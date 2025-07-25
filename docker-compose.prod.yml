@@ -33,7 +33,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      CLIENT_URL: ${CLIENT_URL:-http://localhost:3000}
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: ${DB_NAME:-church_attendance}
@@ -45,7 +44,7 @@ services:
       OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS:-60}
       EMAIL_FROM: ${EMAIL_FROM:-noreply@redeemercc.org.au}
     ports:
-      - "${SERVER_PORT:-3001}:3001"
+      - "3001:3001"
     volumes:
       - ./server/uploads:/app/uploads
     depends_on:
@@ -60,7 +59,7 @@ services:
     container_name: church_attendance_client
     restart: unless-stopped
     ports:
-      - "${CLIENT_PORT:-3000}:3000"
+      - "3000:3000"
     depends_on:
       - server
     networks:

@@ -155,7 +155,9 @@ router.post('/send',
         `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.id, invitationToken, expiresAt]);
 
         // Send invitation via appropriate method
-        const invitationLink = `${process.env.APP_DOMAIN || 'https://app.letmypeoplegrow.com.au'}/accept-invitation/${invitationToken}`;
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+        const host = req.headers['x-forwarded-host'] || req.get('host');
+        const invitationLink = `${protocol}://${host}/accept-invitation/${invitationToken}`;
         if (primaryContactMethod === 'email') {
           await sendInvitationEmail(email, firstName, lastName, role, invitationLink, req.user);
         } else {
@@ -254,7 +256,9 @@ router.post('/resend/:id',
       `, [newToken, newExpiresAt, id]);
 
       // Resend email
-      const invitationLink = `${process.env.APP_DOMAIN || 'https://app.letmypeoplegrow.com.au'}/accept-invitation/${newToken}`;
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.headers['x-forwarded-host'] || req.get('host');
+      const invitationLink = `${protocol}://${host}/accept-invitation/${newToken}`;
       await sendInvitationEmail(
         invitation.email, 
         invitation.first_name, 

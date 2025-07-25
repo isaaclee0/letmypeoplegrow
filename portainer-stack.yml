@@ -30,8 +30,7 @@ services:
     restart: on-failure:3
     environment:
       NODE_ENV: ${NODE_ENV}
-      PORT: ${SERVER_PORT}
-      APP_DOMAIN: ${APP_DOMAIN}
+      PORT: 3001
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: ${DB_NAME}
@@ -46,8 +45,8 @@ services:
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
       TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER}
       BREVO_API_KEY: ${BREVO_API_KEY}
-    ports:
-      - "${SERVER_PORT}:3001"
+          ports:
+        - "3001:3001"
     volumes:
       - server_uploads:/app/uploads
     depends_on:
@@ -61,8 +60,8 @@ services:
     image: staugustine1/letmypeoplegrow-client:latest
     container_name: church_attendance_client
     restart: unless-stopped
-    ports:
-      - "${CLIENT_PORT}:3000"
+          ports:
+        - "3000:3000"
     depends_on:
       - server
     networks:
