@@ -45,7 +45,7 @@ docker buildx build \
     --platform linux/amd64 \
     -t $CLIENT_IMAGE:$VERSION \
     -t $CLIENT_IMAGE:latest \
-    -f Dockerfile.client \
+    -f Dockerfile.client.optimized \
     . \
     --push
 
