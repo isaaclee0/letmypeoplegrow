@@ -1,0 +1,36 @@
+{
+  "name": "let-my-people-grow-server",
+  "version": "1.0.0",
+  "description": "Backend server for Let My People Grow - Church Attendance Tracking and Reporting",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "init-db": "node scripts/initDatabase.js"
+  },
+  "dependencies": {
+    "@getbrevo/brevo": "^2.5.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.0.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "isomorphic-dompurify": "^2.26.0",
+    "jsonwebtoken": "^9.0.2",
+    "libphonenumber-js": "^1.12.10",
+    "mariadb": "^3.2.2",
+    "moment": "^2.29.4",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.7",
+    "twilio": "^5.7.3",
+    "uuid": "^9.0.1",
+    "validator": "^13.15.15"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

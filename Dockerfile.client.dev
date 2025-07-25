@@ -1,0 +1,17 @@
+# Development React client
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY client/package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Expose port
+EXPOSE 3000
+
+# Start development server
+CMD ["npm", "start"] 
