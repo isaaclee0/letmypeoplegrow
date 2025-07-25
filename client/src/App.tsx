@@ -8,6 +8,7 @@ import AttendancePage from './pages/AttendancePage';
 import ReportsPage from './pages/ReportsPage';
 import ManageGatheringsPage from './pages/ManageGatheringsPage';
 import PeoplePage from './pages/PeoplePage';
+import UsersPage from './pages/UsersPage';
 import OnboardingPage from './pages/OnboardingPage';
 import AcceptInvitationPage from './pages/AcceptInvitationPage';
 import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
@@ -44,6 +45,20 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
         return <Navigate to="/non-admin-setup" replace />;
       }
     }
+  }
+
+  return <>{children}</>;
+};
+
+// Role-based Protected Route component
+const RoleProtectedRoute: React.FC<{ 
+  children: React.ReactNode; 
+  allowedRoles: string[];
+}> = ({ children, allowedRoles }) => {
+  const { user } = useAuth();
+
+  if (!user || !allowedRoles.includes(user.role)) {
+    return <Navigate to="/app/dashboard" replace />;
   }
 
   return <>{children}</>;
@@ -128,6 +143,14 @@ function App() {
               <Route path="people" element={<PeoplePage />} />
               <Route path="gatherings" element={<ManageGatheringsPage />} />
               <Route path="reports" element={<ReportsPage />} />
+              <Route 
+                path="users" 
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
+                    <UsersPage />
+                  </RoleProtectedRoute>
+                } 
+              />
             </Route>
           </Routes>
         </div>

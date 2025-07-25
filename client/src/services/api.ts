@@ -1,4 +1,4 @@
-import axios, { AxiosResponse } from 'axios';
+import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3002/api';
 
@@ -29,7 +29,10 @@ api.interceptors.response.use(
   async (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Only redirect if we're not already on the login page
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -164,9 +167,14 @@ export const usersAPI = {
   getAll: () => 
     api.get('/users'),
     
+  getById: (id: number) => 
+    api.get(`/users/${id}`),
+    
   create: (data: {
-    email: string;
-    role: string;
+    email?: string;
+    mobileNumber?: string;
+    primaryContactMethod: 'email' | 'sms';
+    role: 'coordinator' | 'attendance_taker';
     firstName: string;
     lastName: string;
   }) => 
@@ -175,11 +183,43 @@ export const usersAPI = {
   update: (id: number, data: any) => 
     api.put(`/users/${id}`, data),
     
+  delete: (id: number) => 
+    api.delete(`/users/${id}`),
+    
   getGatheringAssignments: (userId: number) => 
     api.get(`/users/${userId}/gatherings`),
     
   assignGatherings: (userId: number, gatheringIds: number[]) => 
     api.post(`/users/${userId}/gatherings`, { gatheringIds }),
+};
+
+// Invitations API
+export const invitationsAPI = {
+  send: (data: {
+    email?: string;
+    mobileNumber?: string;
+    primaryContactMethod: 'email' | 'sms';
+    role: 'coordinator' | 'attendance_taker';
+    firstName: string;
+    lastName: string;
+    gatheringIds?: number[];
+  }) => 
+    api.post('/invitations/send', data),
+    
+  getPending: () => 
+    api.get('/invitations/pending'),
+    
+  resend: (id: number) => 
+    api.post(`/invitations/resend/${id}`),
+    
+  cancel: (id: number) => 
+    api.delete(`/invitations/${id}`),
+    
+  accept: (token: string) => 
+    api.get(`/invitations/accept/${token}`),
+    
+  complete: (token: string, data: { gatheringAssignments?: number[] }) => 
+    api.post(`/invitations/complete/${token}`, data),
 };
 
 // Families API
@@ -288,35 +328,6 @@ export const onboardingAPI = {
     
   saveProgress: (currentStep: number, data?: any) =>
     api.post('/onboarding/save-progress', { currentStep, data }),
-};
-
-// Invitations API
-export const invitationsAPI = {
-  send: (data: {
-    email?: string;
-    mobileNumber?: string;
-    primaryContactMethod: 'email' | 'sms';
-    role: 'coordinator' | 'attendance_taker';
-    firstName: string;
-    lastName: string;
-    gatheringIds?: number[];
-  }) => 
-    api.post('/invitations/send', data),
-    
-  getPending: () => 
-    api.get('/invitations/pending'),
-    
-  resend: (id: number) => 
-    api.post(`/invitations/resend/${id}`),
-    
-  cancel: (id: number) => 
-    api.delete(`/invitations/${id}`),
-    
-  accept: (token: string) => 
-    api.get(`/invitations/accept/${token}`),
-    
-  complete: (token: string, data: { gatheringAssignments?: number[] }) => 
-    api.post(`/invitations/complete/${token}`, data),
 };
 
 // CSV Import API

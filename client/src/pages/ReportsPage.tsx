@@ -172,7 +172,7 @@ const ReportsPage: React.FC = () => {
                     Average Attendance
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : '-'}
+                    {isLoading ? '...' : (metrics?.averageAttendance || 0)}
                   </dd>
                 </dl>
               </div>
@@ -192,7 +192,7 @@ const ReportsPage: React.FC = () => {
                     Growth Rate
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : '-'}
+                    {isLoading ? '...' : `${metrics?.growthRate || 0}%`}
                   </dd>
                 </dl>
               </div>
@@ -209,10 +209,10 @@ const ReportsPage: React.FC = () => {
               <div className="ml-5 w-0 flex-1">
                 <dl>
                   <dt className="text-sm font-medium text-gray-500 truncate">
-                    Regular Attendees
+                    Total Sessions
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : '-'}
+                    {isLoading ? '...' : (metrics?.totalSessions || 0)}
                   </dd>
                 </dl>
               </div>
@@ -229,10 +229,10 @@ const ReportsPage: React.FC = () => {
               <div className="ml-5 w-0 flex-1">
                 <dl>
                   <dt className="text-sm font-medium text-gray-500 truncate">
-                    New Visitors
+                    Total Individuals
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : '-'}
+                    {isLoading ? '...' : (metrics?.totalIndividuals || 0)}
                   </dd>
                 </dl>
               </div>
@@ -249,13 +249,40 @@ const ReportsPage: React.FC = () => {
             <h3 className="text-lg leading-6 font-medium text-gray-900">
               Attendance Trend
             </h3>
-            <div className="mt-6 flex justify-center items-center h-64">
+            <div className="mt-6">
               {isLoading ? (
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                <div className="flex justify-center items-center h-64">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                </div>
+              ) : metrics?.attendanceData && metrics.attendanceData.length > 0 ? (
+                <div className="space-y-4">
+                  {metrics.attendanceData.slice(0, 8).map((session: any, index: number) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-gray-900">
+                          {new Date(session.date).toLocaleDateString()}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {session.present} present, {session.absent} absent
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-semibold text-primary-600">
+                          {session.present}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          of {session.total}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <div className="text-gray-500">
-                  <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
-                  <p className="text-sm">Chart visualization coming soon</p>
+                <div className="flex justify-center items-center h-64">
+                  <div className="text-gray-500">
+                    <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
+                    <p className="text-sm">No attendance data available for the selected period</p>
+                  </div>
                 </div>
               )}
             </div>
