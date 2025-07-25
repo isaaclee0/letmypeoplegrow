@@ -17,9 +17,6 @@ COPY client/tsconfig.json ./
 COPY client/tailwind.config.js ./
 COPY client/postcss.config.js ./
 
-# Set environment variables for build
-ENV REACT_APP_API_URL=http://server:3001/api
-
 # Build the app
 RUN npm run build
 
