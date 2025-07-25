@@ -13,25 +13,25 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
-      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
     command: --default-authentication-plugin=mysql_native_password
     networks:
       - app-network
     healthcheck:
       test: ["CMD", "mariadb", "-u", "${DB_USER}", "-p${DB_PASSWORD}", "-e", "SELECT 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # Node.js Backend Server
   server:
-    image: staugustine1/letmypeoplegrow-server:${IMAGE_TAG}
+    image: staugustine1/letmypeoplegrow-server:latest
     container_name: church_attendance_server
-    restart: unless-stopped
+    restart: on-failure:3
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: ${SERVER_PORT}
-      CLIENT_URL: ${CLIENT_URL}
+      APP_DOMAIN: ${APP_DOMAIN}
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: ${DB_NAME}
@@ -49,7 +49,7 @@ services:
     ports:
       - "${SERVER_PORT}:3001"
     volumes:
-      - ./server/uploads:/app/uploads
+      - server_uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -58,7 +58,7 @@ services:
 
   # React Frontend Client
   client:
-    image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG}
+    image: staugustine1/letmypeoplegrow-client:latest
     container_name: church_attendance_client
     restart: unless-stopped
     ports:
@@ -67,27 +67,16 @@ services:
       - server
     networks:
       - app-network
+      - npm_proxy
 
-  # Nginx Reverse Proxy
-  nginx:
-    image: nginx:alpine
-    container_name: church_attendance_nginx
-    restart: unless-stopped
-    ports:
-      - "${NGINX_HTTP_PORT}:80"
-      - "${NGINX_HTTPS_PORT}:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl:ro  # Optional: for SSL certificates
-    depends_on:
-      - client
-      - server
-    networks:
-      - app-network
+
 
 volumes:
   db_data:
+  server_uploads:
 
 networks:
   app-network:
-    driver: bridge 
+    driver: bridge
+  npm_proxy:
+    external: true 
