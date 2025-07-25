@@ -118,6 +118,7 @@ server/uploads/*
 apikeys
 *.key
 *.pem
+stack.env
 
 # Backup files
 *.bak
