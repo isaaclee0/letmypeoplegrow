@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  db:
+    image: mariadb:10.6
+    container_name: church_attendance_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: church_attendance
+      MYSQL_USER: church_user
+      MYSQL_PASSWORD: church_password
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "church_user", "-pchurch_password", "-e", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node.js Backend Server
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: church_attendance_server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      CLIENT_URL: http://localhost:3000
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: church_attendance
+      DB_USER: church_user
+      DB_PASSWORD: church_password
+      JWT_SECRET: your_secure_jwt_secret_change_this_in_production
+      JWT_EXPIRE: 24h
+      OTC_EXPIRE_MINUTES: 10
+      OTC_RESEND_COOLDOWN_SECONDS: 60
+      EMAIL_FROM: noreply@redeemercc.org.au
+      BREVO_API_KEY: your_brevo_api_key_here
+      TWILIO_ACCOUNT_SID: your_twilio_account_sid_here
+      TWILIO_AUTH_TOKEN: your_twilio_auth_token_here
+      TWILIO_FROM_NUMBER: your_twilio_phone_number_here
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./server/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # React Frontend Client
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: church_attendance_client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    networks:
+      - app-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: church_attendance_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - client
+      - server
+    networks:
+      - app-network
+
+volumes:
+  db_data:
+
+networks:
+  app-network:
+    driver: bridge 
