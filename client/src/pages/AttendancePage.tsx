@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { format, addWeeks, addMonths, startOfWeek, addDays, isBefore, isAfter, startOfDay } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, GatheringType, Individual, Visitor } from '../services/api';
@@ -23,7 +23,7 @@ const AttendancePage: React.FC = () => {
   const [error, setError] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [saveTimeout, setSaveTimeout] = useState<NodeJS.Timeout | null>(null);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isSettingDefault, setIsSettingDefault] = useState(false);
   const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
@@ -166,36 +166,49 @@ const AttendancePage: React.FC = () => {
   };
 
   const toggleAttendance = (individualId: number) => {
-    setAttendanceList(prev => 
-      prev.map(person => 
+    console.log('Toggling attendance for individual:', individualId);
+    setAttendanceList(prev => {
+      const updated = prev.map(person => 
         person.id === individualId 
           ? { ...person, present: !person.present }
           : person
-      )
-    );
+      );
+      console.log('Updated attendance list:', updated);
+      return updated;
+    });
     setHasChanges(true);
+    console.log('Set hasChanges to true');
   };
 
   const toggleAllFamily = (familyId: number) => {
+    console.log('Toggling all family attendance for family:', familyId);
     // Count how many family members are currently present
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
     const presentCount = familyMembers.filter(person => person.present).length;
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
+    console.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
     
-    setAttendanceList(prev => 
-      prev.map(person => 
+    setAttendanceList(prev => {
+      const updated = prev.map(person => 
         person.familyId === familyId 
           ? { ...person, present: shouldCheckAll }
           : person
-      )
-    );
+      );
+      console.log('Updated attendance list after family toggle:', updated);
+      return updated;
+    });
     setHasChanges(true);
+    console.log('Set hasChanges to true (family toggle)');
   };
 
-  const saveAttendance = async () => {
+  const saveAttendance = useCallback(async () => {
     if (!selectedGathering) return;
+
+    console.log('Saving attendance for:', selectedGathering.id, selectedDate);
+    console.log('Attendance records:', attendanceList.map(person => ({ id: person.id, present: person.present })));
+    console.log('Visitors:', visitors);
 
     setIsSaving(true);
     try {
@@ -204,40 +217,49 @@ const AttendancePage: React.FC = () => {
         present: person.present || false
       }));
 
-      await attendanceAPI.record(selectedGathering.id, selectedDate, {
+      const response = await attendanceAPI.record(selectedGathering.id, selectedDate, {
         attendanceRecords,
         visitors
       });
 
+      console.log('Attendance saved successfully:', response);
       setHasChanges(false);
       setError('');
     } catch (err) {
+      console.error('Failed to save attendance:', err);
       setError('Failed to save attendance');
     } finally {
       setIsSaving(false);
     }
-  };
+  }, [selectedGathering, selectedDate, attendanceList, visitors]);
 
   // Debounced save function
   const debouncedSave = useCallback(() => {
+    console.log('Debounced save triggered, hasChanges:', hasChanges);
     // Clear any existing timeout
-    if (saveTimeout) {
-      clearTimeout(saveTimeout);
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      console.log('Cleared existing timeout');
     }
 
     // Set a new timeout to save after 2 seconds of inactivity
     const timeout = setTimeout(() => {
+      console.log('Timeout fired, hasChanges:', hasChanges);
       if (hasChanges) {
+        console.log('Calling saveAttendance from debounced save');
         saveAttendance();
       }
     }, 2000);
 
-    setSaveTimeout(timeout);
-  }, [hasChanges, selectedGathering, selectedDate, attendanceList, visitors, saveTimeout]);
+    saveTimeoutRef.current = timeout;
+    console.log('Set new timeout');
+  }, [hasChanges, saveAttendance]);
 
   // Trigger debounced save when changes occur
   useEffect(() => {
+    console.log('useEffect triggered - hasChanges:', hasChanges, 'debouncedSave function:', !!debouncedSave);
     if (hasChanges) {
+      console.log('Calling debouncedSave from useEffect');
       debouncedSave();
     }
   }, [hasChanges, debouncedSave]);
@@ -245,11 +267,11 @@ const AttendancePage: React.FC = () => {
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
-      if (saveTimeout) {
-        clearTimeout(saveTimeout);
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [saveTimeout]);
+  }, []);
 
   // Set default gathering
   const setDefaultGathering = async (gatheringId: number) => {

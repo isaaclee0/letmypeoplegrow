@@ -5,7 +5,8 @@ import {
   UserGroupIcon, 
   ClipboardDocumentListIcon, 
   ChartBarIcon,
-  CalendarIcon 
+  CalendarIcon,
+  UserCircleIcon
 } from '@heroicons/react/24/outline';
 
 const DashboardPage: React.FC = () => {
@@ -138,6 +139,28 @@ const DashboardPage: React.FC = () => {
                   </h3>
                   <p className="mt-2 text-sm text-gray-500">
                     Manage gatherings and their members
+                  </p>
+                </div>
+              </button>
+            )}
+
+            {(user?.role === 'admin' || user?.role === 'coordinator') && (
+              <button 
+                onClick={() => navigate('/app/users')}
+                className="relative group bg-white p-6 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary-500 rounded-lg border border-gray-300 hover:border-gray-400"
+              >
+                <div>
+                  <span className="rounded-lg inline-flex p-3 bg-indigo-50 text-indigo-600 ring-4 ring-white">
+                    <UserCircleIcon className="h-6 w-6" aria-hidden="true" />
+                  </span>
+                </div>
+                <div className="mt-8">
+                  <h3 className="text-lg font-medium">
+                    <span className="absolute inset-0" aria-hidden="true" />
+                    Manage Users
+                  </h3>
+                  <p className="mt-2 text-sm text-gray-500">
+                    Invite and manage users and permissions
                   </p>
                 </div>
               </button>

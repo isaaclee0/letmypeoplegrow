@@ -24,6 +24,9 @@ const Layout: React.FC = () => {
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
     { name: 'People', href: '/app/people', icon: UsersIcon },
     { name: 'Gatherings', href: '/app/gatherings', icon: UserGroupIcon },
+    ...(user?.role === 'admin' || user?.role === 'coordinator' ? [
+      { name: 'Users', href: '/app/users', icon: UserCircleIcon }
+    ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
   ];
 

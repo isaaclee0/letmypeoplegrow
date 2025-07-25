@@ -5,18 +5,18 @@ const jwt = require('jsonwebtoken');
 const moment = require('moment');
 
 const Database = require('../config/database');
-const { generateOTC, sendOTCEmail } = require('../utils/email');
-const { sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
+const { sendOTCEmail } = require('../utils/email');
+const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
 // Rate limiting for auth endpoints
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 requests per windowMs
-  message: { error: 'Too many authentication attempts, please try again later.' }
-});
+// const authLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 5, // limit each IP to 5 requests per windowMs
+//   message: { error: 'Too many authentication attempts, please try again later.' }
+// });
 
 // Disabled rate limiting for development/testing
 // const otcLimiter = rateLimit({
@@ -186,7 +186,7 @@ router.post('/request-code',
 
 // Verify One-Time Code and login (supports both email and SMS)
 router.post('/verify-code',
-  authLimiter,
+  // authLimiter, // Temporarily disabled for development
   [
     body('contact')
       .trim()

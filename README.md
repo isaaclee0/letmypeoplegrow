@@ -73,12 +73,29 @@ A comprehensive church attendance and member management system designed to help 
    cd letmypeoplegrow
    ```
 
-2. **Start the development environment**
+2. **Set up environment variables**
+   ```bash
+   # Copy the example environment file
+   cp server/.env.example server/.env
+   
+   # Edit the .env file with your actual API keys
+   nano server/.env
+   ```
+   
+   **Required API Keys:**
+   - **Brevo API Key**: For email notifications
+   - **Twilio Account SID**: For SMS notifications
+   - **Twilio Auth Token**: For SMS notifications  
+   - **Twilio Phone Number**: For SMS notifications
+   
+   **Note**: The `.env` file is excluded from git for security. Never commit your actual API keys.
+
+3. **Start the development environment**
    ```bash
    docker-compose -f docker-compose.dev.yml up -d
    ```
 
-3. **Access the application**
+4. **Access the application**
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:3002
    - Database: localhost:3307

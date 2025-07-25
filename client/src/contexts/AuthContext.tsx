@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, ReactNode, useRef } from 'react';
 import { authAPI, onboardingAPI, User } from '../services/api';
 
 interface AuthContextType {
@@ -30,10 +30,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const isInitializing = useRef(false);
 
   useEffect(() => {
     const initializeAuth = async () => {
-      const storedUser = localStorage.getItem('user');
+      // Prevent multiple simultaneous initialization calls
+      if (isInitializing.current) {
+        return;
+      }
+      
+      isInitializing.current = true;
 
       try {
         // Always try to get current user from backend (in case user is logged in via cookies)
@@ -54,9 +60,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // User is not authenticated, clear any stale localStorage
         localStorage.removeItem('user');
         setUser(null);
+      } finally {
+        setIsLoading(false);
+        isInitializing.current = false;
       }
-      
-      setIsLoading(false);
     };
 
     initializeAuth();
