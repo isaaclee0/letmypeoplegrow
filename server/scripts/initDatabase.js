@@ -4,7 +4,15 @@ const createTables = async () => {
   console.log('🗄️  Initializing database schema...');
 
   try {
+    // Test database connection first
+    console.log('🔌 Testing database connection...');
+    const testResult = await Database.query('SELECT 1 as test');
+    console.log('✅ Database connection successful');
+    
+    // Check if we can create tables
+    console.log('📋 Starting table creation...');
     // Users table
+    console.log('📝 Creating users table...');
     await Database.query(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
