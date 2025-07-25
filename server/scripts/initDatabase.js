@@ -306,6 +306,24 @@ const createTables = async () => {
       ) ENGINE=InnoDB
     `);
 
+    // Onboarding progress tracking
+    await Database.query(`
+      CREATE TABLE IF NOT EXISTS onboarding_progress (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        current_step VARCHAR(100) DEFAULT 'church_info',
+        completed_steps JSON,
+        church_info JSON,
+        gatherings JSON,
+        csv_upload JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        INDEX idx_user (user_id),
+        INDEX idx_current_step (current_step)
+      ) ENGINE=InnoDB
+    `);
+
     console.log('✅ Database schema created successfully!');
 
     // Create default admin user if it doesn't exist
