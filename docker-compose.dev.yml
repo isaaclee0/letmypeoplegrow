@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  db:
+    image: mariadb:10.6
+    container_name: church_attendance_db_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: church_attendance
+      MYSQL_USER: church_user
+      MYSQL_PASSWORD: church_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data_dev:/var/lib/mysql
+      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - app-network-dev
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "church_user", "-pchurch_password", "-e", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node.js Backend Server (Development)
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server.dev
+    container_name: church_attendance_server_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      CLIENT_URL: http://localhost:3000
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: church_attendance
+      DB_USER: church_user
+      DB_PASSWORD: church_password
+      JWT_SECRET: your_secure_jwt_secret_change_this_in_production
+      JWT_EXPIRE: 24h
+      OTC_EXPIRE_MINUTES: 10
+      OTC_RESEND_COOLDOWN_SECONDS: 60
+      EMAIL_FROM: noreply@redeemercc.org.au
+      BREVO_API_KEY: your_brevo_api_key_here
+      TWILIO_ACCOUNT_SID: your_twilio_account_sid_here
+      TWILIO_AUTH_TOKEN: your_twilio_auth_token_here
+      TWILIO_FROM_NUMBER: your_twilio_phone_number_here
+    ports:
+      - "3002:3001"
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+      - ./server/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network-dev
+    command: npm run dev
+
+  # React Frontend Client (Development)
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client.dev
+    container_name: church_attendance_client_dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    depends_on:
+      - server
+    networks:
+      - app-network-dev
+    command: npm start
+
+volumes:
+  db_data_dev:
+
+networks:
+  app-network-dev:
+    driver: bridge 
