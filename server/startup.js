@@ -32,13 +32,11 @@ async function initializeDatabase() {
       console.log(`⚠️  Missing tables: ${missingTables.join(', ')}`);
       console.log('🗄️  Initializing database schema...');
       
-      // Run the database initialization script
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
+      // Run the database initialization script directly
+      const { createTables } = require('./scripts/initDatabase');
       
       try {
-        await execAsync('node scripts/initDatabase.js');
+        await createTables();
         console.log('✅ Database schema initialized successfully!');
       } catch (error) {
         console.error('❌ Failed to initialize database schema:', error.message);
