@@ -6,6 +6,36 @@ const path = require('path');
 
 const router = express.Router();
 
+// Helper function to split SQL content into individual statements
+function splitSqlStatements(sqlContent) {
+  return sqlContent
+    .split(';')
+    .map(stmt => stmt.trim())
+    .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'))
+    .map(stmt => stmt + ';');
+}
+
+// Helper function to execute multiple SQL statements
+async function executeMultipleStatements(sqlContent) {
+  const statements = splitSqlStatements(sqlContent);
+  console.log(`Executing ${statements.length} statements...`);
+  
+  for (let i = 0; i < statements.length; i++) {
+    const statement = statements[i];
+    console.log(`Executing statement ${i + 1}/${statements.length}: ${statement.substring(0, 50)}...`);
+    
+    try {
+      await Database.query(statement);
+      console.log(`✅ Statement ${i + 1} executed successfully`);
+    } catch (error) {
+      console.error(`❌ Statement ${i + 1} failed:`, error.message);
+      throw error;
+    }
+  }
+  
+  return { success: true, statementsExecuted: statements.length };
+}
+
 // All routes require admin authentication
 router.use(verifyToken);
 router.use(requireRole(['admin']));
@@ -106,17 +136,8 @@ router.post('/run/:version', async (req, res) => {
     let errorMessage = null;
 
     try {
-      // Split and execute SQL statements
-      const statements = sqlContent
-        .split(';')
-        .map(stmt => stmt.trim())
-        .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
-
-      for (const statement of statements) {
-        if (statement.trim()) {
-          await Database.query(statement);
-        }
-      }
+      // Execute the entire SQL content as one block to handle prepared statements
+      await executeMultipleStatements(sqlContent);
 
       // Record successful migration
       await Database.query(`
@@ -202,7 +223,8 @@ router.post('/run-all', async (req, res) => {
 function getMigrationDescription(version) {
   const descriptions = {
     '001_fix_audit_log': 'Fix audit_log table structure - add entity_type and entity_id columns',
-    '002_add_missing_indexes': 'Add missing database indexes for performance',
+    '002_add_contact_fields': 'Add is_visitor flag to individuals table',
+    '003_enhance_visitors_table': 'Enhance visitors table with additional fields',
     // Add more descriptions as migrations are created
   };
   return descriptions[version] || `Migration ${version}`;
@@ -254,16 +276,8 @@ async function runMigration(version) {
   let errorMessage = null;
 
   try {
-    const statements = sqlContent
-      .split(';')
-      .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
-
-    for (const statement of statements) {
-      if (statement.trim()) {
-        await Database.query(statement);
-      }
-    }
+    // Execute the entire SQL content as one block to handle prepared statements
+    await executeMultipleStatements(sqlContent);
 
     await Database.query(`
       INSERT INTO migrations (version, name, description, execution_time_ms, status)
