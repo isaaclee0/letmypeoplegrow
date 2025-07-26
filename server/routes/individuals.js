@@ -130,13 +130,11 @@ router.get('/', async (req, res) => {
         i.id,
         i.first_name,
         i.last_name,
-        i.phone,
-        i.email,
         i.family_id,
         f.family_name,
         f.family_identifier,
         i.is_active,
-        i.is_visitor,
+        -- i.is_visitor, -- Temporarily commented out until migration is run
         i.created_at,
         GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
         GROUP_CONCAT(DISTINCT gt.name) as gathering_names
@@ -154,13 +152,11 @@ router.get('/', async (req, res) => {
       id: Number(individual.id),
       firstName: individual.first_name,
       lastName: individual.last_name,
-      phone: individual.phone,
-      email: individual.email,
       familyId: individual.family_id ? Number(individual.family_id) : null,
       familyName: individual.family_name,
       familyIdentifier: individual.family_identifier,
       isActive: Boolean(individual.is_active),
-      isVisitor: Boolean(individual.is_visitor),
+      isVisitor: false, // Temporarily set to false until migration is run
       createdAt: individual.created_at,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
@@ -179,12 +175,12 @@ router.get('/', async (req, res) => {
 // Create individual (Admin/Coordinator)
 router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
-    const { firstName, lastName, familyId, email, phone } = req.body;
+    const { firstName, lastName, familyId } = req.body;
     
     const result = await Database.query(`
-      INSERT INTO individuals (first_name, last_name, phone, email, family_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [firstName, lastName, phone || null, email || null, familyId || null, req.user.id]);
+      INSERT INTO individuals (first_name, last_name, family_id, created_by)
+      VALUES (?, ?, ?, ?)
+    `, [firstName, lastName, familyId || null, req.user.id]);
 
     res.status(201).json({ 
       message: 'Individual created successfully',
@@ -200,13 +196,13 @@ router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
 router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, familyId, email, phone } = req.body;
+    const { firstName, lastName, familyId } = req.body;
     
     const result = await Database.query(`
       UPDATE individuals 
-      SET first_name = ?, last_name = ?, phone = ?, email = ?, family_id = ?, updated_at = NOW()
+      SET first_name = ?, last_name = ?, family_id = ?, updated_at = NOW()
       WHERE id = ?
-    `, [firstName, lastName, phone || null, email || null, familyId || null, id]);
+    `, [firstName, lastName, familyId || null, id]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Individual not found' });

@@ -213,8 +213,8 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
         if (existingIndividual.length === 0) {
           // Create new individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, is_visitor, created_by)
-            VALUES (?, ?, true, ?)
+            INSERT INTO individuals (first_name, last_name, created_by)
+            VALUES (?, ?, ?)
           `, [firstName, lastName, req.user.id]);
 
           const individualId = individualResult.insertId;
