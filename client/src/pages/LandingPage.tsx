@@ -1,7 +1,28 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { authAPI } from '../services/api';
 
 const LandingPage: React.FC = () => {
+  const [hasUsers, setHasUsers] = useState<boolean | null>(null);
+  const [hasNonAdminUsers, setHasNonAdminUsers] = useState<boolean | null>(null);
+
+  // Check if users exist on component mount
+  useEffect(() => {
+    const checkUsers = async () => {
+      try {
+        const response = await authAPI.checkUsers();
+        setHasUsers(response.data.hasUsers);
+        setHasNonAdminUsers(response.data.hasNonAdminUsers);
+      } catch (error) {
+        console.error('Failed to check users:', error);
+        // Default to showing "welcome back" if we can't check
+        setHasUsers(true);
+        setHasNonAdminUsers(true);
+      }
+    };
+    
+    checkUsers();
+  }, []);
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-500 via-primary-600 to-secondary-500">
       <div className="relative overflow-hidden">
@@ -30,17 +51,19 @@ const LandingPage: React.FC = () => {
                       to="/signup"
                       className="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-primary-600 bg-white hover:bg-gray-50 md:py-4 md:text-lg md:px-10"
                     >
-                      Get Started
+                      {hasNonAdminUsers ? 'Get Started' : 'Set Up Your Church'}
                     </Link>
                   </div>
-                  <div className="mt-3 sm:mt-0 sm:ml-3">
-                    <Link
-                      to="/login"
-                      className="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-primary-600 bg-opacity-60 hover:bg-opacity-70 md:py-4 md:text-lg md:px-10"
-                    >
-                      Sign In
-                    </Link>
-                  </div>
+                  {hasNonAdminUsers && (
+                    <div className="mt-3 sm:mt-0 sm:ml-3">
+                      <Link
+                        to="/login"
+                        className="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-primary-600 bg-opacity-60 hover:bg-opacity-70 md:py-4 md:text-lg md:px-10"
+                      >
+                        Sign In
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </div>
             </main>

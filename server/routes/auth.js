@@ -578,6 +578,41 @@ router.post('/register',
   }
 );
 
+// Check if any users exist besides the default admin
+router.get('/check-users', async (req, res) => {
+  try {
+    // Count all active users
+    const totalUsers = await Database.query(
+      'SELECT COUNT(*) as count FROM users WHERE is_active = true'
+    );
+    
+    // Count admin users
+    const adminUsers = await Database.query(
+      'SELECT COUNT(*) as count FROM users WHERE role = "admin" AND is_active = true'
+    );
+    
+    // Count non-admin users (excluding the default admin)
+    const nonAdminUsers = await Database.query(
+      'SELECT COUNT(*) as count FROM users WHERE role != "admin" AND is_active = true'
+    );
+    
+    const totalCount = Number(totalUsers[0].count);
+    const adminCount = Number(adminUsers[0].count);
+    const nonAdminCount = Number(nonAdminUsers[0].count);
+    
+    res.json({
+      hasUsers: totalCount > 0,
+      hasNonAdminUsers: nonAdminCount > 0,
+      totalUsers: totalCount,
+      adminUsers: adminCount,
+      nonAdminUsers: nonAdminCount
+    });
+  } catch (error) {
+    console.error('Check users error:', error);
+    res.status(500).json({ error: 'Failed to check users.' });
+  }
+});
+
 // Logout - clear the auth cookie
 router.post('/logout', verifyToken, (req, res) => {
   res.clearCookie('authToken', {
