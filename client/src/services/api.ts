@@ -269,8 +269,6 @@ export const individualsAPI = {
     firstName: string;
     lastName: string;
     familyId?: number;
-    email?: string;
-    phone?: string;
   }) => 
     api.post('/individuals', data),
     
@@ -278,8 +276,6 @@ export const individualsAPI = {
     firstName: string;
     lastName: string;
     familyId?: number;
-    email?: string;
-    phone?: string;
   }) => 
     api.put(`/individuals/${id}`, data),
     

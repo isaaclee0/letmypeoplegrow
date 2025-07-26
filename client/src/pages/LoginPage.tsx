@@ -65,7 +65,7 @@ const LoginPage: React.FC = () => {
       setStep('code');
       setCooldownSeconds(response.data.cooldownSeconds || 60);
       // Reset the code form to ensure it's empty
-      codeForm.reset();
+      codeForm.reset({ code: '' });
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to send verification code');
     } finally {
@@ -115,7 +115,7 @@ const LoginPage: React.FC = () => {
   const goBackToContact = () => {
     setStep('contact');
     setError('');
-    codeForm.reset();
+    codeForm.reset({ code: '' });
   };
 
   // Show loading state while checking users

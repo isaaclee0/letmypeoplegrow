@@ -18,6 +18,7 @@ import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
 import NonAdminSetupPage from './pages/NonAdminSetupPage';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
+import ToastContainer from './components/ToastContainer';
 
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -82,8 +83,9 @@ function App() {
   return (
     <AuthProvider>
       <MigrationProvider>
-        <Router>
-          <div className="min-h-screen bg-gray-50">
+        <ToastContainer>
+          <Router>
+            <div className="min-h-screen bg-gray-50">
             <Routes>
             <Route
               path="/signup"
@@ -167,6 +169,7 @@ function App() {
           </Routes>
         </div>
       </Router>
+        </ToastContainer>
       </MigrationProvider>
     </AuthProvider>
   );

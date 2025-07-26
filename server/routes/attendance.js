@@ -91,13 +91,13 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
 
       let sessionId;
       if (sessionResult.insertId) {
-        sessionId = sessionResult.insertId;
+        sessionId = Number(sessionResult.insertId);
       } else {
         const sessions = await conn.query(
           'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
-        sessionId = sessions[0].id;
+        sessionId = Number(sessions[0].id);
       }
 
       console.log('Session ID:', sessionId);
@@ -194,13 +194,13 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
 
       let sessionId;
       if (sessionResult.insertId) {
-        sessionId = sessionResult.insertId;
+        sessionId = Number(sessionResult.insertId);
       } else {
         const sessions = await conn.query(
           'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
-        sessionId = sessions[0].id;
+        sessionId = Number(sessions[0].id);
       }
 
       // Parse visitor name to extract individual names
@@ -225,7 +225,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
             VALUES (?, ?, true, ?)
           `, [firstName, lastName, req.user.id]);
 
-          const individualId = individualResult.insertId;
+          const individualId = Number(individualResult.insertId);
 
           // Add to gathering list
           await conn.query(`
@@ -246,7 +246,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
           });
         } else {
           // Individual exists, just mark as present if not already
-          const individualId = existingIndividual[0].id;
+          const individualId = Number(existingIndividual[0].id);
           
           // Check if already in gathering list
           const inGathering = await conn.query(`

@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-server",
-  "version": "0.2.9",
+  "version": "0.3.1",
   "description": "Backend server for Let My People Grow - Church Attendance Tracking and Reporting",
   "main": "index.js",
   "scripts": {

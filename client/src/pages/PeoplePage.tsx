@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { individualsAPI, familiesAPI, csvImportAPI } from '../services/api';
+import { useToast } from '../components/ToastContainer';
 import { 
   PlusIcon, 
   UserGroupIcon, 
@@ -18,8 +19,6 @@ interface Person {
   lastName: string;
   familyId?: number;
   familyName?: string;
-  email?: string;
-  phone?: string;
   isVisitor?: boolean;
   gatheringAssignments?: Array<{
     id: number;
@@ -36,6 +35,7 @@ interface Family {
 
 const PeoplePage: React.FC = () => {
   const { user } = useAuth();
+  const { showSuccess } = useToast();
   const [people, setPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -146,6 +146,7 @@ const PeoplePage: React.FC = () => {
         familyId: ''
       });
       setError('');
+      showSuccess('Person added successfully');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to add person');
     }
@@ -164,6 +165,7 @@ const PeoplePage: React.FC = () => {
         familyIdentifier: ''
       });
       setError('');
+      showSuccess('Family added successfully');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to add family');
     }
@@ -179,6 +181,7 @@ const PeoplePage: React.FC = () => {
       
       // Reload people to get the updated list
       await loadPeople();
+      showSuccess('Person deleted successfully');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to delete person');
     }
@@ -209,7 +212,7 @@ const PeoplePage: React.FC = () => {
       setSelectedGatheringId(null);
       
       // Show success message
-      alert(`Import completed!\n\nImported: ${response.data.imported} people\nFamilies: ${response.data.families}\nDuplicates: ${response.data.duplicates}\nSkipped: ${response.data.skipped}`);
+      showSuccess(`Import completed! Imported: ${response.data.imported} people, Families: ${response.data.families}, Duplicates: ${response.data.duplicates}, Skipped: ${response.data.skipped}`);
       
       // Reload people after upload
       await loadPeople();
@@ -232,7 +235,7 @@ const PeoplePage: React.FC = () => {
       
       const response = await csvImportAPI.massAssign(gatheringId, selectedPeople);
       
-      alert(`Mass assignment completed!\n\nAssigned: ${response.data.assigned}\nAlready assigned: ${response.data.alreadyAssigned}\nNot found: ${response.data.notFound}`);
+      showSuccess(`Mass assignment completed! Assigned: ${response.data.assigned}, Already assigned: ${response.data.alreadyAssigned}, Not found: ${response.data.notFound}`);
       
       setSelectedPeople([]);
       setShowMassManage(false);
@@ -260,7 +263,7 @@ const PeoplePage: React.FC = () => {
       
       const response = await csvImportAPI.massRemove(gatheringId, selectedPeople);
       
-      alert(`Mass removal completed!\n\nRemoved: ${response.data.removed} people`);
+      showSuccess(`Mass removal completed! Removed: ${response.data.removed} people`);
       
       setSelectedPeople([]);
       setShowMassManage(false);
@@ -293,7 +296,6 @@ const PeoplePage: React.FC = () => {
     const matchesSearch = searchTerm === '' || 
       person.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       person.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      person.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       person.familyName?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesFamily = selectedFamily === null || person.familyId === selectedFamily;
@@ -306,7 +308,6 @@ const PeoplePage: React.FC = () => {
     const matchesSearch = searchTerm === '' || 
       person.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       person.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      person.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       person.familyName?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesFamily = selectedFamily === null || person.familyId === selectedFamily;
@@ -372,6 +373,8 @@ const PeoplePage: React.FC = () => {
           </div>
         </div>
       )}
+
+
 
       {/* Filters */}
       <div className="bg-white shadow rounded-lg">
@@ -477,7 +480,7 @@ const PeoplePage: React.FC = () => {
                       Family
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Contact
+                      Type
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Gatherings
@@ -510,9 +513,7 @@ const PeoplePage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
-                          {person.email && <div>{person.email}</div>}
-                          {person.phone && <div>{person.phone}</div>}
-                          {!person.email && !person.phone && '-'}
+                          {person.isVisitor ? 'Visitor' : 'Regular'}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -598,7 +599,7 @@ const PeoplePage: React.FC = () => {
                       Family
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Contact
+                      Type
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Gatherings
@@ -634,9 +635,7 @@ const PeoplePage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
-                          {person.email && <div>{person.email}</div>}
-                          {person.phone && <div>{person.phone}</div>}
-                          {!person.email && !person.phone && '-'}
+                          {person.isVisitor ? 'Visitor' : 'Regular'}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -1149,15 +1148,10 @@ const PeoplePage: React.FC = () => {
                   </div>
                 )}
 
-                {(selectedPerson.email || selectedPerson.phone) && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Contact</label>
-                    <div className="mt-1 text-sm text-gray-900">
-                      {selectedPerson.email && <div>{selectedPerson.email}</div>}
-                      {selectedPerson.phone && <div>{selectedPerson.phone}</div>}
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Type</label>
+                  <p className="mt-1 text-sm text-gray-900">{selectedPerson.isVisitor ? 'Visitor' : 'Regular Attendee'}</p>
+                </div>
 
                 {selectedPerson.gatheringAssignments && selectedPerson.gatheringAssignments.length > 0 && (
                   <div>

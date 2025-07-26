@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { format, addWeeks, addMonths, startOfWeek, addDays, isBefore, isAfter, startOfDay } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, GatheringType, Individual, Visitor } from '../services/api';
+import { useToast } from '../components/ToastContainer';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -14,6 +15,7 @@ import {
 
 const AttendancePage: React.FC = () => {
   const { user, updateUser } = useAuth();
+  const { showSuccess } = useToast();
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
@@ -238,6 +240,7 @@ const AttendancePage: React.FC = () => {
       console.log('Attendance saved successfully:', response);
       setHasChanges(false);
       setError('');
+      showSuccess('Attendance saved');
     } catch (err) {
       console.error('Failed to save attendance:', err);
       setError('Failed to save attendance');
@@ -379,10 +382,12 @@ const AttendancePage: React.FC = () => {
           `${visitorForm.notes || ''} ${visitorForm.spouseNotes || ''}`.trim() : undefined
       });
 
-      // Show success message
+      // Show success toast
       if (response.data.individuals && response.data.individuals.length > 0) {
         const names = response.data.individuals.map((ind: any) => `${ind.firstName} ${ind.lastName}`).join(', ');
-        alert(`Visitor added successfully!\n\nCreated individuals: ${names}\n\nThey have been added to the people list and marked as present for today's service.`);
+        showSuccess(`Visitor added: ${names}`);
+      } else {
+        showSuccess('Visitor added successfully');
       }
 
       // Reload attendance data
