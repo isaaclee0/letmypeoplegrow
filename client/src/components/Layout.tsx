@@ -41,10 +41,12 @@ const Layout: React.FC = () => {
   };
 
   return (
-    <div className="h-screen flex overflow-hidden bg-gradient-to-br from-primary-50 to-secondary-50">
+    <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
       {/* Update notification bar */}
       <UpdateNotificationBar />
-      {/* Mobile sidebar */}
+      
+      <div className="flex overflow-hidden h-full">
+        {/* Mobile sidebar */}
       <div className={`fixed inset-0 flex z-40 md:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-primary-900 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
         <div className="relative flex-1 flex flex-col max-w-xs w-full bg-primary-500">
@@ -181,6 +183,7 @@ const Layout: React.FC = () => {
             </div>
           </div>
         </main>
+      </div>
       </div>
     </div>
   );

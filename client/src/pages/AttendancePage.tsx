@@ -29,6 +29,7 @@ const AttendancePage: React.FC = () => {
   const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
+  const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
   const [visitorForm, setVisitorForm] = useState({
     personType: 'visitor', // 'regular' or 'visitor'
     visitorType: 'local', // 'local' or 'traveller'
@@ -139,6 +140,7 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     if (selectedGathering && selectedDate) {
       loadAttendanceData();
+      loadRecentVisitors();
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
       if (lastSetting !== null) {
@@ -162,6 +164,17 @@ const AttendancePage: React.FC = () => {
       setError('Failed to load attendance data');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadRecentVisitors = async () => {
+    if (!selectedGathering) return;
+    
+    try {
+      const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+      setRecentVisitors(response.data.visitors || []);
+    } catch (err: any) {
+      console.error('Failed to load recent visitors:', err);
     }
   };
 
@@ -303,7 +316,7 @@ const AttendancePage: React.FC = () => {
   };
 
   // Handle add visitor
-  const handleAddVisitor = () => {
+  const handleAddVisitor = async () => {
     // Set default person type based on user role
     const defaultPersonType = user?.role === 'admin' || user?.role === 'coordinator' ? 'visitor' : 'visitor';
     setVisitorForm({
@@ -322,12 +335,80 @@ const AttendancePage: React.FC = () => {
       hasSpouse: false
     });
     setShowAddVisitorModal(true);
+    
+    // Load recent visitors for suggestions
+    await loadRecentVisitors();
   };
 
   const handleSubmitVisitor = async () => {
-    // TODO: Implement visitor submission
-    console.log('Submitting visitor:', visitorForm);
-    setShowAddVisitorModal(false);
+    if (!selectedGathering) return;
+    
+    try {
+      // Validate form
+      if (!visitorForm.firstName.trim() && !visitorForm.firstNameUnknown) {
+        setError('First name is required');
+        return;
+      }
+      if (!visitorForm.lastName.trim() && !visitorForm.lastNameUnknown) {
+        setError('Last name is required');
+        return;
+      }
+
+      // Build visitor name
+      const firstName = visitorForm.firstNameUnknown ? 'Unknown' : visitorForm.firstName.trim();
+      const lastName = visitorForm.lastNameUnknown ? 'Unknown' : visitorForm.lastName.trim();
+      const visitorName = `${firstName} ${lastName}`.trim();
+
+      // Add spouse if present
+      let fullName = visitorName;
+      if (visitorForm.hasSpouse) {
+        const spouseFirstName = visitorForm.spouseFirstNameUnknown ? 'Unknown' : visitorForm.spouseFirstName.trim();
+        const spouseLastName = visitorForm.spouseLastNameUnknown ? 'Unknown' : visitorForm.spouseLastName.trim();
+        const spouseName = `${spouseFirstName} ${spouseLastName}`.trim();
+        if (spouseName !== 'Unknown Unknown') {
+          fullName += ` & ${spouseName}`;
+        }
+      }
+
+      // Add visitor to backend
+      const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
+        name: fullName,
+        visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
+        visitorFamilyGroup: visitorForm.hasSpouse ? 'Couple' : undefined,
+        notes: visitorForm.notes || visitorForm.spouseNotes ? 
+          `${visitorForm.notes || ''} ${visitorForm.spouseNotes || ''}`.trim() : undefined
+      });
+
+      // Show success message
+      if (response.data.individuals && response.data.individuals.length > 0) {
+        const names = response.data.individuals.map((ind: any) => `${ind.firstName} ${ind.lastName}`).join(', ');
+        alert(`Visitor added successfully!\n\nCreated individuals: ${names}\n\nThey have been added to the people list and marked as present for today's service.`);
+      }
+
+      // Reload attendance data
+      await loadAttendanceData();
+      
+      // Reset form and close modal
+      setVisitorForm({
+        personType: 'visitor',
+        visitorType: 'local',
+        firstName: '',
+        firstNameUnknown: false,
+        lastName: '',
+        lastNameUnknown: false,
+        notes: '',
+        spouseFirstName: '',
+        spouseFirstNameUnknown: false,
+        spouseLastName: '',
+        spouseLastNameUnknown: false,
+        spouseNotes: '',
+        hasSpouse: false
+      });
+      setShowAddVisitorModal(false);
+      setError('');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add visitor');
+    }
   };
 
   // Group attendees by family and filter based on search term
@@ -419,6 +500,40 @@ const AttendancePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Attendance Summary */}
+      {selectedGathering && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-gray-900">
+                  {attendanceList.filter(person => person.present).length + visitors.length}
+                </div>
+                <div className="text-sm text-gray-500">Total Present</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-primary-600">
+                  {attendanceList.filter(person => person.present).length}
+                </div>
+                <div className="text-sm text-gray-500">Regular Attendees</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">
+                  {visitors.length}
+                </div>
+                <div className="text-sm text-gray-500">Visitors</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-gray-400">
+                  {attendanceList.filter(person => !person.present).length}
+                </div>
+                <div className="text-sm text-gray-500">Absent</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Gathering Type Tabs */}
       <div className="bg-white shadow rounded-lg">
@@ -748,6 +863,45 @@ const AttendancePage: React.FC = () => {
                         />
                         <span className="ml-2 text-sm text-gray-900">Regular Attendee</span>
                       </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Visitors Suggestions */}
+                {visitorForm.personType === 'visitor' && recentVisitors.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Recent Visitors (click to add)
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                      {recentVisitors.slice(0, 6).map((visitor, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => {
+                            // Parse visitor name to extract first and last name
+                            const nameParts = visitor.name.split(' ');
+                            const firstName = nameParts[0] || '';
+                            const lastName = nameParts.slice(1).join(' ') || '';
+                            
+                            setVisitorForm({
+                              ...visitorForm,
+                              firstName: firstName === 'Unknown' ? '' : firstName,
+                              firstNameUnknown: firstName === 'Unknown',
+                              lastName: lastName === 'Unknown' ? '' : lastName,
+                              lastNameUnknown: lastName === 'Unknown',
+                              notes: visitor.notes || '',
+                              visitorType: visitor.visitorType === 'potential_regular' ? 'local' : 'traveller'
+                            });
+                          }}
+                          className="text-left p-2 text-sm border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="font-medium">{visitor.name}</div>
+                          <div className="text-xs text-gray-500">
+                            {visitor.lastAttended ? `Last: ${new Date(visitor.lastAttended).toLocaleDateString()}` : 'No previous visits'}
+                          </div>
+                        </button>
+                      ))}
                     </div>
                   </div>
                 )}

@@ -15,7 +15,7 @@ const sendEmail = async (to, subject, htmlContent, textContent = null) => {
     if (textContent) {
       sendSmtpEmail.textContent = textContent;
     }
-    sendSmtpEmail.sender = { email: process.env.EMAIL_FROM || 'noreply@redeemercc.org.au' };
+    sendSmtpEmail.sender = { email: process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au' };
 
     const response = await transactionalEmailsApi.sendTransacEmail(sendSmtpEmail);
     console.log('Email sent successfully:', response);
@@ -35,7 +35,7 @@ const sendInvitationEmail = async (email, firstName, lastName, role, invitationL
       
       <p>Hi ${firstName},</p>
       
-      <p>${invitedBy.firstName} ${invitedBy.lastName} has invited you to join our church management system as a <strong>${role}</strong>.</p>
+      <p>${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join our church management system as a <strong>${role}</strong>.</p>
       
       <p>This system helps us track attendance, manage members, and grow our community together.</p>
       
@@ -48,7 +48,7 @@ const sendInvitationEmail = async (email, firstName, lastName, role, invitationL
       
       <p><strong>Important:</strong> This invitation link will expire in 7 days for security reasons.</p>
       
-      <p>If you have any questions, please contact ${invitedBy.firstName} ${invitedBy.lastName}.</p>
+      <p>If you have any questions, please contact ${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName}.</p>
       
       <p>Blessings,<br>
       ${process.env.CHURCH_NAME || 'Your Church Team'}</p>
@@ -60,7 +60,7 @@ Welcome to ${process.env.CHURCH_NAME || 'our church'}!
 
 Hi ${firstName},
 
-${invitedBy.firstName} ${invitedBy.lastName} has invited you to join our church management system as a ${role}.
+${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join our church management system as a ${role}.
 
 This system helps us track attendance, manage members, and grow our community together.
 
@@ -68,7 +68,7 @@ Accept your invitation here: ${invitationLink}
 
 Important: This invitation link will expire in 7 days for security reasons.
 
-If you have any questions, please contact ${invitedBy.firstName} ${invitedBy.lastName}.
+If you have any questions, please contact ${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName}.
 
 Blessings,
 ${process.env.CHURCH_NAME || 'Your Church Team'}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI } from '../services/api';
+import { individualsAPI, familiesAPI, csvImportAPI } from '../services/api';
 import { 
   PlusIcon, 
   UserGroupIcon, 
@@ -20,6 +20,7 @@ interface Person {
   familyName?: string;
   email?: string;
   phone?: string;
+  isVisitor?: boolean;
   gatheringAssignments?: Array<{
     id: number;
     name: string;
@@ -64,10 +65,15 @@ const PeoplePage: React.FC = () => {
 
   const [csvData, setCsvData] = useState('');
   const [copyPasteData, setCopyPasteData] = useState('');
+  const [selectedPeople, setSelectedPeople] = useState<number[]>([]);
+  const [gatheringTypes, setGatheringTypes] = useState<Array<{id: number, name: string}>>([]);
+  const [showMassManage, setShowMassManage] = useState(false);
+  const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
 
   useEffect(() => {
     loadPeople();
     loadFamilies();
+    loadGatheringTypes();
   }, []);
 
   const loadPeople = async () => {
@@ -106,6 +112,16 @@ const PeoplePage: React.FC = () => {
       setFamilies(response.data.families || []);
     } catch (err: any) {
       setError('Failed to load families');
+    }
+  };
+
+  const loadGatheringTypes = async () => {
+    try {
+      const response = await fetch('/api/gatherings');
+      const data = await response.json();
+      setGatheringTypes(data.gatherings || []);
+    } catch (err: any) {
+      console.error('Failed to load gathering types:', err);
     }
   };
 
@@ -183,15 +199,93 @@ const PeoplePage: React.FC = () => {
 
   const handleCopyPasteUpload = async () => {
     try {
-      // TODO: Implement copy-paste parsing and upload
-      console.log('Copy-paste data:', copyPasteData);
+      setIsLoading(true);
+      setError('');
+      
+      const response = await csvImportAPI.copyPaste(copyPasteData, selectedGatheringId || undefined);
+      
       setShowCopyPaste(false);
       setCopyPasteData('');
+      setSelectedGatheringId(null);
+      
+      // Show success message
+      alert(`Import completed!\n\nImported: ${response.data.imported} people\nFamilies: ${response.data.families}\nDuplicates: ${response.data.duplicates}\nSkipped: ${response.data.skipped}`);
+      
       // Reload people after upload
       await loadPeople();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to process data');
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  const handleMassAssign = async (gatheringId: number) => {
+    if (selectedPeople.length === 0) {
+      setError('Please select people to assign');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError('');
+      
+      const response = await csvImportAPI.massAssign(gatheringId, selectedPeople);
+      
+      alert(`Mass assignment completed!\n\nAssigned: ${response.data.assigned}\nAlready assigned: ${response.data.alreadyAssigned}\nNot found: ${response.data.notFound}`);
+      
+      setSelectedPeople([]);
+      setShowMassManage(false);
+      await loadPeople();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to assign people to service');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMassRemove = async (gatheringId: number) => {
+    if (selectedPeople.length === 0) {
+      setError('Please select people to remove');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to remove ${selectedPeople.length} people from this service?`)) {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setError('');
+      
+      const response = await csvImportAPI.massRemove(gatheringId, selectedPeople);
+      
+      alert(`Mass removal completed!\n\nRemoved: ${response.data.removed} people`);
+      
+      setSelectedPeople([]);
+      setShowMassManage(false);
+      await loadPeople();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to remove people from service');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const togglePersonSelection = (personId: number) => {
+    setSelectedPeople(prev => 
+      prev.includes(personId) 
+        ? prev.filter(id => id !== personId)
+        : [...prev, personId]
+    );
+  };
+
+  const selectAllPeople = () => {
+    setSelectedPeople([...filteredPeople.map(person => person.id), ...filteredVisitors.map(person => person.id)]);
+  };
+
+  const clearSelection = () => {
+    setSelectedPeople([]);
   };
 
   // Filter people based on search term and family selection
@@ -204,7 +298,20 @@ const PeoplePage: React.FC = () => {
     
     const matchesFamily = selectedFamily === null || person.familyId === selectedFamily;
     
-    return matchesSearch && matchesFamily;
+    return matchesSearch && matchesFamily && !person.isVisitor;
+  });
+
+  // Filter visitors separately
+  const filteredVisitors = people.filter(person => {
+    const matchesSearch = searchTerm === '' || 
+      person.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      person.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      person.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      person.familyName?.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesFamily = selectedFamily === null || person.familyId === selectedFamily;
+    
+    return matchesSearch && matchesFamily && person.isVisitor;
   });
 
   if (isLoading) {
@@ -230,6 +337,15 @@ const PeoplePage: React.FC = () => {
               </p>
             </div>
             <div className="flex space-x-3">
+              {selectedPeople.length > 0 && (
+                <button
+                  onClick={() => setShowMassManage(true)}
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                >
+                  <UserGroupIcon className="h-4 w-4 mr-2" />
+                  Manage Selected ({selectedPeople.length})
+                </button>
+              )}
               <button
                 onClick={() => setShowCopyPaste(true)}
                 className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
@@ -312,6 +428,17 @@ const PeoplePage: React.FC = () => {
               People ({filteredPeople.length})
             </h3>
             <div className="flex space-x-3">
+              {selectedPeople.length > 0 && (
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <span>{selectedPeople.length} selected</span>
+                  <button
+                    onClick={clearSelection}
+                    className="text-primary-600 hover:text-primary-700"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
               <button
                 onClick={() => setShowAddFamily(true)}
                 className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
@@ -336,6 +463,14 @@ const PeoplePage: React.FC = () => {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={selectedPeople.length === filteredPeople.length && filteredPeople.length > 0}
+                        onChange={selectedPeople.length === filteredPeople.length ? clearSelection : selectAllPeople}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Name
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -355,6 +490,14 @@ const PeoplePage: React.FC = () => {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {filteredPeople.map((person) => (
                     <tr key={person.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedPeople.includes(person.id)}
+                          onChange={() => togglePersonSelection(person.id)}
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
                           {person.firstName} {person.lastName}
@@ -423,6 +566,130 @@ const PeoplePage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Visitors Section */}
+      {filteredVisitors.length > 0 && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg leading-6 font-medium text-gray-900">
+                Visitors ({filteredVisitors.length})
+              </h3>
+            </div>
+            
+            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+              <table className="min-w-full divide-y divide-gray-300">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={filteredVisitors.length > 0 && filteredVisitors.every(person => selectedPeople.includes(person.id))}
+                        onChange={filteredVisitors.every(person => selectedPeople.includes(person.id)) ? 
+                          () => setSelectedPeople(selectedPeople.filter(id => !filteredVisitors.map(p => p.id).includes(id))) :
+                          () => setSelectedPeople([...selectedPeople, ...filteredVisitors.map(person => person.id)])}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Family
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Contact
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Gatherings
+                    </th>
+                    <th className="relative px-6 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredVisitors.map((person) => (
+                    <tr key={person.id} className="bg-yellow-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedPeople.includes(person.id)}
+                          onChange={() => togglePersonSelection(person.id)}
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">
+                          {person.firstName} {person.lastName}
+                          <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                            Visitor
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">
+                          {person.familyName || '-'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">
+                          {person.email && <div>{person.email}</div>}
+                          {person.phone && <div>{person.phone}</div>}
+                          {!person.email && !person.phone && '-'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">
+                          {person.gatheringAssignments?.length ? (
+                            <div className="flex flex-wrap gap-1">
+                              {person.gatheringAssignments.map(gathering => (
+                                <span key={gathering.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
+                                  {gathering.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            '-'
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex justify-end space-x-2">
+                          <button
+                            onClick={() => {
+                              setSelectedPerson(person);
+                              setShowPersonDetails(true);
+                            }}
+                            className="text-primary-600 hover:text-primary-700"
+                            title="View Details"
+                          >
+                            <EyeIcon className="h-5 w-5" />
+                          </button>
+                          <button
+                            onClick={() => {/* TODO: Implement edit */}}
+                            className="text-gray-400 hover:text-gray-600"
+                            title="Edit"
+                          >
+                            <PencilIcon className="h-5 w-5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeletePerson(person.id)}
+                            className="text-red-400 hover:text-red-600"
+                            title="Delete"
+                          >
+                            <TrashIcon className="h-5 w-5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Person Modal */}
       {showAddPerson && (
@@ -738,8 +1005,26 @@ const PeoplePage: React.FC = () => {
 
                 <div className="text-sm text-gray-500">
                   <p>Expected format (tab or comma separated):</p>
-                  <p className="font-mono text-xs mt-1">firstName lastName email phone familyName</p>
+                  <p className="font-mono text-xs mt-1">firstName lastName familyName</p>
                   <p className="mt-2">The system will automatically detect the separator and parse the data.</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign to Service (Optional)
+                  </label>
+                  <select
+                    value={selectedGatheringId || ''}
+                    onChange={(e) => setSelectedGatheringId(e.target.value ? parseInt(e.target.value) : null)}
+                    className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="">Don't assign to any service</option>
+                    {gatheringTypes.map(gathering => (
+                      <option key={gathering.id} value={gathering.id}>
+                        {gathering.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 
                 <div className="flex justify-end space-x-3 pt-4">
@@ -756,6 +1041,73 @@ const PeoplePage: React.FC = () => {
                     className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
                   >
                     Process Data
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mass Management Modal */}
+      {showMassManage && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Mass Manage People ({selectedPeople.length} selected)
+                </h3>
+                <button
+                  onClick={() => setShowMassManage(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign to Service
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {gatheringTypes.map(gathering => (
+                      <div key={gathering.id} className="flex space-x-2">
+                        <button
+                          onClick={() => handleMassAssign(gathering.id)}
+                          className="flex-1 px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                        >
+                          Add to {gathering.name}
+                        </button>
+                        <button
+                          onClick={() => handleMassRemove(gathering.id)}
+                          className="px-3 py-2 text-sm font-medium rounded-md text-red-600 border border-red-600 hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {gatheringTypes.length === 0 && (
+                    <p className="text-sm text-gray-500">No services available</p>
+                  )}
+                </div>
+
+                <div className="text-sm text-gray-500">
+                  <p>This will assign or remove the selected people from the chosen service.</p>
+                </div>
+                
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowMassManage(false)}
+                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    Close
                   </button>
                 </div>
               </div>

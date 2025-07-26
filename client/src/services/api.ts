@@ -74,6 +74,7 @@ export interface Individual {
   familyId?: number;
   familyName?: string;
   present?: boolean;
+  isVisitor?: boolean;
 }
 
 export interface Visitor {
@@ -82,6 +83,7 @@ export interface Visitor {
   visitorType: 'potential_regular' | 'temporary_other';
   visitorFamilyGroup?: string;
   notes?: string;
+  lastAttended?: string;
 }
 
 export interface AttendanceData {
@@ -164,6 +166,17 @@ export const attendanceAPI = {
     visitors: Visitor[];
   }) => 
     api.post(`/attendance/${gatheringTypeId}/${date}`, data),
+    
+  getRecentVisitors: (gatheringTypeId: number) => 
+    api.get(`/attendance/${gatheringTypeId}/visitors/recent`),
+    
+  addVisitor: (gatheringTypeId: number, date: string, visitor: {
+    name: string;
+    visitorType?: string;
+    visitorFamilyGroup?: string;
+    notes?: string;
+  }) => 
+    api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
 };
 
 // Users API
@@ -358,8 +371,17 @@ export const csvImportAPI = {
     });
   },
     
+  copyPaste: (data: string, gatheringId?: number) => 
+    api.post(`/csv-import/copy-paste${gatheringId ? `/${gatheringId}` : ''}`, { data }),
+    
   downloadTemplate: () => 
     api.get('/csv-import/template', { responseType: 'blob' }),
+    
+  massAssign: (gatheringId: number, individualIds: number[]) => 
+    api.post(`/csv-import/mass-assign/${gatheringId}`, { individualIds }),
+    
+  massRemove: (gatheringId: number, individualIds: number[]) => 
+    api.delete(`/csv-import/mass-remove/${gatheringId}`, { data: { individualIds } }),
 };
 
 export default api; 

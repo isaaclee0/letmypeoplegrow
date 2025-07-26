@@ -22,9 +22,13 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
       
-      // Note: visitors table doesn't have session_id, so we can't query visitors per session
-      // For now, we'll return an empty visitors array
-      // TODO: Implement visitor management separately if needed
+      // Get visitors for this session
+      visitors = await Database.query(`
+        SELECT id, name, visitor_type, visitor_family_group, notes, last_attended
+        FROM visitors 
+        WHERE session_id = ?
+        ORDER BY name
+      `, [sessionId]);
     }
 
     // Get regular attendees with attendance status (always return the list)
@@ -55,7 +59,8 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       name: visitor.name,
       visitorType: visitor.visitor_type,
       visitorFamilyGroup: visitor.visitor_family_group,
-      notes: visitor.notes
+      notes: visitor.notes,
+      lastAttended: visitor.last_attended
     }));
 
     res.json({ attendanceList: processedAttendanceList, visitors: processedVisitors });
@@ -96,9 +101,9 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
 
       console.log('Session ID:', sessionId);
 
-      // Clear existing attendance records
+      // Clear existing attendance records and visitors
       await conn.query('DELETE FROM attendance_records WHERE session_id = ?', [sessionId]);
-      // Note: visitors table doesn't have session_id, so we can't clear visitors per session
+      await conn.query('DELETE FROM visitors WHERE session_id = ?', [sessionId]);
 
       // Insert attendance records
       if (attendanceRecords && attendanceRecords.length > 0) {
@@ -110,8 +115,15 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
         );
       }
 
-      // Note: Visitors are stored globally, not per session, so we skip visitor insertion for now
-      // TODO: Implement visitor management separately if needed
+      // Insert visitors
+      if (visitors && visitors.length > 0) {
+        for (const visitor of visitors) {
+          await conn.query(`
+            INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [sessionId, visitor.name, visitor.visitorType, visitor.visitorFamilyGroup, visitor.notes, date]);
+        }
+      }
     });
 
     res.json({ message: 'Attendance recorded successfully' });
@@ -119,6 +131,166 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
     console.error('Record attendance error:', error);
     console.error('Error stack:', error.stack);
     res.status(500).json({ error: 'Failed to record attendance.', details: error.message });
+  }
+});
+
+// Get recent visitors (for suggestions)
+router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId } = req.params;
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    
+    // Get visitors who attended in the last 2 months
+    const recentVisitors = await Database.query(`
+      SELECT DISTINCT v.name, v.visitor_type, v.visitor_family_group, v.notes, v.last_attended
+      FROM visitors v
+      JOIN attendance_sessions s ON v.session_id = s.id
+      WHERE s.gathering_type_id = ? 
+        AND v.last_attended >= ?
+      ORDER BY v.last_attended DESC, v.name
+    `, [gatheringTypeId, twoMonthsAgo.toISOString().split('T')[0]]);
+
+    const processedVisitors = recentVisitors.map(visitor => ({
+      name: visitor.name,
+      visitorType: visitor.visitor_type,
+      visitorFamilyGroup: visitor.visitor_family_group,
+      notes: visitor.notes,
+      lastAttended: visitor.last_attended
+    }));
+
+    res.json({ visitors: processedVisitors });
+  } catch (error) {
+    console.error('Get recent visitors error:', error);
+    res.status(500).json({ error: 'Failed to retrieve recent visitors.' });
+  }
+});
+
+// Add visitor to a session and create individual
+router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { name, visitorType, visitorFamilyGroup, notes } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Visitor name is required' });
+    }
+
+    await Database.transaction(async (conn) => {
+      // Get or create attendance session
+      let sessionResult = await conn.query(`
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+      `, [gatheringTypeId, date, req.user.id]);
+
+      let sessionId;
+      if (sessionResult.insertId) {
+        sessionId = sessionResult.insertId;
+      } else {
+        const sessions = await conn.query(
+          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          [gatheringTypeId, date]
+        );
+        sessionId = sessions[0].id;
+      }
+
+      // Parse visitor name to extract individual names
+      const nameParts = name.trim().split(' & ');
+      const individuals = [];
+
+      for (const namePart of nameParts) {
+        const personParts = namePart.trim().split(' ');
+        const firstName = personParts[0] || 'Unknown';
+        const lastName = personParts.slice(1).join(' ') || 'Unknown';
+
+        // Check if individual already exists
+        const existingIndividual = await conn.query(`
+          SELECT id FROM individuals 
+          WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?)
+        `, [firstName, lastName]);
+
+        if (existingIndividual.length === 0) {
+          // Create new individual
+          const individualResult = await conn.query(`
+            INSERT INTO individuals (first_name, last_name, is_visitor, created_by)
+            VALUES (?, ?, true, ?)
+          `, [firstName, lastName, req.user.id]);
+
+          const individualId = individualResult.insertId;
+
+          // Add to gathering list
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            VALUES (?, ?, ?)
+          `, [gatheringTypeId, individualId, req.user.id]);
+
+          // Mark as present in attendance
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present)
+            VALUES (?, ?, true)
+          `, [sessionId, individualId]);
+
+          individuals.push({
+            id: individualId,
+            firstName,
+            lastName
+          });
+        } else {
+          // Individual exists, just mark as present if not already
+          const individualId = existingIndividual[0].id;
+          
+          // Check if already in gathering list
+          const inGathering = await conn.query(`
+            SELECT 1 FROM gathering_lists 
+            WHERE gathering_type_id = ? AND individual_id = ?
+          `, [gatheringTypeId, individualId]);
+
+          if (inGathering.length === 0) {
+            // Add to gathering list
+            await conn.query(`
+              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+              VALUES (?, ?, ?)
+            `, [gatheringTypeId, individualId, req.user.id]);
+          }
+
+          // Mark as present in attendance
+          const existingAttendance = await conn.query(`
+            SELECT 1 FROM attendance_records 
+            WHERE session_id = ? AND individual_id = ?
+          `, [sessionId, individualId]);
+
+          if (existingAttendance.length === 0) {
+            await conn.query(`
+              INSERT INTO attendance_records (session_id, individual_id, present)
+              VALUES (?, ?, true)
+            `, [sessionId, individualId]);
+          }
+
+          individuals.push({
+            id: individualId,
+            firstName,
+            lastName
+          });
+        }
+      }
+
+      // Also add to visitors table for historical tracking
+      const visitorResult = await conn.query(`
+        INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [sessionId, name.trim(), visitorType || 'temporary_other', visitorFamilyGroup || null, notes || null, date]);
+
+      res.json({ 
+        message: 'Visitor added successfully and converted to individual',
+        visitorId: Number(visitorResult.insertId),
+        individuals: individuals
+      });
+    });
+
+  } catch (error) {
+    console.error('Add visitor error:', error);
+    res.status(500).json({ error: 'Failed to add visitor.' });
   }
 });
 
