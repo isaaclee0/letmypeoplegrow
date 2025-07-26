@@ -25,7 +25,7 @@ services:
 
   # Node.js Backend Server
   server:
-    image: staugustine1/letmypeoplegrow-server:${IMAGE_TAG:-v0.2.8}
+    image: staugustine1/letmypeoplegrow-server:${IMAGE_TAG:-v0.2.9}
     container_name: church_attendance_server
     restart: unless-stopped
     env_file:
@@ -55,7 +55,7 @@ services:
 
   # React Frontend Client
   client:
-    image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG:-v0.2.8}
+    image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG:-v0.2.9}
     container_name: church_attendance_client
     restart: unless-stopped
     ports:
