@@ -221,7 +221,7 @@ router.post('/fix-schema', async (req, res) => {
 router.post('/run-all', async (req, res) => {
   try {
     // Get pending migrations
-    const statusResponse = await getMigrationStatus();
+    const statusResponse = await getMigrationList();
     const pendingMigrations = statusResponse.migrations.filter(m => !m.executed);
 
     if (pendingMigrations.length === 0) {
@@ -273,7 +273,7 @@ function getMigrationDescription(version) {
 }
 
 // Helper function to get migration status (duplicate of route logic for internal use)
-async function getMigrationStatus() {
+async function getMigrationList() {
   const executedMigrations = await Database.query(
     'SELECT * FROM migrations ORDER BY version'
   );
