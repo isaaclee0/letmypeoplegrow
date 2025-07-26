@@ -3,6 +3,7 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
+const { getMigrationStatus } = require('../utils/migrationHelpers');
 
 const router = express.Router();
 
@@ -39,6 +40,17 @@ async function executeMultipleStatements(sqlContent) {
 // All routes require admin authentication
 router.use(verifyToken);
 router.use(requireRole(['admin']));
+
+// Get actual database schema status
+router.get('/schema-status', async (req, res) => {
+  try {
+    const schemaStatus = await getMigrationStatus();
+    res.json(schemaStatus);
+  } catch (error) {
+    console.error('Get schema status error:', error);
+    res.status(500).json({ error: 'Failed to get schema status' });
+  }
+});
 
 // Get migration status
 router.get('/status', async (req, res) => {
@@ -173,6 +185,35 @@ router.post('/run/:version', async (req, res) => {
       error: 'Failed to execute migration',
       details: error.message 
     });
+  }
+});
+
+// Fix database schema (ensures all required columns and indexes exist)
+router.post('/fix-schema', async (req, res) => {
+  try {
+    const { fixDatabaseSchema } = require('../scripts/fixDatabaseSchema');
+    
+    // Capture console output
+    const originalLog = console.log;
+    const logs = [];
+    console.log = (...args) => {
+      logs.push(args.join(' '));
+      originalLog(...args);
+    };
+
+    await fixDatabaseSchema();
+    
+    // Restore console.log
+    console.log = originalLog;
+
+    res.json({ 
+      message: 'Database schema fixed successfully',
+      logs: logs
+    });
+
+  } catch (error) {
+    console.error('Fix schema error:', error);
+    res.status(500).json({ error: 'Failed to fix database schema' });
   }
 });
 
