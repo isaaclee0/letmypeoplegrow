@@ -106,23 +106,22 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
 
       console.log('Session ID:', sessionId);
 
-      // Clear existing attendance records and visitors
-      await conn.query('DELETE FROM attendance_records WHERE session_id = ?', [sessionId]);
-      await conn.query('DELETE FROM visitors WHERE session_id = ?', [sessionId]);
-
-      // Insert attendance records
+      // Update individual attendance records (prevents race conditions)
       if (attendanceRecords && attendanceRecords.length > 0) {
-        const values = attendanceRecords.map(record => [sessionId, record.individualId, record.present]);
-        console.log('Inserting attendance records:', values);
-        console.log('Session ID for insertion:', sessionId);
-        const result = await conn.batch(
-          'INSERT INTO attendance_records (session_id, individual_id, present) VALUES (?, ?, ?)',
-          values
-        );
-        console.log('Insert result:', result);
+        for (const record of attendanceRecords) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE present = VALUES(present)
+          `, [sessionId, record.individualId, record.present]);
+        }
+        console.log('Updated attendance records for session:', sessionId);
       } else {
-        console.log('No attendance records to insert');
+        console.log('No attendance records to update');
       }
+
+      // Clear existing visitors and insert new ones
+      await conn.query('DELETE FROM visitors WHERE session_id = ?', [sessionId]);
 
       // Insert visitors
       if (visitors && visitors.length > 0) {

@@ -75,6 +75,7 @@ export interface Individual {
   familyName?: string;
   present?: boolean;
   isVisitor?: boolean;
+  isSaving?: boolean;
 }
 
 export interface Visitor {

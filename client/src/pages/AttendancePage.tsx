@@ -26,6 +26,8 @@ const AttendancePage: React.FC = () => {
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSavedDataRef = useRef<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSettingDefault, setIsSettingDefault] = useState(false);
   const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
@@ -185,7 +187,7 @@ const AttendancePage: React.FC = () => {
     setAttendanceList(prev => {
       const updated = prev.map(person => 
         person.id === individualId 
-          ? { ...person, present: !person.present }
+          ? { ...person, present: !person.present, isSaving: true }
           : person
       );
       console.log('Updated attendance list:', updated);
@@ -208,7 +210,7 @@ const AttendancePage: React.FC = () => {
     setAttendanceList(prev => {
       const updated = prev.map(person => 
         person.familyId === familyId 
-          ? { ...person, present: shouldCheckAll }
+          ? { ...person, present: shouldCheckAll, isSaving: true }
           : person
       );
       console.log('Updated attendance list after family toggle:', updated);
@@ -241,16 +243,31 @@ const AttendancePage: React.FC = () => {
       console.log('Attendance saved successfully:', response);
       setHasChanges(false);
       setError('');
+      
+      // Clear isSaving flags from all attendees
+      setAttendanceList(prev => 
+        prev.map((person: Individual) => ({ ...person, isSaving: false }))
+      );
+      
+      // Store the saved data hash for change detection
+      const savedDataHash = JSON.stringify(attendanceRecords);
+      lastSavedDataRef.current = savedDataHash;
+      
       showSuccess('Attendance saved');
     } catch (err) {
       console.error('Failed to save attendance:', err);
       setError('Failed to save attendance');
+      
+      // Clear isSaving flags on error
+      setAttendanceList(prev => 
+        prev.map(person => ({ ...person, isSaving: false }))
+      );
     } finally {
       setIsSaving(false);
     }
   }, [selectedGathering, selectedDate, attendanceList, visitors]);
 
-  // Debounced save function
+  // Debounced save function - reduced to 500ms for faster feedback
   const debouncedSave = useCallback(() => {
     console.log('Debounced save triggered, hasChanges:', hasChanges);
     // Clear any existing timeout
@@ -259,14 +276,14 @@ const AttendancePage: React.FC = () => {
       console.log('Cleared existing timeout');
     }
 
-    // Set a new timeout to save after 2 seconds of inactivity
+    // Set a new timeout to save after 500ms of inactivity
     const timeout = setTimeout(() => {
       console.log('Timeout fired, hasChanges:', hasChanges);
       if (hasChanges) {
         console.log('Calling saveAttendance from debounced save');
         saveAttendance();
       }
-    }, 2000);
+    }, 500);
 
     saveTimeoutRef.current = timeout;
     console.log('Set new timeout');
@@ -281,11 +298,69 @@ const AttendancePage: React.FC = () => {
     }
   }, [hasChanges, debouncedSave]);
 
-  // Cleanup timeout on unmount
+  // Polling for real-time collaboration - poll every 2 seconds when not saving
+  useEffect(() => {
+    if (!selectedGathering || !selectedDate || isSaving) {
+      return;
+    }
+
+    const startPolling = () => {
+      pollingIntervalRef.current = setInterval(async () => {
+        try {
+          const response = await attendanceAPI.get(selectedGathering!.id, selectedDate);
+          const newAttendanceList = response.data.attendanceList || [];
+          const newVisitors = response.data.visitors || [];
+          
+          // Create hash of new data for comparison
+          const newDataHash = JSON.stringify(newAttendanceList.map((person: Individual) => ({
+            id: person.id,
+            present: person.present
+          })));
+          
+          // Check if data has changed from what we last saved
+          if (newDataHash !== lastSavedDataRef.current) {
+            console.log('Polling detected changes from other users');
+            
+            // Update attendance list, preserving isSaving flags for items being edited
+            setAttendanceList(prev => 
+              prev.map((person: Individual) => {
+                const newPerson = newAttendanceList.find((p: Individual) => p.id === person.id);
+                if (newPerson && !person.isSaving) {
+                  return { ...newPerson, isSaving: false };
+                }
+                return person;
+              })
+            );
+            
+            // Update visitors
+            setVisitors(newVisitors);
+            
+            // Show subtle notification
+            showSuccess('Attendance updated by another user');
+          }
+        } catch (err) {
+          console.error('Polling error:', err);
+        }
+      }, 2000); // Poll every 2 seconds
+    };
+
+    startPolling();
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, [selectedGathering, selectedDate, isSaving]);
+
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+      }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
       }
     };
   }, []);
@@ -481,27 +556,20 @@ const AttendancePage: React.FC = () => {
               </p>
             </div>
             <div className="flex items-center space-x-3">
-              {hasChanges && !isSaving && (
-                <div className="text-sm text-gray-500">
-                  Changes will be saved automatically
-                </div>
-              )}
               {isSaving && (
                 <div className="flex items-center text-sm text-gray-500">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"></div>
                   Saving...
                 </div>
               )}
-              {hasChanges && (
-                <button
-                  onClick={saveAttendance}
-                  disabled={isSaving}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-                >
-                  <CheckIcon className="h-4 w-4 mr-2" />
-                  Save Now
-                </button>
-              )}
+              <button
+                onClick={saveAttendance}
+                disabled={isSaving}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+              >
+                <CheckIcon className="h-4 w-4 mr-2" />
+                Save Now
+              </button>
             </div>
           </div>
         </div>
@@ -754,12 +822,12 @@ const AttendancePage: React.FC = () => {
                                   person.present
                                     ? 'border-primary-500 bg-primary-50'
                                     : 'border-gray-200 hover:border-gray-300'
-                                }`
+                                } ${person.isSaving ? 'opacity-75' : ''}`
                               : `p-2 rounded-md ${
                                   person.present
                                     ? 'bg-primary-50'
                                     : 'hover:bg-gray-50'
-                                }`
+                                } ${person.isSaving ? 'opacity-75' : ''}`
                           }`}
                         >
                           <input
@@ -767,16 +835,20 @@ const AttendancePage: React.FC = () => {
                             checked={Boolean(person.present)}
                             onChange={() => toggleAttendance(person.id)}
                             className="sr-only"
+                            disabled={person.isSaving}
                           />
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                             person.present ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
-                          }`}>
+                          } ${person.isSaving ? 'animate-pulse' : ''}`}>
                             {person.present && (
                               <CheckIcon className="h-3 w-3 text-white" />
                             )}
                           </div>
                           <span className="ml-3 text-sm font-medium text-gray-900">
                             {person.firstName} {person.lastName}
+                            {person.isSaving && (
+                              <span className="ml-2 text-xs text-gray-500">Saving...</span>
+                            )}
                           </span>
                         </label>
                       ))}
