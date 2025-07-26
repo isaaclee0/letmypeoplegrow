@@ -26,7 +26,7 @@ interface MigrationContextType {
   error: string | null;
   refreshStatus: () => Promise<void>;
   runMigration: (version: string) => Promise<void>;
-  runAllMigrations: () => Promise<void>;
+  runAllMigrations: () => Promise<any>;
 }
 
 const MigrationContext = createContext<MigrationContextType | undefined>(undefined);
@@ -90,8 +90,9 @@ export const MigrationProvider: React.FC<MigrationProviderProps> = ({ children }
     try {
       setIsLoading(true);
       setError(null);
-      await migrationsAPI.runAllMigrations();
+      const response = await migrationsAPI.runAllMigrations();
       await fetchStatus();
+      return response.data;
     } catch (err: any) {
       console.error('Failed to run all migrations:', err);
       setError(err.response?.data?.error || 'Failed to run migrations');
