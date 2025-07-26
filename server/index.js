@@ -26,6 +26,7 @@ const notificationRoutes = require('./routes/notifications');
 const onboardingRoutes = require('./routes/onboarding');
 const invitationRoutes = require('./routes/invitations');
 const csvImportRoutes = require('./routes/csv-import');
+const migrationRoutes = require('./routes/migrations');
 const testRoutes = require('./routes/test');
 
 const app = express();
@@ -74,6 +75,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/invitations', invitationRoutes);
 app.use('/api/csv-import', csvImportRoutes);
+app.use('/api/migrations', migrationRoutes);
 app.use('/api/test', testRoutes);
 
 // Error handling middleware

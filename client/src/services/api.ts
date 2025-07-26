@@ -197,6 +197,18 @@ export const usersAPI = {
     api.post(`/users/${userId}/gatherings`, { gatheringIds }),
 };
 
+// Migrations API
+export const migrationsAPI = {
+  getStatus: () => 
+    api.get('/migrations/status'),
+    
+  runMigration: (version: string) => 
+    api.post(`/migrations/run/${version}`),
+    
+  runAllMigrations: () => 
+    api.post('/migrations/run-all'),
+};
+
 // Invitations API
 export const invitationsAPI = {
   send: (data: {
