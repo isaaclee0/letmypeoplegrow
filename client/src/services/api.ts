@@ -116,6 +116,9 @@ export const authAPI = {
     
   setDefaultGathering: (gatheringId: number) =>
     api.post('/auth/set-default-gathering', { gatheringId }),
+    
+  checkUsers: () => 
+    api.get('/auth/check-users'),
 };
 
 // Gatherings API
