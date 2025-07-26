@@ -222,14 +222,15 @@ const AttendancePage: React.FC = () => {
     if (!selectedGathering) return;
 
     console.log('Saving attendance for:', selectedGathering.id, selectedDate);
-    console.log('Attendance records:', attendanceList.map(person => ({ id: person.id, present: person.present })));
+    console.log('Raw attendance list:', attendanceList);
+    console.log('Attendance records:', attendanceList.map(person => ({ id: person.id, present: person.present, presentType: typeof person.present })));
     console.log('Visitors:', visitors);
 
     setIsSaving(true);
     try {
       const attendanceRecords = attendanceList.map(person => ({
         individualId: person.id,
-        present: person.present || false
+        present: Boolean(person.present)
       }));
 
       const response = await attendanceAPI.record(selectedGathering.id, selectedDate, {
@@ -763,7 +764,7 @@ const AttendancePage: React.FC = () => {
                         >
                           <input
                             type="checkbox"
-                            checked={person.present || false}
+                            checked={Boolean(person.present)}
                             onChange={() => toggleAttendance(person.id)}
                             className="sr-only"
                           />

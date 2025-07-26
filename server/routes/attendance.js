@@ -52,7 +52,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       lastName: attendee.last_name,
       familyName: attendee.family_name,
       familyId: attendee.family_id ? Number(attendee.family_id) : null,
-      present: Boolean(attendee.present)
+      present: attendee.present === 1 || attendee.present === true
     }));
 
     const processedVisitors = visitors.map(visitor => ({
@@ -93,10 +93,14 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
       if (sessionResult.insertId) {
         sessionId = Number(sessionResult.insertId);
       } else {
+        // If no insertId, the session already exists, so get its ID
         const sessions = await conn.query(
           'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
+        if (sessions.length === 0) {
+          throw new Error('Failed to create or retrieve attendance session');
+        }
         sessionId = Number(sessions[0].id);
       }
 
@@ -110,10 +114,14 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
       if (attendanceRecords && attendanceRecords.length > 0) {
         const values = attendanceRecords.map(record => [sessionId, record.individualId, record.present]);
         console.log('Inserting attendance records:', values);
-        await conn.batch(
+        console.log('Session ID for insertion:', sessionId);
+        const result = await conn.batch(
           'INSERT INTO attendance_records (session_id, individual_id, present) VALUES (?, ?, ?)',
           values
         );
+        console.log('Insert result:', result);
+      } else {
+        console.log('No attendance records to insert');
       }
 
       // Insert visitors
