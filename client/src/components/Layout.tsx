@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import UpdateNotificationBar from './UpdateNotificationBar';
 import {
   Bars3Icon,
   BellIcon,
@@ -11,6 +12,7 @@ import {
   UserGroupIcon,
   UsersIcon,
   XMarkIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
@@ -28,6 +30,9 @@ const Layout: React.FC = () => {
       { name: 'Users', href: '/app/users', icon: UserCircleIcon }
     ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
+    ...(user?.role === 'admin' ? [
+      { name: 'Migrations', href: '/app/migrations', icon: WrenchScrewdriverIcon }
+    ] : []),
   ];
 
   const handleLogout = async () => {
@@ -37,6 +42,8 @@ const Layout: React.FC = () => {
 
   return (
     <div className="h-screen flex overflow-hidden bg-gradient-to-br from-primary-50 to-secondary-50">
+      {/* Update notification bar */}
+      <UpdateNotificationBar />
       {/* Mobile sidebar */}
       <div className={`fixed inset-0 flex z-40 md:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-primary-900 bg-opacity-75" onClick={() => setSidebarOpen(false)} />

@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { MigrationProvider } from './contexts/MigrationContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import LandingPage from './pages/LandingPage';
@@ -10,6 +11,7 @@ import ReportsPage from './pages/ReportsPage';
 import ManageGatheringsPage from './pages/ManageGatheringsPage';
 import PeoplePage from './pages/PeoplePage';
 import UsersPage from './pages/UsersPage';
+import MigrationsPage from './pages/MigrationsPage';
 import OnboardingPage from './pages/OnboardingPage';
 import AcceptInvitationPage from './pages/AcceptInvitationPage';
 import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
@@ -79,9 +81,10 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <div className="min-h-screen bg-gray-50">
-          <Routes>
+      <MigrationProvider>
+        <Router>
+          <div className="min-h-screen bg-gray-50">
+            <Routes>
             <Route
               path="/signup"
               element={
@@ -152,10 +155,19 @@ function App() {
                   </RoleProtectedRoute>
                 } 
               />
+              <Route 
+                path="migrations" 
+                element={
+                  <RoleProtectedRoute allowedRoles={['admin']}>
+                    <MigrationsPage />
+                  </RoleProtectedRoute>
+                } 
+              />
             </Route>
           </Routes>
         </div>
       </Router>
+      </MigrationProvider>
     </AuthProvider>
   );
 }
