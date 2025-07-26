@@ -82,9 +82,9 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
     await Database.transaction(async (conn) => {
       // Create or get attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
 
       console.log('Session result:', sessionResult);
@@ -187,9 +187,9 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
     await Database.transaction(async (conn) => {
       // Get or create attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
 
       let sessionId;

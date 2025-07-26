@@ -135,7 +135,8 @@ async function getMigrationStatus() {
   const requirements = {
     'individuals': ['is_visitor'],
     'visitors': ['last_attended'],
-    'audit_log': ['entity_type', 'entity_id']
+    'audit_log': ['entity_type', 'entity_id'],
+    'attendance_sessions': ['recorded_by']
   };
 
   return await verifyMigrationRequirements(requirements);
