@@ -225,6 +225,7 @@ function getMigrationDescription(version) {
     '001_fix_audit_log': 'Fix audit_log table structure - add entity_type and entity_id columns',
     '002_add_contact_fields': 'Add is_visitor flag to individuals table',
     '003_enhance_visitors_table': 'Enhance visitors table with additional fields',
+
     // Add more descriptions as migrations are created
   };
   return descriptions[version] || `Migration ${version}`;

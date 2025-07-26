@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireGatheringAccess } = require('../middleware/auth');
+const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -176,6 +177,9 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
       return res.status(400).json({ error: 'Visitor name is required' });
     }
 
+    // Check if is_visitor column exists
+    await requireIsVisitorColumn();
+
     await Database.transaction(async (conn) => {
       // Get or create attendance session
       let sessionResult = await conn.query(`
@@ -213,8 +217,8 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
         if (existingIndividual.length === 0) {
           // Create new individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, created_by)
-            VALUES (?, ?, ?)
+            INSERT INTO individuals (first_name, last_name, is_visitor, created_by)
+            VALUES (?, ?, true, ?)
           `, [firstName, lastName, req.user.id]);
 
           const individualId = individualResult.insertId;

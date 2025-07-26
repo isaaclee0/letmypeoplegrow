@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -125,6 +126,9 @@ router.post('/deduplicate', requireRole(['admin']), async (req, res) => {
 // Get all individuals with their family and gathering assignments
 router.get('/', async (req, res) => {
   try {
+    // Check if is_visitor column exists
+    await requireIsVisitorColumn();
+    
     const individuals = await Database.query(`
       SELECT 
         i.id,
@@ -134,7 +138,7 @@ router.get('/', async (req, res) => {
         f.family_name,
         f.family_identifier,
         i.is_active,
-        -- i.is_visitor, -- Temporarily commented out until migration is run
+        i.is_visitor,
         i.created_at,
         GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
         GROUP_CONCAT(DISTINCT gt.name) as gathering_names
@@ -156,7 +160,7 @@ router.get('/', async (req, res) => {
       familyName: individual.family_name,
       familyIdentifier: individual.family_identifier,
       isActive: Boolean(individual.is_active),
-      isVisitor: false, // Temporarily set to false until migration is run
+      isVisitor: Boolean(individual.is_visitor),
       createdAt: individual.created_at,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
