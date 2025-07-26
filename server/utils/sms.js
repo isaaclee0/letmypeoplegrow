@@ -68,36 +68,64 @@ const sendOTCSMS = async (phoneNumber, code) => {
 
 // Send invitation via SMS
 const sendInvitationSMS = async (phoneNumber, firstName, lastName, role, invitationLink, invitedBy) => {
+  console.log('📱 [SMS_DEBUG] Starting invitation SMS send', {
+    phoneNumber,
+    firstName,
+    lastName,
+    role,
+    invitationLink,
+    invitedBy: {
+      firstName: invitedBy.firstName,
+      lastName: invitedBy.lastName
+    }
+  });
+
   if (!twilioClient || !fromNumber) {
-    console.error('❌ Twilio not configured. Cannot send SMS.');
+    console.error('❌ [SMS_DEBUG] Twilio not configured. Cannot send SMS.');
     return { success: false, error: 'SMS service not configured' };
   }
 
   try {
     // Get church country for intelligent parsing
     const countryCode = await getChurchCountry();
+    console.log('🌍 [SMS_DEBUG] Church country code:', countryCode);
     
     // Parse phone number intelligently based on country
     const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
+    console.log('📱 [SMS_DEBUG] International number:', internationalNumber);
+    
     if (!internationalNumber) {
-      console.error('❌ Invalid phone number format:', phoneNumber);
+      console.error('❌ [SMS_DEBUG] Invalid phone number format:', phoneNumber);
       return { success: false, error: 'Invalid phone number format' };
     }
 
     const roleDisplayName = role === 'attendance_taker' ? 'Attendance Taker' : 
                            role === 'coordinator' ? 'Coordinator' : role;
 
-    const message = await twilioClient.messages.create({
-      body: `Hi ${firstName}! ${invitedBy.firstName} ${invitedBy.lastName} has invited you to join Let My People Grow as a ${roleDisplayName}. Accept your invitation: ${invitationLink} (Expires in 7 days)`,
+    const messageBody = `Hi ${firstName}! ${invitedBy.firstName} ${invitedBy.lastName} has invited you to join Let My People Grow as a ${roleDisplayName}. Accept your invitation: ${invitationLink} (Expires in 7 days)`;
+    
+    console.log('📱 [SMS_DEBUG] SMS message prepared', {
+      body: messageBody,
       from: fromNumber,
       to: internationalNumber
     });
 
-    console.log('✅ Invitation SMS sent successfully via Twilio:', message.sid);
+    const message = await twilioClient.messages.create({
+      body: messageBody,
+      from: fromNumber,
+      to: internationalNumber
+    });
+
+    console.log('✅ [SMS_DEBUG] Invitation SMS sent successfully via Twilio:', message.sid);
     return { success: true, messageId: message.sid };
     
   } catch (error) {
-    console.error('❌ Error sending invitation SMS via Twilio:', error);
+    console.error('❌ [SMS_DEBUG] Error sending invitation SMS via Twilio:', error);
+    console.error('❌ [SMS_DEBUG] Error details:', {
+      message: error.message,
+      code: error.code,
+      status: error.status
+    });
     return { success: false, error: error.message };
   }
 };

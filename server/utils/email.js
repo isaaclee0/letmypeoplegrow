@@ -27,6 +27,18 @@ const sendEmail = async (to, subject, htmlContent, textContent = null) => {
 };
 
 const sendInvitationEmail = async (email, firstName, lastName, role, invitationLink, invitedBy) => {
+  console.log('📧 [EMAIL_DEBUG] Starting invitation email send', {
+    email,
+    firstName,
+    lastName,
+    role,
+    invitationLink,
+    invitedBy: {
+      firstName: invitedBy.first_name || invitedBy.firstName,
+      lastName: invitedBy.last_name || invitedBy.lastName
+    }
+  });
+
   const subject = `You're invited to join ${process.env.CHURCH_NAME || 'our church'}!`;
   
   const htmlContent = `
@@ -74,7 +86,20 @@ Blessings,
 ${process.env.CHURCH_NAME || 'Your Church Team'}
   `;
   
-  return sendEmail(email, subject, htmlContent, textContent);
+  console.log('📧 [EMAIL_DEBUG] Email content prepared', {
+    subject,
+    htmlLength: htmlContent.length,
+    textLength: textContent.length
+  });
+  
+  try {
+    const result = await sendEmail(email, subject, htmlContent, textContent);
+    console.log('✅ [EMAIL_DEBUG] Invitation email sent successfully', result);
+    return result;
+  } catch (error) {
+    console.error('❌ [EMAIL_DEBUG] Failed to send invitation email', error);
+    throw error;
+  }
 };
 
 const sendOTCEmail = async (email, otcCode) => {

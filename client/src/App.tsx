@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { MigrationProvider } from './contexts/MigrationContext';
+import { DebugProvider } from './contexts/DebugContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import LandingPage from './pages/LandingPage';
@@ -16,6 +17,7 @@ import OnboardingPage from './pages/OnboardingPage';
 import AcceptInvitationPage from './pages/AcceptInvitationPage';
 import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
 import NonAdminSetupPage from './pages/NonAdminSetupPage';
+import SettingsPage from './pages/SettingsPage';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
@@ -83,9 +85,10 @@ function App() {
   return (
     <AuthProvider>
       <MigrationProvider>
-        <ToastContainer>
-          <Router>
-            <div className="min-h-screen bg-gray-50">
+        <DebugProvider>
+          <ToastContainer>
+            <Router>
+              <div className="min-h-screen bg-gray-50">
             <Routes>
             <Route
               path="/signup"
@@ -165,11 +168,13 @@ function App() {
                   </RoleProtectedRoute>
                 } 
               />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>
         </div>
       </Router>
         </ToastContainer>
+        </DebugProvider>
       </MigrationProvider>
     </AuthProvider>
   );

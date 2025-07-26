@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useDebug } from '../contexts/DebugContext';
 import UpdateNotificationBar from './UpdateNotificationBar';
+import DebugPanel from './DebugPanel';
 import {
   Bars3Icon,
   BellIcon,
@@ -13,11 +15,14 @@ import {
   UsersIcon,
   XMarkIcon,
   WrenchScrewdriverIcon,
+  BugAntIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
+  const { isDebugMode, toggleDebugMode } = useDebug();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -33,6 +38,7 @@ const Layout: React.FC = () => {
     ...(user?.role === 'admin' ? [
       { name: 'Migrations', href: '/app/migrations', icon: WrenchScrewdriverIcon }
     ] : []),
+    { name: 'Settings', href: '/app/settings', icon: Cog6ToothIcon },
   ];
 
   const handleLogout = async () => {
@@ -145,8 +151,21 @@ const Layout: React.FC = () => {
               </div>
             </div>
             <div className="ml-4 flex items-center md:ml-6">
+              {/* Debug Toggle */}
+              <button 
+                onClick={toggleDebugMode}
+                className={`p-1 rounded-full transition-colors duration-200 ${
+                  isDebugMode 
+                    ? 'bg-red-100 text-red-600 hover:bg-red-200' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+                title={isDebugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}
+              >
+                <BugAntIcon className="h-5 w-5" />
+              </button>
+
               {/* Notifications */}
-              <button className="bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
+              <button className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
                 <BellIcon className="h-6 w-6" />
                 {user?.unreadNotifications && user.unreadNotifications > 0 && (
                   <span className="absolute -mt-2 -mr-1 px-2 py-1 text-xs leading-none text-white bg-secondary-500 rounded-full">
@@ -185,6 +204,9 @@ const Layout: React.FC = () => {
         </main>
       </div>
       </div>
+      
+      {/* Debug Panel */}
+      <DebugPanel />
     </div>
   );
 };

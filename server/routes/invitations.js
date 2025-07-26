@@ -56,38 +56,64 @@ router.post('/send',
   ],
   async (req, res) => {
     try {
+      console.log('🔍 [INVITATION_DEBUG] Starting invitation process', {
+        body: req.body,
+        user: req.user.id,
+        userRole: req.user.role
+      });
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        console.log('❌ [INVITATION_DEBUG] Validation errors:', errors.array());
         return res.status(400).json({ errors: errors.array() });
       }
 
       const { email, mobileNumber, primaryContactMethod, role, firstName, lastName, gatheringIds = [] } = req.body;
+      
+      console.log('✅ [INVITATION_DEBUG] Validation passed', {
+        email,
+        mobileNumber,
+        primaryContactMethod,
+        role,
+        firstName,
+        lastName,
+        gatheringIds
+      });
 
       // Validate that at least one contact method is provided
       if (!email && !mobileNumber) {
+        console.log('❌ [INVITATION_DEBUG] No contact method provided');
         return res.status(400).json({ error: 'Either email or mobile number must be provided' });
       }
 
       // Validate that primary contact method matches available contact info
       if (primaryContactMethod === 'email' && !email) {
+        console.log('❌ [INVITATION_DEBUG] Email required but not provided');
         return res.status(400).json({ error: 'Email is required when primary contact method is email' });
       }
       if (primaryContactMethod === 'sms' && !mobileNumber) {
+        console.log('❌ [INVITATION_DEBUG] Mobile number required but not provided');
         return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
       }
 
       // Check if user is coordinator and trying to create admin
       if (req.user.role === 'coordinator' && role === 'admin') {
+        console.log('❌ [INVITATION_DEBUG] Coordinator trying to create admin user');
         return res.status(403).json({ error: 'Coordinators cannot create admin users' });
       }
 
       // Normalize mobile number if provided
       let normalizedMobile = null;
       if (mobileNumber) {
+        console.log('📱 [INVITATION_DEBUG] Normalizing mobile number:', mobileNumber);
         const countryCode = await getChurchCountry();
+        console.log('🌍 [INVITATION_DEBUG] Church country code:', countryCode);
+        
         normalizedMobile = getInternationalFormat(mobileNumber, countryCode);
+        console.log('📱 [INVITATION_DEBUG] Normalized mobile number:', normalizedMobile);
         
         if (!normalizedMobile) {
+          console.log('❌ [INVITATION_DEBUG] Invalid mobile number format');
           return res.status(400).json({ 
             error: `Invalid mobile number format for ${countryCode}` 
           });
@@ -95,94 +121,130 @@ router.post('/send',
       }
 
       // Check if user already exists with this email or mobile number
+      console.log('🔍 [INVITATION_DEBUG] Checking for existing users');
       const existingUserChecks = [];
       if (email) {
+        console.log('📧 [INVITATION_DEBUG] Checking for existing user with email:', email);
         existingUserChecks.push(
           Database.query('SELECT id FROM users WHERE email = ?', [email])
         );
       }
       if (normalizedMobile) {
+        console.log('📱 [INVITATION_DEBUG] Checking for existing user with mobile:', normalizedMobile);
         existingUserChecks.push(
           Database.query('SELECT id FROM users WHERE mobile_number = ?', [normalizedMobile])
         );
       }
 
       const existingUserResults = await Promise.all(existingUserChecks);
+      console.log('🔍 [INVITATION_DEBUG] Existing user check results:', existingUserResults);
+      
       if (existingUserResults.some(result => result.length > 0)) {
+        console.log('❌ [INVITATION_DEBUG] User already exists');
         return res.status(409).json({ error: 'User with this email or mobile number already exists' });
       }
 
       // Check for pending invitations
+      console.log('🔍 [INVITATION_DEBUG] Checking for pending invitations');
       const existingInvitationChecks = [];
       if (email) {
+        console.log('📧 [INVITATION_DEBUG] Checking for pending invitation with email:', email);
         existingInvitationChecks.push(
           Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = false AND expires_at > NOW()', [email])
         );
       }
       if (normalizedMobile) {
+        console.log('📱 [INVITATION_DEBUG] Checking for pending invitation with mobile:', normalizedMobile);
         existingInvitationChecks.push(
           Database.query('SELECT id FROM user_invitations WHERE mobile_number = ? AND accepted = false AND expires_at > NOW()', [normalizedMobile])
         );
       }
 
       const existingInvitationResults = await Promise.all(existingInvitationChecks);
+      console.log('🔍 [INVITATION_DEBUG] Pending invitation check results:', existingInvitationResults);
+      
       if (existingInvitationResults.some(result => result.length > 0)) {
+        console.log('❌ [INVITATION_DEBUG] Pending invitation already exists');
         return res.status(409).json({ error: 'Invitation already sent to this contact' });
       }
 
       // Validate gathering access for coordinators
       if (req.user.role === 'coordinator' && gatheringIds.length > 0) {
+        console.log('🔍 [INVITATION_DEBUG] Validating gathering access for coordinator');
         const userGatherings = await Database.query(
           'SELECT gathering_type_id FROM user_gathering_assignments WHERE user_id = ?',
           [req.user.id]
         );
         const userGatheringIds = userGatherings.map(g => g.gathering_type_id);
+        console.log('🔍 [INVITATION_DEBUG] User gathering IDs:', userGatheringIds);
+        console.log('🔍 [INVITATION_DEBUG] Requested gathering IDs:', gatheringIds);
         
         const hasInvalidGathering = gatheringIds.some(id => !userGatheringIds.includes(parseInt(id)));
         if (hasInvalidGathering) {
+          console.log('❌ [INVITATION_DEBUG] Coordinator trying to assign unauthorized gatherings');
           return res.status(403).json({ error: 'Cannot assign gatherings you do not have access to' });
         }
+        console.log('✅ [INVITATION_DEBUG] Gathering access validated');
       }
 
+      console.log('💾 [INVITATION_DEBUG] Starting database transaction');
       await Database.transaction(async (conn) => {
         // Generate invitation token
         const invitationToken = uuidv4();
         const expiresAt = moment().add(7, 'days').format('YYYY-MM-DD HH:mm:ss');
+        
+        console.log('🔑 [INVITATION_DEBUG] Generated invitation token:', invitationToken);
+        console.log('⏰ [INVITATION_DEBUG] Expires at:', expiresAt);
 
         // Create invitation
+        console.log('💾 [INVITATION_DEBUG] Creating invitation record');
         const invitationResult = await conn.query(`
           INSERT INTO user_invitations (email, mobile_number, primary_contact_method, role, first_name, last_name, invited_by, invitation_token, expires_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.id, invitationToken, expiresAt]);
+        
+        console.log('✅ [INVITATION_DEBUG] Invitation record created with ID:', invitationResult.insertId);
 
         // Send invitation via appropriate method
         const protocol = req.headers['x-forwarded-proto'] || req.protocol;
         const host = req.headers['x-forwarded-host'] || req.get('host');
         const invitationLink = `${protocol}://${host}/accept-invitation/${invitationToken}`;
+        
+        console.log('🔗 [INVITATION_DEBUG] Generated invitation link:', invitationLink);
+        console.log('📤 [INVITATION_DEBUG] Sending invitation via:', primaryContactMethod);
+        
         if (primaryContactMethod === 'email') {
-          await sendInvitationEmail(email, firstName, lastName, role, invitationLink, req.user);
+          console.log('📧 [INVITATION_DEBUG] Sending email invitation');
+          const emailResult = await sendInvitationEmail(email, firstName, lastName, role, invitationLink, req.user);
+          console.log('📧 [INVITATION_DEBUG] Email invitation result:', emailResult);
         } else {
-          await sendInvitationSMS(normalizedMobile, firstName, lastName, role, invitationLink, req.user);
+          console.log('📱 [INVITATION_DEBUG] Sending SMS invitation');
+          const smsResult = await sendInvitationSMS(normalizedMobile, firstName, lastName, role, invitationLink, req.user);
+          console.log('📱 [INVITATION_DEBUG] SMS invitation result:', smsResult);
         }
 
         // If gathering IDs are provided, store them for later assignment
         if (gatheringIds.length > 0) {
-          // We'll store this in a temporary way or handle it when the invitation is accepted
-          // For now, let's store it as a JSON field in the invitation record
+          console.log('🏛️ [INVITATION_DEBUG] Storing gathering assignments:', gatheringIds);
           await conn.query(
             'UPDATE user_invitations SET gathering_assignments = ? WHERE id = ?',
             [JSON.stringify(gatheringIds), invitationResult.insertId]
           );
+          console.log('✅ [INVITATION_DEBUG] Gathering assignments stored');
         }
       });
+      
+      console.log('✅ [INVITATION_DEBUG] Database transaction completed successfully');
 
+      console.log('✅ [INVITATION_DEBUG] Invitation process completed successfully');
       res.json({ 
         message: 'Invitation sent successfully',
         email: email
       });
 
     } catch (error) {
-      console.error('Send invitation error:', error);
+      console.error('❌ [INVITATION_DEBUG] Send invitation error:', error);
+      console.error('❌ [INVITATION_DEBUG] Error stack:', error.stack);
       res.status(500).json({ error: 'Failed to send invitation' });
     }
   }
