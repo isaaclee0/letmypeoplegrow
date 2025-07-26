@@ -49,8 +49,17 @@ async function requireIsVisitorColumn() {
   return requireColumn('individuals', 'is_visitor', '002_add_contact_fields');
 }
 
+/**
+ * Check if last_attended column exists in visitors table and provide helpful error if not
+ * @returns {Promise<void>}
+ */
+async function requireLastAttendedColumn() {
+  return requireColumn('visitors', 'last_attended', '003_enhance_visitors_table');
+}
+
 module.exports = {
   columnExists,
   requireColumn,
-  requireIsVisitorColumn
+  requireIsVisitorColumn,
+  requireLastAttendedColumn
 }; 

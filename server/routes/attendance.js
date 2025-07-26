@@ -1,7 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireGatheringAccess } = require('../middleware/auth');
-const { requireIsVisitorColumn } = require('../utils/databaseSchema');
+const { requireIsVisitorColumn, requireLastAttendedColumn } = require('../utils/databaseSchema');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -139,6 +139,10 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
 router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId } = req.params;
+    
+    // Check if last_attended column exists
+    await requireLastAttendedColumn();
+    
     const twoMonthsAgo = new Date();
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
     
