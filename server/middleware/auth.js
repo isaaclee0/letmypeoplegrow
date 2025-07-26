@@ -93,7 +93,7 @@ const auditLog = (action) => {
         setImmediate(async () => {
           try {
             await Database.query(`
-              INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
+              INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent)
               VALUES (?, ?, ?, ?, ?, ?, ?)
             `, [
               req.user.id,
