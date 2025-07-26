@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-client",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.5",
@@ -26,6 +26,7 @@
     "react-hook-form": "^7.60.0",
     "react-router-dom": "^7.7.0",
     "react-scripts": "5.0.1",
+    "socket.io-client": "^4.7.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^4.9.5",
     "web-vitals": "^2.1.4",
