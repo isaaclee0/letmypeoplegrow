@@ -20,6 +20,7 @@ router.post('/send',
   [
     body('email')
       .optional()
+      .if(body('email').notEmpty())
       .isEmail()
       .normalizeEmail()
       .withMessage('Valid email is required'),
