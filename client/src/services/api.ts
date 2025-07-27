@@ -406,9 +406,9 @@ export const csvImportAPI = {
 
 export const notificationRulesAPI = {
   getAll: () => api.get('/notification-rules'),
-  create: (data) => api.post('/notification-rules', data),
-  update: (id, data) => api.put(`/notification-rules/${id}`, data),
-  remove: (id) => api.delete(`/notification-rules/${id}`),
+  create: (data: any) => api.post('/notification-rules', data),
+  update: (id: number, data: any) => api.put(`/notification-rules/${id}`, data),
+  remove: (id: number) => api.delete(`/notification-rules/${id}`),
 };
 
 export default api; 
