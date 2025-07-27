@@ -674,6 +674,15 @@ const AttendancePage: React.FC = () => {
     });
   });
 
+  // Helper function to count actual number of people in visitor records
+  const getVisitorPeopleCount = useMemo(() => {
+    return visitors.reduce((total, visitor) => {
+      // Count the number of people in each visitor record by splitting on ' & '
+      const peopleInRecord = visitor.name.split(' & ').length;
+      return total + peopleInRecord;
+    }, 0);
+  }, [visitors]);
+
   // Group visitors by family
   const groupedVisitors = useMemo(() => {
     if (!groupByFamily) {
@@ -700,7 +709,20 @@ const AttendancePage: React.FC = () => {
             return (firstName && firstName !== 'Unknown' && !firstName.startsWith('Child')) ? firstName : null;
           }).filter(name => name !== null);
           
-          if (firstNames.length > 0) {
+          // Try to get a shared family surname (not "Unknown")
+          const surnames = people.map(person => {
+            const parts = person.split(' ');
+            const lastName = parts.slice(1).join(' ');
+            return (lastName && lastName !== 'Unknown') ? lastName : null;
+          }).filter(name => name !== null);
+          
+          // Use the most common surname, or default to first names
+          const uniqueSurnames = Array.from(new Set(surnames));
+          if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
+            // All have the same surname
+            familyName = uniqueSurnames[0];
+          } else if (firstNames.length > 0) {
+            // Use first names when surnames are mixed or unknown
             if (firstNames.length === 1) {
               familyName = `${firstNames[0]} Family`;
             } else if (firstNames.length === 2) {
@@ -765,7 +787,7 @@ const AttendancePage: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">
-                  {attendanceList.filter(person => person.present).length + visitors.length}
+                  {attendanceList.filter(person => person.present).length + getVisitorPeopleCount}
                 </div>
                 <div className="text-sm text-gray-500">Total Present</div>
               </div>
@@ -777,7 +799,7 @@ const AttendancePage: React.FC = () => {
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-green-600">
-                  {visitors.length}
+                  {getVisitorPeopleCount}
                 </div>
                 <div className="text-sm text-gray-500">Visitors</div>
               </div>
@@ -1048,14 +1070,16 @@ const AttendancePage: React.FC = () => {
       {visitors.length > 0 && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Visitors</h3>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">
+              Visitors ({getVisitorPeopleCount})
+            </h3>
             <div className="space-y-4">
               {groupedVisitors.map((group: any) => (
-                <div key={group.familyId || `visitor-group-${group.members[0].id}`} className={groupByFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
-                  {groupByFamily && group.familyName && (
+                <div key={group.familyId || `visitor-group-${group.members[0].id}`} className={groupByFamily && group.isFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
+                  {groupByFamily && group.familyName && group.isFamily && (
                     <div className="flex justify-between items-center mb-3">
                       <h4 className="text-md font-medium text-gray-900">
-                        {group.familyName} (Visitors)
+                        {group.familyName}
                       </h4>
                     </div>
                   )}
@@ -1081,13 +1105,19 @@ const AttendancePage: React.FC = () => {
                         <label
                           key={person.id}
                           className={`flex items-center cursor-pointer transition-colors ${
-                            group.isFamily 
-                              ? `p-3 rounded-md border border-gray-200 bg-gray-50 hover:bg-gray-100`
-                              : `p-2 rounded-md bg-primary-50 hover:bg-primary-100`
+                            groupByFamily && group.isFamily
+                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50` // Same as present regular family members
+                              : `p-2 rounded-md bg-primary-50` // Same as present individual regulars
                           }`}
                         >
-                          <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
-                            <CheckIcon className="h-3 w-3 text-white" />
+                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                            groupByFamily && group.isFamily
+                              ? 'bg-white border-primary-500' // Match regular family member checkbox style
+                              : 'bg-primary-600 border-primary-600' // Match individual style
+                          }`}>
+                            <CheckIcon className={`h-3 w-3 ${
+                              groupByFamily && group.isFamily ? 'text-primary-600' : 'text-white'
+                            }`} />
                           </div>
                           <div className="ml-3 flex-1">
                             <span className="text-sm font-medium text-gray-900">
