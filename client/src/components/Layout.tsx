@@ -92,14 +92,14 @@ const Layout: React.FC = () => {
                 src="/logo-white.png"
                 alt="Let My People Grow"
               />
-              <div className="text-center">
-                <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
-                  LET MY PEOPLE
-                </div>
-                <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
-                  GROW
-                </div>
-              </div>
+                               <div className="text-center">
+                   <div className="text-white font-title font-bold text-lg leading-tight tracking-normal">
+                     LET MY PEOPLE
+                   </div>
+                   <div className="text-white font-title font-bold text-xl leading-tight tracking-wide">
+                     GROW
+                   </div>
+                 </div>
             </div>
           </div>
         </div>
@@ -134,10 +134,10 @@ const Layout: React.FC = () => {
                   alt="Let My People Grow"
                 />
                 <div className="text-center">
-                  <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                  <div className="text-white font-title font-bold text-lg leading-tight tracking-normal">
                     LET MY PEOPLE
                   </div>
-                  <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                  <div className="text-white font-title font-bold text-xl leading-tight tracking-wide">
                     GROW
                   </div>
                 </div>
