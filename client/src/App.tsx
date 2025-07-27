@@ -5,7 +5,6 @@ import { MigrationProvider } from './contexts/MigrationContext';
 import { DebugProvider } from './contexts/DebugContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
-import LandingPage from './pages/LandingPage';
 import DashboardPage from './pages/DashboardPage';
 import AttendancePage from './pages/AttendancePage';
 import ReportsPage from './pages/ReportsPage';
@@ -75,15 +74,24 @@ const RoleProtectedRoute: React.FC<{
   return <>{children}</>;
 };
 
-// Public Route component (redirects to dashboard if authenticated)
+// Public Route component (redirects based on user role if authenticated)
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return <LoadingSpinner />;
   }
 
-  return !isAuthenticated ? <>{children}</> : <Navigate to="/app/dashboard" replace />;
+  if (isAuthenticated && user) {
+    // Redirect based on user role
+    if (user.role === 'attendance_taker') {
+      return <Navigate to="/app/attendance" replace />;
+    } else {
+      return <Navigate to="/app/dashboard" replace />;
+    }
+  }
+
+  return <>{children}</>;
 };
 
 function App() {
@@ -141,7 +149,7 @@ function App() {
             />
             <Route
               path="/"
-              element={<LandingPage />}
+              element={<Navigate to="/login" replace />}
             />
             <Route
               path="/app"

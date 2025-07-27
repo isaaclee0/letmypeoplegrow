@@ -86,12 +86,20 @@ const Layout: React.FC = () => {
               ))}
             </nav>
             {/* Logo at bottom */}
-            <div className="flex-shrink-0 flex justify-center px-4 py-6">
+            <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
               <img
-                className="w-3/4 aspect-square object-contain"
-                src="/logo.png"
+                className="w-3/4 aspect-square object-contain mb-3"
+                src="/logo-white.png"
                 alt="Let My People Grow"
               />
+              <div className="text-center">
+                <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                  LET MY PEOPLE
+                </div>
+                <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                  GROW
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -119,12 +127,20 @@ const Layout: React.FC = () => {
                 ))}
               </nav>
               {/* Logo at bottom */}
-              <div className="flex-shrink-0 flex justify-center px-4 py-6">
+              <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
                 <img
-                  className="w-3/4 aspect-square object-contain"
-                  src="/logo.png"
+                  className="w-3/4 aspect-square object-contain mb-3"
+                  src="/logo-white.png"
                   alt="Let My People Grow"
                 />
+                <div className="text-center">
+                  <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                    LET MY PEOPLE
+                  </div>
+                  <div className="text-white font-title font-bold text-lg leading-tight tracking-wide">
+                    GROW
+                  </div>
+                </div>
               </div>
             </div>
           </div>
