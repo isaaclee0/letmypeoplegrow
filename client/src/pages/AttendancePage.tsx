@@ -1090,21 +1090,18 @@ const AttendancePage: React.FC = () => {
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                     {group.members.map((person: any) => {
-                      // Each visitor record now contains a single person's name
                       const parts = person.name.trim().split(' ');
                       const firstName = parts[0];
                       const lastName = parts.slice(1).join(' ');
-                      
-                      // Clean display name - hide "Unknown" surnames
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
 
                       return (
-                        <label
+                        <div
                           key={person.id}
-                          className={`flex items-center cursor-pointer transition-colors ${
+                          className={`flex items-center transition-colors ${
                             groupByFamily && group.isFamily
-                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50` // Match regular family members
-                              : `p-2 rounded-md bg-primary-50` // Match individual regulars
+                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50`
+                              : `p-2 rounded-md bg-primary-50`
                           }`}
                         >
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600`}>
@@ -1134,7 +1131,7 @@ const AttendancePage: React.FC = () => {
                               </button>
                             </div>
                           </div>
-                        </label>
+                        </div>
                       );
                     })}
                   </div>
