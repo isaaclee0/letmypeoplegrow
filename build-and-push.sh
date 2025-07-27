@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-VERSION=${1:-v0.5.6}
+VERSION=${1:-v0.5.8}
 REGISTRY="staugustine1"
 SERVER_IMAGE="$REGISTRY/letmypeoplegrow-server"
 CLIENT_IMAGE="$REGISTRY/letmypeoplegrow-client"
