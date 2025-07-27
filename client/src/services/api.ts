@@ -85,6 +85,8 @@ export interface Visitor {
   visitorFamilyGroup?: string;
   notes?: string;
   lastAttended?: string;
+  familyId?: number;
+  familyName?: string;
 }
 
 export interface AttendanceData {

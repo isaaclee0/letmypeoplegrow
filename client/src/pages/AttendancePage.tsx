@@ -650,35 +650,19 @@ const AttendancePage: React.FC = () => {
     const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[] } } = {};
 
     visitors.forEach(visitor => {
-      if (visitor.familyId) {
-        const familyKey = `family_${visitor.familyId}`;
-        if (!grouped[familyKey]) {
-          grouped[familyKey] = {
-            familyId: visitor.familyId,
-            familyName: visitor.familyName || 'Unknown Family',
-            members: []
-          };
-        }
-        grouped[familyKey].members.push(visitor);
-      } else {
-        const singleVisitorKey = 'single_visitor';
-        if (!grouped[singleVisitorKey]) {
-          grouped[singleVisitorKey] = {
-            familyId: null,
-            familyName: null,
-            members: []
-          };
-        }
-        grouped[singleVisitorKey].members.push(visitor);
+      // For now, treat all visitors as individuals since they don't have family info from backend
+      const singleVisitorKey = 'single_visitor';
+      if (!grouped[singleVisitorKey]) {
+        grouped[singleVisitorKey] = {
+          familyId: null,
+          familyName: null,
+          members: []
+        };
       }
+      grouped[singleVisitorKey].members.push(visitor);
     });
 
-    return Object.values(grouped).sort((a, b) => {
-      if (a.familyId === null && b.familyId === null) return 0;
-      if (a.familyId === null) return -1;
-      if (b.familyId === null) return 1;
-      return a.familyName!.localeCompare(b.familyName!);
-    });
+    return Object.values(grouped);
   }, [visitors, groupByFamily]);
 
   return (
@@ -1023,7 +1007,7 @@ const AttendancePage: React.FC = () => {
                         </div>
                         <div className="ml-3 flex-1">
                           <span className="text-sm font-medium text-gray-900">
-                            {person.firstName} {person.lastName}
+                            {person.name}
                           </span>
                           <div className="flex items-center mt-1">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
