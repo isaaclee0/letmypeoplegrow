@@ -515,4 +515,123 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
   }
 });
 
+// Add regular attendee to a gathering from attendance page
+router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { people } = req.body;
+
+    if (!people || people.length === 0) {
+      return res.status(400).json({ error: 'People information is required' });
+    }
+
+    // Check if is_visitor column exists
+    await requireIsVisitorColumn();
+
+    await Database.transaction(async (conn) => {
+      // Create family if multiple people
+      let familyId = null;
+      let familyLastName = 'Unknown';
+      let childCount = 0;
+      const createdIndividuals = [];
+
+      if (people.length > 1) {
+        const mainPerson = people.find(p => !p.isChild);
+        if (mainPerson && !mainPerson.lastUnknown) {
+          familyLastName = mainPerson.lastName.toUpperCase();
+          const familyName = `${familyLastName}, ${people.map(p => p.firstName).join(' & ')}`;
+          
+          const familyResult = await conn.query(`
+            INSERT INTO families (family_name) VALUES (?)
+          `, [familyName]);
+          
+          familyId = Number(familyResult.insertId);
+        }
+      }
+
+      for (const person of people) {
+        let { firstName, lastName, firstUnknown, lastUnknown, isChild } = person;
+
+        // Handle unknown first name
+        if (firstUnknown || !firstName.trim()) {
+          if (isChild) {
+            childCount++;
+            firstName = `Child ${childCount}`;
+          } else {
+            firstName = 'Unknown';
+          }
+        } else {
+          firstName = firstName.trim();
+        }
+
+        // Handle unknown last name
+        if (lastUnknown || !lastName || !lastName.trim()) {
+          lastName = familyId ? familyLastName : 'Unknown';
+        } else {
+          lastName = lastName.trim();
+        }
+
+        // Check if individual already exists (only match non-visitors)
+        const existingIndividual = await conn.query(`
+          SELECT id FROM individuals 
+          WHERE LOWER(first_name) = LOWER(?) 
+            AND LOWER(last_name) = LOWER(?) 
+            AND (is_visitor = false OR is_visitor IS NULL)
+            AND is_active = true
+        `, [firstName, lastName]);
+
+        let individualId;
+        if (existingIndividual.length === 0) {
+          // Create new individual as regular (not visitor)
+          const individualResult = await conn.query(`
+            INSERT INTO individuals (first_name, last_name, family_id, is_visitor, created_by)
+            VALUES (?, ?, ?, false, ?)
+          `, [firstName, lastName, familyId, req.user.id]);
+
+          individualId = Number(individualResult.insertId);
+        } else {
+          // Use existing individual
+          individualId = Number(existingIndividual[0].id);
+          
+          // Update family_id if creating a new family
+          if (familyId) {
+            await conn.query(`
+              UPDATE individuals 
+              SET family_id = ? 
+              WHERE id = ?
+            `, [familyId, individualId]);
+          }
+        }
+
+        // Add to gathering list if not already there
+        const existingAssignment = await conn.query(
+          'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
+          [gatheringTypeId, individualId]
+        );
+        
+        if (existingAssignment.length === 0) {
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            VALUES (?, ?, ?)
+          `, [gatheringTypeId, individualId, req.user.id]);
+        }
+
+        createdIndividuals.push({
+          id: individualId,
+          firstName,
+          lastName
+        });
+      }
+
+      res.json({ 
+        message: 'Regular attendee(s) added successfully',
+        individuals: createdIndividuals
+      });
+    });
+  } catch (error) {
+    console.error('Add regular attendee error:', error);
+    res.status(500).json({ error: 'Failed to add regular attendee.' });
+  }
+});
+
 module.exports = router; 

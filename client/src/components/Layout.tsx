@@ -14,6 +14,7 @@ import {
   XMarkIcon,
   WrenchScrewdriverIcon,
   Cog6ToothIcon,
+  ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
@@ -45,6 +46,11 @@ const Layout: React.FC = () => {
     navigate('/login');
   };
 
+  const handleMyProfile = () => {
+    setSidebarOpen(false);
+    navigate('/app/users?profile=me');
+  };
+
   return (
     <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
       {/* Update notification bar */}
@@ -64,7 +70,19 @@ const Layout: React.FC = () => {
             </button>
           </div>
           <div className="flex-1 h-0 pt-5 pb-4 overflow-y-auto flex flex-col">
-            <nav className="flex-1 px-2 space-y-1">
+            {/* User Profile Section */}
+            <div className="px-4 py-3 border-b border-primary-400">
+              <div className="flex items-center">
+                <UserCircleIcon className="h-10 w-10 text-white" />
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-white">{user?.firstName} {user?.lastName}</p>
+                  <p className="text-xs text-primary-200 capitalize">{user?.role?.replace('_', ' ')}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Navigation */}
+            <nav className="flex-1 px-2 space-y-1 mt-4">
               {navigation.map((item) => (
                 <Link
                   key={item.name}
@@ -81,6 +99,25 @@ const Layout: React.FC = () => {
                 </Link>
               ))}
             </nav>
+
+            {/* Profile Actions */}
+            <div className="px-2 space-y-1 mt-4">
+              <button
+                onClick={handleMyProfile}
+                className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
+              >
+                <UserCircleIcon className="mr-4 h-6 w-6" />
+                My Profile
+              </button>
+              <button
+                onClick={handleLogout}
+                className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
+              >
+                <ArrowRightOnRectangleIcon className="mr-4 h-6 w-6" />
+                Logout
+              </button>
+            </div>
+
             {/* Logo at bottom */}
             <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
               <img
@@ -167,7 +204,6 @@ const Layout: React.FC = () => {
             </div>
             <div className="ml-4 flex items-center md:ml-6">
 
-
               {/* Notifications - only show for non-attendance takers */}
               {user?.role !== 'attendance_taker' && (
                 <button className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
@@ -180,8 +216,8 @@ const Layout: React.FC = () => {
                 </button>
               )}
 
-              {/* Profile dropdown */}
-              <div className="ml-3 relative">
+              {/* Profile dropdown - Desktop only */}
+              <div className="ml-3 relative hidden md:block">
                 <div className="flex items-center">
                   <UserCircleIcon className="h-8 w-8 text-primary-400" />
                   <div className="ml-2">

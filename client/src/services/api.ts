@@ -192,6 +192,15 @@ export const attendanceAPI = {
     
   updateVisitor: (gatheringTypeId: number, date: string, visitorId: number, visitor: AddVisitorData) => 
     api.put(`/attendance/${gatheringTypeId}/${date}/visitors/${visitorId}`, visitor),
+    
+  addRegularAttendee: (gatheringTypeId: number, date: string, people: Array<{
+    firstName: string;
+    lastName: string;
+    firstUnknown: boolean;
+    lastUnknown: boolean;
+    isChild: boolean;
+  }>) => 
+    api.post(`/attendance/${gatheringTypeId}/${date}/regulars`, { people }),
 };
 
 // Users API

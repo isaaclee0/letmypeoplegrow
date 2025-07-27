@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usersAPI, invitationsAPI, gatheringsAPI } from '../services/api';
 import ActionMenu from '../components/ActionMenu';
+import { useSearchParams } from 'react-router-dom';
 import {
   UserIcon,
   UserGroupIcon,
@@ -53,6 +54,7 @@ interface GatheringType {
 
 const UsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
+  const [searchParams] = useSearchParams();
   const [users, setUsers] = useState<User[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
@@ -86,6 +88,17 @@ const UsersPage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Handle profile parameter to open current user's details
+  useEffect(() => {
+    const profileParam = searchParams.get('profile');
+    if (profileParam === 'me' && currentUser && users.length > 0) {
+      const currentUserInList = users.find(user => user.id === currentUser.id);
+      if (currentUserInList) {
+        handleViewUserDetails(currentUserInList);
+      }
+    }
+  }, [searchParams, currentUser, users]);
 
   const loadData = async () => {
     try {

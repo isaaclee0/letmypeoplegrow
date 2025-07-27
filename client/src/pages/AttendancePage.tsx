@@ -487,17 +487,25 @@ const AttendancePage: React.FC = () => {
 
       const notes = visitorForm.notes.trim();
 
-      // Add visitor to backend
-      const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
-        people,
-        visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
-        notes: notes ? notes : undefined
-      });
+      let response;
+      // Choose endpoint based on person type
+      if (visitorForm.personType === 'regular') {
+        // Add as regular attendee (to People and gathering list)
+        response = await attendanceAPI.addRegularAttendee(selectedGathering.id, selectedDate, people);
+      } else {
+        // Add as visitor
+        response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
+          people,
+          visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
+          notes: notes ? notes : undefined
+        });
+      }
 
       // Show success toast
       if (response.data.individuals && response.data.individuals.length > 0) {
         const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
-        showSuccess(`Added: ${names}`);
+        const personTypeText = visitorForm.personType === 'regular' ? 'Added to regular attendees' : 'Added as visitor';
+        showSuccess(`${personTypeText}: ${names}`);
       } else {
         showSuccess('Added successfully');
       }
@@ -1095,18 +1103,12 @@ const AttendancePage: React.FC = () => {
                           key={person.id}
                           className={`flex items-center cursor-pointer transition-colors ${
                             groupByFamily && group.isFamily
-                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50` // Same as present regular family members
-                              : `p-2 rounded-md bg-primary-50` // Same as present individual regulars
+                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50` // Match regular family members
+                              : `p-2 rounded-md bg-primary-50` // Match individual regulars
                           }`}
                         >
-                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                            groupByFamily && group.isFamily
-                              ? 'bg-white border-primary-500' // Match regular family member checkbox style
-                              : 'bg-primary-600 border-primary-600' // Match individual style
-                          }`}>
-                            <CheckIcon className={`h-3 w-3 ${
-                              groupByFamily && group.isFamily ? 'text-primary-600' : 'text-white'
-                            }`} />
+                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600`}>
+                            <CheckIcon className="h-3 w-3 text-white" />
                           </div>
                           <div className="ml-3 flex-1">
                             <span className="text-sm font-medium text-gray-900">
@@ -1363,7 +1365,7 @@ const AttendancePage: React.FC = () => {
                     </div>
                   </div>
                 )}
-                {/* Children Section */}
+                {/* Children Section - only for visitors */}
                 {visitorForm.personType === 'visitor' && (
                   <div className="mt-4">
                     <div className="flex items-center justify-between">
@@ -1422,20 +1424,32 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Notes field - single notes box for all */}
-                <div>
-                  <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
-                    Notes
-                  </label>
-                  <textarea
-                    id="notes"
-                    value={visitorForm.notes}
-                    onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Any additional notes (optional)"
-                    rows={3}
-                  />
-                </div>
+                {/* Help text for regular attendees */}
+                {visitorForm.personType === 'regular' && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                    <div className="text-sm text-blue-700">
+                      <strong>Adding Regular Attendees:</strong> This will add the person to your People list and assign them to this gathering. 
+                      For families with children, we recommend adding family members individually through the People page where you can properly organize families.
+                    </div>
+                  </div>
+                )}
+
+                {/* Notes field - only for visitors since regular attendees don't support notes in this form */}
+                {visitorForm.personType === 'visitor' && (
+                  <div>
+                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                      Notes
+                    </label>
+                    <textarea
+                      id="notes"
+                      value={visitorForm.notes}
+                      onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="Any additional notes (optional)"
+                      rows={3}
+                    />
+                  </div>
+                )}
                 
                 <div className="flex justify-end space-x-3 pt-4">
                   <button
