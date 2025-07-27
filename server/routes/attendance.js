@@ -326,15 +326,26 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
       // Compute full name for visitors table
       const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
 
-      // Add to visitors table
-      const visitorResult = await conn.query(`
-        INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [sessionId, fullName, visitorType || 'temporary_other', visitorFamilyGroup || null, notes || null, date]);
+      // Add to visitors table - Create separate records for each person instead of one combined record
+      const visitorIds = [];
+      for (const individual of createdIndividuals) {
+        const visitorResult = await conn.query(`
+          INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+          sessionId, 
+          `${individual.firstName} ${individual.lastName}`, // Individual name, not combined
+          visitorType || 'temporary_other', 
+          peopleToCreate.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null, // Group families together
+          notes || null, 
+          date
+        ]);
+        visitorIds.push(Number(visitorResult.insertId));
+      }
 
       res.json({ 
         message: 'Visitor(s) added successfully',
-        visitorId: Number(visitorResult.insertId),
+        visitorIds: visitorIds,
         individuals: createdIndividuals
       });
     });
@@ -475,15 +486,26 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
       // Compute full name for visitors table
       const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
 
-      // Add updated visitor to visitors table
-      const visitorResult = await conn.query(`
-        INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [sessionId, fullName, visitorType || 'temporary_other', null, notes || null, date]);
+      // Add updated visitor to visitors table - Create separate records for each person
+      const visitorIds = [];
+      for (const individual of createdIndividuals) {
+        const visitorResult = await conn.query(`
+          INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+          sessionId, 
+          `${individual.firstName} ${individual.lastName}`, // Individual name, not combined
+          visitorType || 'temporary_other', 
+          createdIndividuals.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null, // Group families together
+          notes || null, 
+          date
+        ]);
+        visitorIds.push(Number(visitorResult.insertId));
+      }
 
       res.json({ 
         message: 'Visitor updated successfully',
-        visitorId: Number(visitorResult.insertId),
+        visitorIds: visitorIds,
         individuals: createdIndividuals
       });
     });

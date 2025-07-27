@@ -676,11 +676,8 @@ const AttendancePage: React.FC = () => {
 
   // Helper function to count actual number of people in visitor records
   const getVisitorPeopleCount = useMemo(() => {
-    return visitors.reduce((total, visitor) => {
-      // Count the number of people in each visitor record by splitting on ' & '
-      const peopleInRecord = visitor.name.split(' & ').length;
-      return total + peopleInRecord;
-    }, 0);
+    // Now each visitor record represents one person, so just count the records
+    return visitors.length;
   }, [visitors]);
 
   // Group visitors by family
@@ -700,29 +697,29 @@ const AttendancePage: React.FC = () => {
         let familyName = null;
         
         if (isFamily) {
-          // Extract first names from the visitor name to create family name
-          const people = visitor.name.split(' & ').map(name => name.trim());
-          const firstNames = people.map(person => {
-            const parts = person.split(' ');
+          // For families, we'll collect all first names and create a family name
+          // We need to look at all visitors in this family group to determine the name
+          const familyMembers = visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
+          
+          const firstNames = familyMembers.map(member => {
+            const parts = member.name.trim().split(' ');
             const firstName = parts[0];
-            // Don't use "Unknown" or "Child" names
-            return (firstName && firstName !== 'Unknown' && !firstName.startsWith('Child')) ? firstName : null;
+            return (firstName && firstName !== 'Unknown') ? firstName : null;
           }).filter(name => name !== null);
           
-          // Try to get a shared family surname (not "Unknown")
-          const surnames = people.map(person => {
-            const parts = person.split(' ');
+          const surnames = familyMembers.map(member => {
+            const parts = member.name.trim().split(' ');
             const lastName = parts.slice(1).join(' ');
             return (lastName && lastName !== 'Unknown') ? lastName : null;
           }).filter(name => name !== null);
           
-          // Use the most common surname, or default to first names
+          // Use shared surname if all have the same one, otherwise use first names
           const uniqueSurnames = Array.from(new Set(surnames));
           if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
-            // All have the same surname
+            // All have the same surname - use it
             familyName = uniqueSurnames[0];
           } else if (firstNames.length > 0) {
-            // Use first names when surnames are mixed or unknown
+            // Different or unknown surnames - use first names
             if (firstNames.length === 1) {
               familyName = `${firstNames[0]} Family`;
             } else if (firstNames.length === 2) {
@@ -736,7 +733,7 @@ const AttendancePage: React.FC = () => {
         }
         
         grouped[groupKey] = {
-          familyId: null, // Visitors don't have numeric family IDs like regular attendees
+          familyId: null,
           familyName,
           members: [],
           isFamily
@@ -1085,21 +1082,13 @@ const AttendancePage: React.FC = () => {
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                     {group.members.map((person: any) => {
-                      // Clean up visitor name display - hide "Unknown" surnames
-                      const cleanName = person.name
-                        .split(' & ')
-                        .map((name: string) => {
-                          const parts = name.trim().split(' ');
-                          const firstName = parts[0];
-                          const lastName = parts.slice(1).join(' ');
-                          
-                          // If lastName is "Unknown", just show firstName
-                          if (lastName === 'Unknown' || !lastName) {
-                            return firstName;
-                          }
-                          return `${firstName} ${lastName}`;
-                        })
-                        .join(' & ');
+                      // Each visitor record now contains a single person's name
+                      const parts = person.name.trim().split(' ');
+                      const firstName = parts[0];
+                      const lastName = parts.slice(1).join(' ');
+                      
+                      // Clean display name - hide "Unknown" surnames
+                      const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
 
                       return (
                         <label
