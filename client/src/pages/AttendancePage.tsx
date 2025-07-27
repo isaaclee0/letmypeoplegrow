@@ -10,7 +10,8 @@ import {
   CheckIcon,
   MagnifyingGlassIcon,
   StarIcon,
-  XMarkIcon
+  XMarkIcon,
+  PencilIcon
 } from '@heroicons/react/24/outline';
 
 interface VisitorFormState {
@@ -25,7 +26,6 @@ interface VisitorFormState {
   spouseFirstNameUnknown: boolean;
   spouseLastName: string;
   spouseLastNameUnknown: boolean;
-  spouseNotes: string;
   hasSpouse: boolean;
   children: { firstName: string; firstNameUnknown: boolean; }[];
 }
@@ -48,7 +48,9 @@ const AttendancePage: React.FC = () => {
   const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
-  const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
+  const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
+  const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
+
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
     visitorType: 'local', // 'local' or 'traveller'
@@ -61,7 +63,6 @@ const AttendancePage: React.FC = () => {
     spouseFirstNameUnknown: false,
     spouseLastName: '',
     spouseLastNameUnknown: false,
-    spouseNotes: '',
     hasSpouse: false,
     children: []
   });
@@ -160,7 +161,6 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     if (selectedGathering && selectedDate) {
       loadAttendanceData();
-      loadRecentVisitors();
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
       if (lastSetting !== null) {
@@ -187,16 +187,7 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  const loadRecentVisitors = async () => {
-    if (!selectedGathering) return;
-    
-    try {
-      const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-      setRecentVisitors(response.data.visitors || []);
-    } catch (err: any) {
-      console.error('Failed to load recent visitors:', err);
-    }
-  };
+
 
   const toggleAttendance = async (individualId: number) => {
     setAttendanceList(prev => {
@@ -356,14 +347,35 @@ const AttendancePage: React.FC = () => {
       spouseFirstNameUnknown: false,
       spouseLastName: '',
       spouseLastNameUnknown: false,
-      spouseNotes: '',
       hasSpouse: false,
       children: []
     });
     setShowAddVisitorModal(true);
+  };
+
+  const handleEditVisitor = (visitor: Visitor) => {
+    // Parse visitor name to extract first and last name
+    const nameParts = visitor.name.split(' ');
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || '';
     
-    // Load recent visitors for suggestions
-    await loadRecentVisitors();
+    setVisitorForm({
+      personType: 'visitor',
+      visitorType: visitor.visitorType === 'potential_regular' ? 'local' : 'traveller',
+      firstName: firstName === 'Unknown' ? '' : firstName,
+      firstNameUnknown: firstName === 'Unknown',
+      lastName: lastName === 'Unknown' ? '' : lastName,
+      lastNameUnknown: lastName === 'Unknown',
+      notes: visitor.notes || '',
+      spouseFirstName: '',
+      spouseFirstNameUnknown: false,
+      spouseLastName: '',
+      spouseLastNameUnknown: false,
+      hasSpouse: false,
+      children: []
+    });
+    setEditingVisitor(visitor);
+    setShowEditVisitorModal(true);
   };
 
   const addChild = () => {
@@ -440,7 +452,7 @@ const AttendancePage: React.FC = () => {
         });
       });
 
-      const notes = `${visitorForm.notes || ''} ${visitorForm.spouseNotes || ''}`.trim();
+      const notes = visitorForm.notes.trim();
 
       // Add visitor to backend
       const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
@@ -473,7 +485,6 @@ const AttendancePage: React.FC = () => {
         spouseFirstNameUnknown: false,
         spouseLastName: '',
         spouseLastNameUnknown: false,
-        spouseNotes: '',
         hasSpouse: false,
         children: []
       });
@@ -482,6 +493,100 @@ const AttendancePage: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to add:', err);
       setError(err.response?.data?.error || 'Failed to add');
+    }
+  };
+
+  const handleSubmitEditVisitor = async () => {
+    if (!selectedGathering || !editingVisitor) return;
+    
+    try {
+      // Validate form
+      if (!visitorForm.firstName.trim() && !visitorForm.firstNameUnknown) {
+        setError('First name is required');
+        return;
+      }
+      if (!visitorForm.lastName.trim() && !visitorForm.lastNameUnknown) {
+        setError('Last name is required');
+        return;
+      }
+
+      // Build people array
+      const people: { firstName: string; lastName: string; firstUnknown: boolean; lastUnknown: boolean; isChild: boolean; }[] = [];
+      const firstName = visitorForm.firstNameUnknown ? 'Unknown' : visitorForm.firstName.trim();
+      const lastName = visitorForm.lastNameUnknown ? 'Unknown' : visitorForm.lastName.trim();
+      people.push({
+        firstName,
+        lastName,
+        firstUnknown: visitorForm.firstNameUnknown,
+        lastUnknown: visitorForm.lastNameUnknown,
+        isChild: false
+      });
+
+      if (visitorForm.hasSpouse) {
+        const spouseFirst = visitorForm.spouseFirstNameUnknown ? 'Unknown' : visitorForm.spouseFirstName.trim();
+        const spouseLast = visitorForm.spouseLastNameUnknown ? 'Unknown' : visitorForm.spouseLastName.trim();
+        people.push({
+          firstName: spouseFirst,
+          lastName: spouseLast,
+          firstUnknown: visitorForm.spouseFirstNameUnknown,
+          lastUnknown: visitorForm.spouseLastNameUnknown,
+          isChild: false
+        });
+      }
+
+      visitorForm.children.forEach((child) => {
+        const childFirst = child.firstNameUnknown ? 'Unknown' : child.firstName.trim();
+        people.push({
+          firstName: childFirst,
+          lastName: 'Unknown',
+          firstUnknown: child.firstNameUnknown,
+          lastUnknown: true,
+          isChild: true
+        });
+      });
+
+      const notes = visitorForm.notes.trim();
+
+      // Update visitor in backend
+      const response = await attendanceAPI.updateVisitor(selectedGathering.id, selectedDate, editingVisitor.id!, {
+        people,
+        visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
+        notes: notes ? notes : undefined
+      });
+
+      // Show success toast
+      if (response.data.individuals && response.data.individuals.length > 0) {
+        const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
+        showSuccess(`Updated: ${names}`);
+      } else {
+        showSuccess('Updated successfully');
+      }
+
+      // Reload attendance data
+      await loadAttendanceData();
+      
+      // Reset form and close modal
+      setVisitorForm({
+        personType: 'visitor',
+        visitorType: 'local',
+        firstName: '',
+        firstNameUnknown: false,
+        lastName: '',
+        lastNameUnknown: false,
+        notes: '',
+        spouseFirstName: '',
+        spouseFirstNameUnknown: false,
+        spouseLastName: '',
+        spouseLastNameUnknown: false,
+        hasSpouse: false,
+        children: []
+      });
+      setShowEditVisitorModal(false);
+      setEditingVisitor(null);
+      setError('');
+    } catch (err: any) {
+      console.error('Failed to update:', err);
+      setError(err.response?.data?.error || 'Failed to update');
     }
   };
 
@@ -859,19 +964,36 @@ const AttendancePage: React.FC = () => {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Visitors</h3>
-            <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
               {visitors.map((visitor, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                  <div>
-                    <span className="font-medium">{visitor.name}</span>
-                    <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      visitor.visitorType === 'potential_regular' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {visitor.visitorType === 'potential_regular' ? 'Potential Regular' : 'Temporary'}
-                    </span>
+                <div
+                  key={index}
+                  className="flex items-center p-3 rounded-md border-2 border-primary-500 bg-primary-50"
+                >
+                  <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
+                    <CheckIcon className="h-3 w-3 text-white" />
                   </div>
+                  <div className="ml-3 flex-1">
+                    <span className="text-sm font-medium text-gray-900">
+                      {visitor.name}
+                    </span>
+                    <div className="flex items-center mt-1">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        visitor.visitorType === 'potential_regular' 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {visitor.visitorType === 'potential_regular' ? 'Potential Regular' : 'Temporary'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleEditVisitor(visitor)}
+                    className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Edit visitor"
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -938,44 +1060,7 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Recent Visitors Suggestions */}
-                {visitorForm.personType === 'visitor' && recentVisitors.length > 0 && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Recent Visitors (click to add)
-                    </label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-32 overflow-y-auto">
-                      {recentVisitors.slice(0, 6).map((visitor, index) => (
-                        <button
-                          key={index}
-                          type="button"
-                          onClick={() => {
-                            // Parse visitor name to extract first and last name
-                            const nameParts = visitor.name.split(' ');
-                            const firstName = nameParts[0] || '';
-                            const lastName = nameParts.slice(1).join(' ') || '';
-                            
-                            setVisitorForm({
-                              ...visitorForm,
-                              firstName: firstName === 'Unknown' ? '' : firstName,
-                              firstNameUnknown: firstName === 'Unknown',
-                              lastName: lastName === 'Unknown' ? '' : lastName,
-                              lastNameUnknown: lastName === 'Unknown',
-                              notes: visitor.notes || '',
-                              visitorType: visitor.visitorType === 'potential_regular' ? 'local' : 'traveller'
-                            });
-                          }}
-                          className="text-left p-2 text-sm border border-gray-200 rounded hover:bg-gray-50 transition-colors"
-                        >
-                          <div className="font-medium">{visitor.name}</div>
-                          <div className="text-xs text-gray-500">
-                            {visitor.lastAttended ? `Last: ${new Date(visitor.lastAttended).toLocaleDateString()}` : 'No previous visits'}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+
 
                 {/* Visitor Type (only show if person type is visitor) */}
                 {visitorForm.personType === 'visitor' && (
@@ -1065,34 +1150,19 @@ const AttendancePage: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                {/* Notes field - always available for visitors, required if names unknown */}
-                {visitorForm.personType === 'visitor' && (
-                  <div>
-                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
-                      Notes {visitorForm.firstNameUnknown && visitorForm.lastNameUnknown && <span className="text-red-500">*</span>}
-                    </label>
-                    <textarea
-                      id="notes"
-                      value={visitorForm.notes}
-                      onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
-                      required={visitorForm.firstNameUnknown && visitorForm.lastNameUnknown}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="Any additional notes about this visitor (optional)"
-                    />
-                  </div>
-                )}
+
                 {/* Add Spouse */}
-                <div className="flex items-center">
-                  <input
-                    id="hasSpouse"
-                    type="checkbox"
-                    checked={visitorForm.hasSpouse}
-                    onChange={(e) => setVisitorForm({ ...visitorForm, hasSpouse: e.target.checked })}
-                    className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                  />
-                  <label htmlFor="hasSpouse" className="ml-2 block text-sm text-gray-900">
-                    Add spouse/family member
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Family Members
                   </label>
+                  <button
+                    type="button"
+                    onClick={() => setVisitorForm({ ...visitorForm, hasSpouse: !visitorForm.hasSpouse })}
+                    className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  >
+                    {visitorForm.hasSpouse ? 'Remove Spouse' : 'Add Spouse'}
+                  </button>
                 </div>
                 {/* Spouse Fields */}
                 {visitorForm.hasSpouse && (
@@ -1162,7 +1232,7 @@ const AttendancePage: React.FC = () => {
                         <button
                           type="button"
                           onClick={addChild}
-                          className="text-sm text-primary-600 hover:text-primary-700"
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                         >
                           Add Child
                         </button>
@@ -1209,22 +1279,21 @@ const AttendancePage: React.FC = () => {
                     ))}
                   </div>
                 )}
-                {/* Spouse Notes field - always available for visitors, required if names unknown */}
-                {visitorForm.hasSpouse && visitorForm.personType === 'visitor' && (
-                  <div className="pl-6">
-                    <label htmlFor="spouseNotes" className="block text-sm font-medium text-gray-700">
-                      Spouse Notes {visitorForm.spouseFirstNameUnknown && visitorForm.spouseLastNameUnknown && <span className="text-red-500">*</span>}
-                    </label>
-                    <textarea
-                      id="spouseNotes"
-                      value={visitorForm.spouseNotes}
-                      onChange={(e) => setVisitorForm({ ...visitorForm, spouseNotes: e.target.value })}
-                      required={visitorForm.spouseFirstNameUnknown && visitorForm.spouseLastNameUnknown}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="Any additional notes about this visitor's spouse (optional)"
-                    />
-                  </div>
-                )}
+
+                {/* Notes field - single notes box for all */}
+                <div>
+                  <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                    Notes
+                  </label>
+                  <textarea
+                    id="notes"
+                    value={visitorForm.notes}
+                    onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="Any additional notes (optional)"
+                    rows={3}
+                  />
+                </div>
                 
                 <div className="flex justify-end space-x-3 pt-4">
                   <button
@@ -1237,12 +1306,155 @@ const AttendancePage: React.FC = () => {
                   <button
                     type="submit"
                     disabled={
-                      (visitorForm.firstNameUnknown && visitorForm.lastNameUnknown && !visitorForm.notes) ||
-                      (visitorForm.hasSpouse && visitorForm.spouseFirstNameUnknown && visitorForm.spouseLastNameUnknown && !visitorForm.spouseNotes)
+                      (visitorForm.firstNameUnknown && visitorForm.lastNameUnknown && !visitorForm.notes)
                     }
                     className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
                   >
                     Add Person
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Visitor Modal */}
+      {showEditVisitorModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Edit Visitor
+                </h3>
+                <button
+                  onClick={() => setShowEditVisitorModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <form onSubmit={(e) => { e.preventDefault(); handleSubmitEditVisitor(); }} className="space-y-4">
+                {/* Visitor Type */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Visitor Type
+                  </label>
+                  <div className="flex space-x-4">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="visitorType"
+                        value="local"
+                        checked={visitorForm.visitorType === 'local'}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      />
+                      <span className="ml-2 text-sm text-gray-900">Local (might attend regularly)</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="visitorType"
+                        value="traveller"
+                        checked={visitorForm.visitorType === 'traveller'}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      />
+                      <span className="ml-2 text-sm text-gray-900">Traveller (just passing through)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Name Fields */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="editFirstName" className="block text-sm font-medium text-gray-700">
+                      First Name
+                    </label>
+                    <input
+                      id="editFirstName"
+                      type="text"
+                      value={visitorForm.firstName}
+                      onChange={(e) => setVisitorForm({ ...visitorForm, firstName: e.target.value })}
+                      disabled={visitorForm.firstNameUnknown}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                      placeholder="First name"
+                    />
+                    <div className="flex items-center mt-1">
+                      <input
+                        id="editFirstNameUnknown"
+                        type="checkbox"
+                        checked={visitorForm.firstNameUnknown}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, firstNameUnknown: e.target.checked, firstName: e.target.checked ? '' : visitorForm.firstName })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="editFirstNameUnknown" className="ml-2 block text-sm text-gray-900">
+                        Unknown
+                      </label>
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="editLastName" className="block text-sm font-medium text-gray-700">
+                      Last Name
+                    </label>
+                    <input
+                      id="editLastName"
+                      type="text"
+                      value={visitorForm.lastName}
+                      onChange={(e) => setVisitorForm({ ...visitorForm, lastName: e.target.value })}
+                      disabled={visitorForm.lastNameUnknown}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                      placeholder="Last name"
+                    />
+                    <div className="flex items-center mt-1">
+                      <input
+                        id="editLastNameUnknown"
+                        type="checkbox"
+                        checked={visitorForm.lastNameUnknown}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, lastNameUnknown: e.target.checked, lastName: e.target.checked ? '' : visitorForm.lastName })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="editLastNameUnknown" className="ml-2 block text-sm text-gray-900">
+                        Unknown
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notes field */}
+                <div>
+                  <label htmlFor="editNotes" className="block text-sm font-medium text-gray-700">
+                    Notes
+                  </label>
+                  <textarea
+                    id="editNotes"
+                    value={visitorForm.notes}
+                    onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="Any additional notes (optional)"
+                    rows={3}
+                  />
+                </div>
+                
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditVisitorModal(false)}
+                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={
+                      (visitorForm.firstNameUnknown && visitorForm.lastNameUnknown && !visitorForm.notes)
+                    }
+                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    Update Visitor
                   </button>
                 </div>
               </form>
