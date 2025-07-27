@@ -239,6 +239,25 @@ const ReportsPage: React.FC = () => {
             </div>
           </div>
         </div>
+        <div className="bg-white overflow-hidden shadow rounded-lg">
+          <div className="p-5">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <UsersIcon className="h-6 w-6 text-gray-400" />
+              </div>
+              <div className="ml-5 w-0 flex-1">
+                <dl>
+                  <dt className="text-sm font-medium text-gray-500 truncate">
+                    Total Absences
+                  </dt>
+                  <dd className="text-lg font-medium text-gray-900">
+                    {isLoading ? '...' : (metrics?.totalAbsent || 0)}
+                  </dd>
+                </dl>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Charts Section */}
@@ -295,14 +314,11 @@ const ReportsPage: React.FC = () => {
             <h3 className="text-lg leading-6 font-medium text-gray-900">
               Visitor Analysis
             </h3>
-            <div className="mt-6 flex justify-center items-center h-64">
+            <div className="mt-6">
               {isLoading ? (
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
               ) : (
-                <div className="text-gray-500">
-                  <UsersIcon className="h-12 w-12 mx-auto mb-4" />
-                  <p className="text-sm">Visitor insights coming soon</p>
-                </div>
+                <p className="text-sm text-gray-500">Total visitors in period: {metrics?.totalVisitors || 0} (placeholder)</p>
               )}
             </div>
           </div>

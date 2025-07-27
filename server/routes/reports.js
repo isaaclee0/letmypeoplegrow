@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const moment = require('moment');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -36,13 +37,26 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
     const totalAbsent = attendanceData.reduce((sum, session) => sum + (session.absent_individuals || 0), 0);
     const averageAttendance = totalSessions > 0 ? Math.round(totalPresent / totalSessions) : 0;
     
-    // Calculate growth rate (simple comparison of first vs last week)
+    // Calculate growth rate with weekly aggregation
+    const weeklyData = {};
+    attendanceData.forEach(session => {
+      const week = moment(session.session_date).isoWeek();
+      if (!weeklyData[week]) {
+        weeklyData[week] = { totalPresent: 0, sessionCount: 0 };
+      }
+      weeklyData[week].totalPresent += session.present_individuals || 0;
+      weeklyData[week].sessionCount += 1;
+    });
+
+    const sortedWeeks = Object.keys(weeklyData).sort((a, b) => a - b);
     let growthRate = 0;
-    if (attendanceData.length >= 2) {
-      const firstWeek = attendanceData.slice(-2, -1)[0]?.present_individuals || 0;
-      const lastWeek = attendanceData[0]?.present_individuals || 0;
-      if (firstWeek > 0) {
-        growthRate = Math.round(((lastWeek - firstWeek) / firstWeek) * 100);
+    if (sortedWeeks.length >= 2) {
+      const firstWeekAvg = weeklyData[sortedWeeks[0]].totalPresent / weeklyData[sortedWeeks[0]].sessionCount;
+      const lastWeekAvg = weeklyData[sortedWeeks[sortedWeeks.length - 1]].totalPresent / weeklyData[sortedWeeks[sortedWeeks.length - 1]].sessionCount;
+      if (firstWeekAvg > 0) {
+        growthRate = Math.round(((lastWeekAvg - firstWeekAvg) / firstWeekAvg) * 100);
+      } else if (lastWeekAvg > 0) {
+        growthRate = 100; // From 0 to positive, consider 100% growth
       }
     }
 

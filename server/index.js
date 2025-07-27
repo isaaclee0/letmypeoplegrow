@@ -31,6 +31,7 @@ const invitationRoutes = require('./routes/invitations');
 const csvImportRoutes = require('./routes/csv-import');
 const migrationRoutes = require('./routes/migrations');
 const testRoutes = require('./routes/test');
+const notificationRulesRoutes = require('./routes/notification_rules');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -83,6 +84,7 @@ app.use('/api/invitations', invitationRoutes);
 app.use('/api/csv-import', csvImportRoutes);
 app.use('/api/migrations', migrationRoutes);
 app.use('/api/test', testRoutes);
+app.use('/api/notification-rules', notificationRulesRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -136,7 +136,11 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
       }
     });
 
-    res.json({ message: 'Attendance recorded successfully' });
+    // Trigger notifications
+    const { triggerAttendanceNotifications } = require('../utils/attendanceNotifications');
+    await triggerAttendanceNotifications(gatheringTypeId, date);
+
+    res.json({ message: 'Attendance recorded successfully', sessionId });
   } catch (error) {
     console.error('Record attendance error:', error);
     console.error('Error stack:', error.stack);

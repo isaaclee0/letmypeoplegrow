@@ -16,6 +16,7 @@ import AcceptInvitationPage from './pages/AcceptInvitationPage';
 import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
 import NonAdminSetupPage from './pages/NonAdminSetupPage';
 import SettingsPage from './pages/SettingsPage';
+import NotificationRulesPage from './pages/NotificationRulesPage';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
@@ -180,6 +181,11 @@ function App() {
                 } 
               />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="notification-rules" element={
+                <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
+                  <NotificationRulesPage />
+                </RoleProtectedRoute>
+              } />
             </Route>
           </Routes>
         </div>
