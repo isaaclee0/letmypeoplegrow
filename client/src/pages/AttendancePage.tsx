@@ -13,6 +13,23 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline';
 
+interface VisitorFormState {
+  personType: string;
+  visitorType: string;
+  firstName: string;
+  firstNameUnknown: boolean;
+  lastName: string;
+  lastNameUnknown: boolean;
+  notes: string;
+  spouseFirstName: string;
+  spouseFirstNameUnknown: boolean;
+  spouseLastName: string;
+  spouseLastNameUnknown: boolean;
+  spouseNotes: string;
+  hasSpouse: boolean;
+  children: { firstName: string; firstNameUnknown: boolean; }[];
+}
+
 const AttendancePage: React.FC = () => {
   const { user, updateUser } = useAuth();
   const { showSuccess } = useToast();
@@ -23,9 +40,7 @@ const AttendancePage: React.FC = () => {
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [hasChanges, setHasChanges] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedDataRef = useRef<string>('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,7 +49,7 @@ const AttendancePage: React.FC = () => {
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
-  const [visitorForm, setVisitorForm] = useState({
+  const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
     visitorType: 'local', // 'local' or 'traveller'
     firstName: '',
@@ -47,7 +62,8 @@ const AttendancePage: React.FC = () => {
     spouseLastName: '',
     spouseLastNameUnknown: false,
     spouseNotes: '',
-    hasSpouse: false
+    hasSpouse: false,
+    children: []
   });
 
   // Calculate valid dates for the selected gathering
@@ -163,7 +179,7 @@ const AttendancePage: React.FC = () => {
       const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
       setAttendanceList(response.data.attendanceList || []);
       setVisitors(response.data.visitors || []);
-      setHasChanges(false);
+      // setHasChanges(false); // Removed hasChanges state
     } catch (err) {
       setError('Failed to load attendance data');
     } finally {
@@ -182,19 +198,41 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  const toggleAttendance = (individualId: number) => {
-    console.log('Toggling attendance for individual:', individualId);
+  const toggleAttendance = async (individualId: number) => {
     setAttendanceList(prev => {
-      const updated = prev.map(person => 
+      return prev.map(person => 
         person.id === individualId 
           ? { ...person, present: !person.present, isSaving: true }
           : person
       );
-      console.log('Updated attendance list:', updated);
-      return updated;
     });
-    setHasChanges(true);
-    console.log('Set hasChanges to true');
+
+    if (!selectedGathering || !selectedDate) return;
+
+    try {
+      await attendanceAPI.record(selectedGathering.id, selectedDate, {
+        attendanceRecords: [{ individualId, present: !attendanceList.find(p => p.id === individualId)?.present }],
+        visitors: []
+      });
+
+      setAttendanceList(prev => 
+        prev.map(person => 
+          person.id === individualId 
+            ? { ...person, isSaving: false }
+            : person
+        )
+      );
+    } catch (err) {
+      console.error('Failed to save attendance change:', err);
+      setError('Failed to save change');
+      setAttendanceList(prev => 
+        prev.map(person => 
+          person.id === individualId 
+            ? { ...person, isSaving: false, present: !person.present } // Revert on error
+            : person
+        )
+      );
+    }
   };
 
   const toggleAllFamily = (familyId: number) => {
@@ -216,132 +254,43 @@ const AttendancePage: React.FC = () => {
       console.log('Updated attendance list after family toggle:', updated);
       return updated;
     });
-    setHasChanges(true);
+    // setHasChanges(true); // Removed hasChanges state
     console.log('Set hasChanges to true (family toggle)');
   };
 
-  const saveAttendance = useCallback(async () => {
-    if (!selectedGathering) return;
+  // Remove saveAttendance and debouncedSave
 
-    console.log('Saving attendance for:', selectedGathering.id, selectedDate);
-    console.log('Raw attendance list:', attendanceList);
-    console.log('Attendance records:', attendanceList.map(person => ({ id: person.id, present: person.present, presentType: typeof person.present })));
-    console.log('Visitors:', visitors);
-
-    setIsSaving(true);
-    try {
-      const attendanceRecords = attendanceList.map(person => ({
-        individualId: person.id,
-        present: Boolean(person.present)
-      }));
-
-      const response = await attendanceAPI.record(selectedGathering.id, selectedDate, {
-        attendanceRecords,
-        visitors
-      });
-
-      console.log('Attendance saved successfully:', response);
-      setHasChanges(false);
-      setError('');
-      
-      // Clear isSaving flags from all attendees
-      setAttendanceList(prev => 
-        prev.map((person: Individual) => ({ ...person, isSaving: false }))
-      );
-      
-      // Store the saved data hash for change detection
-      const savedDataHash = JSON.stringify(attendanceRecords);
-      lastSavedDataRef.current = savedDataHash;
-      
-      showSuccess('Attendance saved');
-    } catch (err) {
-      console.error('Failed to save attendance:', err);
-      setError('Failed to save attendance');
-      
-      // Clear isSaving flags on error
-      setAttendanceList(prev => 
-        prev.map(person => ({ ...person, isSaving: false }))
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }, [selectedGathering, selectedDate, attendanceList, visitors]);
-
-  // Debounced save function - reduced to 500ms for faster feedback
-  const debouncedSave = useCallback(() => {
-    console.log('Debounced save triggered, hasChanges:', hasChanges);
-    // Clear any existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-      console.log('Cleared existing timeout');
-    }
-
-    // Set a new timeout to save after 500ms of inactivity
-    const timeout = setTimeout(() => {
-      console.log('Timeout fired, hasChanges:', hasChanges);
-      if (hasChanges) {
-        console.log('Calling saveAttendance from debounced save');
-        saveAttendance();
-      }
-    }, 500);
-
-    saveTimeoutRef.current = timeout;
-    console.log('Set new timeout');
-  }, [hasChanges, saveAttendance]);
-
-  // Trigger debounced save when changes occur
+  // Update polling effect
   useEffect(() => {
-    console.log('useEffect triggered - hasChanges:', hasChanges, 'debouncedSave function:', !!debouncedSave);
-    if (hasChanges) {
-      console.log('Calling debouncedSave from useEffect');
-      debouncedSave();
-    }
-  }, [hasChanges, debouncedSave]);
-
-  // Polling for real-time collaboration - poll every 2 seconds when not saving
-  useEffect(() => {
-    if (!selectedGathering || !selectedDate || isSaving) {
+    if (!selectedGathering || !selectedDate) {
       return;
     }
 
     const startPolling = () => {
       pollingIntervalRef.current = setInterval(async () => {
+        setIsPolling(true);
         try {
           const response = await attendanceAPI.get(selectedGathering!.id, selectedDate);
           const newAttendanceList = response.data.attendanceList || [];
           const newVisitors = response.data.visitors || [];
           
-          // Create hash of new data for comparison
-          const newDataHash = JSON.stringify(newAttendanceList.map((person: Individual) => ({
-            id: person.id,
-            present: person.present
-          })));
+          setAttendanceList(prev => {
+            return prev.map(person => {
+              const newPerson = newAttendanceList.find((p: Individual) => p.id === person.id);
+              if (newPerson && !person.isSaving) {
+                return { ...newPerson, isSaving: false };
+              }
+              return person;
+            });
+          });
           
-          // Check if data has changed from what we last saved
-          if (newDataHash !== lastSavedDataRef.current) {
-            console.log('Polling detected changes from other users');
-            
-            // Update attendance list, preserving isSaving flags for items being edited
-            setAttendanceList(prev => 
-              prev.map((person: Individual) => {
-                const newPerson = newAttendanceList.find((p: Individual) => p.id === person.id);
-                if (newPerson && !person.isSaving) {
-                  return { ...newPerson, isSaving: false };
-                }
-                return person;
-              })
-            );
-            
-            // Update visitors
-            setVisitors(newVisitors);
-            
-            // Show subtle notification
-            showSuccess('Attendance updated by another user');
-          }
+          setVisitors(newVisitors);
         } catch (err) {
           console.error('Polling error:', err);
+        } finally {
+          setIsPolling(false);
         }
-      }, 2000); // Poll every 2 seconds
+      }, 5000); // Poll every 5 seconds
     };
 
     startPolling();
@@ -351,19 +300,16 @@ const AttendancePage: React.FC = () => {
         clearInterval(pollingIntervalRef.current);
       }
     };
-  }, [selectedGathering, selectedDate, isSaving]);
+  }, [selectedGathering, selectedDate]);
 
-  // Cleanup timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-    };
-  }, []);
+  // Remove useEffect for hasChanges and debouncedSave
+
+  // Remove save button if not needed, or keep for manual full save
+
+  // Add subtle spinner
+  {isPolling && (
+    <div className="fixed top-4 right-4 animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
+  )}
 
   // Set default gathering
   const setDefaultGathering = async (gatheringId: number) => {
@@ -411,12 +357,38 @@ const AttendancePage: React.FC = () => {
       spouseLastName: '',
       spouseLastNameUnknown: false,
       spouseNotes: '',
-      hasSpouse: false
+      hasSpouse: false,
+      children: []
     });
     setShowAddVisitorModal(true);
     
     // Load recent visitors for suggestions
     await loadRecentVisitors();
+  };
+
+  const addChild = () => {
+    setVisitorForm(prev => ({
+      ...prev,
+      children: [...prev.children, { firstName: '', firstNameUnknown: false }]
+    }));
+  };
+
+  const removeChild = (index: number) => {
+    setVisitorForm(prev => ({
+      ...prev,
+      children: prev.children.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateChild = (index: number, updates: Partial<{ firstName: string; firstNameUnknown: boolean }>) => {
+    setVisitorForm(prev => {
+      const newChildren = [...prev.children];
+      newChildren[index] = { ...newChildren[index], ...updates };
+      if (updates.firstNameUnknown) {
+        newChildren[index].firstName = '';
+      }
+      return { ...prev, children: newChildren };
+    });
   };
 
   const handleSubmitVisitor = async () => {
@@ -433,37 +405,56 @@ const AttendancePage: React.FC = () => {
         return;
       }
 
-      // Build visitor name
+      // Build people array
+      const people: { firstName: string; lastName: string; firstUnknown: boolean; lastUnknown: boolean; isChild: boolean; }[] = [];
       const firstName = visitorForm.firstNameUnknown ? 'Unknown' : visitorForm.firstName.trim();
       const lastName = visitorForm.lastNameUnknown ? 'Unknown' : visitorForm.lastName.trim();
-      const visitorName = `${firstName} ${lastName}`.trim();
+      people.push({
+        firstName,
+        lastName,
+        firstUnknown: visitorForm.firstNameUnknown,
+        lastUnknown: visitorForm.lastNameUnknown,
+        isChild: false
+      });
 
-      // Add spouse if present
-      let fullName = visitorName;
       if (visitorForm.hasSpouse) {
-        const spouseFirstName = visitorForm.spouseFirstNameUnknown ? 'Unknown' : visitorForm.spouseFirstName.trim();
-        const spouseLastName = visitorForm.spouseLastNameUnknown ? 'Unknown' : visitorForm.spouseLastName.trim();
-        const spouseName = `${spouseFirstName} ${spouseLastName}`.trim();
-        if (spouseName !== 'Unknown Unknown') {
-          fullName += ` & ${spouseName}`;
-        }
+        const spouseFirst = visitorForm.spouseFirstNameUnknown ? 'Unknown' : visitorForm.spouseFirstName.trim();
+        const spouseLast = visitorForm.spouseLastNameUnknown ? 'Unknown' : visitorForm.spouseLastName.trim();
+        people.push({
+          firstName: spouseFirst,
+          lastName: spouseLast,
+          firstUnknown: visitorForm.spouseFirstNameUnknown,
+          lastUnknown: visitorForm.spouseLastNameUnknown,
+          isChild: false
+        });
       }
+
+      visitorForm.children.forEach((child) => {
+        const childFirst = child.firstNameUnknown ? 'Unknown' : child.firstName.trim();
+        people.push({
+          firstName: childFirst,
+          lastName: 'Unknown',
+          firstUnknown: child.firstNameUnknown,
+          lastUnknown: true,
+          isChild: true
+        });
+      });
+
+      const notes = `${visitorForm.notes || ''} ${visitorForm.spouseNotes || ''}`.trim();
 
       // Add visitor to backend
       const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
-        name: fullName,
+        people,
         visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
-        visitorFamilyGroup: visitorForm.hasSpouse ? 'Couple' : undefined,
-        notes: visitorForm.notes || visitorForm.spouseNotes ? 
-          `${visitorForm.notes || ''} ${visitorForm.spouseNotes || ''}`.trim() : undefined
+        notes: notes ? notes : undefined
       });
 
       // Show success toast
       if (response.data.individuals && response.data.individuals.length > 0) {
-        const names = response.data.individuals.map((ind: any) => `${ind.firstName} ${ind.lastName}`).join(', ');
-        showSuccess(`Visitor added: ${names}`);
+        const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
+        showSuccess(`Added: ${names}`);
       } else {
-        showSuccess('Visitor added successfully');
+        showSuccess('Added successfully');
       }
 
       // Reload attendance data
@@ -483,12 +474,14 @@ const AttendancePage: React.FC = () => {
         spouseLastName: '',
         spouseLastNameUnknown: false,
         spouseNotes: '',
-        hasSpouse: false
+        hasSpouse: false,
+        children: []
       });
       setShowAddVisitorModal(false);
       setError('');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to add visitor');
+      console.error('Failed to add:', err);
+      setError(err.response?.data?.error || 'Failed to add');
     }
   };
 
@@ -556,20 +549,20 @@ const AttendancePage: React.FC = () => {
               </p>
             </div>
             <div className="flex items-center space-x-3">
-              {isSaving && (
+              {/* isSaving && (
                 <div className="flex items-center text-sm text-gray-500">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"></div>
                   Saving...
                 </div>
-              )}
-              <button
+              ) */}
+              {/* <button
                 onClick={saveAttendance}
                 disabled={isSaving}
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
               >
                 <CheckIcon className="h-4 w-4 mr-2" />
                 Save Now
-              </button>
+              </button> */}
             </div>
           </div>
         </div>
@@ -1156,6 +1149,64 @@ const AttendancePage: React.FC = () => {
                         </label>
                       </div>
                     </div>
+                  </div>
+                )}
+                {/* Children Section */}
+                {visitorForm.personType === 'visitor' && (
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Children (up to 10)
+                      </label>
+                      {visitorForm.children.length < 10 && (
+                        <button
+                          type="button"
+                          onClick={addChild}
+                          className="text-sm text-primary-600 hover:text-primary-700"
+                        >
+                          Add Child
+                        </button>
+                      )}
+                    </div>
+                    {visitorForm.children.map((child, index) => (
+                      <div key={index} className="mt-2 pl-6 border-l-2 border-gray-200">
+                        <div className="grid grid-cols-1 gap-4 relative">
+                          <div>
+                            <label htmlFor={`childFirstName-${index}`} className="block text-sm font-medium text-gray-700">
+                              Child {index + 1} First Name
+                            </label>
+                            <input
+                              id={`childFirstName-${index}`}
+                              type="text"
+                              value={child.firstName}
+                              onChange={(e) => updateChild(index, { firstName: e.target.value })}
+                              disabled={child.firstNameUnknown}
+                              className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                              placeholder="First name (optional)"
+                            />
+                            <div className="flex items-center mt-1">
+                              <input
+                                id={`childFirstNameUnknown-${index}`}
+                                type="checkbox"
+                                checked={child.firstNameUnknown}
+                                onChange={(e) => updateChild(index, { firstNameUnknown: e.target.checked })}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <label htmlFor={`childFirstNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                                Use placeholder (Child {index + 1})
+                              </label>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeChild(index)}
+                            className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Spouse Notes field - always available for visitors, required if names unknown */}

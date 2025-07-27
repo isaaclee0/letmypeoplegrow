@@ -92,6 +92,20 @@ export interface AttendanceData {
   visitors: Visitor[];
 }
 
+export interface AddVisitorData {
+  name?: string;
+  visitorType?: string;
+  visitorFamilyGroup?: string;
+  notes?: string;
+  people?: Array<{
+    firstName: string;
+    lastName: string;
+    firstUnknown: boolean;
+    lastUnknown: boolean;
+    isChild: boolean;
+  }>;
+}
+
 // Auth API
 export const authAPI = {
   requestCode: (contact: string) => 
@@ -171,12 +185,7 @@ export const attendanceAPI = {
   getRecentVisitors: (gatheringTypeId: number) => 
     api.get(`/attendance/${gatheringTypeId}/visitors/recent`),
     
-  addVisitor: (gatheringTypeId: number, date: string, visitor: {
-    name: string;
-    visitorType?: string;
-    visitorFamilyGroup?: string;
-    notes?: string;
-  }) => 
+  addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
 };
 

@@ -182,10 +182,10 @@ router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (r
 router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
-    const { name, visitorType, visitorFamilyGroup, notes } = req.body;
+    const { name, visitorType, visitorFamilyGroup, notes, people } = req.body;
 
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Visitor name is required' });
+    if ((!name || !name.trim()) && (!people || people.length === 0)) {
+      return res.status(400).json({ error: 'Visitor information is required' });
     }
 
     // Check if is_visitor column exists
@@ -210,99 +210,149 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
         sessionId = Number(sessions[0].id);
       }
 
-      // Parse visitor name to extract individual names
-      const nameParts = name.trim().split(' & ');
-      const individuals = [];
+      // Prepare people to create
+      let peopleToCreate = [];
+      if (people && people.length > 0) {
+        peopleToCreate = people;
+      } else {
+        // Fallback to parsing name
+        const nameParts = name.trim().split(' & ');
+        for (const namePart of nameParts) {
+          const personParts = namePart.trim().split(' ');
+          const firstName = personParts[0] || 'Unknown';
+          const lastName = personParts.slice(1).join(' ') || 'Unknown';
+          peopleToCreate.push({ firstName, lastName, isChild: false });
+        }
+      }
 
-      for (const namePart of nameParts) {
-        const personParts = namePart.trim().split(' ');
-        const firstName = personParts[0] || 'Unknown';
-        const lastName = personParts.slice(1).join(' ') || 'Unknown';
+      // Create family if multiple people
+      let familyId = null;
+      let familyLastName = 'Unknown';
+      if (peopleToCreate.length > 1) {
+        // Find a known last name, preferring non-children
+        for (const person of peopleToCreate) {
+          if (!person.isChild && person.lastName && person.lastName !== 'Unknown') {
+            familyLastName = person.lastName;
+            break;
+          }
+        }
+        if (familyLastName === 'Unknown') {
+          for (const person of peopleToCreate) {
+            if (person.lastName && person.lastName !== 'Unknown') {
+              familyLastName = person.lastName;
+              break;
+            }
+          }
+        }
 
-        // Check if individual already exists
+        const mainFirstName = peopleToCreate[0].firstName !== 'Unknown' ? peopleToCreate[0].firstName : 'Visitor';
+        const familyName = `${mainFirstName} ${familyLastName} Family`;
+
+        const familyResult = await conn.query(`
+          INSERT INTO families (family_name, created_by)
+          VALUES (?, ?)
+        `, [familyName, req.user.id]);
+        familyId = Number(familyResult.insertId);
+      }
+
+      // Process and create individuals
+      const createdIndividuals = [];
+      let childCount = 0;
+      for (let i = 0; i < peopleToCreate.length; i++) {
+        let { firstName, lastName, firstUnknown = false, lastUnknown = false, isChild = false } = peopleToCreate[i];
+
+        // Handle unknown first name
+        if (firstUnknown || !firstName.trim()) {
+          if (isChild) {
+            childCount++;
+            firstName = `Child ${childCount}`;
+          } else {
+            firstName = 'Unknown';
+          }
+        } else {
+          firstName = firstName.trim();
+        }
+
+        // Handle unknown last name
+        if (lastUnknown || !lastName || !lastName.trim()) {
+          lastName = familyId ? familyLastName : 'Unknown';
+        } else {
+          lastName = lastName.trim();
+        }
+
+        // Check if individual already exists (only match visitors)
         const existingIndividual = await conn.query(`
           SELECT id FROM individuals 
-          WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?)
+          WHERE LOWER(first_name) = LOWER(?) 
+            AND LOWER(last_name) = LOWER(?) 
+            AND is_visitor = true
         `, [firstName, lastName]);
 
+        let individualId;
         if (existingIndividual.length === 0) {
           // Create new individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, is_visitor, created_by)
-            VALUES (?, ?, true, ?)
-          `, [firstName, lastName, req.user.id]);
+            INSERT INTO individuals (first_name, last_name, family_id, is_visitor, created_by)
+            VALUES (?, ?, ?, true, ?)
+          `, [firstName, lastName, familyId, req.user.id]);
 
-          const individualId = Number(individualResult.insertId);
+          individualId = Number(individualResult.insertId);
+        } else {
+          // Use existing
+          individualId = Number(existingIndividual[0].id);
+          
+          // Update family_id if creating a new family
+          if (familyId) {
+            await conn.query(`
+              UPDATE individuals 
+              SET family_id = ? 
+              WHERE id = ?
+            `, [familyId, individualId]);
+          }
+        }
 
-          // Add to gathering list
+        // Add to gathering list if not already
+        const inGathering = await conn.query(`
+          SELECT 1 FROM gathering_lists 
+          WHERE gathering_type_id = ? AND individual_id = ?
+        `, [gatheringTypeId, individualId]);
+
+        if (inGathering.length === 0) {
           await conn.query(`
             INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
             VALUES (?, ?, ?)
           `, [gatheringTypeId, individualId, req.user.id]);
-
-          // Mark as present in attendance
-          await conn.query(`
-            INSERT INTO attendance_records (session_id, individual_id, present)
-            VALUES (?, ?, true)
-          `, [sessionId, individualId]);
-
-          individuals.push({
-            id: individualId,
-            firstName,
-            lastName
-          });
-        } else {
-          // Individual exists, just mark as present if not already
-          const individualId = Number(existingIndividual[0].id);
-          
-          // Check if already in gathering list
-          const inGathering = await conn.query(`
-            SELECT 1 FROM gathering_lists 
-            WHERE gathering_type_id = ? AND individual_id = ?
-          `, [gatheringTypeId, individualId]);
-
-          if (inGathering.length === 0) {
-            // Add to gathering list
-            await conn.query(`
-              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-              VALUES (?, ?, ?)
-            `, [gatheringTypeId, individualId, req.user.id]);
-          }
-
-          // Mark as present in attendance
-          const existingAttendance = await conn.query(`
-            SELECT 1 FROM attendance_records 
-            WHERE session_id = ? AND individual_id = ?
-          `, [sessionId, individualId]);
-
-          if (existingAttendance.length === 0) {
-            await conn.query(`
-              INSERT INTO attendance_records (session_id, individual_id, present)
-              VALUES (?, ?, true)
-            `, [sessionId, individualId]);
-          }
-
-          individuals.push({
-            id: individualId,
-            firstName,
-            lastName
-          });
         }
+
+        // Mark as present
+        await conn.query(`
+          INSERT INTO attendance_records (session_id, individual_id, present)
+          VALUES (?, ?, true)
+          ON DUPLICATE KEY UPDATE present = true
+        `, [sessionId, individualId]);
+
+        createdIndividuals.push({
+          id: individualId,
+          firstName,
+          lastName
+        });
       }
 
-      // Also add to visitors table for historical tracking
+      // Compute full name for visitors table
+      const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
+
+      // Add to visitors table
       const visitorResult = await conn.query(`
         INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
         VALUES (?, ?, ?, ?, ?, ?)
-      `, [sessionId, name.trim(), visitorType || 'temporary_other', visitorFamilyGroup || null, notes || null, date]);
+      `, [sessionId, fullName, visitorType || 'temporary_other', visitorFamilyGroup || null, notes || null, date]);
 
       res.json({ 
-        message: 'Visitor added successfully and converted to individual',
+        message: 'Visitor(s) added successfully',
         visitorId: Number(visitorResult.insertId),
-        individuals: individuals
+        individuals: createdIndividuals
       });
     });
-
   } catch (error) {
     console.error('Add visitor error:', error);
     res.status(500).json({ error: 'Failed to add visitor.' });
