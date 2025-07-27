@@ -641,6 +641,46 @@ const AttendancePage: React.FC = () => {
     });
   });
 
+  // Group visitors by family
+  const groupedVisitors = useMemo(() => {
+    if (!groupByFamily) {
+      return [{ familyId: null, familyName: null, members: visitors }];
+    }
+
+    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[] } } = {};
+
+    visitors.forEach(visitor => {
+      if (visitor.familyId) {
+        const familyKey = `family_${visitor.familyId}`;
+        if (!grouped[familyKey]) {
+          grouped[familyKey] = {
+            familyId: visitor.familyId,
+            familyName: visitor.familyName || 'Unknown Family',
+            members: []
+          };
+        }
+        grouped[familyKey].members.push(visitor);
+      } else {
+        const singleVisitorKey = 'single_visitor';
+        if (!grouped[singleVisitorKey]) {
+          grouped[singleVisitorKey] = {
+            familyId: null,
+            familyName: null,
+            members: []
+          };
+        }
+        grouped[singleVisitorKey].members.push(visitor);
+      }
+    });
+
+    return Object.values(grouped).sort((a, b) => {
+      if (a.familyId === null && b.familyId === null) return 0;
+      if (a.familyId === null) return -1;
+      if (b.familyId === null) return 1;
+      return a.familyName!.localeCompare(b.familyName!);
+    });
+  }, [visitors, groupByFamily]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -964,36 +1004,47 @@ const AttendancePage: React.FC = () => {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Visitors</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-              {visitors.map((visitor, index) => (
-                <div
-                  key={index}
-                  className="flex items-center p-3 rounded-md border-2 border-primary-500 bg-primary-50"
-                >
-                  <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
-                    <CheckIcon className="h-3 w-3 text-white" />
-                  </div>
-                  <div className="ml-3 flex-1">
-                    <span className="text-sm font-medium text-gray-900">
-                      {visitor.name}
-                    </span>
-                    <div className="flex items-center mt-1">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                        visitor.visitorType === 'potential_regular' 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {visitor.visitorType === 'potential_regular' ? 'Potential Regular' : 'Temporary'}
-                      </span>
+            <div className="space-y-6">
+              {groupedVisitors.map((group: any) => (
+                <div key={group.familyId || `single-${group.members[0].id}`} className="border border-gray-200 rounded-md p-4">
+                  {group.familyId && (
+                    <div className="flex justify-between items-center mb-2">
+                      <h4 className="text-sm font-semibold text-gray-900">{group.familyName}</h4>
                     </div>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                    {group.members.map((person: any) => (
+                      <div
+                        key={person.id}
+                        className="flex items-center p-3 rounded-md border-2 border-primary-500 bg-primary-50"
+                      >
+                        <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
+                          <CheckIcon className="h-3 w-3 text-white" />
+                        </div>
+                        <div className="ml-3 flex-1">
+                          <span className="text-sm font-medium text-gray-900">
+                            {person.firstName} {person.lastName}
+                          </span>
+                          <div className="flex items-center mt-1">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                              person.visitorType === 'potential_regular' 
+                                ? 'bg-green-100 text-green-800' 
+                                : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {person.visitorType === 'potential_regular' ? 'Potential Regular' : 'Temporary'}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleEditVisitor(person)}
+                          className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                          title="Edit visitor"
+                        >
+                          <PencilIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                  <button
-                    onClick={() => handleEditVisitor(visitor)}
-                    className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                    title="Edit visitor"
-                  >
-                    <PencilIcon className="h-4 w-4" />
-                  </button>
                 </div>
               ))}
             </div>

@@ -53,6 +53,11 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     }
   }
 
+  // Redirect attendance takers directly to attendance page
+  if (user?.role === 'attendance_taker' && window.location.pathname === '/app/dashboard') {
+    return <Navigate to="/app/attendance" replace />;
+  }
+
   return <>{children}</>;
 };
 

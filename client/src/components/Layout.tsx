@@ -26,7 +26,10 @@ const Layout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const navigation = [
+  const navigation = user?.role === 'attendance_taker' ? [
+    { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
+    { name: 'Settings', href: '/app/settings', icon: Cog6ToothIcon },
+  ] : [
     { name: 'Dashboard', href: '/app/dashboard', icon: HomeIcon },
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
     { name: 'People', href: '/app/people', icon: UsersIcon },
@@ -151,28 +154,32 @@ const Layout: React.FC = () => {
               </div>
             </div>
             <div className="ml-4 flex items-center md:ml-6">
-              {/* Debug Toggle */}
-              <button 
-                onClick={toggleDebugMode}
-                className={`p-1 rounded-full transition-colors duration-200 ${
-                  isDebugMode 
-                    ? 'bg-red-100 text-red-600 hover:bg-red-200' 
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-                title={isDebugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}
-              >
-                <BugAntIcon className="h-5 w-5" />
-              </button>
+              {/* Debug Toggle - only show for non-attendance takers */}
+              {user?.role !== 'attendance_taker' && (
+                <button 
+                  onClick={toggleDebugMode}
+                  className={`p-1 rounded-full transition-colors duration-200 ${
+                    isDebugMode 
+                      ? 'bg-red-100 text-red-600 hover:bg-red-200' 
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  title={isDebugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}
+                >
+                  <BugAntIcon className="h-5 w-5" />
+                </button>
+              )}
 
-              {/* Notifications */}
-              <button className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
-                <BellIcon className="h-6 w-6" />
-                {user?.unreadNotifications && user.unreadNotifications > 0 && (
-                  <span className="absolute -mt-2 -mr-1 px-2 py-1 text-xs leading-none text-white bg-secondary-500 rounded-full">
-                    {user.unreadNotifications}
-                  </span>
-                )}
-              </button>
+              {/* Notifications - only show for non-attendance takers */}
+              {user?.role !== 'attendance_taker' && (
+                <button className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
+                  <BellIcon className="h-6 w-6" />
+                  {user?.unreadNotifications && user.unreadNotifications > 0 && (
+                    <span className="absolute -mt-2 -mr-1 px-2 py-1 text-xs leading-none text-white bg-secondary-500 rounded-full">
+                      {user.unreadNotifications}
+                    </span>
+                  )}
+                </button>
+              )}
 
               {/* Profile dropdown */}
               <div className="ml-3 relative">
@@ -205,8 +212,8 @@ const Layout: React.FC = () => {
       </div>
       </div>
       
-      {/* Debug Panel */}
-      <DebugPanel />
+      {/* Debug Panel - only show for non-attendance takers */}
+      {user?.role !== 'attendance_taker' && <DebugPanel />}
     </div>
   );
 };

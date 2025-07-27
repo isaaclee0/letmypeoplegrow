@@ -40,7 +40,12 @@ const FirstLoginSetupPage: React.FC = () => {
         updateUser({ ...user, defaultGatheringId: selectedGathering });
       }
       
-      navigate('/app/dashboard');
+      // Redirect attendance takers directly to attendance page
+      if (user?.role === 'attendance_taker') {
+        navigate('/app/attendance');
+      } else {
+        navigate('/app/dashboard');
+      }
 
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to set default gathering');
@@ -50,7 +55,12 @@ const FirstLoginSetupPage: React.FC = () => {
   };
 
   const handleSkip = () => {
-            navigate('/app/dashboard');
+    // Redirect attendance takers directly to attendance page
+    if (user?.role === 'attendance_taker') {
+      navigate('/app/attendance');
+    } else {
+      navigate('/app/dashboard');
+    }
   };
 
   if (!user) {

@@ -86,6 +86,9 @@ const LoginPage: React.FC = () => {
       if (response.data.user.role === 'admin') {
         // Will be redirected by ProtectedRoute logic if onboarding needed
         navigate('/app/dashboard');
+      } else if (response.data.user.role === 'attendance_taker') {
+        // Redirect attendance takers directly to attendance page
+        navigate('/app/attendance');
       } else {
         navigate('/app/dashboard');
       }
