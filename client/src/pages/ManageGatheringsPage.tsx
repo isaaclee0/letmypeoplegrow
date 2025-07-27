@@ -1,13 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { gatheringsAPI, individualsAPI } from '../services/api';
+import { gatheringsAPI, individualsAPI, usersAPI } from '../services/api';
+import ActionMenu from '../components/ActionMenu';
 import {
   PlusIcon,
   UserGroupIcon,
   CalendarIcon,
   TrashIcon,
   PencilIcon,
-  EyeIcon
+  EyeIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CheckIcon,
+  ClipboardDocumentIcon
 } from '@heroicons/react/24/outline';
 
 interface Gathering {
@@ -20,6 +25,7 @@ interface Gathering {
   frequency: string;
   isActive: boolean;
   memberCount?: number;
+  recentVisitorCount?: number;
 }
 
 interface Individual {
@@ -29,16 +35,48 @@ interface Individual {
   familyName?: string;
 }
 
+interface User {
+  id: number;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  mobileNumber?: string;
+  role: string;
+}
+
+interface CreateGatheringData {
+  // Step 1: Basic details
+  name: string;
+  description: string;
+  dayOfWeek: string;
+  startTime: string;
+  durationMinutes: number;
+  frequency: string;
+  setAsDefault: boolean;
+  
+  // Step 2: People to add
+  peopleToAdd: string[]; // Array of "First Last" names
+  bulkPeopleText: string; // For copy+paste input
+  
+  // Step 3: Users to assign
+  userIds: number[];
+  assignSelf: boolean;
+}
+
 const ManageGatheringsPage: React.FC = () => {
   const { user } = useAuth();
   const [gatherings, setGatherings] = useState<Gathering[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<Gathering | null>(null);
   const [gatheringMembers, setGatheringMembers] = useState<Individual[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [showMembers, setShowMembers] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [showAddGatheringWizard, setShowAddGatheringWizard] = useState(false);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [isCreating, setIsCreating] = useState(false);
   const [showManageMembers, setShowManageMembers] = useState(false);
   const [editingGathering, setEditingGathering] = useState<Gathering | null>(null);
   const [managingGathering, setManagingGathering] = useState<Gathering | null>(null);
@@ -50,6 +88,8 @@ const ManageGatheringsPage: React.FC = () => {
     assigned: boolean;
   }>>([]);
   const [originalAssignedIds, setOriginalAssignedIds] = useState<Set<number>>(new Set());
+  
+  // Form states
   const [editFormData, setEditFormData] = useState({
     name: '',
     description: '',
@@ -58,18 +98,24 @@ const ManageGatheringsPage: React.FC = () => {
     durationMinutes: 90,
     frequency: 'weekly'
   });
-  const [addFormData, setAddFormData] = useState({
+
+  const [createGatheringData, setCreateGatheringData] = useState<CreateGatheringData>({
     name: '',
     description: '',
     dayOfWeek: 'Sunday',
     startTime: '10:00',
     durationMinutes: 90,
     frequency: 'weekly',
-    setAsDefault: false
+    setAsDefault: false,
+    peopleToAdd: [],
+    bulkPeopleText: '',
+    userIds: [],
+    assignSelf: true
   });
 
   useEffect(() => {
     loadGatherings();
+    loadUsers();
   }, []);
 
   const loadGatherings = async () => {
@@ -84,12 +130,171 @@ const ManageGatheringsPage: React.FC = () => {
     }
   };
 
+  const loadUsers = async () => {
+    try {
+      const response = await usersAPI.getAll();
+      setAllUsers(response.data.users || []);
+    } catch (err: any) {
+      console.error('Failed to load users:', err);
+    }
+  };
+
   const loadGatheringMembers = async (gatheringId: number) => {
     try {
       const response = await gatheringsAPI.getMembers(gatheringId);
       setGatheringMembers(response.data.members || []);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load gathering members');
+    }
+  };
+
+  // Reset wizard state
+  const resetWizardState = () => {
+    setCreateGatheringData({
+      name: '',
+      description: '',
+      dayOfWeek: 'Sunday',
+      startTime: '10:00',
+      durationMinutes: 90,
+      frequency: 'weekly',
+      setAsDefault: false,
+      peopleToAdd: [],
+      bulkPeopleText: '',
+      userIds: [],
+      assignSelf: true
+    });
+    setCurrentStep(1);
+    setError('');
+    setSuccess('');
+  };
+
+  // Parse bulk people text into individual names
+  const parseBulkPeopleText = (text: string): string[] => {
+    return text
+      .split(/[\n,;]/) // Split by newlines, commas, or semicolons
+      .map(name => name.trim())
+      .filter(name => name.length > 0 && name.includes(' ')) // Must have at least first and last name
+      .filter((name, index, arr) => arr.indexOf(name) === index); // Remove duplicates
+  };
+
+  // Handle bulk people text change
+  const handleBulkPeopleTextChange = (text: string) => {
+    setCreateGatheringData(prev => ({
+      ...prev,
+      bulkPeopleText: text,
+      peopleToAdd: parseBulkPeopleText(text)
+    }));
+  };
+
+  // Navigation functions
+  const nextStep = () => {
+    if (currentStep < 3) {
+      setCurrentStep(currentStep + 1);
+    }
+  };
+
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1);
+    }
+  };
+
+  const canProceedFromStep1 = () => {
+    return createGatheringData.name.trim().length > 0;
+  };
+
+  const canProceedFromStep2 = () => {
+    return true; // Step 2 is optional
+  };
+
+  // Handle gathering creation
+  const handleCreateGathering = async () => {
+    try {
+      setIsCreating(true);
+      setError('');
+
+      // Step 1: Create the gathering
+      const gatheringResponse = await gatheringsAPI.create({
+        name: createGatheringData.name,
+        description: createGatheringData.description,
+        dayOfWeek: createGatheringData.dayOfWeek,
+        startTime: createGatheringData.startTime,
+        durationMinutes: createGatheringData.durationMinutes,
+        frequency: createGatheringData.frequency,
+        setAsDefault: createGatheringData.setAsDefault
+      });
+
+      const newGatheringId = gatheringResponse.data.id;
+
+      // Step 2: Add people if any
+      if (createGatheringData.peopleToAdd.length > 0) {
+        try {
+          // Create people and assign them to gathering
+          for (const personName of createGatheringData.peopleToAdd) {
+            const [firstName, ...lastNameParts] = personName.split(' ');
+            const lastName = lastNameParts.join(' ');
+            
+            try {
+              // Create the person
+              const personResponse = await individualsAPI.create({
+                firstName,
+                lastName
+              });
+              
+              // Assign them to the gathering
+              await individualsAPI.assignToGathering(personResponse.data.id, newGatheringId);
+            } catch (personErr: any) {
+              console.error(`Failed to create person ${personName}:`, personErr);
+              // Continue with other people even if one fails
+            }
+          }
+        } catch (peopleErr: any) {
+          console.error('Error adding people:', peopleErr);
+          // Don't fail the whole process if people addition fails
+        }
+      }
+
+      // Step 3: Assign users if any
+      const usersToAssign = [...createGatheringData.userIds];
+      if (createGatheringData.assignSelf && user && !usersToAssign.includes(user.id)) {
+        usersToAssign.push(user.id);
+      }
+
+      if (usersToAssign.length > 0) {
+        try {
+          for (const userId of usersToAssign) {
+            await usersAPI.assignGatherings(userId, [newGatheringId]);
+          }
+        } catch (userErr: any) {
+          console.error('Error assigning users:', userErr);
+          // Don't fail the whole process if user assignment fails
+        }
+      }
+
+      // Success - update local state
+      const newGathering: Gathering = {
+        id: newGatheringId,
+        name: createGatheringData.name,
+        description: createGatheringData.description,
+        dayOfWeek: createGatheringData.dayOfWeek,
+        startTime: createGatheringData.startTime,
+        durationMinutes: createGatheringData.durationMinutes,
+        frequency: createGatheringData.frequency,
+        isActive: true,
+        memberCount: createGatheringData.peopleToAdd.length,
+        recentVisitorCount: 0
+      };
+
+      setGatherings([...gatherings, newGathering]);
+      setSuccess(`Gathering "${createGatheringData.name}" created successfully with ${createGatheringData.peopleToAdd.length} people and ${usersToAssign.length} users assigned.`);
+      setShowAddGatheringWizard(false);
+      resetWizardState();
+
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to create gathering');
+      console.error('Create gathering error:', err);
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -130,40 +335,6 @@ const ManageGatheringsPage: React.FC = () => {
       setError('');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to update gathering');
-    }
-  };
-
-  const handleCreateGathering = async () => {
-    try {
-      const response = await gatheringsAPI.create(addFormData);
-      
-      // Add the new gathering to the local state
-      const newGathering: Gathering = {
-        id: response.data.id,
-        name: addFormData.name,
-        description: addFormData.description,
-        dayOfWeek: addFormData.dayOfWeek,
-        startTime: addFormData.startTime,
-        durationMinutes: addFormData.durationMinutes,
-        frequency: addFormData.frequency,
-        isActive: true,
-        memberCount: 0
-      };
-      
-      setGatherings([...gatherings, newGathering]);
-      setShowAddForm(false);
-      setAddFormData({
-        name: '',
-        description: '',
-        dayOfWeek: 'Sunday',
-        startTime: '10:00',
-        durationMinutes: 90,
-        frequency: 'weekly',
-        setAsDefault: false
-      });
-      setError('');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to create gathering');
     }
   };
 
@@ -230,7 +401,7 @@ const ManageGatheringsPage: React.FC = () => {
         )
       ]);
       
-      // Update the gathering's member count
+      // Update the gathering's member count (keep visitor count unchanged)
       setGatherings(gatherings.map(g => 
         g.id === managingGathering.id 
           ? { ...g, memberCount: currentAssignedIds.size }
@@ -296,6 +467,14 @@ const ManageGatheringsPage: React.FC = () => {
         </div>
       )}
 
+      {success && (
+        <div className="bg-green-50 border border-green-200 rounded-md p-4">
+          <div className="flex">
+            <div className="text-sm text-green-700">{success}</div>
+          </div>
+        </div>
+      )}
+
       {/* Gatherings List */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -330,38 +509,40 @@ const ManageGatheringsPage: React.FC = () => {
                       )}
                       <div className="flex items-center mt-2 text-sm text-gray-500">
                         <UserGroupIcon className="h-4 w-4 mr-1" />
-                        {gathering.memberCount || 0} members
+                        {gathering.memberCount || 0} regular attendees
+                        {(gathering.recentVisitorCount || 0) > 0 && (
+                          <span className="ml-2 text-green-600">
+                            • {gathering.recentVisitorCount} recent visitors
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleManageMembers(gathering)}
-                        className="text-primary-600 hover:text-primary-700"
-                        title="Manage Members"
-                      >
-                        <UserGroupIcon className="h-5 w-5" />
-                      </button>
-                      <button
-                        onClick={() => handleViewMembers(gathering)}
-                        className="text-blue-600 hover:text-blue-700"
-                        title="View Members"
-                      >
-                        <EyeIcon className="h-5 w-5" />
-                      </button>
-                      <button
-                        onClick={() => handleEditGathering(gathering)}
-                        className="text-gray-400 hover:text-gray-600"
-                        title="Edit"
-                      >
-                        <PencilIcon className="h-5 w-5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteGathering(gathering.id)}
-                        className="text-red-400 hover:text-red-600"
-                        title="Delete"
-                      >
-                        <TrashIcon className="h-5 w-5" />
-                      </button>
+                      <ActionMenu 
+                        items={[
+                          {
+                            label: 'View Members',
+                            onClick: () => handleViewMembers(gathering),
+                            icon: <EyeIcon className="h-4 w-4" />
+                          },
+                          {
+                            label: 'Manage Members',
+                            onClick: () => handleManageMembers(gathering),
+                            icon: <UserGroupIcon className="h-4 w-4" />
+                          },
+                          {
+                            label: 'Edit Gathering',
+                            onClick: () => handleEditGathering(gathering),
+                            icon: <PencilIcon className="h-4 w-4" />
+                          },
+                          {
+                            label: 'Delete Gathering',
+                            onClick: () => handleDeleteGathering(gathering.id),
+                            icon: <TrashIcon className="h-4 w-4" />,
+                            className: 'text-red-600 hover:bg-red-50'
+                          }
+                        ]}
+                      />
                     </div>
                   </div>
                 </div>
@@ -568,17 +749,54 @@ const ManageGatheringsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Add Gathering Modal */}
-      {showAddForm && (
+      {/* Add Gathering Wizard Modal */}
+      {showAddGatheringWizard && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
             <div className="mt-3">
+              {/* Progress Indicator */}
+              <div className="mb-6">
+                <div className="flex items-center">
+                  <div className="flex items-center text-xs">
+                    <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
+                      currentStep >= 1 ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      {currentStep > 1 ? <CheckIcon className="w-5 h-5" /> : '1'}
+                    </div>
+                    <div className={`w-8 h-0.5 ${currentStep > 1 ? 'bg-primary-600' : 'bg-gray-200'}`}></div>
+                  </div>
+                  <div className="flex items-center text-xs">
+                    <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
+                      currentStep >= 2 ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      {currentStep > 2 ? <CheckIcon className="w-5 h-5" /> : '2'}
+                    </div>
+                    <div className={`w-8 h-0.5 ${currentStep > 2 ? 'bg-primary-600' : 'bg-gray-200'}`}></div>
+                  </div>
+                  <div className="flex items-center text-xs">
+                    <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
+                      currentStep >= 3 ? 'bg-primary-600 text-white' : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      3
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-2">
+                  <span>Details</span>
+                  <span>Add People</span>
+                  <span>Assign Users</span>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  Add New Gathering
+                  {currentStep === 1 ? 'Gathering Details' : currentStep === 2 ? 'Add People' : 'Assign Users'}
                 </h3>
                 <button
-                  onClick={() => setShowAddForm(false)}
+                  onClick={() => {
+                    setShowAddGatheringWizard(false);
+                    resetWizardState();
+                  }}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <span className="sr-only">Close</span>
@@ -588,135 +806,314 @@ const ManageGatheringsPage: React.FC = () => {
                 </button>
               </div>
               
-              <form onSubmit={(e) => { e.preventDefault(); handleCreateGathering(); }} className="space-y-4">
-                <div>
-                  <label htmlFor="add-name" className="block text-sm font-medium text-gray-700">
-                    Gathering Name *
-                  </label>
-                  <input
-                    id="add-name"
-                    type="text"
-                    value={addFormData.name}
-                    onChange={(e) => setAddFormData({ ...addFormData, name: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Sunday Service"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="add-description" className="block text-sm font-medium text-gray-700">
-                    Description
-                  </label>
-                  <textarea
-                    id="add-description"
-                    value={addFormData.description}
-                    onChange={(e) => setAddFormData({ ...addFormData, description: e.target.value })}
-                    rows={2}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Weekly worship service"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {currentStep === 1 && (
+                <div className="space-y-4">
                   <div>
-                    <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700">
-                      Day of Week *
+                    <label htmlFor="add-name" className="block text-sm font-medium text-gray-700">
+                      Gathering Name *
+                    </label>
+                    <input
+                      id="add-name"
+                      type="text"
+                      value={createGatheringData.name}
+                      onChange={(e) => setCreateGatheringData({ ...createGatheringData, name: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="Sunday Service"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="add-description" className="block text-sm font-medium text-gray-700">
+                      Description
+                    </label>
+                    <textarea
+                      id="add-description"
+                      value={createGatheringData.description}
+                      onChange={(e) => setCreateGatheringData({ ...createGatheringData, description: e.target.value })}
+                      rows={2}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="Weekly worship service"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700">
+                        Day of Week *
+                      </label>
+                      <select
+                        id="add-dayOfWeek"
+                        value={createGatheringData.dayOfWeek}
+                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        required
+                      >
+                        <option value="Sunday">Sunday</option>
+                        <option value="Monday">Monday</option>
+                        <option value="Tuesday">Tuesday</option>
+                        <option value="Wednesday">Wednesday</option>
+                        <option value="Thursday">Thursday</option>
+                        <option value="Friday">Friday</option>
+                        <option value="Saturday">Saturday</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700">
+                        Start Time *
+                      </label>
+                      <input
+                        id="add-startTime"
+                        type="time"
+                        value={createGatheringData.startTime}
+                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, startTime: e.target.value })}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="add-durationMinutes" className="block text-sm font-medium text-gray-700">
+                        Duration (minutes) *
+                      </label>
+                      <input
+                        id="add-durationMinutes"
+                        type="number"
+                        value={createGatheringData.durationMinutes}
+                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, durationMinutes: parseInt(e.target.value) })}
+                        min="15"
+                        max="480"
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700">
+                      Frequency *
                     </label>
                     <select
-                      id="add-dayOfWeek"
-                      value={addFormData.dayOfWeek}
-                      onChange={(e) => setAddFormData({ ...addFormData, dayOfWeek: e.target.value })}
+                      id="add-frequency"
+                      value={createGatheringData.frequency}
+                      onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
                       className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       required
                     >
-                      <option value="Sunday">Sunday</option>
-                      <option value="Monday">Monday</option>
-                      <option value="Tuesday">Tuesday</option>
-                      <option value="Wednesday">Wednesday</option>
-                      <option value="Thursday">Thursday</option>
-                      <option value="Friday">Friday</option>
-                      <option value="Saturday">Saturday</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="biweekly">Bi-weekly</option>
+                      <option value="monthly">Monthly</option>
                     </select>
                   </div>
 
-                  <div>
-                    <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700">
-                      Start Time *
-                    </label>
+                  <div className="flex items-center">
                     <input
-                      id="add-startTime"
-                      type="time"
-                      value={addFormData.startTime}
-                      onChange={(e) => setAddFormData({ ...addFormData, startTime: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      required
+                      id="add-setAsDefault"
+                      type="checkbox"
+                      checked={createGatheringData.setAsDefault}
+                      onChange={(e) => setCreateGatheringData({ ...createGatheringData, setAsDefault: e.target.checked })}
+                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                     />
+                    <label htmlFor="add-setAsDefault" className="ml-2 block text-sm text-gray-900">
+                      Set as my default gathering
+                    </label>
+                  </div>
+                  
+                  <div className="flex justify-end space-x-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddGatheringWizard(false);
+                        resetWizardState();
+                      }}
+                      className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={nextStep}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                      disabled={!canProceedFromStep1()}
+                    >
+                      Next
+                      <ChevronRightIcon className="ml-2 h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 2 && (
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="add-peopleToAdd" className="block text-sm font-medium text-gray-700">
+                      Add People (Optional)
+                    </label>
+                    <div className="relative">
+                      <textarea
+                        id="add-peopleToAdd"
+                        value={createGatheringData.bulkPeopleText}
+                        onChange={(e) => handleBulkPeopleTextChange(e.target.value)}
+                        rows={6}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        placeholder="John Doe&#10;Jane Smith&#10;Peter Jones&#10;&#10;Or: John Doe, Jane Smith, Peter Jones"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.readText().then(text => {
+                            handleBulkPeopleTextChange(text);
+                          }).catch(err => {
+                            console.error('Failed to read clipboard:', err);
+                          });
+                        }}
+                        className="absolute top-2 right-2 p-1 text-gray-400 hover:text-gray-600"
+                        title="Paste from clipboard"
+                      >
+                        <ClipboardDocumentIcon className="h-5 w-5" />
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500">
+                      Enter names in "First Last" format. One per line, or separated by commas/semicolons.
+                    </p>
+                  </div>
+
+                  {/* People Preview */}
+                  {createGatheringData.peopleToAdd.length > 0 && (
+                    <div className="bg-green-50 border border-green-200 rounded-md p-3">
+                      <h4 className="text-sm font-medium text-green-800 mb-2">
+                        People to add ({createGatheringData.peopleToAdd.length}):
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                        {createGatheringData.peopleToAdd.map((name, index) => (
+                          <div key={index} className="text-sm text-green-700 flex items-center">
+                            <CheckIcon className="h-3 w-3 mr-1" />
+                            {name}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="flex justify-between space-x-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={prevStep}
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      <ChevronLeftIcon className="mr-2 h-4 w-4" />
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={nextStep}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Next
+                      <ChevronRightIcon className="ml-2 h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 3 && (
+                <div className="space-y-4">
+                  {/* Summary */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                    <h4 className="text-sm font-medium text-blue-800">Summary:</h4>
+                    <p className="text-sm text-blue-700">
+                      Creating "{createGatheringData.name}" with {createGatheringData.peopleToAdd.length} people
+                    </p>
                   </div>
 
                   <div>
-                    <label htmlFor="add-durationMinutes" className="block text-sm font-medium text-gray-700">
-                      Duration (minutes) *
+                    <label className="block text-sm font-medium text-gray-700 mb-3">
+                      Assign Users (Optional)
                     </label>
-                    <input
-                      id="add-durationMinutes"
-                      type="number"
-                      value={addFormData.durationMinutes}
-                      onChange={(e) => setAddFormData({ ...addFormData, durationMinutes: parseInt(e.target.value) })}
-                      min="15"
-                      max="480"
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      required
-                    />
+                    
+                    {/* Self Assignment First */}
+                    <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={createGatheringData.assignSelf}
+                          onChange={(e) => setCreateGatheringData({ ...createGatheringData, assignSelf: e.target.checked })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <div className="ml-3">
+                          <p className="text-sm font-medium text-blue-900">
+                            Assign myself to this gathering
+                          </p>
+                          <p className="text-xs text-blue-700">
+                            Recommended so you can manage attendance and settings
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+
+                    {/* Other Users */}
+                    {allUsers.filter(u => u.id !== user?.id).length > 0 && (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {allUsers.filter(u => u.id !== user?.id).map((userItem) => (
+                          <label key={userItem.id} className="flex items-center p-3 bg-gray-50 rounded-md hover:bg-gray-100 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={createGatheringData.userIds.includes(userItem.id)}
+                              onChange={(e) => {
+                                setCreateGatheringData(prev => ({
+                                  ...prev,
+                                  userIds: e.target.checked 
+                                    ? [...prev.userIds, userItem.id]
+                                    : prev.userIds.filter(id => id !== userItem.id)
+                                }));
+                              }}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <div className="ml-3 flex-1">
+                              <p className="text-sm font-medium text-gray-900">
+                                {userItem.firstName} {userItem.lastName}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {userItem.role} • {userItem.email || userItem.mobileNumber}
+                              </p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex justify-between space-x-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={prevStep}
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      <ChevronLeftIcon className="mr-2 h-4 w-4" />
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCreateGathering}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                      disabled={isCreating}
+                    >
+                      {isCreating ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <CheckIcon className="mr-2 h-4 w-4" />
+                          Create Gathering
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
-
-                <div>
-                  <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700">
-                    Frequency *
-                  </label>
-                  <select
-                    id="add-frequency"
-                    value={addFormData.frequency}
-                    onChange={(e) => setAddFormData({ ...addFormData, frequency: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    required
-                  >
-                    <option value="weekly">Weekly</option>
-                    <option value="biweekly">Bi-weekly</option>
-                    <option value="monthly">Monthly</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center">
-                  <input
-                    id="add-setAsDefault"
-                    type="checkbox"
-                    checked={addFormData.setAsDefault}
-                    onChange={(e) => setAddFormData({ ...addFormData, setAsDefault: e.target.checked })}
-                    className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                  />
-                  <label htmlFor="add-setAsDefault" className="ml-2 block text-sm text-gray-900">
-                    Set as my default gathering
-                  </label>
-                </div>
-                
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddForm(false)}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-                  >
-                    Create Gathering
-                  </button>
-                </div>
-              </form>
+              )}
             </div>
           </div>
         </div>
@@ -803,7 +1200,11 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Floating Add Gathering Button */}
       <button
-        onClick={() => setShowAddForm(true)}
+        onClick={() => {
+          resetWizardState();
+          setSuccess(''); // Clear any previous success messages
+          setShowAddGatheringWizard(true);
+        }}
         className="fixed bottom-6 right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50"
       >
         <PlusIcon className="h-6 w-6" />

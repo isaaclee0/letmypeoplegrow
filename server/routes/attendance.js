@@ -40,7 +40,9 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       JOIN individuals i ON gl.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-      WHERE gl.gathering_type_id = ? AND i.is_active = true
+      WHERE gl.gathering_type_id = ? 
+        AND i.is_active = true 
+        AND (i.is_visitor = false OR i.is_visitor IS NULL)
       ORDER BY i.last_name, i.first_name
     `, [sessionId, gatheringTypeId]);
 
@@ -311,25 +313,8 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
           }
         }
 
-        // Add to gathering list if not already
-        const inGathering = await conn.query(`
-          SELECT 1 FROM gathering_lists 
-          WHERE gathering_type_id = ? AND individual_id = ?
-        `, [gatheringTypeId, individualId]);
-
-        if (inGathering.length === 0) {
-          await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-            VALUES (?, ?, ?)
-          `, [gatheringTypeId, individualId, req.user.id]);
-        }
-
-        // Mark as present
-        await conn.query(`
-          INSERT INTO attendance_records (session_id, individual_id, present)
-          VALUES (?, ?, true)
-          ON DUPLICATE KEY UPDATE present = true
-        `, [sessionId, individualId]);
+        // Visitors should not be added to gathering_lists or attendance_records
+        // They are tracked separately in the visitors table
 
         createdIndividuals.push({
           id: individualId,
@@ -477,25 +462,8 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
           }
         }
 
-        // Add to gathering list if not already
-        const inGathering = await conn.query(`
-          SELECT 1 FROM gathering_lists 
-          WHERE gathering_type_id = ? AND individual_id = ?
-        `, [gatheringTypeId, individualId]);
-
-        if (inGathering.length === 0) {
-          await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-            VALUES (?, ?, ?)
-          `, [gatheringTypeId, individualId, req.user.id]);
-        }
-
-        // Mark as present
-        await conn.query(`
-          INSERT INTO attendance_records (session_id, individual_id, present)
-          VALUES (?, ?, true)
-          ON DUPLICATE KEY UPDATE present = true
-        `, [sessionId, individualId]);
+        // Visitors should not be added to gathering_lists or attendance_records
+        // They are tracked separately in the visitors table
 
         createdIndividuals.push({
           id: individualId,

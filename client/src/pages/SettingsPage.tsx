@@ -1,23 +1,18 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useDebug } from '../contexts/DebugContext';
 import {
   Cog6ToothIcon,
-  BugAntIcon,
   InformationCircleIcon,
-  ExclamationTriangleIcon,
   CheckIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
-  const { isDebugMode, toggleDebugMode, logs, clearLogs } = useDebug();
-  const [activeTab, setActiveTab] = useState<'general' | 'debug' | 'system'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'system'>('general');
 
   const tabs = [
     { id: 'general', name: 'General', icon: Cog6ToothIcon },
-    { id: 'debug', name: 'Debug', icon: BugAntIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
   ];
 
@@ -104,86 +99,7 @@ const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'debug' && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Debug Mode</h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Enable debug mode to see detailed logs and system information for troubleshooting.
-                </p>
-                
-                <div className="mt-4 flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div className="flex items-center">
-                    <BugAntIcon className="h-5 w-5 text-gray-400 mr-3" />
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">Debug Mode</p>
-                      <p className="text-sm text-gray-500">
-                        {isDebugMode ? 'Enabled' : 'Disabled'}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={toggleDebugMode}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      isDebugMode ? 'bg-red-600' : 'bg-gray-200'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        isDebugMode ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
-                </div>
 
-                {isDebugMode && (
-                  <div className="mt-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-medium text-gray-900">Debug Logs</h4>
-                      <button
-                        onClick={clearLogs}
-                        className="text-sm text-red-600 hover:text-red-800"
-                      >
-                        Clear Logs
-                      </button>
-                    </div>
-                    <div className="bg-gray-900 text-green-400 p-4 rounded-lg max-h-64 overflow-y-auto font-mono text-xs">
-                      {logs.length === 0 ? (
-                        <p>No logs yet. Perform some actions to see debug information.</p>
-                      ) : (
-                        logs.slice(-20).map((log) => (
-                          <div key={log.id} className="mb-1">
-                            <span className="text-gray-500">
-                              {log.timestamp.toLocaleTimeString()}
-                            </span>
-                            <span className="ml-2 text-blue-400">[{log.category}]</span>
-                            <span className="ml-2">{log.message}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <div className="flex">
-                  <ExclamationTriangleIcon className="h-5 w-5 text-yellow-400" />
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-yellow-800">
-                      Debug Mode Warning
-                    </h3>
-                    <div className="mt-2 text-sm text-yellow-700">
-                      <p>
-                        Debug mode is intended for troubleshooting only. It may expose sensitive information 
-                        and should be disabled in production environments.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           {activeTab === 'system' && (
             <div className="space-y-6">

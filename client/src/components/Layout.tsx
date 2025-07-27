@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useDebug } from '../contexts/DebugContext';
 import UpdateNotificationBar from './UpdateNotificationBar';
-import DebugPanel from './DebugPanel';
 import {
   Bars3Icon,
   BellIcon,
@@ -15,14 +13,12 @@ import {
   UsersIcon,
   XMarkIcon,
   WrenchScrewdriverIcon,
-  BugAntIcon,
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
-  const { isDebugMode, toggleDebugMode } = useDebug();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -170,20 +166,7 @@ const Layout: React.FC = () => {
               </div>
             </div>
             <div className="ml-4 flex items-center md:ml-6">
-              {/* Debug Toggle - only show for non-attendance takers */}
-              {user?.role !== 'attendance_taker' && (
-                <button 
-                  onClick={toggleDebugMode}
-                  className={`p-1 rounded-full transition-colors duration-200 ${
-                    isDebugMode 
-                      ? 'bg-red-100 text-red-600 hover:bg-red-200' 
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  title={isDebugMode ? 'Disable Debug Mode' : 'Enable Debug Mode'}
-                >
-                  <BugAntIcon className="h-5 w-5" />
-                </button>
-              )}
+
 
               {/* Notifications - only show for non-attendance takers */}
               {user?.role !== 'attendance_taker' && (
@@ -227,9 +210,7 @@ const Layout: React.FC = () => {
         </main>
       </div>
       </div>
-      
-      {/* Debug Panel - only show for non-attendance takers */}
-      {user?.role !== 'attendance_taker' && <DebugPanel />}
+
     </div>
   );
 };

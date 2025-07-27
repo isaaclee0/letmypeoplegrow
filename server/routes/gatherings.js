@@ -14,9 +14,12 @@ router.get('/', async (req, res) => {
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at,
-               COUNT(gl.individual_id) as member_count
+               COUNT(DISTINCT gl.individual_id) as member_count,
+               COUNT(DISTINCT CASE WHEN as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) THEN v.id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
+        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
+        LEFT JOIN visitors v ON as_table.id = v.session_id
         WHERE gt.is_active = true
         GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at
         ORDER BY gt.name
@@ -24,9 +27,12 @@ router.get('/', async (req, res) => {
     } else {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at,
-               COUNT(gl.individual_id) as member_count
+               COUNT(DISTINCT gl.individual_id) as member_count,
+               COUNT(DISTINCT CASE WHEN as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) THEN v.id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
+        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
+        LEFT JOIN visitors v ON as_table.id = v.session_id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE gt.is_active = true AND uga.user_id = ?
         GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at
@@ -47,6 +53,7 @@ router.get('/', async (req, res) => {
 
       isActive: Boolean(gathering.is_active),
       memberCount: Number(gathering.member_count),
+      recentVisitorCount: Number(gathering.recent_visitor_count || 0),
       createdAt: gathering.created_at
     }));
     

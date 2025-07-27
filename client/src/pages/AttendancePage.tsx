@@ -354,10 +354,43 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleEditVisitor = (visitor: Visitor) => {
-    // Parse visitor name to extract first and last name
-    const nameParts = visitor.name.split(' ');
-    const firstName = nameParts[0] || '';
-    const lastName = nameParts.slice(1).join(' ') || '';
+    // Parse visitor name to handle families (e.g., "John Smith & Jane Smith & Child1 & Child2")
+    const people = visitor.name.split(' & ').map(name => name.trim());
+    
+    // First person is the main visitor
+    const mainPersonName = people[0] || '';
+    const mainParts = mainPersonName.split(' ');
+    const firstName = mainParts[0] || '';
+    const lastName = mainParts.slice(1).join(' ') || '';
+    
+    // Second person might be spouse (if it's an adult name pattern)
+    let hasSpouse = false;
+    let spouseFirstName = '';
+    let spouseLastName = '';
+    let spouseFirstNameUnknown = false;
+    let spouseLastNameUnknown = false;
+    
+    if (people.length > 1 && !people[1].startsWith('Child')) {
+      hasSpouse = true;
+      const spouseParts = people[1].split(' ');
+      spouseFirstName = spouseParts[0] || '';
+      spouseLastName = spouseParts.slice(1).join(' ') || '';
+      spouseFirstNameUnknown = spouseFirstName === 'Unknown';
+      spouseLastNameUnknown = spouseLastName === 'Unknown';
+      if (spouseFirstNameUnknown) spouseFirstName = '';
+      if (spouseLastNameUnknown) spouseLastName = '';
+    }
+    
+    // Remaining people are children
+    const startIndex = hasSpouse ? 2 : 1;
+    const children = people.slice(startIndex).map((childName, index) => {
+      const childParts = childName.split(' ');
+      const childFirstName = childParts[0] || '';
+      return {
+        firstName: childFirstName === 'Unknown' || childName.startsWith('Child') ? '' : childFirstName,
+        firstNameUnknown: childFirstName === 'Unknown' || childName.startsWith('Child')
+      };
+    });
     
     setVisitorForm({
       personType: 'visitor',
@@ -367,12 +400,12 @@ const AttendancePage: React.FC = () => {
       lastName: lastName === 'Unknown' ? '' : lastName,
       lastNameUnknown: lastName === 'Unknown',
       notes: visitor.notes || '',
-      spouseFirstName: '',
-      spouseFirstNameUnknown: false,
-      spouseLastName: '',
-      spouseLastNameUnknown: false,
-      hasSpouse: false,
-      children: []
+      spouseFirstName,
+      spouseFirstNameUnknown,
+      spouseLastName,
+      spouseLastNameUnknown,
+      hasSpouse,
+      children
     });
     setEditingVisitor(visitor);
     setShowEditVisitorModal(true);
@@ -644,22 +677,50 @@ const AttendancePage: React.FC = () => {
   // Group visitors by family
   const groupedVisitors = useMemo(() => {
     if (!groupByFamily) {
-      return [{ familyId: null, familyName: null, members: visitors }];
+      return [{ familyId: null, familyName: null, members: visitors, isFamily: false }];
     }
 
-    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[] } } = {};
+    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean } } = {};
 
     visitors.forEach(visitor => {
-      // For now, treat all visitors as individuals since they don't have family info from backend
-      const singleVisitorKey = 'single_visitor';
-      if (!grouped[singleVisitorKey]) {
-        grouped[singleVisitorKey] = {
-          familyId: null,
-          familyName: null,
-          members: []
+      // Group by visitor_family_group if it exists, otherwise treat as individual
+      const groupKey = visitor.visitorFamilyGroup ? `family_${visitor.visitorFamilyGroup}` : `individual_${visitor.id}`;
+      
+      if (!grouped[groupKey]) {
+        const isFamily = !!visitor.visitorFamilyGroup;
+        let familyName = null;
+        
+        if (isFamily) {
+          // Extract first names from the visitor name to create family name
+          const people = visitor.name.split(' & ').map(name => name.trim());
+          const firstNames = people.map(person => {
+            const parts = person.split(' ');
+            const firstName = parts[0];
+            // Don't use "Unknown" or "Child" names
+            return (firstName && firstName !== 'Unknown' && !firstName.startsWith('Child')) ? firstName : null;
+          }).filter(name => name !== null);
+          
+          if (firstNames.length > 0) {
+            if (firstNames.length === 1) {
+              familyName = `${firstNames[0]} Family`;
+            } else if (firstNames.length === 2) {
+              familyName = `${firstNames[0]} & ${firstNames[1]} Family`;
+            } else {
+              familyName = `${firstNames[0]} & ${firstNames[1]} + ${firstNames.length - 2} Family`;
+            }
+          } else {
+            familyName = 'Visitor Family';
+          }
+        }
+        
+        grouped[groupKey] = {
+          familyId: null, // Visitors don't have numeric family IDs like regular attendees
+          familyName,
+          members: [],
+          isFamily
         };
       }
-      grouped[singleVisitorKey].members.push(visitor);
+      grouped[groupKey].members.push(visitor);
     });
 
     return Object.values(grouped);
@@ -988,46 +1049,73 @@ const AttendancePage: React.FC = () => {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Visitors</h3>
-            <div className="space-y-6">
+            <div className="space-y-4">
               {groupedVisitors.map((group: any) => (
-                <div key={group.familyId || `single-${group.members[0].id}`} className="border border-gray-200 rounded-md p-4">
-                  {group.familyId && (
-                    <div className="flex justify-between items-center mb-2">
-                      <h4 className="text-sm font-semibold text-gray-900">{group.familyName}</h4>
+                <div key={group.familyId || `visitor-group-${group.members[0].id}`} className={groupByFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
+                  {groupByFamily && group.familyName && (
+                    <div className="flex justify-between items-center mb-3">
+                      <h4 className="text-md font-medium text-gray-900">
+                        {group.familyName} (Visitors)
+                      </h4>
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-                    {group.members.map((person: any) => (
-                      <div
-                        key={person.id}
-                        className="flex items-center p-3 rounded-md border-2 border-primary-500 bg-primary-50"
-                      >
-                        <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
-                          <CheckIcon className="h-3 w-3 text-white" />
-                        </div>
-                        <div className="ml-3 flex-1">
-                          <span className="text-sm font-medium text-gray-900">
-                            {person.name}
-                          </span>
-                          <div className="flex items-center mt-1">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                              person.visitorType === 'potential_regular' 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                            }`}>
-                              {person.visitorType === 'potential_regular' ? 'Potential Regular' : 'Temporary'}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleEditVisitor(person)}
-                          className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                          title="Edit visitor"
+                    {group.members.map((person: any) => {
+                      // Clean up visitor name display - hide "Unknown" surnames
+                      const cleanName = person.name
+                        .split(' & ')
+                        .map((name: string) => {
+                          const parts = name.trim().split(' ');
+                          const firstName = parts[0];
+                          const lastName = parts.slice(1).join(' ');
+                          
+                          // If lastName is "Unknown", just show firstName
+                          if (lastName === 'Unknown' || !lastName) {
+                            return firstName;
+                          }
+                          return `${firstName} ${lastName}`;
+                        })
+                        .join(' & ');
+
+                      return (
+                        <label
+                          key={person.id}
+                          className={`flex items-center cursor-pointer transition-colors ${
+                            group.isFamily 
+                              ? `p-3 rounded-md border border-gray-200 bg-gray-50 hover:bg-gray-100`
+                              : `p-2 rounded-md bg-primary-50 hover:bg-primary-100`
+                          }`}
                         >
-                          <PencilIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
+                          <div className="flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600">
+                            <CheckIcon className="h-3 w-3 text-white" />
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <span className="text-sm font-medium text-gray-900">
+                              {cleanName}
+                            </span>
+                            <div className="flex items-center space-x-2 mt-1">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                person.visitorType === 'potential_regular' 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  handleEditVisitor(person);
+                                }}
+                                className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Edit visitor"
+                              >
+                                <PencilIcon className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -1457,6 +1545,135 @@ const AttendancePage: React.FC = () => {
                       </label>
                     </div>
                   </div>
+                </div>
+
+                {/* Add Spouse */}
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Family Members
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setVisitorForm({ ...visitorForm, hasSpouse: !visitorForm.hasSpouse })}
+                    className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  >
+                    {visitorForm.hasSpouse ? 'Remove Spouse' : 'Add Spouse'}
+                  </button>
+                </div>
+                
+                {/* Spouse Fields */}
+                {visitorForm.hasSpouse && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-6 border-l-2 border-gray-200">
+                    <div>
+                      <label htmlFor="editSpouseFirstName" className="block text-sm font-medium text-gray-700">
+                        Spouse First Name
+                      </label>
+                      <input
+                        id="editSpouseFirstName"
+                        type="text"
+                        value={visitorForm.spouseFirstName}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, spouseFirstName: e.target.value })}
+                        disabled={visitorForm.spouseFirstNameUnknown}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                        placeholder="First name"
+                      />
+                      <div className="flex items-center mt-1">
+                        <input
+                          id="editSpouseFirstNameUnknown"
+                          type="checkbox"
+                          checked={visitorForm.spouseFirstNameUnknown}
+                          onChange={(e) => setVisitorForm({ ...visitorForm, spouseFirstNameUnknown: e.target.checked, spouseFirstName: e.target.checked ? '' : visitorForm.spouseFirstName })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <label htmlFor="editSpouseFirstNameUnknown" className="ml-2 block text-sm text-gray-900">
+                          Unknown
+                        </label>
+                      </div>
+                    </div>
+                    <div>
+                      <label htmlFor="editSpouseLastName" className="block text-sm font-medium text-gray-700">
+                        Spouse Last Name
+                      </label>
+                      <input
+                        id="editSpouseLastName"
+                        type="text"
+                        value={visitorForm.spouseLastName}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, spouseLastName: e.target.value })}
+                        disabled={visitorForm.spouseLastNameUnknown}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                        placeholder="Last name"
+                      />
+                      <div className="flex items-center mt-1">
+                        <input
+                          id="editSpouseLastNameUnknown"
+                          type="checkbox"
+                          checked={visitorForm.spouseLastNameUnknown}
+                          onChange={(e) => setVisitorForm({ ...visitorForm, spouseLastNameUnknown: e.target.checked, spouseLastName: e.target.checked ? '' : visitorForm.spouseLastName })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <label htmlFor="editSpouseLastNameUnknown" className="ml-2 block text-sm text-gray-900">
+                          Unknown
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Children Section */}
+                <div className="mt-4">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Children (up to 10)
+                    </label>
+                    {visitorForm.children.length < 10 && (
+                      <button
+                        type="button"
+                        onClick={addChild}
+                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                      >
+                        Add Child
+                      </button>
+                    )}
+                  </div>
+                  {visitorForm.children.map((child, index) => (
+                    <div key={index} className="mt-2 pl-6 border-l-2 border-gray-200">
+                      <div className="grid grid-cols-1 gap-4 relative">
+                        <div>
+                          <label htmlFor={`editChildFirstName-${index}`} className="block text-sm font-medium text-gray-700">
+                            Child {index + 1} First Name
+                          </label>
+                          <input
+                            id={`editChildFirstName-${index}`}
+                            type="text"
+                            value={child.firstName}
+                            onChange={(e) => updateChild(index, { firstName: e.target.value })}
+                            disabled={child.firstNameUnknown}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                            placeholder="First name (optional)"
+                          />
+                          <div className="flex items-center mt-1">
+                            <input
+                              id={`editChildFirstNameUnknown-${index}`}
+                              type="checkbox"
+                              checked={child.firstNameUnknown}
+                              onChange={(e) => updateChild(index, { firstNameUnknown: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`editChildFirstNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                              Use placeholder (Child {index + 1})
+                            </label>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeChild(index)}
+                          className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
                 {/* Notes field */}

@@ -5,6 +5,9 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
+// Import Winston logger
+const logger = require('./config/logger');
+
 // Import database initialization
 const { initializeDatabase } = require('./startup');
 
@@ -54,6 +57,9 @@ app.use(express.urlencoded({ extended: true }));
 // Cookie parsing middleware
 app.use(cookieParser());
 
+// Request logging middleware
+app.use(logger.createRequestLogger());
+
 // Security middleware - apply to all routes
 app.use(sanitizeInput);
 app.use(detectSQLInjection);
@@ -80,7 +86,13 @@ app.use('/api/test', testRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error('Unhandled server error', { 
+    error: err.message, 
+    stack: err.stack,
+    url: req.url,
+    method: req.method,
+    userId: req.user?.id
+  });
   res.status(500).json({ 
     error: 'Something went wrong!', 
     message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' 
@@ -100,11 +112,12 @@ async function startServer() {
     
     // Start the server
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🏃 Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info(`🚀 Server running on port ${PORT}`);
+      logger.info(`🏃 Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info('Server startup completed successfully');
     });
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    logger.error('❌ Failed to start server', { error: error.message, stack: error.stack });
     process.exit(1);
   }
 }

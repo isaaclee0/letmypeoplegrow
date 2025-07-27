@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { useDebug } from '../contexts/DebugContext';
 import { usersAPI, invitationsAPI, gatheringsAPI } from '../services/api';
+import ActionMenu from '../components/ActionMenu';
 import {
   UserIcon,
   UserGroupIcon,
@@ -53,7 +53,6 @@ interface GatheringType {
 
 const UsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
-  const { addLog } = useDebug();
   const [users, setUsers] = useState<User[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
@@ -93,8 +92,6 @@ const UsersPage: React.FC = () => {
       setIsLoading(true);
       setError('');
       
-      addLog('info', 'UsersPage', 'Loading users, invitations, and gatherings data');
-      
       const [usersResponse, invitationsResponse, gatheringsResponse] = await Promise.all([
         usersAPI.getAll(),
         invitationsAPI.getPending(),
@@ -105,15 +102,10 @@ const UsersPage: React.FC = () => {
       setInvitations(invitationsResponse.data.invitations || []);
       setGatherings(gatheringsResponse.data.gatherings || []);
       
-      addLog('info', 'UsersPage', 'Data loaded successfully', {
-        usersCount: usersResponse.data.users?.length || 0,
-        invitationsCount: invitationsResponse.data.invitations?.length || 0,
-        gatheringsCount: gatheringsResponse.data.gatherings?.length || 0
-      });
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to load data';
       setError(errorMessage);
-      addLog('error', 'UsersPage', 'Failed to load data', {
+      console.error('Failed to load data:', {
         error: errorMessage,
         response: err.response?.data,
         status: err.response?.status
@@ -127,42 +119,32 @@ const UsersPage: React.FC = () => {
     try {
       setError('');
       
-      addLog('info', 'Invitation', 'Starting invitation process', inviteForm);
-      
       // Validate form
       if (!inviteForm.firstName || !inviteForm.lastName) {
         const errorMsg = 'First name and last name are required';
         setError(errorMsg);
-        addLog('error', 'Invitation', errorMsg, inviteForm);
         return;
       }
 
       if (inviteForm.primaryContactMethod === 'email' && !inviteForm.email) {
         const errorMsg = 'Email is required when primary contact method is email';
         setError(errorMsg);
-        addLog('error', 'Invitation', errorMsg, inviteForm);
         return;
       }
 
       if (inviteForm.primaryContactMethod === 'sms' && !inviteForm.mobileNumber) {
         const errorMsg = 'Mobile number is required when primary contact method is SMS';
         setError(errorMsg);
-        addLog('error', 'Invitation', errorMsg, inviteForm);
         return;
       }
 
       if (!inviteForm.email && !inviteForm.mobileNumber) {
         const errorMsg = 'Either email or mobile number must be provided';
         setError(errorMsg);
-        addLog('error', 'Invitation', errorMsg, inviteForm);
         return;
       }
 
-      addLog('info', 'Invitation', 'Form validation passed, sending invitation');
-      
       const response = await invitationsAPI.send(inviteForm);
-      
-      addLog('info', 'Invitation', 'Invitation sent successfully', response.data);
       
       setSuccess('Invitation sent successfully');
       setShowInviteModal(false);
@@ -177,15 +159,13 @@ const UsersPage: React.FC = () => {
       });
       
       // Reload invitations
-      addLog('info', 'Invitation', 'Reloading invitations list');
       const invitationsResponse = await invitationsAPI.getPending();
       setInvitations(invitationsResponse.data.invitations || []);
       
-      addLog('info', 'Invitation', 'Invitation process completed successfully');
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to send invitation';
       setError(errorMessage);
-      addLog('error', 'Invitation', 'Failed to send invitation', {
+      console.error('Failed to send invitation:', {
         error: errorMessage,
         formData: inviteForm,
         response: err.response?.data,
@@ -197,17 +177,14 @@ const UsersPage: React.FC = () => {
 
   const handleResendInvitation = async (invitationId: number) => {
     try {
-      addLog('info', 'Invitation', `Resending invitation ${invitationId}`);
-      
       const response = await invitationsAPI.resend(invitationId);
       
-      addLog('info', 'Invitation', 'Invitation resent successfully', response.data);
       setSuccess('Invitation resent successfully');
       loadData();
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to resend invitation';
       setError(errorMessage);
-      addLog('error', 'Invitation', 'Failed to resend invitation', {
+      console.error('Failed to resend invitation:', {
         invitationId,
         error: errorMessage,
         response: err.response?.data,
@@ -372,7 +349,76 @@ const UsersPage: React.FC = () => {
             Users ({users.length})
           </h3>
           
-          <div className="overflow-x-auto">
+          {/* Mobile Card Layout */}
+          <div className="block md:hidden space-y-4">
+            {users.map((user) => (
+              <div key={user.id} className="bg-gray-50 rounded-lg p-4 border">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-3 mb-2">
+                      <UserIcon className="h-8 w-8 text-gray-400 flex-shrink-0" />
+                      <div>
+                        <h4 className="text-base font-medium text-gray-900">
+                          {user.firstName} {user.lastName}
+                        </h4>
+                        <div className="text-sm text-gray-500">
+                          {user.primaryContactMethod === 'email' ? (
+                            <div className="flex items-center">
+                              <EnvelopeIcon className="h-4 w-4 mr-1" />
+                              <span className="truncate">{user.email}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center">
+                              <PhoneIcon className="h-4 w-4 mr-1" />
+                              <span>{user.mobileNumber}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+                        {user.role.replace('_', ' ')}
+                      </span>
+                      {getStatusBadge(user)}
+                    </div>
+                    
+                    <div className="text-sm text-gray-600 mb-3">
+                      {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
+                    </div>
+                    
+                    <div className="flex space-x-3">
+                      <ActionMenu
+                        items={[
+                          {
+                            label: 'View Details',
+                            icon: <EyeIcon className="h-4 w-4" />,
+                            onClick: () => handleViewUserDetails(user),
+                          },
+                          {
+                            label: 'Assign Gatherings',
+                            icon: <UserGroupIcon className="h-4 w-4" />,
+                            onClick: () => handleAssignGatherings(user),
+                          },
+                          {
+                            label: 'Deactivate User',
+                            icon: <TrashIcon className="h-4 w-4" />,
+                            onClick: () => handleDeleteUser(user.id),
+                            className: 'text-red-600 hover:bg-red-50',
+                            hidden: currentUser?.role !== 'admin'
+                          },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop Table Layout */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -409,7 +455,7 @@ const UsersPage: React.FC = () => {
                             {user.firstName} {user.lastName}
                           </div>
                           <div className="text-sm text-gray-500">
-                            {user.primaryContactMethod === 'email' ? 'Email' : 'SMS'}
+                            {user.primaryContactMethod === 'email' ? 'Email User' : 'SMS User'}
                           </div>
                         </div>
                       </div>
@@ -442,29 +488,27 @@ const UsersPage: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex space-x-2">
-                        <button
-                          onClick={() => handleViewUserDetails(user)}
-                          className="text-blue-600 hover:text-blue-900"
-                          title="View Details"
-                        >
-                          <EyeIcon className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleAssignGatherings(user)}
-                          className="text-green-600 hover:text-green-900"
-                          title="Assign Gatherings"
-                        >
-                          <UserGroupIcon className="h-4 w-4" />
-                        </button>
-                        {currentUser?.role === 'admin' && (
-                          <button
-                            onClick={() => handleDeleteUser(user.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Deactivate User"
-                          >
-                            <TrashIcon className="h-4 w-4" />
-                          </button>
-                        )}
+                        <ActionMenu
+                          items={[
+                            {
+                              label: 'View Details',
+                              icon: <EyeIcon className="h-4 w-4" />,
+                              onClick: () => handleViewUserDetails(user),
+                            },
+                            {
+                              label: 'Assign Gatherings',
+                              icon: <UserGroupIcon className="h-4 w-4" />,
+                              onClick: () => handleAssignGatherings(user),
+                            },
+                            {
+                              label: 'Deactivate User',
+                              icon: <TrashIcon className="h-4 w-4" />,
+                              onClick: () => handleDeleteUser(user.id),
+                              className: 'text-red-600 hover:bg-red-50',
+                              hidden: currentUser?.role !== 'admin'
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -483,7 +527,52 @@ const UsersPage: React.FC = () => {
               Pending Invitations ({invitations.length})
             </h3>
             
-            <div className="overflow-x-auto">
+            {/* Mobile Card Layout for Invitations */}
+            <div className="block md:hidden space-y-4">
+              {invitations.map((invitation) => (
+                <div key={invitation.id} className="bg-gray-50 rounded-lg p-4 border">
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <h4 className="text-base font-medium text-gray-900">
+                        {invitation.firstName} {invitation.lastName}
+                      </h4>
+                      <div className="text-sm text-gray-600">
+                        {invitation.email || invitation.mobileNumber}
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(invitation.role)}`}>
+                      {invitation.role.replace('_', ' ')}
+                    </span>
+                  </div>
+                  
+                  <div className="text-sm text-gray-600 mb-3">
+                    <div>Invited by: {invitation.invitedByFirstName} {invitation.invitedByLastName}</div>
+                    <div>Expires: {new Date(invitation.expiresAt).toLocaleDateString()}</div>
+                  </div>
+                  
+                  <div className="flex space-x-3">
+                    <ActionMenu
+                      items={[
+                        {
+                          label: 'Resend Invitation',
+                          icon: <PaperAirplaneIcon className="h-4 w-4" />,
+                          onClick: () => handleResendInvitation(invitation.id),
+                        },
+                        {
+                          label: 'Cancel Invitation',
+                          icon: <XMarkIcon className="h-4 w-4" />,
+                          onClick: () => handleCancelInvitation(invitation.id),
+                          className: 'text-red-600 hover:bg-red-50'
+                        },
+                      ]}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table Layout for Invitations */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
@@ -532,22 +621,21 @@ const UsersPage: React.FC = () => {
                         {new Date(invitation.expiresAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => handleResendInvitation(invitation.id)}
-                            className="text-blue-600 hover:text-blue-900"
-                            title="Resend Invitation"
-                          >
-                            <PaperAirplaneIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => handleCancelInvitation(invitation.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Cancel Invitation"
-                          >
-                            <XMarkIcon className="h-4 w-4" />
-                          </button>
-                        </div>
+                        <ActionMenu
+                          items={[
+                            {
+                              label: 'Resend Invitation',
+                              icon: <PaperAirplaneIcon className="h-4 w-4" />,
+                              onClick: () => handleResendInvitation(invitation.id),
+                            },
+                            {
+                              label: 'Cancel Invitation',
+                              icon: <XMarkIcon className="h-4 w-4" />,
+                              onClick: () => handleCancelInvitation(invitation.id),
+                              className: 'text-red-600 hover:bg-red-50'
+                            },
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -561,12 +649,12 @@ const UsersPage: React.FC = () => {
       {/* Invite User Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Invite New User</h3>
               
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700">First Name</label>
                     <input
@@ -654,7 +742,7 @@ const UsersPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-3 mt-6">
+              <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
                   onClick={() => setShowInviteModal(false)}
                   className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -676,7 +764,7 @@ const UsersPage: React.FC = () => {
       {/* User Details Modal */}
       {showUserDetails && selectedUser && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">User Details</h3>
               
@@ -739,7 +827,7 @@ const UsersPage: React.FC = () => {
       {/* Assign Gatherings Modal */}
       {showAssignGatherings && selectedUser && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 Assign Gatherings - {selectedUser.firstName} {selectedUser.lastName}
@@ -767,7 +855,7 @@ const UsersPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-3 mt-6">
+              <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
                   onClick={() => setShowAssignGatherings(false)}
                   className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"

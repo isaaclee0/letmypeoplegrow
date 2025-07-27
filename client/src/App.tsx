@@ -2,7 +2,6 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { MigrationProvider } from './contexts/MigrationContext';
-import { DebugProvider } from './contexts/DebugContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import DashboardPage from './pages/DashboardPage';
@@ -98,8 +97,7 @@ function App() {
   return (
     <AuthProvider>
       <MigrationProvider>
-        <DebugProvider>
-          <ToastContainer>
+        <ToastContainer>
             <Router>
               <div className="min-h-screen bg-gray-50">
             <Routes>
@@ -185,9 +183,8 @@ function App() {
             </Route>
           </Routes>
         </div>
-      </Router>
+              </Router>
         </ToastContainer>
-        </DebugProvider>
       </MigrationProvider>
     </AuthProvider>
   );

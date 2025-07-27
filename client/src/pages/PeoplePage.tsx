@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI, csvImportAPI } from '../services/api';
+import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
-import { 
-  PlusIcon, 
-  UserGroupIcon, 
+import ActionMenu from '../components/ActionMenu';
+import {
+  UserIcon,
+  UserGroupIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
+  CloudArrowUpIcon,
+  ClipboardDocumentIcon,
   TrashIcon,
   PencilIcon,
   EyeIcon,
-  CloudArrowUpIcon,
-  ClipboardDocumentIcon
+  CheckIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 
 interface Person {
@@ -117,9 +121,8 @@ const PeoplePage: React.FC = () => {
 
   const loadGatheringTypes = async () => {
     try {
-      const response = await fetch('/api/gatherings');
-      const data = await response.json();
-      setGatheringTypes(data.gatherings || []);
+      const response = await gatheringsAPI.getAll();
+      setGatheringTypes(response.data.gatherings || []);
     } catch (err: any) {
       console.error('Failed to load gathering types:', err);
     }
@@ -532,32 +535,29 @@ const PeoplePage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex justify-end space-x-2">
-                          <button
-                            onClick={() => {
-                              setSelectedPerson(person);
-                              setShowPersonDetails(true);
-                            }}
-                            className="text-primary-600 hover:text-primary-700"
-                            title="View Details"
-                          >
-                            <EyeIcon className="h-5 w-5" />
-                          </button>
-                          <button
-                            onClick={() => {/* TODO: Implement edit */}}
-                            className="text-gray-400 hover:text-gray-600"
-                            title="Edit"
-                          >
-                            <PencilIcon className="h-5 w-5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeletePerson(person.id)}
-                            className="text-red-400 hover:text-red-600"
-                            title="Delete"
-                          >
-                            <TrashIcon className="h-5 w-5" />
-                          </button>
-                        </div>
+                        <ActionMenu
+                          items={[
+                            {
+                              label: 'View Details',
+                              icon: <EyeIcon className="h-4 w-4" />,
+                              onClick: () => {
+                                setSelectedPerson(person);
+                                setShowPersonDetails(true);
+                              }
+                            },
+                            {
+                              label: 'Edit',
+                              icon: <PencilIcon className="h-4 w-4" />,
+                              onClick: () => {/* TODO: Implement edit */}
+                            },
+                            {
+                              label: 'Delete',
+                              icon: <TrashIcon className="h-4 w-4" />,
+                              onClick: () => handleDeletePerson(person.id),
+                              className: 'text-red-600 hover:bg-red-50'
+                            }
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -654,32 +654,29 @@ const PeoplePage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex justify-end space-x-2">
-                          <button
-                            onClick={() => {
-                              setSelectedPerson(person);
-                              setShowPersonDetails(true);
-                            }}
-                            className="text-primary-600 hover:text-primary-700"
-                            title="View Details"
-                          >
-                            <EyeIcon className="h-5 w-5" />
-                          </button>
-                          <button
-                            onClick={() => {/* TODO: Implement edit */}}
-                            className="text-gray-400 hover:text-gray-600"
-                            title="Edit"
-                          >
-                            <PencilIcon className="h-5 w-5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeletePerson(person.id)}
-                            className="text-red-400 hover:text-red-600"
-                            title="Delete"
-                          >
-                            <TrashIcon className="h-5 w-5" />
-                          </button>
-                        </div>
+                        <ActionMenu
+                          items={[
+                            {
+                              label: 'View Details',
+                              icon: <EyeIcon className="h-4 w-4" />,
+                              onClick: () => {
+                                setSelectedPerson(person);
+                                setShowPersonDetails(true);
+                              }
+                            },
+                            {
+                              label: 'Edit',
+                              icon: <PencilIcon className="h-4 w-4" />,
+                              onClick: () => {/* TODO: Implement edit */}
+                            },
+                            {
+                              label: 'Delete',
+                              icon: <TrashIcon className="h-4 w-4" />,
+                              onClick: () => handleDeletePerson(person.id),
+                              className: 'text-red-600 hover:bg-red-50'
+                            }
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}

@@ -1,12 +1,13 @@
 #!/bin/bash
 
-# Build and Push Script for Let My People Grow
-# Uses Docker Build Cloud for faster builds
+# Build and push Docker images to Docker Hub
+# Usage: ./build-and-push.sh [version]
+# If no version is provided, uses the default version
 
-set -e
+# Default version (change this when releasing new versions)
+VERSION=${1:-v0.6.0}
 
 # Configuration
-VERSION=${1:-v0.5.8}
 REGISTRY="staugustine1"
 SERVER_IMAGE="$REGISTRY/letmypeoplegrow-server"
 CLIENT_IMAGE="$REGISTRY/letmypeoplegrow-client"
