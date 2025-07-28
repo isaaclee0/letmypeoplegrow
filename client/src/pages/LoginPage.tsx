@@ -99,6 +99,21 @@ const LoginPage: React.FC = () => {
     }
   };
 
+  const handleDevLogin = async () => {
+    setIsLoading(true);
+    setError('');
+  
+    try {
+      const response = await authAPI.devLogin();
+      await login('', response.data.user);
+      navigate('/app/dashboard');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Development login failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleResendCode = async () => {
     if (cooldownSeconds > 0) return;
 
@@ -263,6 +278,23 @@ const LoginPage: React.FC = () => {
               </button>
             </div>
           </form>
+        )}
+
+        {/* Development Login Button - Only show in development */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="text-center">
+              <p className="text-sm text-gray-500 mb-3">Development Mode</p>
+              <button
+                type="button"
+                onClick={handleDevLogin}
+                disabled={isLoading}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? 'Logging in...' : 'Login as Development Admin'}
+              </button>
+            </div>
+          </div>
         )}
 
         {/* Signup Link - Show different messaging based on user existence */}

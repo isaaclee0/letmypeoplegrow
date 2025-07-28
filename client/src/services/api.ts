@@ -116,6 +116,9 @@ export const authAPI = {
   verifyCode: (contact: string, code: string) => 
     api.post('/auth/verify-code', { contact, code }),
     
+  devLogin: () => 
+    api.post('/auth/dev-login'),
+    
   register: (data: {
     email: string;
     firstName: string;

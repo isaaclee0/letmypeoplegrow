@@ -624,4 +624,87 @@ router.post('/logout', verifyToken, (req, res) => {
   res.json({ message: 'Logged out successfully' });
 });
 
+// Development bypass route - only available in development mode
+router.post('/dev-login', async (req, res) => {
+  try {
+    // Only allow in development mode
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).json({ error: 'Route not found' });
+    }
+
+    // Get or create a development admin user
+    let devUser = await Database.query(
+      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed, default_gathering_id FROM users WHERE email = ?',
+      ['dev@church.local']
+    );
+
+    if (devUser.length === 0) {
+      // Create development admin user
+      const result = await Database.query(`
+        INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed)
+        VALUES (?, 'admin', 'Development', 'Admin', true, true)
+      `, ['dev@church.local']);
+      
+      devUser = [{
+        id: result.insertId,
+        email: 'dev@church.local',
+        role: 'admin',
+        first_name: 'Development',
+        last_name: 'Admin',
+        is_active: true,
+        first_login_completed: true,
+        default_gathering_id: null
+      }];
+    }
+
+    const user = devUser[0];
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user.id, 
+        email: user.email, 
+        mobile: user.mobile_number,
+        role: user.role 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE || '30d' }
+    );
+
+    // Set HTTP-only cookie with the token
+    const cookieOptions = {
+      httpOnly: true,
+      secure: false, // Always false for development
+      sameSite: 'lax', // More permissive for development
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
+      path: '/'
+    };
+    
+    res.cookie('authToken', token, cookieOptions);
+
+    // Get user's gathering assignments (empty for dev user)
+    const assignments = [];
+
+    res.json({
+      message: 'Development login successful',
+      user: {
+        id: user.id,
+        email: user.email,
+        mobileNumber: user.mobile_number,
+        primaryContactMethod: 'email',
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        isFirstLogin: false,
+        defaultGatheringId: user.default_gathering_id,
+        gatheringAssignments: assignments
+      }
+    });
+
+  } catch (error) {
+    console.error('Development login error:', error);
+    res.status(500).json({ error: 'Development login failed.' });
+  }
+});
+
 module.exports = router; 
