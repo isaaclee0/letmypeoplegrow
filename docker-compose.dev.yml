@@ -76,6 +76,7 @@ services:
     environment:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
+      - REACT_APP_API_URL=http://localhost:3002/api
     depends_on:
       - server
     networks:
