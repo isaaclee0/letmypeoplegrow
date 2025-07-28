@@ -84,7 +84,7 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
     await Database.transaction(async (conn) => {
       // Create or get attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
         VALUES (?, ?, ?)
         ON DUPLICATE KEY UPDATE updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
