@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, GatheringType } from '../services/api';
 import { 
@@ -21,19 +21,7 @@ const ReportsPage: React.FC = () => {
   // Check if user has access to reports
   const hasReportsAccess = user?.role === 'admin' || user?.role === 'coordinator';
 
-  useEffect(() => {
-    if (hasReportsAccess) {
-      loadGatherings();
-    }
-  }, [hasReportsAccess]);
-
-  useEffect(() => {
-    if (hasReportsAccess && (selectedGathering || selectedPeriod)) {
-      loadMetrics();
-    }
-  }, [selectedGathering, selectedPeriod, hasReportsAccess]);
-
-  const loadGatherings = async () => {
+  const loadGatherings = useCallback(async () => {
     try {
       const response = await gatheringsAPI.getAll();
       const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
@@ -43,9 +31,9 @@ const ReportsPage: React.FC = () => {
     } catch (err) {
       setError('Failed to load gatherings');
     }
-  };
+  }, [user?.gatheringAssignments]);
 
-  const loadMetrics = async () => {
+  const loadMetrics = useCallback(async () => {
     setIsLoading(true);
     try {
       const params = {
@@ -59,7 +47,19 @@ const ReportsPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedGathering?.id, selectedPeriod]);
+
+  useEffect(() => {
+    if (hasReportsAccess) {
+      loadGatherings();
+    }
+  }, [hasReportsAccess, loadGatherings]);
+
+  useEffect(() => {
+    if (hasReportsAccess && (selectedGathering || selectedPeriod)) {
+      loadMetrics();
+    }
+  }, [selectedGathering, selectedPeriod, hasReportsAccess, loadMetrics]);
 
   const periodOptions = [
     { value: '4', label: 'Last 4 weeks' },

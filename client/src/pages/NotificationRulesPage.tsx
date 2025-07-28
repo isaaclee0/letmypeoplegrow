@@ -9,9 +9,8 @@ interface Rule {
 }
 
 const NotificationRulesPage = () => {
-  const { user } = useAuth();
   const [rules, setRules] = useState<Rule[]>([]);
-  const [form, setForm] = useState({ rule_name: '', target_group: 'regular_attendees', trigger_event: 'misses', threshold_count: 3, timeframe_periods: 1, gathering_type_id: null });
+  const [form] = useState({ rule_name: '', target_group: 'regular_attendees', trigger_event: 'misses', threshold_count: 3, timeframe_periods: 1, gathering_type_id: null });
 
   useEffect(() => {
     loadRules();

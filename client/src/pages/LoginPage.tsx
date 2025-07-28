@@ -16,7 +16,7 @@ const LoginPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [contact, setContact] = useState('');
-  const [contactType, setContactType] = useState<'email' | 'sms'>('email');
+
   const [step, setStep] = useState<'contact' | 'code'>('contact');
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
@@ -61,7 +61,6 @@ const LoginPage: React.FC = () => {
     try {
       const response = await authAPI.requestCode(data.contact);
       setContact(data.contact);
-      setContactType(response.data.contactType || 'email');
       setStep('code');
       setCooldownSeconds(response.data.cooldownSeconds || 60);
       // Reset the code form to ensure it's empty
@@ -198,7 +197,7 @@ const LoginPage: React.FC = () => {
                 {...contactForm.register('contact', { 
                   required: 'Email or phone number is required',
                   pattern: {
-                    value: /^([^\s@]+@[^\s@]+\.[^\s@]+|[+]?[\d\s\-\(\)]+)$/,
+                    value: /^([^\s@]+@[^\s@]+\.[^\s@]+|[+]?[\d\s\-()]+)$/,
                     message: 'Please enter a valid email address or phone number'
                   }
                 })}

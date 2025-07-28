@@ -148,16 +148,9 @@ router.get('/:id/members', async (req, res) => {
       ORDER BY i.last_name, i.first_name
     `, [id]);
     
-    // Convert BigInt values to regular numbers to avoid JSON serialization issues
-    // Also convert snake_case to camelCase for frontend compatibility
-    const processedMembers = members.map(member => ({
-      id: Number(member.id),
-      firstName: member.first_name,
-      lastName: member.last_name,
-      familyName: member.family_name
-    }));
-    
-    res.json({ members: processedMembers });
+    // Use systematic conversion utility for field name conversion and BigInt handling
+    const responseData = processApiResponse({ members });
+    res.json(responseData);
   } catch (error) {
     console.error('Get gathering members error:', error);
     res.status(500).json({ error: 'Failed to retrieve gathering members.' });

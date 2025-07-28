@@ -46,26 +46,15 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
     
     const users = await Database.query(query, params);
     
-    // Transform field names from snake_case to camelCase and convert BigInt values
-    const processedUsers = users.map(user => ({
-      id: Number(user.id),
-      email: user.email,
-      mobileNumber: user.mobile_number,
-      primaryContactMethod: user.primary_contact_method,
-      role: user.role,
-      firstName: user.first_name,
-      lastName: user.last_name,
-      isActive: user.is_active,
-      isInvited: user.is_invited,
-      firstLoginCompleted: user.first_login_completed,
-      emailNotifications: user.email_notifications,
-      smsNotifications: user.sms_notifications,
-      notificationFrequency: user.notification_frequency,
-      createdAt: user.created_at,
-      gatheringCount: Number(user.gathering_count)
-    }));
+    // Use systematic conversion utility for field name conversion and BigInt handling
+    const responseData = processApiResponse({ 
+      users: users.map(user => ({
+        ...user,
+        gathering_count: Number(user.gathering_count)
+      }))
+    });
     
-    res.json({ users: processedUsers });
+    res.json(responseData);
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Failed to retrieve users.' });
@@ -117,27 +106,16 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
       ORDER BY gt.name
     `, [id]);
 
-    res.json({
+    // Use systematic conversion utility for consistent field naming
+    const responseData = processApiResponse({
       user: {
-        id: Number(user.id),
-        email: user.email,
-        mobileNumber: user.mobile_number,
-        primaryContactMethod: user.primary_contact_method,
-        role: user.role,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        isActive: user.is_active,
-        isInvited: user.is_invited,
-        firstLoginCompleted: user.first_login_completed,
-        emailNotifications: user.email_notifications,
-        smsNotifications: user.sms_notifications,
-        notificationFrequency: user.notification_frequency,
-        defaultGatheringId: user.default_gathering_id ? Number(user.default_gathering_id) : null,
-        createdAt: user.created_at,
-        updatedAt: user.updated_at
+        ...user,
+        default_gathering_id: user.default_gathering_id ? Number(user.default_gathering_id) : null
       },
-      gatheringAssignments: assignments
+      gathering_assignments: assignments
     });
+    
+    res.json(responseData);
 
   } catch (error) {
     console.error('Get user error:', error);

@@ -136,7 +136,7 @@ async function getMigrationStatus() {
     'individuals': ['is_visitor'],
     'visitors': ['last_attended'],
     'audit_log': ['entity_type', 'entity_id'],
-    'attendance_sessions': ['recorded_by']
+    'attendance_sessions': ['created_by']
   };
 
   return await verifyMigrationRequirements(requirements);

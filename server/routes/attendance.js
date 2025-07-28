@@ -2,6 +2,7 @@ const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireGatheringAccess } = require('../middleware/auth');
 const { requireIsVisitorColumn, requireLastAttendedColumn } = require('../utils/databaseSchema');
+const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -46,27 +47,16 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       ORDER BY i.last_name, i.first_name
     `, [sessionId, gatheringTypeId]);
 
-    // Convert BigInt values to regular numbers to avoid JSON serialization issues
-    // Also convert snake_case to camelCase for frontend compatibility
-    const processedAttendanceList = attendanceList.map(attendee => ({
-      id: Number(attendee.id),
-      firstName: attendee.first_name,
-      lastName: attendee.last_name,
-      familyName: attendee.family_name,
-      familyId: attendee.family_id ? Number(attendee.family_id) : null,
-      present: attendee.present === 1 || attendee.present === true
-    }));
+    // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion
+    const responseData = processApiResponse({
+      attendanceList: attendanceList.map(attendee => ({
+        ...attendee,
+        present: attendee.present === 1 || attendee.present === true
+      })),
+      visitors
+    });
 
-    const processedVisitors = visitors.map(visitor => ({
-      id: Number(visitor.id),
-      name: visitor.name,
-      visitorType: visitor.visitor_type,
-      visitorFamilyGroup: visitor.visitor_family_group,
-      notes: visitor.notes,
-      lastAttended: visitor.last_attended
-    }));
-
-    res.json({ attendanceList: processedAttendanceList, visitors: processedVisitors });
+    res.json(responseData);
   } catch (error) {
     console.error('Get attendance error:', error);
     res.status(500).json({ error: 'Failed to retrieve attendance.' });

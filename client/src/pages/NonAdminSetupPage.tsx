@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  CheckIcon,
   CalendarIcon,
   ExclamationTriangleIcon,
   ArrowRightIcon
@@ -12,7 +11,7 @@ const NonAdminSetupPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   
-  const [isLoading, setIsLoading] = useState(false);
+
 
   if (!user) {
     return null;
@@ -89,10 +88,9 @@ const NonAdminSetupPage: React.FC = () => {
               </button>
               <button
                 onClick={() => window.location.reload()}
-                disabled={isLoading}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
               >
-                {isLoading ? 'Checking...' : 'Check Again'}
+                Check Again
                 <ArrowRightIcon className="ml-2 h-4 w-4" />
               </button>
             </div>

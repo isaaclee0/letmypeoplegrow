@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { migrationsAPI } from '../services/api';
 import { useAuth } from './AuthContext';
 
@@ -49,7 +49,7 @@ export const MigrationProvider: React.FC<MigrationProviderProps> = ({ children }
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     if (!user || user.role !== 'admin') {
       return;
     }
@@ -65,7 +65,7 @@ export const MigrationProvider: React.FC<MigrationProviderProps> = ({ children }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user]);
 
   const refreshStatus = async () => {
     await fetchStatus();
@@ -105,7 +105,7 @@ export const MigrationProvider: React.FC<MigrationProviderProps> = ({ children }
   // Fetch status when user changes or on mount
   useEffect(() => {
     fetchStatus();
-  }, [user]);
+  }, [user, fetchStatus]);
 
   const value: MigrationContextType = {
     migrationStatus,

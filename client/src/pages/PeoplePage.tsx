@@ -4,7 +4,6 @@ import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI } from '../ser
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import {
-  UserIcon,
   UserGroupIcon,
   MagnifyingGlassIcon,
   PlusIcon,
@@ -13,7 +12,6 @@ import {
   TrashIcon,
   PencilIcon,
   EyeIcon,
-  CheckIcon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
 
@@ -38,7 +36,7 @@ interface Family {
 }
 
 const PeoplePage: React.FC = () => {
-  const { user } = useAuth();
+
   const { showSuccess } = useToast();
   const [people, setPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);

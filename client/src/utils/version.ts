@@ -16,12 +16,12 @@ export const getAppVersion = (): string => {
     return packageJson.version;
   } catch (error) {
     // Final fallback
-    return '0.7.8';
+    return '0.7.9';
   }
 };
 
 // Format version for display
 export const getFormattedVersion = (): string => {
   const version = getAppVersion();
-  return `v${version}`;
+  return version.startsWith('v') ? version : `v${version}`;
 }; 

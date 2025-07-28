@@ -151,17 +151,11 @@ router.get('/', async (req, res) => {
       ORDER BY i.last_name, i.first_name
     `);
     
-    // Convert BigInt values to regular numbers and process gathering assignments
+    // Process gathering assignments and use systematic conversion utility
     const processedIndividuals = individuals.map(individual => ({
-      id: Number(individual.id),
-      firstName: individual.first_name,
-      lastName: individual.last_name,
-      familyId: individual.family_id ? Number(individual.family_id) : null,
-      familyName: individual.family_name,
-      familyIdentifier: individual.family_identifier,
+      ...individual,
       isActive: Boolean(individual.is_active),
       isVisitor: Boolean(individual.is_visitor),
-      createdAt: individual.created_at,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
           id: Number(id),
@@ -169,7 +163,8 @@ router.get('/', async (req, res) => {
         })) : []
     }));
     
-    res.json({ people: processedIndividuals });
+    const responseData = processApiResponse({ people: processedIndividuals });
+    res.json(responseData);
   } catch (error) {
     console.error('Get individuals error:', error);
     res.status(500).json({ error: 'Failed to retrieve individuals.' });

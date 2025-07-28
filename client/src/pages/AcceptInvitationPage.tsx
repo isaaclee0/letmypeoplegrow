@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { invitationsAPI, authAPI } from '../services/api';
+import { invitationsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import {
   CheckIcon,
@@ -19,7 +19,7 @@ interface InvitationDetails {
 const AcceptInvitationPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { login } = useAuth();
+
   
   const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);

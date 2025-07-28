@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { format, addWeeks, addMonths, startOfWeek, addDays, isBefore, isAfter, startOfDay } from 'date-fns';
+import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, GatheringType, Individual, Visitor } from '../services/api';
 import { useToast } from '../components/ToastContainer';
@@ -41,9 +41,7 @@ const AttendancePage: React.FC = () => {
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [isPolling, setIsPolling] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSavedDataRef = useRef<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSettingDefault, setIsSettingDefault] = useState(false);
   const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
@@ -52,7 +50,7 @@ const AttendancePage: React.FC = () => {
   const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
-  const [concurrentUpdateWarning, setConcurrentUpdateWarning] = useState(false);
+
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
@@ -167,21 +165,7 @@ const AttendancePage: React.FC = () => {
     }
   }, [validDates]);
 
-  // Load attendance data when date or gathering changes
-  useEffect(() => {
-    if (selectedGathering && selectedDate) {
-      loadAttendanceData();
-      // Load the last used group by family setting for this gathering
-      const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
-      if (lastSetting !== null) {
-        setGroupByFamily(lastSetting === 'true');
-      } else {
-        setGroupByFamily(true); // Default to true
-      }
-    }
-  }, [selectedGathering, selectedDate]);
-
-  const loadAttendanceData = async () => {
+  const loadAttendanceData = useCallback(async () => {
     if (!selectedGathering) return;
 
     setIsLoading(true);
@@ -203,7 +187,21 @@ const AttendancePage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedGathering, selectedDate]);
+
+  // Load attendance data when date or gathering changes
+  useEffect(() => {
+    if (selectedGathering && selectedDate) {
+      loadAttendanceData();
+      // Load the last used group by family setting for this gathering
+      const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
+      if (lastSetting !== null) {
+        setGroupByFamily(lastSetting === 'true');
+      } else {
+        setGroupByFamily(true); // Default to true
+      }
+    }
+  }, [selectedGathering, selectedDate, loadAttendanceData]);
 
   const toggleAttendance = async (individualId: number) => {
     const now = Date.now();
@@ -321,7 +319,6 @@ const AttendancePage: React.FC = () => {
 
     const startPolling = () => {
       pollingIntervalRef.current = setInterval(async () => {
-        setIsPolling(true);
         try {
           const response = await attendanceAPI.get(selectedGathering!.id, selectedDate);
           const newAttendanceList = response.data.attendanceList || [];
@@ -348,8 +345,6 @@ const AttendancePage: React.FC = () => {
               }
             });
           }
-          
-          setConcurrentUpdateWarning(hasConcurrentUpdates);
           
           setAttendanceList(prev => {
             // Create a map of current people by ID for quick lookup
@@ -390,8 +385,6 @@ const AttendancePage: React.FC = () => {
           setVisitors(newVisitors);
         } catch (err) {
           console.error('Polling error:', err);
-        } finally {
-          setIsPolling(false);
         }
       }, 10000); // Poll every 10 seconds (reduced frequency)
     };
@@ -403,7 +396,7 @@ const AttendancePage: React.FC = () => {
         clearInterval(pollingIntervalRef.current);
       }
     };
-  }, [selectedGathering, selectedDate, lastUserModification]);
+  }, [selectedGathering, selectedDate, lastUserModification, attendanceList]);
 
   // Clean up old modification timestamps (older than 30 seconds)
   useEffect(() => {
@@ -1170,8 +1163,7 @@ const AttendancePage: React.FC = () => {
                     {validDates.map((date) => {
                       const dateObj = new Date(date);
                       const isToday = format(dateObj, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
-                      const isPast = isBefore(dateObj, startOfDay(new Date()));
-                                          const displayText = isToday 
+                      const displayText = isToday 
                       ? `Today (${format(dateObj, 'MMM d, yyyy')})`
                       : format(dateObj, 'MMM d, yyyy');
                       

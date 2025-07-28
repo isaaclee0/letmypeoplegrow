@@ -211,9 +211,7 @@ const ManageGatheringsPage: React.FC = () => {
     return createGatheringData.name.trim().length > 0;
   };
 
-  const canProceedFromStep2 = () => {
-    return true; // Step 2 is optional
-  };
+
 
   // Handle gathering creation
   const handleCreateGathering = async () => {

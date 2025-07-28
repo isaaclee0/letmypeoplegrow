@@ -9,10 +9,8 @@ import {
   EnvelopeIcon,
   PhoneIcon,
   PlusIcon,
-  PencilIcon,
   TrashIcon,
   EyeIcon,
-  ClockIcon,
   CheckIcon,
   XMarkIcon,
   PaperAirplaneIcon,
@@ -168,7 +166,7 @@ const UsersPage: React.FC = () => {
         return;
       }
 
-      const response = await invitationsAPI.send(inviteForm);
+      await invitationsAPI.send(inviteForm);
       
       setSuccess('Invitation sent successfully');
       setShowInviteModal(false);
@@ -201,7 +199,7 @@ const UsersPage: React.FC = () => {
 
   const handleResendInvitation = async (invitationId: number) => {
     try {
-      const response = await invitationsAPI.resend(invitationId);
+      await invitationsAPI.resend(invitationId);
       
       setSuccess('Invitation resent successfully');
       loadData();
