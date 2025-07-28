@@ -464,6 +464,151 @@ router.post('/upload-csv/:gatheringId',
   }
 );
 
+// Step 3: Import Paste Data
+router.post('/import-paste/:gatheringId',
+  verifyToken,
+  requireRole(['admin', 'coordinator']),
+  createSecurityRateLimit(15 * 60 * 1000, 10), // 10 imports per 15 minutes
+  [
+    body('data').isString().notEmpty().withMessage('Data is required')
+  ],
+  auditLog('ONBOARDING_IMPORT_PASTE'),
+  async (req, res) => {
+    const { gatheringId } = req.params;
+    const { data } = req.body;
+    
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      // Verify gathering exists and user has access
+      const gatherings = await Database.query(
+        'SELECT id FROM gathering_types WHERE id = ? AND created_by = ?',
+        [gatheringId, req.user.id]
+      );
+
+      if (gatherings.length === 0) {
+        return res.status(404).json({ error: 'Gathering not found or access denied' });
+      }
+
+      // Parse CSV data from string
+      const lines = data.trim().split('\n');
+      if (lines.length < 2) {
+        return res.status(400).json({ error: 'Invalid CSV data - must have headers and at least one row' });
+      }
+
+      // Parse headers
+      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+      const firstNameIndex = headers.findIndex(h => 
+        h.toUpperCase() === 'FIRST NAME' || h.toUpperCase() === 'FIRSTNAME'
+      );
+      const lastNameIndex = headers.findIndex(h => 
+        h.toUpperCase() === 'LAST NAME' || h.toUpperCase() === 'LASTNAME'
+      );
+      const familyNameIndex = headers.findIndex(h => 
+        h.toUpperCase() === 'FAMILY NAME' || h.toUpperCase() === 'FAMILYNAME'
+      );
+
+      if (firstNameIndex === -1 || lastNameIndex === -1) {
+        return res.status(400).json({ error: 'CSV must contain FIRST NAME and LAST NAME columns' });
+      }
+
+      // Process the CSV data
+      const familyMap = new Map();
+      const individuals = [];
+
+      await Database.transaction(async (conn) => {
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+
+          // Parse CSV row (handle quoted values)
+          const values = [];
+          let current = '';
+          let inQuotes = false;
+          
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            if (char === '"') {
+              inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+              values.push(current.trim());
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          values.push(current.trim());
+
+          if (values.length < Math.max(firstNameIndex, lastNameIndex) + 1) {
+            continue; // Skip invalid rows
+          }
+
+          // Extract and sanitize data
+          const firstName = sanitizeString(values[firstNameIndex] || '');
+          const lastName = sanitizeString(values[lastNameIndex] || '');
+          const familyName = familyNameIndex !== -1 ? sanitizeString(values[familyNameIndex] || '') : '';
+
+          if (!firstName || !lastName || firstName.trim() === '' || lastName.trim() === '') {
+            continue; // Skip invalid rows
+          }
+
+          let familyId = null;
+          
+          // Handle family creation/assignment
+          if (familyName && familyName.trim()) {
+            if (!familyMap.has(familyName)) {
+              const familyResult = await conn.query(`
+                INSERT INTO families (family_name, family_identifier, created_by)
+                VALUES (?, ?, ?)
+              `, [familyName, familyName, req.user.id]);
+              familyMap.set(familyName, Number(familyResult.insertId));
+            }
+            familyId = familyMap.get(familyName);
+          }
+
+          // Create individual
+          const individualResult = await conn.query(`
+            INSERT INTO individuals (first_name, last_name, family_id, created_by)
+            VALUES (?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, req.user.id]);
+
+          // Add to gathering list
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            VALUES (?, ?, ?)
+          `, [gatheringId, Number(individualResult.insertId), req.user.id]);
+
+          individuals.push({
+            id: Number(individualResult.insertId),
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            familyName: familyName
+          });
+        }
+      });
+
+      // Save progress
+      const uploadResult = {
+        message: `Successfully imported ${individuals.length} individuals`,
+        imported: individuals.length,
+        families: familyMap.size,
+        gatheringId: Number(gatheringId)
+      };
+      
+      await saveOnboardingProgress(req.user.id, 3, { csv_upload: uploadResult }, [2]);
+
+      res.json(uploadResult);
+
+    } catch (error) {
+      console.error('Paste import error:', error);
+      res.status(500).json({ error: 'Failed to process pasted data' });
+    }
+  }
+);
+
 // Complete onboarding
 router.post('/complete',
   verifyToken,

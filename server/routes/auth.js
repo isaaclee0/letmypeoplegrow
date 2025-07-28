@@ -626,9 +626,11 @@ router.post('/logout', verifyToken, (req, res) => {
 
 // Development bypass route - only available in development mode
 router.post('/dev-login', async (req, res) => {
+  console.log('Dev login route hit');
   try {
     // Only allow in development mode
     if (process.env.NODE_ENV === 'production') {
+      console.log('Dev login blocked - production mode');
       return res.status(404).json({ error: 'Route not found' });
     }
 
@@ -662,7 +664,7 @@ router.post('/dev-login', async (req, res) => {
     // Generate JWT token
     const token = jwt.sign(
       { 
-        userId: user.id, 
+        userId: Number(user.id), 
         email: user.email, 
         mobile: user.mobile_number,
         role: user.role 
@@ -688,7 +690,7 @@ router.post('/dev-login', async (req, res) => {
     res.json({
       message: 'Development login successful',
       user: {
-        id: user.id,
+        id: Number(user.id),
         email: user.email,
         mobileNumber: user.mobile_number,
         primaryContactMethod: 'email',
@@ -696,7 +698,7 @@ router.post('/dev-login', async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         isFirstLogin: false,
-        defaultGatheringId: user.default_gathering_id,
+        defaultGatheringId: user.default_gathering_id ? Number(user.default_gathering_id) : null,
         gatheringAssignments: assignments
       }
     });

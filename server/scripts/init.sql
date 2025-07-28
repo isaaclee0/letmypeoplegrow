@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   date_of_birth DATE,
   is_regular_attendee BOOLEAN DEFAULT true,
   is_active BOOLEAN DEFAULT true,
+  is_visitor BOOLEAN DEFAULT false,
   notes TEXT,
   created_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -128,7 +129,8 @@ CREATE TABLE IF NOT EXISTS individuals (
   INDEX idx_name (first_name, last_name),
   INDEX idx_family (family_id),
   INDEX idx_regular (is_regular_attendee),
-  INDEX idx_active (is_active)
+  INDEX idx_active (is_active),
+  INDEX idx_is_visitor (is_visitor)
 ) ENGINE=InnoDB;
 
 -- Create gathering lists table
@@ -186,14 +188,19 @@ CREATE TABLE IF NOT EXISTS attendance_records (
 -- Create visitors table
 CREATE TABLE IF NOT EXISTS visitors (
   id INT AUTO_INCREMENT PRIMARY KEY,
+  session_id INT,
   name VARCHAR(255) NOT NULL,
   visitor_type ENUM('potential_regular', 'temporary_other') DEFAULT 'temporary_other',
   visitor_family_group VARCHAR(255),
   notes TEXT,
+  last_attended DATE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
   INDEX idx_name (name),
-  INDEX idx_type (visitor_type)
+  INDEX idx_type (visitor_type),
+  INDEX idx_session (session_id),
+  INDEX idx_last_attended (last_attended)
 ) ENGINE=InnoDB;
 
 -- Create user invitations table

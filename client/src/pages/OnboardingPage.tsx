@@ -52,6 +52,8 @@ const OnboardingPage: React.FC = () => {
   const [countries, setCountries] = useState<any[]>([]);
   const [showAddGathering, setShowAddGathering] = useState(false);
   const [progressLoaded, setProgressLoaded] = useState(false);
+  const [importMethod, setImportMethod] = useState<'file' | 'paste'>('file');
+  const [pasteData, setPasteData] = useState('');
   
   const { user, updateUser, refreshOnboardingStatus } = useAuth();
   const navigate = useNavigate();
@@ -263,6 +265,22 @@ const OnboardingPage: React.FC = () => {
       setUploadResult(response.data);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to upload CSV');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePasteImport = async () => {
+    if (!pasteData.trim() || !selectedGatheringId) return;
+    
+    setIsLoading(true);
+    setError('');
+    
+    try {
+      const response = await onboardingAPI.importPasteData(selectedGatheringId, pasteData);
+      setUploadResult(response.data);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to import pasted data');
     } finally {
       setIsLoading(false);
     }
@@ -700,7 +718,7 @@ const OnboardingPage: React.FC = () => {
               {!uploadResult ? (
                 <div className="space-y-6">
                   <p className="text-gray-600">
-                    Upload a CSV file with your regular attendees to get started quickly. 
+                    Import your regular attendees to get started quickly. 
                     You can always add more people later.
                   </p>
 
@@ -724,42 +742,109 @@ const OnboardingPage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Import Method Tabs */}
                   <div>
-                    <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700 mb-2">
-                      Upload CSV File
-                    </label>
-                    <input
-                      type="file"
-                      id="csvFile"
-                      accept=".csv"
-                      onChange={handleFileUpload}
-                      className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
-                    />
-                  </div>
-
-                  {uploadedFile && (
-                    <div className="bg-green-50 border border-green-200 rounded-md p-4">
-                      <p className="text-sm text-green-800">
-                        <strong>Selected file:</strong> {uploadedFile.name}
-                      </p>
+                    <div className="border-b border-gray-200">
+                      <nav className="-mb-px flex space-x-8">
+                        <button
+                          onClick={() => setImportMethod('file')}
+                          className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            importMethod === 'file'
+                              ? 'border-primary-500 text-primary-600'
+                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                          }`}
+                        >
+                          <CloudArrowUpIcon className="h-5 w-5 inline mr-2" />
+                          Upload File
+                        </button>
+                        <button
+                          onClick={() => setImportMethod('paste')}
+                          className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            importMethod === 'paste'
+                              ? 'border-primary-500 text-primary-600'
+                              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                          }`}
+                        >
+                          <DocumentArrowDownIcon className="h-5 w-5 inline mr-2" />
+                          Copy & Paste
+                        </button>
+                      </nav>
                     </div>
-                  )}
 
-                  <div className="flex justify-between">
-                    <button
-                      onClick={handleSkipUpload}
-                      className="inline-flex items-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                    >
-                      Skip for Now
-                    </button>
-                    <button
-                      onClick={handleCSVUpload}
-                      disabled={!uploadedFile || isLoading}
-                      className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-                    >
-                      {isLoading ? 'Uploading...' : 'Upload & Continue'}
-                      <CloudArrowUpIcon className="ml-2 h-5 w-5" />
-                    </button>
+                    <div className="mt-6">
+                      {importMethod === 'file' ? (
+                        <div className="space-y-4">
+                          <div>
+                            <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700 mb-2">
+                              Upload CSV File
+                            </label>
+                            <input
+                              type="file"
+                              id="csvFile"
+                              accept=".csv"
+                              onChange={handleFileUpload}
+                              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+                            />
+                          </div>
+
+                          {uploadedFile && (
+                            <div className="bg-green-50 border border-green-200 rounded-md p-4">
+                              <p className="text-sm text-green-800">
+                                <strong>Selected file:</strong> {uploadedFile.name}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div>
+                            <label htmlFor="pasteData" className="block text-sm font-medium text-gray-700 mb-2">
+                              Paste CSV Data
+                            </label>
+                            <textarea
+                              id="pasteData"
+                              value={pasteData}
+                              onChange={(e) => setPasteData(e.target.value)}
+                              placeholder="Paste your CSV data here...&#10;FIRST NAME,LAST NAME,FAMILY NAME&#10;John,Smith,&quot;Smith, John and Sarah&quot;&#10;Sarah,Smith,&quot;Smith, John and Sarah&quot;"
+                              rows={8}
+                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              Paste CSV data with headers: FIRST NAME, LAST NAME, FAMILY NAME
+                            </p>
+                          </div>
+
+                          {pasteData.trim() && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                              <p className="text-sm text-blue-800">
+                                <strong>Ready to import:</strong> {pasteData.split('\n').length - 1} rows of data
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between pt-6">
+                      <button
+                        onClick={handleSkipUpload}
+                        className="inline-flex items-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                      >
+                        Skip for Now
+                      </button>
+                      <button
+                        onClick={importMethod === 'file' ? handleCSVUpload : handlePasteImport}
+                        disabled={
+                          (importMethod === 'file' && !uploadedFile) ||
+                          (importMethod === 'paste' && !pasteData.trim()) ||
+                          isLoading
+                        }
+                        className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                      >
+                        {isLoading ? 'Importing...' : 'Import & Continue'}
+                        <CloudArrowUpIcon className="ml-2 h-5 w-5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (

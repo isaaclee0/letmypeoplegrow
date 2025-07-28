@@ -372,6 +372,9 @@ export const onboardingAPI = {
     });
   },
     
+  importPasteData: (gatheringId: number, data: string) => 
+    api.post(`/onboarding/import-paste/${gatheringId}`, { data }),
+    
   complete: () => 
     api.post('/onboarding/complete'),
     
