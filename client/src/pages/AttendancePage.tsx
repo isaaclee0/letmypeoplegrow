@@ -11,7 +11,8 @@ import {
   MagnifyingGlassIcon,
   StarIcon,
   XMarkIcon,
-  PencilIcon
+  PencilIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline';
 
 interface VisitorFormState {
@@ -53,6 +54,12 @@ const AttendancePage: React.FC = () => {
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
   const [concurrentUpdateWarning, setConcurrentUpdateWarning] = useState(false);
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    visitor: Visitor | null;
+    deleteFamily: boolean;
+    message: string;
+  }>({ visitor: null, deleteFamily: false, message: '' });
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
@@ -469,25 +476,44 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleEditVisitor = (visitor: Visitor) => {
-    // Parse visitor name to handle families (e.g., "John Smith & Jane Smith & Child1 & Child2")
-    const people = visitor.name.split(' & ').map(name => name.trim());
+    // Find ALL visitors in the same family group (including the clicked visitor)
+    const familyMembers = visitor.visitorFamilyGroup 
+      ? visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup)
+      : [visitor]; // If no family group, just edit the individual visitor
     
-    // First person is the main visitor
-    const mainPersonName = people[0] || '';
-    const mainParts = mainPersonName.split(' ');
+    // Separate adults and children
+    const adults = familyMembers.filter(member => {
+      const name = member.name.trim();
+      // Identify children by common patterns
+      return !name.match(/^Child\s*\d*$/i) && 
+             !name.startsWith('Child ') && 
+             !name.match(/^[A-Za-z]{1,4}\s+[A-Za-z]+$/); // Exclude very short first names that might be children
+    });
+    
+    const children = familyMembers.filter(member => {
+      const name = member.name.trim();
+      // Identify children by common patterns
+      return name.match(/^Child\s*\d*$/i) || 
+             name.startsWith('Child ') || 
+             name.match(/^[A-Za-z]{1,4}\s+[A-Za-z]+$/); // Include very short first names that might be children
+    });
+    
+    // Set up main person (first adult)
+    const mainPerson = adults[0] || familyMembers[0];
+    const mainParts = mainPerson.name.trim().split(' ');
     const firstName = mainParts[0] || '';
     const lastName = mainParts.slice(1).join(' ') || '';
     
-    // Second person might be spouse (if it's an adult name pattern)
+    // Set up spouse (second adult)
     let hasSpouse = false;
     let spouseFirstName = '';
     let spouseLastName = '';
     let spouseFirstNameUnknown = false;
     let spouseLastNameUnknown = false;
     
-    if (people.length > 1 && !people[1].startsWith('Child')) {
+    if (adults.length > 1) {
       hasSpouse = true;
-      const spouseParts = people[1].split(' ');
+      const spouseParts = adults[1].name.trim().split(' ');
       spouseFirstName = spouseParts[0] || '';
       spouseLastName = spouseParts.slice(1).join(' ') || '';
       spouseFirstNameUnknown = spouseFirstName === 'Unknown';
@@ -496,14 +522,13 @@ const AttendancePage: React.FC = () => {
       if (spouseLastNameUnknown) spouseLastName = '';
     }
     
-    // Remaining people are children
-    const startIndex = hasSpouse ? 2 : 1;
-    const children = people.slice(startIndex).map((childName, index) => {
-      const childParts = childName.split(' ');
+    // Set up children
+    const childrenData = children.map(child => {
+      const childParts = child.name.trim().split(' ');
       const childFirstName = childParts[0] || '';
       return {
-        firstName: childFirstName === 'Unknown' || childName.startsWith('Child') ? '' : childFirstName,
-        firstNameUnknown: childFirstName === 'Unknown' || childName.startsWith('Child')
+        firstName: childFirstName === 'Unknown' || child.name.startsWith('Child') ? '' : childFirstName,
+        firstNameUnknown: childFirstName === 'Unknown' || child.name.startsWith('Child')
       };
     });
     
@@ -520,10 +545,52 @@ const AttendancePage: React.FC = () => {
       spouseLastName,
       spouseLastNameUnknown,
       hasSpouse,
-      children
+      children: childrenData
     });
     setEditingVisitor(visitor);
     setShowEditVisitorModal(true);
+  };
+
+  const handleDeleteVisitor = (visitor: Visitor, deleteFamily: boolean = false) => {
+    const confirmMessage = deleteFamily 
+      ? `Are you sure you want to delete the entire visitor family? This cannot be undone.`
+      : `Are you sure you want to delete ${visitor.name}? This cannot be undone.`;
+
+    setDeleteConfirmation({
+      visitor,
+      deleteFamily,
+      message: confirmMessage
+    });
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteVisitor = async () => {
+    if (!selectedGathering || !deleteConfirmation.visitor) return;
+
+    try {
+      const response = await attendanceAPI.deleteVisitor(
+        selectedGathering.id, 
+        selectedDate, 
+        deleteConfirmation.visitor.id!, 
+        deleteConfirmation.deleteFamily
+      );
+
+      showSuccess(response.data.message);
+      
+      // Reload attendance data to refresh the visitor list
+      await loadAttendanceData();
+    } catch (err: any) {
+      console.error('Failed to delete visitor:', err);
+      setError(err.response?.data?.error || 'Failed to delete visitor');
+    } finally {
+      setShowDeleteModal(false);
+      setDeleteConfirmation({ visitor: null, deleteFamily: false, message: '' });
+    }
+  };
+
+  const cancelDeleteVisitor = () => {
+    setShowDeleteModal(false);
+    setDeleteConfirmation({ visitor: null, deleteFamily: false, message: '' });
   };
 
   const addChild = () => {
@@ -818,35 +885,71 @@ const AttendancePage: React.FC = () => {
           // We need to look at all visitors in this family group to determine the name
           const familyMembers = visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
           
-          const firstNames = familyMembers.map(member => {
+          // Filter out children from family name generation
+          const adultMembers = familyMembers.filter(member => {
+            const name = member.name.trim();
+            // Exclude children by common patterns: "Child 1", "Child 2", names starting with "Child", or very short first names that might be children
+            return !name.match(/^Child\s*\d*$/i) && 
+                   !name.startsWith('Child ') && 
+                   !name.match(/^[A-Za-z]{1,4}\s+[A-Za-z]+$/); // Exclude very short first names like "Sissy Jim" which might be children
+          });
+          
+          const firstNames = adultMembers.map(member => {
             const parts = member.name.trim().split(' ');
             const firstName = parts[0];
             return (firstName && firstName !== 'Unknown') ? firstName : null;
           }).filter(name => name !== null);
           
-          const surnames = familyMembers.map(member => {
+          const surnames = adultMembers.map(member => {
             const parts = member.name.trim().split(' ');
             const lastName = parts.slice(1).join(' ');
             return (lastName && lastName !== 'Unknown') ? lastName : null;
           }).filter(name => name !== null);
           
-          // Use shared surname if all have the same one, otherwise use first names
-          const uniqueSurnames = Array.from(new Set(surnames));
-          if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
-            // All have the same surname - use it
-            familyName = uniqueSurnames[0];
-          } else if (firstNames.length > 0) {
-            // Different or unknown surnames - use first names
-            if (firstNames.length === 1) {
-              familyName = `${firstNames[0]} Family`;
-            } else if (firstNames.length === 2) {
-              familyName = `${firstNames[0]} & ${firstNames[1]} Family`;
-            } else {
-              familyName = `${firstNames[0]} & ${firstNames[1]} + ${firstNames.length - 2} Family`;
-            }
+                  // Follow the pattern: SURNAME, Person1firstname and Person2firstname
+        // Or PERSON1SURNAME, Person1firstname and PERSON2SURNAME, Person2firstname if different surnames
+        const uniqueSurnames = Array.from(new Set(surnames));
+        
+        if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
+          // All have the same surname - use pattern: SURNAME, firstname and firstname
+          const surname = uniqueSurnames[0].toUpperCase();
+          if (firstNames.length === 1) {
+            familyName = `${surname}, ${firstNames[0]}`;
+          } else if (firstNames.length === 2) {
+            familyName = `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
+          } else if (firstNames.length > 2) {
+            familyName = `${surname}, ${firstNames[0]} and ${firstNames[1]} and ${firstNames.length - 2} others`;
+          } else {
+            familyName = surname;
+          }
+                 } else if (firstNames.length > 0 && surnames.length > 0) {
+           // Different surnames - use pattern: SURNAME1, firstname1 and SURNAME2, firstname2
+           const nameWithSurname = adultMembers.map(member => {
+             const parts = member.name.trim().split(' ');
+             const firstName = parts[0];
+             const lastName = parts.slice(1).join(' ');
+             
+             if (firstName && firstName !== 'Unknown' && lastName && lastName !== 'Unknown') {
+               return `${lastName.toUpperCase()}, ${firstName}`;
+             } else if (firstName && firstName !== 'Unknown') {
+               return firstName;
+             } else {
+               return null;
+             }
+           }).filter(name => name !== null);
+          
+          if (nameWithSurname.length === 1) {
+            familyName = nameWithSurname[0];
+          } else if (nameWithSurname.length === 2) {
+            familyName = `${nameWithSurname[0]} and ${nameWithSurname[1]}`;
+          } else if (nameWithSurname.length > 2) {
+            familyName = `${nameWithSurname[0]} and ${nameWithSurname[1]} and ${nameWithSurname.length - 2} others`;
           } else {
             familyName = 'Visitor Family';
           }
+        } else {
+          familyName = 'Visitor Family';
+        }
         }
         
         grouped[groupKey] = {
@@ -895,6 +998,43 @@ const AttendancePage: React.FC = () => {
     // Count only visitors that are marked as present
     return visitors.filter(visitor => visitor.id && visitorAttendance[visitor.id]).length;
   }, [visitors, visitorAttendance]);
+
+  // Helper function to get the appropriate modal title
+  const getAddModalTitle = () => {
+    const totalPeople = 1 + (visitorForm.hasSpouse ? 1 : 0) + visitorForm.children.length;
+    const personType = visitorForm.personType === 'visitor' ? 'Visitor' : 'Person';
+    
+    if (totalPeople === 1) {
+      return `Add ${personType}`;
+    } else {
+      const pluralType = visitorForm.personType === 'visitor' ? 'Visitors' : 'People';
+      return `Add ${pluralType} (${totalPeople})`;
+    }
+  };
+
+  // Helper function to get the appropriate button text
+  const getAddButtonText = () => {
+    const totalPeople = 1 + (visitorForm.hasSpouse ? 1 : 0) + visitorForm.children.length;
+    const personType = visitorForm.personType === 'visitor' ? 'Visitor' : 'Person';
+    
+    if (totalPeople === 1) {
+      return `Add ${personType}`;
+    } else {
+      const pluralType = visitorForm.personType === 'visitor' ? 'Visitors' : 'People';
+      return `Add ${pluralType}`;
+    }
+  };
+
+  // Helper function to get the appropriate edit button text
+  const getEditButtonText = () => {
+    const totalPeople = 1 + (visitorForm.hasSpouse ? 1 : 0) + visitorForm.children.length;
+    
+    if (totalPeople === 1) {
+      return 'Update Visitor';
+    } else {
+      return 'Update Visitors';
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1226,9 +1366,38 @@ const AttendancePage: React.FC = () => {
                 <div key={group.familyId || `visitor-group-${group.members[0].id}`} className={groupByFamily && group.isFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
                   {groupByFamily && group.familyName && group.isFamily && (
                     <div className="flex justify-between items-center mb-3">
-                      <h4 className="text-md font-medium text-gray-900">
-                        {group.familyName}
-                      </h4>
+                      <div className="flex items-center space-x-3">
+                        <h4 className="text-md font-medium text-gray-900">
+                          {group.familyName}
+                        </h4>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          group.members[0].visitorType === 'potential_regular' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleEditVisitor(group.members[0]);
+                          }}
+                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                          title="Edit family"
+                        >
+                          <PencilIcon className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleDeleteVisitor(group.members[0], true);
+                          }}
+                          className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                          title="Delete entire family"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      </div>
                       <button
                         onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup)}
                         className="text-sm text-primary-600 hover:text-primary-700"
@@ -1283,25 +1452,38 @@ const AttendancePage: React.FC = () => {
                             <span className="text-sm font-medium text-gray-900">
                               {cleanName}
                             </span>
-                            <div className="flex items-center space-x-2 mt-1">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                person.visitorType === 'potential_regular' 
-                                  ? 'bg-green-100 text-green-800' 
-                                  : 'bg-gray-100 text-gray-800'
-                              }`}>
-                                {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  handleEditVisitor(person);
-                                }}
-                                className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
-                                title="Edit visitor"
-                              >
-                                <PencilIcon className="h-3 w-3" />
-                              </button>
-                            </div>
+                            {/* Show visitor type and edit for individuals (non-family) */}
+                            {(!groupByFamily || !group.isFamily) && (
+                              <div className="flex items-center space-x-2 mt-1">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  person.visitorType === 'potential_regular' 
+                                    ? 'bg-green-100 text-green-800' 
+                                    : 'bg-gray-100 text-gray-800'
+                                }`}>
+                                  {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    handleEditVisitor(person);
+                                  }}
+                                  className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                                  title="Edit visitor"
+                                >
+                                  <PencilIcon className="h-3 w-3" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    handleDeleteVisitor(person, false);
+                                  }}
+                                  className="p-0.5 text-gray-400 hover:text-red-600 transition-colors"
+                                  title="Delete visitor"
+                                >
+                                  <TrashIcon className="h-3 w-3" />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </label>
                       );
@@ -1329,7 +1511,7 @@ const AttendancePage: React.FC = () => {
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  Add Person
+                  {getAddModalTitle()}
                 </h3>
                 <button
                   onClick={() => setShowAddVisitorModal(false)}
@@ -1635,7 +1817,7 @@ const AttendancePage: React.FC = () => {
                     }
                     className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
                   >
-                    Add Person
+                    {getAddButtonText()}
                   </button>
                 </div>
               </form>
@@ -1908,10 +2090,61 @@ const AttendancePage: React.FC = () => {
                     }
                     className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
                   >
-                    Update Visitor
+                    {getEditButtonText()}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Deletion
+                </h3>
+                <button
+                  onClick={cancelDeleteVisitor}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="mb-6">
+                <div className="flex items-center mb-4">
+                  <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100">
+                    <TrashIcon className="h-6 w-6 text-red-600" />
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm text-gray-500">
+                    {deleteConfirmation.message}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={cancelDeleteVisitor}
+                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteVisitor}
+                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
         </div>

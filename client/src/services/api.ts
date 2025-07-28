@@ -196,6 +196,9 @@ export const attendanceAPI = {
   updateVisitor: (gatheringTypeId: number, date: string, visitorId: number, visitor: AddVisitorData) => 
     api.put(`/attendance/${gatheringTypeId}/${date}/visitors/${visitorId}`, visitor),
     
+  deleteVisitor: (gatheringTypeId: number, date: string, visitorId: number, deleteFamily: boolean = false) => 
+    api.delete(`/attendance/${gatheringTypeId}/${date}/visitors/${visitorId}${deleteFamily ? '?deleteFamily=true' : ''}`),
+    
   addRegularAttendee: (gatheringTypeId: number, date: string, people: Array<{
     firstName: string;
     lastName: string;

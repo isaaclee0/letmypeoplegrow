@@ -40,7 +40,7 @@ const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) =>
       
       // Create attendance session
       const sessionResult = await Database.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
       `, [gatheringId, formattedDate, userId]);
       

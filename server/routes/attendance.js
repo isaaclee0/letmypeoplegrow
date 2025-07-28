@@ -84,7 +84,7 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
     await Database.transaction(async (conn) => {
       // Create or get attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
         ON DUPLICATE KEY UPDATE updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
@@ -122,18 +122,13 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
         console.log('No attendance records to update');
       }
 
-      // Clear existing visitors and insert new ones
-      await conn.query('DELETE FROM visitors WHERE session_id = ?', [sessionId]);
-
-      // Insert visitors
-      if (visitors && visitors.length > 0) {
-        for (const visitor of visitors) {
-          await conn.query(`
-            INSERT INTO visitors (session_id, name, visitor_type, visitor_family_group, notes, last_attended)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `, [sessionId, visitor.name, visitor.visitorType, visitor.visitorFamilyGroup, visitor.notes, date]);
-        }
-      }
+      // CRITICAL FIX: Do NOT manage visitors in the regular attendance endpoint
+      // Visitors should only be managed through dedicated visitor endpoints:
+      // - POST /:gatheringTypeId/:date/visitors (add visitors)
+      // - PUT /:gatheringTypeId/:date/visitors/:visitorId (update visitors)
+      // This prevents accidental deletion of visitors when updating regular attendance
+      
+      console.log('Regular attendance update - preserving existing visitors');
     });
 
     // Trigger notifications (moved outside transaction to avoid scope issues)
@@ -205,9 +200,9 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
     await Database.transaction(async (conn) => {
       // Get or create attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
 
       let sessionId;
@@ -335,6 +330,9 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
       // Compute full name for visitors table
       const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
 
+      // Generate a single family group ID for all family members
+      const familyGroupId = peopleToCreate.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null;
+
       // Add to visitors table - Create separate records for each person instead of one combined record
       const visitorIds = [];
       for (const individual of createdIndividuals) {
@@ -345,7 +343,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
           sessionId, 
           `${individual.firstName} ${individual.lastName}`, // Individual name, not combined
           visitorType || 'temporary_other', 
-          peopleToCreate.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null, // Group families together
+          familyGroupId, // Use the same family group ID for all members
           notes || null, 
           date
         ]);
@@ -380,9 +378,9 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
     await Database.transaction(async (conn) => {
       // Get or create attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
 
       let sessionId;
@@ -396,19 +394,27 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
         sessionId = Number(sessions[0].id);
       }
 
-      // Get the existing visitor
+      // Get the existing visitor and their family group
       const existingVisitor = await conn.query(`
-        SELECT id, name FROM visitors WHERE id = ? AND session_id = ?
+        SELECT id, name, visitor_family_group FROM visitors WHERE id = ? AND session_id = ?
       `, [visitorId, sessionId]);
 
       if (existingVisitor.length === 0) {
         return res.status(404).json({ error: 'Visitor not found' });
       }
 
-      // Delete existing visitor and related records
-      await conn.query(`
-        DELETE FROM visitors WHERE id = ?
-      `, [visitorId]);
+      const existingFamilyGroup = existingVisitor[0].visitor_family_group;
+
+      // Delete ALL visitors in the same family group (or just the individual if no family group)
+      if (existingFamilyGroup) {
+        await conn.query(`
+          DELETE FROM visitors WHERE session_id = ? AND visitor_family_group = ?
+        `, [sessionId, existingFamilyGroup]);
+      } else {
+        await conn.query(`
+          DELETE FROM visitors WHERE id = ?
+        `, [visitorId]);
+      }
 
       // Process each person in the people array
       const createdIndividuals = [];
@@ -495,6 +501,9 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
       // Compute full name for visitors table
       const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
 
+      // Generate a single family group ID for all family members
+      const familyGroupId = createdIndividuals.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null;
+
       // Add updated visitor to visitors table - Create separate records for each person
       const visitorIds = [];
       for (const individual of createdIndividuals) {
@@ -505,7 +514,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
           sessionId, 
           `${individual.firstName} ${individual.lastName}`, // Individual name, not combined
           visitorType || 'temporary_other', 
-          createdIndividuals.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null, // Group families together
+          familyGroupId, // Use the same family group ID for all members
           notes || null, 
           date
         ]);
@@ -640,6 +649,85 @@ router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, async (r
   } catch (error) {
     console.error('Add regular attendee error:', error);
     res.status(500).json({ error: 'Failed to add regular attendee.' });
+  }
+});
+
+// Delete visitor(s)
+router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId, date, visitorId } = req.params;
+    const { deleteFamily } = req.query; // Optional query parameter to delete entire family
+
+    await Database.transaction(async (conn) => {
+      // Get or verify attendance session exists
+      const sessions = await conn.query(
+        'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+        [gatheringTypeId, date]
+      );
+
+      if (sessions.length === 0) {
+        return res.status(404).json({ error: 'Attendance session not found' });
+      }
+
+      const sessionId = Number(sessions[0].id);
+
+      // Get the visitor to delete and their family group
+      const visitor = await conn.query(`
+        SELECT id, name, visitor_family_group FROM visitors 
+        WHERE id = ? AND session_id = ?
+      `, [visitorId, sessionId]);
+
+      if (visitor.length === 0) {
+        return res.status(404).json({ error: 'Visitor not found' });
+      }
+
+      const visitorData = visitor[0];
+      const familyGroup = visitorData.visitor_family_group;
+
+      let deletedCount = 0;
+      let deletedNames = [];
+
+      if (deleteFamily === 'true' && familyGroup) {
+        // Delete entire family group
+        const familyMembers = await conn.query(`
+          SELECT name FROM visitors WHERE session_id = ? AND visitor_family_group = ?
+        `, [sessionId, familyGroup]);
+
+        deletedNames = familyMembers.map(member => member.name);
+
+        const result = await conn.query(`
+          DELETE FROM visitors WHERE session_id = ? AND visitor_family_group = ?
+        `, [sessionId, familyGroup]);
+
+        deletedCount = result.affectedRows;
+      } else {
+        // Delete only the specific visitor
+        deletedNames = [visitorData.name];
+
+        const result = await conn.query(`
+          DELETE FROM visitors WHERE id = ?
+        `, [visitorId]);
+
+        deletedCount = result.affectedRows;
+      }
+
+      if (deletedCount === 0) {
+        return res.status(404).json({ error: 'No visitors found to delete' });
+      }
+
+      const message = deleteFamily === 'true' && familyGroup 
+        ? `Deleted visitor family: ${deletedNames.join(', ')}`
+        : `Deleted visitor: ${deletedNames[0]}`;
+
+      res.json({ 
+        message,
+        deletedCount,
+        deletedNames
+      });
+    });
+  } catch (error) {
+    console.error('Delete visitor error:', error);
+    res.status(500).json({ error: 'Failed to delete visitor.' });
   }
 });
 

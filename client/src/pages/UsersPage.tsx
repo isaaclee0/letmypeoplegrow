@@ -85,6 +85,17 @@ const UsersPage: React.FC = () => {
     gatheringIds: [] as number[]
   });
 
+  // Confirmation modal states
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showDeactivateModal, setShowDeactivateModal] = useState(false);
+  const [cancelConfirmation, setCancelConfirmation] = useState<{
+    invitationId: number | null;
+  }>({ invitationId: null });
+  const [deactivateConfirmation, setDeactivateConfirmation] = useState<{
+    userId: number | null;
+    userName: string;
+  }>({ userId: null, userName: '' });
+
   useEffect(() => {
     loadData();
   }, []);
@@ -206,13 +217,16 @@ const UsersPage: React.FC = () => {
     }
   };
 
-  const handleCancelInvitation = async (invitationId: number) => {
-    if (!window.confirm('Are you sure you want to cancel this invitation?')) {
-      return;
-    }
+  const showCancelConfirmation = (invitationId: number) => {
+    setCancelConfirmation({ invitationId });
+    setShowCancelModal(true);
+  };
+
+  const handleCancelInvitation = async () => {
+    if (!cancelConfirmation.invitationId) return;
 
     try {
-      await invitationsAPI.cancel(invitationId);
+      await invitationsAPI.cancel(cancelConfirmation.invitationId);
       setSuccess('Invitation cancelled successfully');
       loadData();
     } catch (err: any) {
@@ -260,13 +274,16 @@ const UsersPage: React.FC = () => {
     }
   };
 
-  const handleDeleteUser = async (userId: number) => {
-    if (!window.confirm('Are you sure you want to deactivate this user? This action cannot be undone.')) {
-      return;
-    }
+  const showDeactivateConfirmation = (userId: number, userName: string) => {
+    setDeactivateConfirmation({ userId, userName });
+    setShowDeactivateModal(true);
+  };
+
+  const handleDeleteUser = async () => {
+    if (!deactivateConfirmation.userId) return;
 
     try {
-      await usersAPI.delete(userId);
+      await usersAPI.delete(deactivateConfirmation.userId);
       setSuccess('User deactivated successfully');
       loadData();
     } catch (err: any) {
@@ -417,7 +434,7 @@ const UsersPage: React.FC = () => {
                           {
                             label: 'Deactivate User',
                             icon: <TrashIcon className="h-4 w-4" />,
-                            onClick: () => handleDeleteUser(user.id),
+                            onClick: () => showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`),
                             className: 'text-red-600 hover:bg-red-50',
                             hidden: currentUser?.role !== 'admin'
                           },
@@ -516,7 +533,7 @@ const UsersPage: React.FC = () => {
                             {
                               label: 'Deactivate User',
                               icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => handleDeleteUser(user.id),
+                              onClick: () => showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`),
                               className: 'text-red-600 hover:bg-red-50',
                               hidden: currentUser?.role !== 'admin'
                             },
@@ -574,7 +591,7 @@ const UsersPage: React.FC = () => {
                         {
                           label: 'Cancel Invitation',
                           icon: <XMarkIcon className="h-4 w-4" />,
-                          onClick: () => handleCancelInvitation(invitation.id),
+                          onClick: () => showCancelConfirmation(invitation.id),
                           className: 'text-red-600 hover:bg-red-50'
                         },
                       ]}
@@ -644,7 +661,7 @@ const UsersPage: React.FC = () => {
                             {
                               label: 'Cancel Invitation',
                               icon: <XMarkIcon className="h-4 w-4" />,
-                              onClick: () => handleCancelInvitation(invitation.id),
+                              onClick: () => showCancelConfirmation(invitation.id),
                               className: 'text-red-600 hover:bg-red-50'
                             },
                           ]}
@@ -880,6 +897,106 @@ const UsersPage: React.FC = () => {
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
                 >
                   Save Assignments
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Invitation Confirmation Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Cancellation
+                </h3>
+                <button
+                  onClick={() => setShowCancelModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <XMarkIcon className="h-6 w-6 text-red-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to cancel this invitation? This action cannot be undone.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowCancelModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Keep Invitation
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleCancelInvitation();
+                    setShowCancelModal(false);
+                    setCancelConfirmation({ invitationId: null });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Cancel Invitation
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deactivate User Confirmation Modal */}
+      {showDeactivateModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Deactivation
+                </h3>
+                <button
+                  onClick={() => setShowDeactivateModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to deactivate <strong>{deactivateConfirmation.userName}</strong>? This action cannot be undone.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowDeactivateModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleDeleteUser();
+                    setShowDeactivateModal(false);
+                    setDeactivateConfirmation({ userId: null, userName: '' });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Deactivate User
                 </button>
               </div>
             </div>

@@ -73,6 +73,18 @@ const PeoplePage: React.FC = () => {
   const [gatheringTypes, setGatheringTypes] = useState<Array<{id: number, name: string}>>([]);
   const [showMassManage, setShowMassManage] = useState(false);
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
+  
+  // Confirmation modal states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showRemoveModal, setShowRemoveModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    personId: number | null;
+    personName: string;
+  }>({ personId: null, personName: '' });
+  const [removeConfirmation, setRemoveConfirmation] = useState<{
+    gatheringId: number | null;
+    peopleCount: number;
+  }>({ gatheringId: null, peopleCount: 0 });
 
   useEffect(() => {
     loadPeople();
@@ -174,13 +186,16 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const handleDeletePerson = async (personId: number) => {
-    if (!window.confirm('Are you sure you want to delete this person?')) {
-      return;
-    }
+  const showDeleteConfirmation = (personId: number, personName: string) => {
+    setDeleteConfirmation({ personId, personName });
+    setShowDeleteModal(true);
+  };
+
+  const handleDeletePerson = async () => {
+    if (!deleteConfirmation.personId) return;
 
     try {
-      await individualsAPI.delete(personId);
+      await individualsAPI.delete(deleteConfirmation.personId);
       
       // Reload people to get the updated list
       await loadPeople();
@@ -250,21 +265,23 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const handleMassRemove = async (gatheringId: number) => {
+  const showRemoveConfirmation = (gatheringId: number) => {
     if (selectedPeople.length === 0) {
       setError('Please select people to remove');
       return;
     }
+    setRemoveConfirmation({ gatheringId, peopleCount: selectedPeople.length });
+    setShowRemoveModal(true);
+  };
 
-    if (!window.confirm(`Are you sure you want to remove ${selectedPeople.length} people from this service?`)) {
-      return;
-    }
+  const handleMassRemove = async () => {
+    if (!removeConfirmation.gatheringId) return;
 
     try {
       setIsLoading(true);
       setError('');
       
-      const response = await csvImportAPI.massRemove(gatheringId, selectedPeople);
+      const response = await csvImportAPI.massRemove(removeConfirmation.gatheringId, selectedPeople);
       
       showSuccess(`Mass removal completed! Removed: ${response.data.removed} people`);
       
@@ -553,7 +570,7 @@ const PeoplePage: React.FC = () => {
                             {
                               label: 'Delete',
                               icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => handleDeletePerson(person.id),
+                              onClick: () => showDeleteConfirmation(person.id, `${person.firstName} ${person.lastName}`),
                               className: 'text-red-600 hover:bg-red-50'
                             }
                           ]}
@@ -672,7 +689,7 @@ const PeoplePage: React.FC = () => {
                             {
                               label: 'Delete',
                               icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => handleDeletePerson(person.id),
+                              onClick: () => showDeleteConfirmation(person.id, `${person.firstName} ${person.lastName}`),
                               className: 'text-red-600 hover:bg-red-50'
                             }
                           ]}
@@ -1080,7 +1097,7 @@ const PeoplePage: React.FC = () => {
                           Add to {gathering.name}
                         </button>
                         <button
-                          onClick={() => handleMassRemove(gathering.id)}
+                          onClick={() => showRemoveConfirmation(gathering.id)}
                           className="px-3 py-2 text-sm font-medium rounded-md text-red-600 border border-red-600 hover:bg-red-50"
                         >
                           Remove
@@ -1171,6 +1188,106 @@ const PeoplePage: React.FC = () => {
                     Close
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Person Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Deletion
+                </h3>
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to delete <strong>{deleteConfirmation.personName}</strong>? This action cannot be undone.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleDeletePerson();
+                    setShowDeleteModal(false);
+                    setDeleteConfirmation({ personId: null, personName: '' });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove People Confirmation Modal */}
+      {showRemoveModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Removal
+                </h3>
+                <button
+                  onClick={() => setShowRemoveModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to remove <strong>{removeConfirmation.peopleCount} people</strong> from this service? This action cannot be undone.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowRemoveModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleMassRemove();
+                    setShowRemoveModal(false);
+                    setRemoveConfirmation({ gatheringId: null, peopleCount: 0 });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Remove
+                </button>
               </div>
             </div>
           </div>

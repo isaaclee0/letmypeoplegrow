@@ -85,9 +85,9 @@ async function testAttendanceAPI() {
     console.log('6. Testing attendance session creation...');
     try {
       const testSession = await Database.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
       `, [7, '2025-07-20', 1]);
       console.log('   ✅ Attendance session creation works');
       

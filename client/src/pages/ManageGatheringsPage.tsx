@@ -12,7 +12,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CheckIcon,
-  ClipboardDocumentIcon
+  ClipboardDocumentIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 
 interface Gathering {
@@ -112,6 +113,13 @@ const ManageGatheringsPage: React.FC = () => {
     userIds: [],
     assignSelf: true
   });
+
+  // Confirmation modal states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    gatheringId: number | null;
+    gatheringName: string;
+  }>({ gatheringId: null, gatheringName: '' });
 
   useEffect(() => {
     loadGatherings();
@@ -416,15 +424,18 @@ const ManageGatheringsPage: React.FC = () => {
     }
   };
 
-  const handleDeleteGathering = async (gatheringId: number) => {
-    if (!window.confirm('Are you sure you want to delete this gathering? This will also remove all member associations.')) {
-      return;
-    }
+  const showDeleteConfirmation = (gatheringId: number, gatheringName: string) => {
+    setDeleteConfirmation({ gatheringId, gatheringName });
+    setShowDeleteModal(true);
+  };
+
+  const handleDeleteGathering = async () => {
+    if (!deleteConfirmation.gatheringId) return;
 
     try {
-      await gatheringsAPI.delete(gatheringId);
-      setGatherings(gatherings.filter(g => g.id !== gatheringId));
-      if (selectedGathering?.id === gatheringId) {
+      await gatheringsAPI.delete(deleteConfirmation.gatheringId);
+      setGatherings(gatherings.filter(g => g.id !== deleteConfirmation.gatheringId));
+      if (selectedGathering?.id === deleteConfirmation.gatheringId) {
         setSelectedGathering(null);
         setShowMembers(false);
       }
@@ -537,7 +548,7 @@ const ManageGatheringsPage: React.FC = () => {
                           },
                           {
                             label: 'Delete Gathering',
-                            onClick: () => handleDeleteGathering(gathering.id),
+                            onClick: () => showDeleteConfirmation(gathering.id, gathering.name),
                             icon: <TrashIcon className="h-4 w-4" />,
                             className: 'text-red-600 hover:bg-red-50'
                           }
@@ -1191,6 +1202,56 @@ const ManageGatheringsPage: React.FC = () => {
                   className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
                 >
                   Update Assignments
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Gathering Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Deletion
+                </h3>
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to delete <strong>{deleteConfirmation.gatheringName}</strong>? This will also remove all member associations and cannot be undone.
+                </p>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    await handleDeleteGathering();
+                    setShowDeleteModal(false);
+                    setDeleteConfirmation({ gatheringId: null, gatheringName: '' });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Delete Gathering
                 </button>
               </div>
             </div>
