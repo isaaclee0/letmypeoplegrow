@@ -1,7 +1,10 @@
 import axios from 'axios';
 
 // Use relative URL for API requests - this will work with any domain
-const API_BASE_URL = '/api';
+// In development mode, we need to point to the server container
+const API_BASE_URL = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:3002/api' 
+  : '/api';
 
 // Create axios instance
 const api = axios.create({
