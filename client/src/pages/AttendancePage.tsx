@@ -52,6 +52,7 @@ const AttendancePage: React.FC = () => {
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
   const [concurrentUpdateWarning, setConcurrentUpdateWarning] = useState(false);
+  const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
@@ -181,15 +182,21 @@ const AttendancePage: React.FC = () => {
       const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
       setAttendanceList(response.data.attendanceList || []);
       setVisitors(response.data.visitors || []);
-      // setHasChanges(false); // Removed hasChanges state
+      
+      // Initialize visitor attendance state (all visitors start as present)
+      const initialVisitorAttendance: { [key: number]: boolean } = {};
+      (response.data.visitors || []).forEach((visitor: Visitor) => {
+        if (visitor.id) {
+          initialVisitorAttendance[visitor.id] = true;
+        }
+      });
+      setVisitorAttendance(initialVisitorAttendance);
     } catch (err) {
       setError('Failed to load attendance data');
     } finally {
       setIsLoading(false);
     }
   };
-
-
 
   const toggleAttendance = async (individualId: number) => {
     const now = Date.now();
@@ -298,8 +305,6 @@ const AttendancePage: React.FC = () => {
       );
     }
   };
-
-  // Remove saveAttendance and debouncedSave
 
   // Update polling effect
   useEffect(() => {
@@ -411,26 +416,6 @@ const AttendancePage: React.FC = () => {
 
     return () => clearInterval(cleanupInterval);
   }, []);
-
-  // Remove useEffect for hasChanges and debouncedSave
-
-  // Remove save button if not needed, or keep for manual full save
-
-  // Add subtle spinner and concurrent update warning
-  {isPolling && (
-    <div className="fixed top-4 right-4 animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
-  )}
-  
-  {concurrentUpdateWarning && (
-    <div className="fixed top-4 left-4 bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-2 rounded shadow-lg">
-      <div className="flex items-center">
-        <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-        </svg>
-        <span className="text-sm font-medium">Other users are updating attendance</span>
-      </div>
-    </div>
-  )}
 
   // Set default gathering
   const setDefaultGathering = async (gatheringId: number) => {
@@ -812,12 +797,6 @@ const AttendancePage: React.FC = () => {
     });
   });
 
-  // Helper function to count actual number of people in visitor records
-  const getVisitorPeopleCount = useMemo(() => {
-    // Now each visitor record represents one person, so just count the records
-    return visitors.length;
-  }, [visitors]);
-
   // Group visitors by family
   const groupedVisitors = useMemo(() => {
     if (!groupByFamily) {
@@ -882,6 +861,40 @@ const AttendancePage: React.FC = () => {
 
     return Object.values(grouped);
   }, [visitors, groupByFamily]);
+
+  // Add toggle function for visitors
+  const toggleVisitorAttendance = (visitorId: number) => {
+    setVisitorAttendance(prev => ({
+      ...prev,
+      [visitorId]: !prev[visitorId]
+    }));
+  };
+
+  // Add toggle all family function for visitors
+  const toggleAllVisitorFamily = (familyGroup: number | string) => {
+    const familyVisitors = visitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
+    const familyVisitorIds = familyVisitors.map(visitor => visitor.id!).filter(id => id !== undefined);
+    
+    // Count how many family members are currently present
+    const presentCount = familyVisitorIds.filter(id => visitorAttendance[id]).length;
+    
+    // If 2 or more are present, uncheck all. Otherwise, check all
+    const shouldCheckAll = presentCount < 2;
+    
+    setVisitorAttendance(prev => {
+      const updated = { ...prev };
+      familyVisitorIds.forEach(id => {
+        updated[id] = shouldCheckAll;
+      });
+      return updated;
+    });
+  };
+
+  // Helper function to count actual number of people in visitor records
+  const getVisitorPeopleCount = useMemo(() => {
+    // Count only visitors that are marked as present
+    return visitors.filter(visitor => visitor.id && visitorAttendance[visitor.id]).length;
+  }, [visitors, visitorAttendance]);
 
   return (
     <div className="space-y-6">
@@ -1216,6 +1229,16 @@ const AttendancePage: React.FC = () => {
                       <h4 className="text-md font-medium text-gray-900">
                         {group.familyName}
                       </h4>
+                      <button
+                        onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup)}
+                        className="text-sm text-primary-600 hover:text-primary-700"
+                      >
+                        {(() => {
+                          const familyVisitors = group.members;
+                          const presentCount = familyVisitors.filter((visitor: any) => visitor.id && visitorAttendance[visitor.id]).length;
+                          return presentCount >= 2 ? 'Uncheck all family' : 'Check all family';
+                        })()}
+                      </button>
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
@@ -1224,18 +1247,37 @@ const AttendancePage: React.FC = () => {
                       const firstName = parts[0];
                       const lastName = parts.slice(1).join(' ');
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
+                      const isPresent = person.id ? visitorAttendance[person.id] : false;
 
                       return (
-                        <div
+                        <label
                           key={person.id}
-                          className={`flex items-center transition-colors ${
+                          className={`flex items-center cursor-pointer transition-colors ${
                             groupByFamily && group.isFamily
-                              ? `p-3 rounded-md border-2 border-primary-500 bg-primary-50`
-                              : `p-2 rounded-md bg-primary-50`
+                              ? `p-3 rounded-md border-2 ${
+                                  isPresent
+                                    ? 'border-primary-500 bg-primary-50'
+                                    : 'border-gray-200 hover:border-gray-300'
+                                }`
+                              : `p-2 rounded-md ${
+                                  isPresent
+                                    ? 'bg-primary-50'
+                                    : 'hover:bg-gray-50'
+                                }`
                           }`}
                         >
-                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center bg-primary-600 border-primary-600`}>
-                            <CheckIcon className="h-3 w-3 text-white" />
+                          <input
+                            type="checkbox"
+                            checked={Boolean(isPresent)}
+                            onChange={() => person.id && toggleVisitorAttendance(person.id)}
+                            className="sr-only"
+                          />
+                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                            isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
+                          }`}>
+                            {isPresent && (
+                              <CheckIcon className="h-3 w-3 text-white" />
+                            )}
                           </div>
                           <div className="ml-3 flex-1">
                             <span className="text-sm font-medium text-gray-900">
@@ -1261,7 +1303,7 @@ const AttendancePage: React.FC = () => {
                               </button>
                             </div>
                           </div>
-                        </div>
+                        </label>
                       );
                     })}
                   </div>
