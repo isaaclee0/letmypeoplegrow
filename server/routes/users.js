@@ -46,10 +46,22 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
     
     const users = await Database.query(query, params);
     
-    // Convert BigInt values to regular numbers to avoid JSON serialization issues
+    // Transform field names from snake_case to camelCase and convert BigInt values
     const processedUsers = users.map(user => ({
-      ...user,
       id: Number(user.id),
+      email: user.email,
+      mobileNumber: user.mobile_number,
+      primaryContactMethod: user.primary_contact_method,
+      role: user.role,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      isActive: user.is_active,
+      isInvited: user.is_invited,
+      firstLoginCompleted: user.first_login_completed,
+      emailNotifications: user.email_notifications,
+      smsNotifications: user.sms_notifications,
+      notificationFrequency: user.notification_frequency,
+      createdAt: user.created_at,
       gatheringCount: Number(user.gathering_count)
     }));
     
@@ -107,9 +119,22 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
 
     res.json({
       user: {
-        ...user,
         id: Number(user.id),
-        defaultGatheringId: user.default_gathering_id ? Number(user.default_gathering_id) : null
+        email: user.email,
+        mobileNumber: user.mobile_number,
+        primaryContactMethod: user.primary_contact_method,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        isActive: user.is_active,
+        isInvited: user.is_invited,
+        firstLoginCompleted: user.first_login_completed,
+        emailNotifications: user.email_notifications,
+        smsNotifications: user.sms_notifications,
+        notificationFrequency: user.notification_frequency,
+        defaultGatheringId: user.default_gathering_id ? Number(user.default_gathering_id) : null,
+        createdAt: user.created_at,
+        updatedAt: user.updated_at
       },
       gatheringAssignments: assignments
     });
@@ -230,7 +255,9 @@ router.post('/',
           role: role,
           firstName: firstName,
           lastName: lastName,
-          isInvited: true
+          isActive: true,
+          isInvited: true,
+          firstLoginCompleted: false
         }
       });
     } catch (error) {
@@ -571,7 +598,12 @@ router.get('/:userId/gatherings',
       }
 
       res.json({
-        user: users[0],
+        user: {
+          id: Number(users[0].id),
+          email: users[0].email,
+          firstName: users[0].first_name,
+          lastName: users[0].last_name
+        },
         currentAssignments: assignments,
         availableGatherings: availableGatherings
       });

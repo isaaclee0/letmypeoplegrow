@@ -7,8 +7,12 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY client/package*.json ./
 
-    # Install dependencies
-    RUN npm ci --only=production
+# Get version from package.json and set as build arg
+ARG VERSION
+ENV REACT_APP_VERSION=$VERSION
+
+# Install dependencies
+RUN npm ci --only=production
 
 # Copy only necessary source files
 COPY client/public ./public

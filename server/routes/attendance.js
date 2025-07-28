@@ -84,9 +84,9 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
     await Database.transaction(async (conn) => {
       // Create or get attendance session
       let sessionResult = await conn.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, recorded_by)
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE recorded_by = VALUES(recorded_by), updated_at = NOW()
+        ON DUPLICATE KEY UPDATE updated_at = NOW()
       `, [gatheringTypeId, date, req.user.id]);
 
       console.log('Session result:', sessionResult);
@@ -108,13 +108,13 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
 
       console.log('Session ID:', sessionId);
 
-      // Update individual attendance records (prevents race conditions)
+      // Update individual attendance records with better concurrency handling
       if (attendanceRecords && attendanceRecords.length > 0) {
         for (const record of attendanceRecords) {
+          // Use REPLACE INTO to handle concurrent updates more reliably
           await conn.query(`
-            INSERT INTO attendance_records (session_id, individual_id, present)
+            REPLACE INTO attendance_records (session_id, individual_id, present)
             VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE present = VALUES(present)
           `, [sessionId, record.individualId, record.present]);
         }
         console.log('Updated attendance records for session:', sessionId);
@@ -136,11 +136,16 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) 
       }
     });
 
-    // Trigger notifications
-    const { triggerAttendanceNotifications } = require('../utils/attendanceNotifications');
-    await triggerAttendanceNotifications(gatheringTypeId, date);
+    // Trigger notifications (moved outside transaction to avoid scope issues)
+    try {
+      const { triggerAttendanceNotifications } = require('../utils/attendanceNotifications');
+      await triggerAttendanceNotifications(gatheringTypeId, date);
+    } catch (notificationError) {
+      console.error('Error triggering notifications:', notificationError);
+      // Don't fail the attendance save if notifications fail
+    }
 
-    res.json({ message: 'Attendance recorded successfully', sessionId });
+    res.json({ message: 'Attendance recorded successfully' });
   } catch (error) {
     console.error('Record attendance error:', error);
     console.error('Error stack:', error.stack);

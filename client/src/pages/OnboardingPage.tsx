@@ -766,7 +766,7 @@ const OnboardingPage: React.FC = () => {
                           }`}
                         >
                           <DocumentArrowDownIcon className="h-5 w-5 inline mr-2" />
-                          Copy & Paste
+                          Paste Data
                         </button>
                       </nav>
                     </div>
@@ -805,12 +805,12 @@ const OnboardingPage: React.FC = () => {
                               id="pasteData"
                               value={pasteData}
                               onChange={(e) => setPasteData(e.target.value)}
-                              placeholder="Paste your CSV data here...&#10;FIRST NAME,LAST NAME,FAMILY NAME&#10;John,Smith,&quot;Smith, John and Sarah&quot;&#10;Sarah,Smith,&quot;Smith, John and Sarah&quot;"
+                              placeholder="Paste your data here...&#10;FIRST NAME,LAST NAME,FAMILY NAME&#10;John,Smith,&quot;Smith, John and Sarah&quot;&#10;Sarah,Smith,&quot;Smith, John and Sarah&quot;&#10;&#10;Works with: CSV files, Excel, Google Sheets, Numbers, etc."
                               rows={8}
                               className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
                             />
                             <p className="mt-1 text-xs text-gray-500">
-                              Paste CSV data with headers: FIRST NAME, LAST NAME, FAMILY NAME
+                              Paste data with headers: FIRST NAME, LAST NAME, FAMILY NAME. Works with spreadsheets and CSV files.
                             </p>
                           </div>
 

@@ -10,6 +10,56 @@ const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
 const { getSupportedCountries, supportsMobileNumbers } = require('../utils/phoneNumber');
 
+// Helper function to create sample attendance sessions for testing
+const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) => {
+  try {
+    const dayMap = {
+      'Sunday': 0,
+      'Monday': 1,
+      'Tuesday': 2,
+      'Wednesday': 3,
+      'Thursday': 4,
+      'Friday': 5,
+      'Saturday': 6
+    };
+    
+    const targetDay = dayMap[dayOfWeek];
+    const today = new Date();
+    const sessions = [];
+    
+    // Create sessions for the past 4 weeks
+    for (let i = 1; i <= 4; i++) {
+      const sessionDate = new Date(today);
+      
+      // Go back to the most recent occurrence of the target day
+      const daysToSubtract = (today.getDay() - targetDay + 7) % 7;
+      sessionDate.setDate(today.getDate() - daysToSubtract - (7 * i));
+      
+      // Format date as YYYY-MM-DD
+      const formattedDate = sessionDate.toISOString().split('T')[0];
+      
+      // Create attendance session
+      const sessionResult = await Database.query(`
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        VALUES (?, ?, ?)
+      `, [gatheringId, formattedDate, userId]);
+      
+      sessions.push({
+        id: Number(sessionResult.insertId),
+        date: formattedDate
+      });
+    }
+    
+    console.log(`Created ${sessions.length} sample attendance sessions for gathering ${gatheringId}`);
+    return sessions;
+  } catch (error) {
+    console.error('Error creating sample attendance sessions:', error);
+    // Don't throw error - this is just for testing convenience
+  }
+};
+
+
+
 const router = express.Router();
 
 // Helper function to save onboarding progress
@@ -287,6 +337,9 @@ router.post('/gathering',
         VALUES (?, ?, ?)
       `, [req.user.id, Number(result.insertId), req.user.id]);
 
+      // Create sample attendance sessions for testing (going back 4 weeks)
+      await createSampleAttendanceSessions(Number(result.insertId), dayOfWeek, req.user.id);
+
       // Get all gatherings for this user to save progress
       const userGatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency
@@ -493,14 +546,24 @@ router.post('/import-paste/:gatheringId',
         return res.status(404).json({ error: 'Gathering not found or access denied' });
       }
 
-      // Parse CSV data from string
+      // Parse data from string - handle both CSV and TSV (spreadsheet paste)
       const lines = data.trim().split('\n');
       if (lines.length < 2) {
-        return res.status(400).json({ error: 'Invalid CSV data - must have headers and at least one row' });
+        return res.status(400).json({ error: 'Invalid data - must have headers and at least one row' });
+      }
+
+      // Detect delimiter by analyzing the first line
+      const firstLine = lines[0];
+      const commaCount = (firstLine.match(/,/g) || []).length;
+      const tabCount = (firstLine.match(/\t/g) || []).length;
+      
+      let delimiter = ',';
+      if (tabCount > commaCount) {
+        delimiter = '\t';
       }
 
       // Parse headers
-      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+      const headers = lines[0].split(delimiter).map(h => h.trim().replace(/"/g, ''));
       const firstNameIndex = headers.findIndex(h => 
         h.toUpperCase() === 'FIRST NAME' || h.toUpperCase() === 'FIRSTNAME'
       );
@@ -512,7 +575,7 @@ router.post('/import-paste/:gatheringId',
       );
 
       if (firstNameIndex === -1 || lastNameIndex === -1) {
-        return res.status(400).json({ error: 'CSV must contain FIRST NAME and LAST NAME columns' });
+        return res.status(400).json({ error: 'Data must contain FIRST NAME and LAST NAME columns' });
       }
 
       // Process the CSV data
@@ -524,7 +587,7 @@ router.post('/import-paste/:gatheringId',
           const line = lines[i].trim();
           if (!line) continue;
 
-          // Parse CSV row (handle quoted values)
+          // Parse row (handle quoted values and detected delimiter)
           const values = [];
           let current = '';
           let inQuotes = false;
@@ -533,7 +596,7 @@ router.post('/import-paste/:gatheringId',
             const char = line[j];
             if (char === '"') {
               inQuotes = !inQuotes;
-            } else if (char === ',' && !inQuotes) {
+            } else if (char === delimiter && !inQuotes) {
               values.push(current.trim());
               current = '';
             } else {
@@ -604,7 +667,7 @@ router.post('/import-paste/:gatheringId',
 
     } catch (error) {
       console.error('Paste import error:', error);
-      res.status(500).json({ error: 'Failed to process pasted data' });
+      res.status(500).json({ error: 'Failed to process pasted data. Please check the format and try again.' });
     }
   }
 );

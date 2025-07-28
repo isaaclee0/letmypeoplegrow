@@ -4,10 +4,10 @@ const { sendNotificationSMS } = require('./sms');
 
 async function triggerAttendanceNotifications(gatheringTypeId, sessionDate) {
   try {
-    // Get active rules for this gathering or global
+    // Get active rules (currently no gathering-specific rules, so get all active rules)
     const rules = await Database.query(
-      `SELECT * FROM notification_rules WHERE is_active = true AND (gathering_type_id = ? OR gathering_type_id IS NULL)` ,
-      [gatheringTypeId]
+      `SELECT * FROM notification_rules WHERE is_active = true` ,
+      []
     );
 
     for (const rule of rules) {

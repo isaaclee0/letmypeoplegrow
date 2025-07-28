@@ -50,6 +50,8 @@ const AttendancePage: React.FC = () => {
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
+  const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
+  const [concurrentUpdateWarning, setConcurrentUpdateWarning] = useState(false);
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
@@ -190,6 +192,9 @@ const AttendancePage: React.FC = () => {
 
 
   const toggleAttendance = async (individualId: number) => {
+    const now = Date.now();
+    setLastUserModification(prev => ({ ...prev, [individualId]: now }));
+    
     setAttendanceList(prev => {
       return prev.map(person => 
         person.id === individualId 
@@ -226,7 +231,7 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  const toggleAllFamily = (familyId: number) => {
+  const toggleAllFamily = async (familyId: number) => {
     console.log('Toggling all family attendance for family:', familyId);
     // Count how many family members are currently present
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
@@ -236,6 +241,20 @@ const AttendancePage: React.FC = () => {
     const shouldCheckAll = presentCount < 2;
     console.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
     
+    if (!selectedGathering || !selectedDate) return;
+
+    // Track user modifications for all family members
+    const now = Date.now();
+    const familyMemberIds = familyMembers.map(person => person.id);
+    setLastUserModification(prev => {
+      const updated = { ...prev };
+      familyMemberIds.forEach(id => {
+        updated[id] = now;
+      });
+      return updated;
+    });
+
+    // Update local state first
     setAttendanceList(prev => {
       const updated = prev.map(person => 
         person.familyId === familyId 
@@ -245,8 +264,39 @@ const AttendancePage: React.FC = () => {
       console.log('Updated attendance list after family toggle:', updated);
       return updated;
     });
-    // setHasChanges(true); // Removed hasChanges state
-    console.log('Set hasChanges to true (family toggle)');
+
+    try {
+      // Create attendance records for all family members
+      const familyAttendanceRecords = familyMembers.map(person => ({
+        individualId: person.id,
+        present: shouldCheckAll
+      }));
+
+      await attendanceAPI.record(selectedGathering.id, selectedDate, {
+        attendanceRecords: familyAttendanceRecords,
+        visitors: []
+      });
+
+      // Clear saving state
+      setAttendanceList(prev => 
+        prev.map(person => 
+          person.familyId === familyId 
+            ? { ...person, isSaving: false }
+            : person
+        )
+      );
+    } catch (err) {
+      console.error('Failed to save family attendance change:', err);
+      setError('Failed to save family changes');
+      // Revert on error
+      setAttendanceList(prev => 
+        prev.map(person => 
+          person.familyId === familyId 
+            ? { ...person, isSaving: false, present: !shouldCheckAll } // Revert to previous state
+            : person
+        )
+      );
+    }
   };
 
   // Remove saveAttendance and debouncedSave
@@ -265,14 +315,64 @@ const AttendancePage: React.FC = () => {
           const newAttendanceList = response.data.attendanceList || [];
           const newVisitors = response.data.visitors || [];
           
+          console.log('Polling: Current list length:', attendanceList.length, 'New list length:', newAttendanceList.length);
+          
+          // Check for concurrent updates by comparing attendance states
+          let hasConcurrentUpdates = false;
+          if (attendanceList.length > 0 && newAttendanceList.length > 0) {
+            const currentMap = new Map(attendanceList.map((p: Individual) => [p.id, p.present]));
+            const newMap = new Map(newAttendanceList.map((p: Individual) => [p.id, p.present]));
+            
+            newMap.forEach((newPresent, id) => {
+              const currentPresent = currentMap.get(id as number);
+              if (currentPresent !== undefined && currentPresent !== newPresent) {
+                const userModifiedTime = lastUserModification[id as number];
+                const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
+                
+                // If user hasn't modified recently and values differ, it's a concurrent update
+                if (timeSinceUserModification > 15000) {
+                  hasConcurrentUpdates = true;
+                }
+              }
+            });
+          }
+          
+          setConcurrentUpdateWarning(hasConcurrentUpdates);
+          
           setAttendanceList(prev => {
-            return prev.map(person => {
-              const newPerson = newAttendanceList.find((p: Individual) => p.id === person.id);
-              if (newPerson && !person.isSaving) {
+            // Create a map of current people by ID for quick lookup
+            const currentPeopleMap = new Map(prev.map(p => [p.id, p]));
+            
+            // Process new data from server
+            const updatedList = newAttendanceList.map((newPerson: Individual) => {
+              const currentPerson = currentPeopleMap.get(newPerson.id);
+              
+              if (!currentPerson) {
+                // New person from server
                 return { ...newPerson, isSaving: false };
               }
-              return person;
+              
+              // Check if user has modified this person recently (within last 15 seconds)
+              const userModifiedTime = lastUserModification[newPerson.id];
+              const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
+              
+              if (currentPerson.isSaving) {
+                // Person is currently being saved, keep current state
+                return currentPerson;
+              } else if (timeSinceUserModification <= 15000) { // 15 seconds (increased window)
+                // User modified recently, keep user's version
+                return {
+                  ...newPerson,
+                  present: currentPerson.present, // Keep user's present value
+                  isSaving: false
+                };
+              } else {
+                // Safe to update from server
+                return { ...newPerson, isSaving: false };
+              }
             });
+            
+            return updatedList;
           });
           
           setVisitors(newVisitors);
@@ -281,7 +381,7 @@ const AttendancePage: React.FC = () => {
         } finally {
           setIsPolling(false);
         }
-      }, 5000); // Poll every 5 seconds
+      }, 10000); // Poll every 10 seconds (reduced frequency)
     };
 
     startPolling();
@@ -291,15 +391,45 @@ const AttendancePage: React.FC = () => {
         clearInterval(pollingIntervalRef.current);
       }
     };
-  }, [selectedGathering, selectedDate]);
+  }, [selectedGathering, selectedDate, lastUserModification]);
+
+  // Clean up old modification timestamps (older than 30 seconds)
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      setLastUserModification(prev => {
+        const cleaned = { ...prev };
+        Object.keys(cleaned).forEach(key => {
+          const id = parseInt(key);
+          if (now - cleaned[id] > 30000) { // 30 seconds
+            delete cleaned[id];
+          }
+        });
+        return cleaned;
+      });
+    }, 30000); // Clean up every 30 seconds
+
+    return () => clearInterval(cleanupInterval);
+  }, []);
 
   // Remove useEffect for hasChanges and debouncedSave
 
   // Remove save button if not needed, or keep for manual full save
 
-  // Add subtle spinner
+  // Add subtle spinner and concurrent update warning
   {isPolling && (
     <div className="fixed top-4 right-4 animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600"></div>
+  )}
+  
+  {concurrentUpdateWarning && (
+    <div className="fixed top-4 left-4 bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-2 rounded shadow-lg">
+      <div className="flex items-center">
+        <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+        </svg>
+        <span className="text-sm font-medium">Other users are updating attendance</span>
+      </div>
+    </div>
   )}
 
   // Set default gathering

@@ -173,12 +173,14 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   visitor_family_group VARCHAR(255),
   notes TEXT,
   present BOOLEAN DEFAULT true,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
   INDEX idx_session (session_id),
   INDEX idx_individual (individual_id),
   INDEX idx_present (present),
+  UNIQUE KEY unique_session_individual (session_id, individual_id),
   CONSTRAINT check_attendee CHECK (
     (individual_id IS NOT NULL) OR 
     (visitor_name IS NOT NULL AND visitor_name != '')

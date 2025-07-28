@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import UpdateNotificationBar from './UpdateNotificationBar';
+import { getFormattedVersion } from '../utils/version';
 import {
   Bars3Icon,
   BellIcon,
@@ -133,6 +134,10 @@ const Layout: React.FC = () => {
                   GROW
                 </div>
               </div>
+              {/* Version number */}
+              <div className="mt-4 text-center">
+                <span className="text-white text-xs opacity-60">{getFormattedVersion()}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -173,6 +178,10 @@ const Layout: React.FC = () => {
                   <div className="text-white font-title font-bold text-3xl leading-tight tracking-wide">
                     GROW
                   </div>
+                </div>
+                {/* Version number */}
+                <div className="mt-4 text-center">
+                  <span className="text-white text-xs opacity-60">{getFormattedVersion()}</span>
                 </div>
               </div>
             </div>

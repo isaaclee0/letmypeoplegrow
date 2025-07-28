@@ -7,6 +7,10 @@ WORKDIR /app
 # Copy package files
 COPY client/package*.json ./
 
+# Get version from package.json and set as build arg
+ARG VERSION
+ENV REACT_APP_VERSION=$VERSION
+
 # Install dependencies
 RUN npm install
 

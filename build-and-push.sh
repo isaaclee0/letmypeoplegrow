@@ -5,7 +5,7 @@
 # If no version is provided, uses the default version
 
 # Default version (change this when releasing new versions)
-VERSION=${1:-v0.7.2}
+VERSION=${1:-v0.7.4}
 
 # Configuration
 REGISTRY="staugustine1"
@@ -44,6 +44,7 @@ echo "Building client image..."
 docker buildx build \
     --builder $BUILDER \
     --platform linux/amd64 \
+    --build-arg VERSION=$VERSION \
     -t $CLIENT_IMAGE:$VERSION \
     -t $CLIENT_IMAGE:latest \
     -f Dockerfile.client.optimized \
