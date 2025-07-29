@@ -42,7 +42,7 @@ services:
       DB_USER: church_user
       DB_PASSWORD: church_password
       JWT_SECRET: your_secure_jwt_secret_change_this_in_production
-      JWT_EXPIRE: 24h
+      JWT_EXPIRE: 30d
       OTC_EXPIRE_MINUTES: 10
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au

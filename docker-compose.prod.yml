@@ -25,7 +25,7 @@ services:
 
   # Node.js Backend Server
   server:
-    image: staugustine1/letmypeoplegrow-server:${IMAGE_TAG:-v0.3.3}
+    image: staugustine1/letmypeoplegrow-server:${IMAGE_TAG:-v0.8.3}
     container_name: church_attendance_server
     restart: unless-stopped
     env_file:
@@ -39,7 +39,7 @@ services:
       DB_USER: ${DB_USER:-church_user}
       DB_PASSWORD: ${DB_PASSWORD:-church_password}
       JWT_SECRET: ${JWT_SECRET:-your_secure_jwt_secret_change_this_in_production}
-      JWT_EXPIRE: ${JWT_EXPIRE:-24h}
+      JWT_EXPIRE: ${JWT_EXPIRE:-30d}
       OTC_EXPIRE_MINUTES: ${OTC_EXPIRE_MINUTES:-10}
       OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS:-60}
       EMAIL_FROM: ${EMAIL_FROM:-hello@letmypeoplegrow.com.au}
@@ -55,7 +55,7 @@ services:
 
   # React Frontend Client
   client:
-    image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG:-v0.3.3}
+    image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG:-v0.8.3}
     container_name: church_attendance_client
     restart: unless-stopped
     ports:

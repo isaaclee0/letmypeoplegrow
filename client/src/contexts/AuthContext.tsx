@@ -31,6 +31,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const isInitializing = useRef(false);
+  const refreshInterval = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -46,6 +47,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const response = await authAPI.getCurrentUser();
         setUser(response.data.user);
         localStorage.setItem('user', JSON.stringify(response.data.user));
+        
+        // Start periodic token refresh for authenticated users
+        startTokenRefresh();
         
         // Check onboarding status for admin users
         if (response.data.user.role === 'admin') {
@@ -67,12 +71,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     };
 
     initializeAuth();
+    
+    // Cleanup function to stop token refresh interval
+    return () => {
+      stopTokenRefresh();
+    };
   }, []);
 
   const login = async (token: string, userData: User) => {
     // Token is now handled by cookies, only store user data locally
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
+    
+    // Start periodic token refresh (every 23 hours to refresh before 24h expiry)
+    startTokenRefresh();
     
     // Check onboarding status for admin users
     if (userData.role === 'admin') {
@@ -92,6 +104,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Even if logout API fails, clear local state
       console.error('Logout error:', error);
     } finally {
+      stopTokenRefresh();
       localStorage.removeItem('user');
       setUser(null);
       setNeedsOnboarding(false);
@@ -103,6 +116,36 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const updatedUser = { ...user, ...userData };
       setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
+    }
+  };
+
+  const startTokenRefresh = () => {
+    // Clear any existing interval
+    if (refreshInterval.current) {
+      clearInterval(refreshInterval.current);
+    }
+    
+    // Refresh token every 23 hours (23 * 60 * 60 * 1000 milliseconds)
+    refreshInterval.current = setInterval(async () => {
+      try {
+        await authAPI.refreshToken();
+        console.log('Token refreshed successfully');
+      } catch (error) {
+        console.error('Failed to refresh token:', error);
+        // If refresh fails, clear user and redirect to login
+        localStorage.removeItem('user');
+        setUser(null);
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+    }, 23 * 60 * 60 * 1000);
+  };
+
+  const stopTokenRefresh = () => {
+    if (refreshInterval.current) {
+      clearInterval(refreshInterval.current);
+      refreshInterval.current = null;
     }
   };
 

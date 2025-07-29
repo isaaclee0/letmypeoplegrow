@@ -32,7 +32,21 @@ const verifyToken = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);
-    res.status(401).json({ error: 'Invalid token.' });
+    
+    // Provide more specific error messages
+    if (error.name === 'TokenExpiredError') {
+      res.status(401).json({ 
+        error: 'Token expired. Please log in again.',
+        code: 'TOKEN_EXPIRED'
+      });
+    } else if (error.name === 'JsonWebTokenError') {
+      res.status(401).json({ 
+        error: 'Invalid token format.',
+        code: 'INVALID_TOKEN'
+      });
+    } else {
+      res.status(401).json({ error: 'Invalid token.' });
+    }
   }
 };
 

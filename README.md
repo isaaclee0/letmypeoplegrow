@@ -182,7 +182,7 @@ DB_PASSWORD=church_password
 
 # JWT
 JWT_SECRET=your_secure_jwt_secret
-JWT_EXPIRE=24h
+JWT_EXPIRE=30d
 
 # Email (Brevo)
 BREVO_API_KEY=your_brevo_api_key
