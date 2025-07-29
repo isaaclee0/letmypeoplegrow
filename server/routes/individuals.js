@@ -2,6 +2,7 @@ const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { requireIsVisitorColumn } = require('../utils/databaseSchema');
+const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 router.use(verifyToken);

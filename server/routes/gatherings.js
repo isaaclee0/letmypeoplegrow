@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 router.use(verifyToken);
