@@ -98,6 +98,7 @@ export interface AddVisitorData {
   name?: string;
   visitorType?: string;
   visitorFamilyGroup?: string;
+  familyName?: string;
   notes?: string;
   people?: Array<{
     firstName: string;

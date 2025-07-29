@@ -24,12 +24,17 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
       
-      // Get visitors for this session
+      // Get visitors for this session with family information
       visitors = await Database.query(`
-        SELECT id, name, visitor_type, visitor_family_group, notes, last_attended
-        FROM visitors 
-        WHERE session_id = ?
-        ORDER BY name
+        SELECT v.id, v.name, v.visitor_type, v.visitor_family_group, v.notes, v.last_attended,
+               f.family_name, f.id as family_id
+        FROM visitors v
+        LEFT JOIN individuals i ON i.first_name = SUBSTRING_INDEX(v.name, ' ', 1) 
+          AND i.last_name = SUBSTRING(v.name, LENGTH(SUBSTRING_INDEX(v.name, ' ', 1)) + 2)
+          AND i.is_visitor = true
+        LEFT JOIN families f ON i.family_id = f.id
+        WHERE v.session_id = ?
+        ORDER BY v.name
       `, [sessionId]);
     }
 
@@ -178,7 +183,7 @@ router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (r
 router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
-    const { name, visitorType, visitorFamilyGroup, notes, people } = req.body;
+    const { name, visitorType, visitorFamilyGroup, familyName, notes, people } = req.body;
 
     if ((!name || !name.trim()) && (!people || people.length === 0)) {
       return res.status(400).json({ error: 'Visitor information is required' });
@@ -221,33 +226,38 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
         }
       }
 
-      // Create family if multiple people
+      // Create family if multiple people or if family name is provided
       let familyId = null;
       let familyLastName = 'Unknown';
-      if (peopleToCreate.length > 1) {
-        // Find a known last name, preferring non-children
-        for (const person of peopleToCreate) {
-          if (!person.isChild && person.lastName && person.lastName !== 'Unknown') {
-            familyLastName = person.lastName;
-            break;
-          }
-        }
-        if (familyLastName === 'Unknown') {
+      if (peopleToCreate.length > 1 || familyName) {
+        // Use provided family name if available, otherwise generate one
+        let finalFamilyName = familyName;
+        
+        if (!finalFamilyName) {
+          // Find a known last name, preferring non-children
           for (const person of peopleToCreate) {
-            if (person.lastName && person.lastName !== 'Unknown') {
+            if (!person.isChild && person.lastName && person.lastName !== 'Unknown') {
               familyLastName = person.lastName;
               break;
             }
           }
-        }
+          if (familyLastName === 'Unknown') {
+            for (const person of peopleToCreate) {
+              if (person.lastName && person.lastName !== 'Unknown') {
+                familyLastName = person.lastName;
+                break;
+              }
+            }
+          }
 
-        const mainFirstName = peopleToCreate[0].firstName !== 'Unknown' ? peopleToCreate[0].firstName : 'Visitor';
-        const familyName = `${mainFirstName} ${familyLastName} Family`;
+          const mainFirstName = peopleToCreate[0].firstName !== 'Unknown' ? peopleToCreate[0].firstName : 'Visitor';
+          finalFamilyName = `${mainFirstName} ${familyLastName} Family`;
+        }
 
         const familyResult = await conn.query(`
           INSERT INTO families (family_name, created_by)
           VALUES (?, ?)
-        `, [familyName, req.user.id]);
+        `, [finalFamilyName, req.user.id]);
         familyId = Number(familyResult.insertId);
       }
 
@@ -266,14 +276,14 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
             firstName = 'Unknown';
           }
         } else {
-          firstName = firstName.trim();
+          firstName = firstName.trim() || 'Unknown';
         }
 
         // Handle unknown last name
         if (lastUnknown || !lastName || !lastName.trim()) {
-          lastName = familyId ? familyLastName : 'Unknown';
+          lastName = familyId && familyLastName ? familyLastName : 'Unknown';
         } else {
-          lastName = lastName.trim();
+          lastName = lastName.trim() || 'Unknown';
         }
 
         // Check if individual already exists (only match visitors)
@@ -356,7 +366,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
 router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date, visitorId } = req.params;
-    const { people, visitorType, notes } = req.body;
+    const { people, visitorType, familyName, notes } = req.body;
 
     if (!people || people.length === 0) {
       return res.status(400).json({ error: 'Visitor information is required' });
@@ -412,16 +422,23 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
       let familyLastName = null;
       let childCount = 0;
 
-      // Create family if multiple people
-      if (people.length > 1) {
-        const mainPerson = people.find(p => !p.isChild);
-        if (mainPerson && !mainPerson.lastUnknown) {
-          familyLastName = mainPerson.lastName.toUpperCase();
-          const familyName = `${familyLastName}, ${people.map(p => p.firstName).join(' & ')}`;
-          
+      // Create family if multiple people or if family name is provided
+      if (people.length > 1 || familyName) {
+        // Use provided family name if available, otherwise generate one
+        let finalFamilyName = familyName;
+        
+        if (!finalFamilyName) {
+          const mainPerson = people.find(p => !p.isChild);
+          if (mainPerson && !mainPerson.lastUnknown) {
+            familyLastName = mainPerson.lastName.toUpperCase();
+            finalFamilyName = `${familyLastName}, ${people.map(p => p.firstName).join(' & ')}`;
+          }
+        }
+        
+        if (finalFamilyName) {
           const familyResult = await conn.query(`
-            INSERT INTO families (family_name) VALUES (?)
-          `, [familyName]);
+            INSERT INTO families (family_name, created_by) VALUES (?, ?)
+          `, [finalFamilyName, req.user.id]);
           
           familyId = Number(familyResult.insertId);
         }
@@ -439,14 +456,19 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
             firstName = 'Unknown';
           }
         } else {
-          firstName = firstName.trim();
+          firstName = firstName.trim() || 'Unknown';
         }
 
         // Handle unknown last name
         if (lastUnknown || !lastName || !lastName.trim()) {
-          lastName = familyId ? familyLastName : 'Unknown';
+          if (isChild) {
+            // For children, use family last name if available, otherwise use parent's last name
+            lastName = familyId && familyLastName ? familyLastName : 'Unknown';
+          } else {
+            lastName = familyId && familyLastName ? familyLastName : 'Unknown';
+          }
         } else {
-          lastName = lastName.trim();
+          lastName = lastName.trim() || 'Unknown';
         }
 
         // Update existing individual or create new one
@@ -492,7 +514,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
       const fullName = createdIndividuals.map(ind => `${ind.firstName} ${ind.lastName}`).join(' & ');
 
       // Generate a single family group ID for all family members
-      const familyGroupId = createdIndividuals.length > 1 ? visitorFamilyGroup || `family_${sessionId}_${Date.now()}` : null;
+      const familyGroupId = createdIndividuals.length > 1 ? existingFamilyGroup || `family_${sessionId}_${Date.now()}` : null;
 
       // Add updated visitor to visitors table - Create separate records for each person
       const visitorIds = [];
@@ -519,7 +541,8 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
     });
   } catch (error) {
     console.error('Update visitor error:', error);
-    res.status(500).json({ error: 'Failed to update visitor.' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to update visitor.', details: error.message });
   }
 });
 
