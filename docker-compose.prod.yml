@@ -42,7 +42,7 @@ services:
       JWT_EXPIRE: ${JWT_EXPIRE:-24h}
       OTC_EXPIRE_MINUTES: ${OTC_EXPIRE_MINUTES:-10}
       OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS:-60}
-      EMAIL_FROM: ${EMAIL_FROM:-noreply@redeemercc.org.au}
+      EMAIL_FROM: ${EMAIL_FROM:-hello@letmypeoplegrow.com.au}
     ports:
       - "3001:3001"
     volumes:
