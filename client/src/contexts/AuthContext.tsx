@@ -43,6 +43,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       isInitializing.current = true;
 
       try {
+        // Add a small delay for iOS Safari to ensure cookies are properly set
+        if (navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
         // Always try to get current user from backend (in case user is logged in via cookies)
         const response = await authAPI.getCurrentUser();
         setUser(response.data.user);
@@ -61,6 +66,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }
         }
       } catch (error) {
+        console.error('Auth initialization error:', error);
         // User is not authenticated, clear any stale localStorage
         localStorage.removeItem('user');
         setUser(null);
@@ -83,7 +89,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
     
-    // Start periodic token refresh (every 23 hours to refresh before 24h expiry)
+    // Start periodic token refresh (every 23 hours to refresh before 30d expiry)
     startTokenRefresh();
     
     // Check onboarding status for admin users
@@ -125,7 +131,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       clearInterval(refreshInterval.current);
     }
     
-    // Refresh token every 23 hours (23 * 60 * 60 * 1000 milliseconds)
+    // Refresh token every 25 days (25 * 24 * 60 * 60 * 1000 milliseconds)
+    // This ensures we refresh before the 30-day expiry
     refreshInterval.current = setInterval(async () => {
       try {
         await authAPI.refreshToken();
@@ -139,7 +146,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           window.location.href = '/login';
         }
       }
-    }, 23 * 60 * 60 * 1000);
+    }, 25 * 24 * 60 * 60 * 1000);
   };
 
   const stopTokenRefresh = () => {

@@ -314,10 +314,15 @@ router.post('/verify-code',
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production', // Only use secure in production
-        sameSite: 'strict',
+        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // Use 'lax' for development to help with iOS Safari
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
         path: '/'
       };
+      
+      // Add domain if specified in environment
+      if (process.env.COOKIE_DOMAIN) {
+        cookieOptions.domain = process.env.COOKIE_DOMAIN;
+      }
       
       res.cookie('authToken', token, cookieOptions);
 
@@ -444,10 +449,15 @@ router.post('/refresh', verifyToken, async (req, res) => {
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // Use 'lax' for development to help with iOS Safari
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
       path: '/'
     };
+    
+    // Add domain if specified in environment
+    if (process.env.COOKIE_DOMAIN) {
+      cookieOptions.domain = process.env.COOKIE_DOMAIN;
+    }
     
     res.cookie('authToken', token, cookieOptions);
     res.json({ message: 'Token refreshed successfully' });
@@ -622,6 +632,27 @@ router.post('/logout', verifyToken, (req, res) => {
     path: '/'
   });
   res.json({ message: 'Logged out successfully' });
+});
+
+// Clear expired token route - helps users with expired tokens
+router.post('/clear-expired-token', (req, res) => {
+  try {
+    // Clear the auth cookie
+    res.clearCookie('authToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/'
+    });
+    
+    res.json({ 
+      message: 'Expired token cleared. Please log in again.',
+      code: 'TOKEN_CLEARED'
+    });
+  } catch (error) {
+    console.error('Clear expired token error:', error);
+    res.status(500).json({ error: 'Failed to clear token.' });
+  }
 });
 
 // Development bypass route - only available in development mode

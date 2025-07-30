@@ -81,6 +81,11 @@ const LoginPage: React.FC = () => {
       // Token is now handled by cookies, pass empty string for backward compatibility
       await login('', response.data.user);
       
+      // Add a small delay for iOS Safari to ensure cookies are properly set
+      if (navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
       // Redirect based on user role and onboarding status
       if (response.data.user.role === 'admin') {
         // Will be redirected by ProtectedRoute logic if onboarding needed

@@ -33,8 +33,16 @@ const verifyToken = async (req, res, next) => {
   } catch (error) {
     console.error('Auth middleware error:', error);
     
-    // Provide more specific error messages
+    // Provide more specific error messages and auto-clear expired tokens
     if (error.name === 'TokenExpiredError') {
+      // Automatically clear the expired token cookie
+      res.clearCookie('authToken', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/'
+      });
+      
       res.status(401).json({ 
         error: 'Token expired. Please log in again.',
         code: 'TOKEN_EXPIRED'

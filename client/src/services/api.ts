@@ -6,16 +6,29 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
 // Create axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 15000, // Increased timeout for iOS Safari
   withCredentials: true, // Enable cookies to be sent with requests
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
+// iOS Safari specific configuration
+const isIOSSafari = () => {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+         /Safari/.test(navigator.userAgent) && 
+         !/Chrome/.test(navigator.userAgent);
+};
+
 // Request interceptor - cookies are automatically sent with withCredentials: true
 api.interceptors.request.use(
   (config) => {
+    // Add iOS Safari specific headers
+    if (isIOSSafari()) {
+      config.headers['Cache-Control'] = 'no-cache';
+      config.headers['Pragma'] = 'no-cache';
+    }
+    
     // Cookies are automatically handled by the browser when withCredentials is true
     return config;
   },
@@ -30,8 +43,35 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
     
+    // iOS Safari retry mechanism for network errors
+    if (isIOSSafari() && !error.response && !originalRequest._retry && originalRequest.method === 'get') {
+      originalRequest._retry = true;
+      console.log('Retrying request for iOS Safari:', originalRequest.url);
+      
+      // Wait a bit before retrying
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return api(originalRequest);
+    }
+    
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
+      
+      // Check if it's a token expired error
+      if (error.response?.data?.code === 'TOKEN_EXPIRED') {
+        try {
+          // Clear the expired token
+          await authAPI.clearExpiredToken();
+        } catch (clearError) {
+          console.error('Failed to clear expired token:', clearError);
+        }
+        
+        // Clear user data and redirect to clear-token page
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/clear-token' && window.location.pathname !== '/login') {
+          window.location.href = '/clear-token';
+        }
+        return Promise.reject(error);
+      }
       
       try {
         // Try to refresh the token
@@ -148,6 +188,9 @@ export const authAPI = {
     
   logout: () => 
     api.post('/auth/logout'),
+    
+  clearExpiredToken: () => 
+    api.post('/auth/clear-expired-token'),
     
   setDefaultGathering: (gatheringId: number) =>
     api.post('/auth/set-default-gathering', { gatheringId }),

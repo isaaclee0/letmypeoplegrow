@@ -17,6 +17,7 @@ import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
 import NonAdminSetupPage from './pages/NonAdminSetupPage';
 import SettingsPage from './pages/SettingsPage';
 import NotificationRulesPage from './pages/NotificationRulesPage';
+import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
@@ -145,6 +146,10 @@ function App() {
             <Route
               path="/accept-invitation/:token"
               element={<AcceptInvitationPage />}
+            />
+            <Route
+              path="/clear-token"
+              element={<TokenClearPage />}
             />
             <Route
               path="/"

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iOS Safari Debug</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+        }
+        .debug-info {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .test-button {
+            background: #007AFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .test-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>iOS Safari Debug Page</h1>
+    
+    <div class="debug-info">
+        <h3>Browser Information</h3>
+        <p><strong>User Agent:</strong> <span id="userAgent"></span></p>
+        <p><strong>Is iOS Safari:</strong> <span id="isIOSSafari"></span></p>
+        <p><strong>Cookies Enabled:</strong> <span id="cookiesEnabled"></span></p>
+        <p><strong>Local Storage:</strong> <span id="localStorage"></span></p>
+        <p><strong>Session Storage:</strong> <span id="sessionStorage"></span></p>
+    </div>
+
+    <div class="debug-info">
+        <h3>API Tests</h3>
+        <button class="test-button" onclick="testHealthCheck()">Test Health Check</button>
+        <button class="test-button" onclick="testAuthCheck()">Test Auth Check</button>
+        <button class="test-button" onclick="testCookieSet()">Test Cookie Setting</button>
+        <div id="testResults"></div>
+    </div>
+
+    <div class="debug-info">
+        <h3>Network Information</h3>
+        <p><strong>Online Status:</strong> <span id="onlineStatus"></span></p>
+        <p><strong>Connection Type:</strong> <span id="connectionType"></span></p>
+    </div>
+
+    <script>
+        // Display browser information
+        document.getElementById('userAgent').textContent = navigator.userAgent;
+        document.getElementById('isIOSSafari').textContent = 
+            /iPad|iPhone|iPod/.test(navigator.userAgent) && 
+            /Safari/.test(navigator.userAgent) && 
+            !/Chrome/.test(navigator.userAgent) ? 'Yes' : 'No';
+        document.getElementById('cookiesEnabled').textContent = navigator.cookieEnabled ? 'Yes' : 'No';
+        document.getElementById('localStorage').textContent = typeof(Storage) !== "undefined" ? 'Available' : 'Not Available';
+        document.getElementById('sessionStorage').textContent = typeof(sessionStorage) !== "undefined" ? 'Available' : 'Not Available';
+        document.getElementById('onlineStatus').textContent = navigator.onLine ? 'Online' : 'Offline';
+        document.getElementById('connectionType').textContent = navigator.connection ? navigator.connection.effectiveType || 'Unknown' : 'Unknown';
+
+        function addResult(message, isSuccess = true) {
+            const resultsDiv = document.getElementById('testResults');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `result ${isSuccess ? 'success' : 'error'}`;
+            resultDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            resultsDiv.appendChild(resultDiv);
+        }
+
+        async function testHealthCheck() {
+            try {
+                const response = await fetch('/api/health', {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    addResult(`Health check successful: ${JSON.stringify(data)}`);
+                } else {
+                    addResult(`Health check failed: ${response.status} ${response.statusText}`, false);
+                }
+            } catch (error) {
+                addResult(`Health check error: ${error.message}`, false);
+            }
+        }
+
+        async function testAuthCheck() {
+            try {
+                const response = await fetch('/api/auth/me', {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    addResult(`Auth check successful: User ID ${data.user.id}`);
+                } else if (response.status === 401) {
+                    addResult('Auth check: Not authenticated (expected)');
+                } else {
+                    addResult(`Auth check failed: ${response.status} ${response.statusText}`, false);
+                }
+            } catch (error) {
+                addResult(`Auth check error: ${error.message}`, false);
+            }
+        }
+
+        async function testCookieSet() {
+            try {
+                // Try to set a test cookie
+                document.cookie = "testCookie=testValue; path=/; max-age=3600";
+                
+                // Check if cookie was set
+                const cookies = document.cookie.split(';');
+                const testCookie = cookies.find(cookie => cookie.trim().startsWith('testCookie='));
+                
+                if (testCookie) {
+                    addResult('Cookie setting test: Success');
+                } else {
+                    addResult('Cookie setting test: Failed - cookie not found', false);
+                }
+            } catch (error) {
+                addResult(`Cookie setting error: ${error.message}`, false);
+            }
+        }
+
+        // Auto-run tests on page load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                testHealthCheck();
+                setTimeout(() => testAuthCheck(), 1000);
+                setTimeout(() => testCookieSet(), 2000);
+            }, 500);
+        });
+    </script>
+</body>
+</html> 

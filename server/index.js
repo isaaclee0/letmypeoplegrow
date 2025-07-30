@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
+const path = require('path');
 require('dotenv').config();
 
 // Import Winston logger
@@ -32,15 +33,22 @@ const csvImportRoutes = require('./routes/csv-import');
 const migrationRoutes = require('./routes/migrations');
 const testRoutes = require('./routes/test');
 const notificationRulesRoutes = require('./routes/notification_rules');
+const importRangeRoutes = require('./routes/importrange');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginEmbedderPolicy: false, // Disable for iOS Safari compatibility
+  crossOriginResourcePolicy: { policy: "cross-origin" } // Allow cross-origin resources
+}));
 app.use(cors({
   origin: true, // Allow all origins - nginx proxy handles security
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Set-Cookie']
 }));
 
 // Rate limiting
@@ -70,6 +78,16 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Clear token page endpoint
+app.get('/clear-token', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/public/clear-token.html'));
+});
+
+// iOS Safari debug page endpoint
+app.get('/ios-debug', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/public/ios-debug.html'));
+});
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -85,6 +103,8 @@ app.use('/api/csv-import', csvImportRoutes);
 app.use('/api/migrations', migrationRoutes);
 app.use('/api/test', testRoutes);
 app.use('/api/notification-rules', notificationRulesRoutes);
+// Temporarily disabled for security - exposes data without authentication
+// app.use('/api/importrange', importRangeRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

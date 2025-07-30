@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear Expired Token - Let My People Grow</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f3f4f6;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        h1 {
+            color: #1f2937;
+            margin-bottom: 20px;
+        }
+        p {
+            color: #6b7280;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        .button {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .button:hover {
+            background-color: #2563eb;
+        }
+        .button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        .success {
+            color: #059669;
+            background-color: #d1fae5;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+        .error {
+            color: #dc2626;
+            background-color: #fee2e2;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Clear Expired Token</h1>
+        <p>If you're having trouble logging in due to an expired token, click the button below to clear it and start fresh.</p>
+        
+        <button class="button" onclick="clearToken()" id="clearButton">Clear Token & Go to Login</button>
+        
+        <div id="message"></div>
+        
+        <div style="margin-top: 30px; font-size: 14px; color: #6b7280;">
+            <p><strong>Alternative methods:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>Clear your browser's cookies and cache</li>
+                <li>Try opening the app in an incognito/private window</li>
+                <li>Contact your administrator for assistance</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        async function clearToken() {
+            const button = document.getElementById('clearButton');
+            const message = document.getElementById('message');
+            
+            button.disabled = true;
+            button.textContent = 'Clearing...';
+            
+            try {
+                // Try to call the API endpoint first
+                const response = await fetch('/api/auth/clear-expired-token', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    message.innerHTML = '<div class="success">Token cleared successfully! Redirecting to login...</div>';
+                } else {
+                    // If API fails, fall back to manual cookie clearing
+                    clearCookieManually();
+                }
+            } catch (error) {
+                // If API call fails, fall back to manual cookie clearing
+                clearCookieManually();
+            }
+            
+            // Redirect to login after a short delay
+            setTimeout(() => {
+                window.location.href = '/login';
+            }, 2000);
+        }
+        
+        function clearCookieManually() {
+            // Clear the authToken cookie manually with different variations
+            document.cookie = 'authToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            document.cookie = 'authToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; secure;';
+            document.cookie = 'authToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; samesite=strict;';
+            document.getElementById('message').innerHTML = '<div class="success">Token cleared! Redirecting to login...</div>';
+        }
+    </script>
+</body>
+</html> 
