@@ -54,7 +54,9 @@
         <h3>API Tests</h3>
         <button class="test-button" onclick="testHealthCheck()">Test Health Check</button>
         <button class="test-button" onclick="testAuthCheck()">Test Auth Check</button>
+        <button class="test-button" onclick="testCookieDebug()">Test Cookie Debug</button>
         <button class="test-button" onclick="testCookieSet()">Test Cookie Setting</button>
+        <button class="test-button" onclick="testManualRefresh()">Test Manual Refresh</button>
         <div id="testResults"></div>
     </div>
 
@@ -108,7 +110,7 @@
             }
         }
 
-        async function testAuthCheck() {
+                async function testAuthCheck() {
             try {
                 const response = await fetch('/api/auth/me', {
                     method: 'GET',
@@ -119,7 +121,7 @@
                         'Pragma': 'no-cache'
                     }
                 });
-                
+
                 if (response.ok) {
                     const data = await response.json();
                     addResult(`Auth check successful: User ID ${data.user.id}`);
@@ -130,6 +132,29 @@
                 }
             } catch (error) {
                 addResult(`Auth check error: ${error.message}`, false);
+            }
+        }
+
+        async function testCookieDebug() {
+            try {
+                const response = await fetch('/api/auth/debug-cookies', {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    addResult(`Cookie debug: ${JSON.stringify(data)}`);
+                } else {
+                    addResult(`Cookie debug failed: ${response.status} ${response.statusText}`, false);
+                }
+            } catch (error) {
+                addResult(`Cookie debug error: ${error.message}`, false);
             }
         }
 
@@ -152,11 +177,34 @@
             }
         }
 
+        async function testManualRefresh() {
+            try {
+                const response = await fetch('/api/auth/refresh', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+
+                if (response.ok) {
+                    addResult("Manual refresh successful");
+                } else {
+                    addResult(`Manual refresh failed: ${response.status} ${response.statusText}`, false);
+                }
+            } catch (error) {
+                addResult(`Manual refresh error: ${error.message}`, false);
+            }
+        }
+
         // Auto-run tests on page load
         window.addEventListener('load', () => {
             setTimeout(() => {
                 testHealthCheck();
                 setTimeout(() => testAuthCheck(), 1000);
+                setTimeout(() => testCookieDebug(), 1500);
                 setTimeout(() => testCookieSet(), 2000);
             }, 500);
         });

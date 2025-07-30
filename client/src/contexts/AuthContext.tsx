@@ -10,6 +10,7 @@ interface AuthContextType {
   logout: () => void;
   updateUser: (userData: Partial<User>) => void;
   refreshOnboardingStatus: () => Promise<void>;
+  manualRefreshToken: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,6 +33,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const isInitializing = useRef(false);
   const refreshInterval = useRef<NodeJS.Timeout | null>(null);
+  const isRefreshing = useRef(false);
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -89,7 +91,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
     
-    // Start periodic token refresh (every 23 hours to refresh before 30d expiry)
+    // Start periodic token refresh (every 25 days to refresh before 30d expiry)
     startTokenRefresh();
     
     // Check onboarding status for admin users
@@ -133,20 +135,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     
     // Refresh token every 25 days (25 * 24 * 60 * 60 * 1000 milliseconds)
     // This ensures we refresh before the 30-day expiry
+    const intervalMs = 25 * 24 * 60 * 60 * 1000; // 25 days
+    
     refreshInterval.current = setInterval(async () => {
+      // Prevent concurrent refresh attempts
+      if (isRefreshing.current) {
+        return;
+      }
+      
+      isRefreshing.current = true;
+      
       try {
         await authAPI.refreshToken();
-        console.log('Token refreshed successfully');
+        console.log('Scheduled token refresh completed successfully');
       } catch (error) {
-        console.error('Failed to refresh token:', error);
+        console.error('Scheduled token refresh failed:', error);
+        
         // If refresh fails, clear user and redirect to login
         localStorage.removeItem('user');
         setUser(null);
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
+      } finally {
+        isRefreshing.current = false;
       }
-    }, 25 * 24 * 60 * 60 * 1000);
+    }, intervalMs);
   };
 
   const stopTokenRefresh = () => {
@@ -154,6 +168,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       clearInterval(refreshInterval.current);
       refreshInterval.current = null;
     }
+    isRefreshing.current = false;
   };
 
   const refreshOnboardingStatus = async () => {
@@ -167,6 +182,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const manualRefreshToken = async () => {
+    // Prevent concurrent refresh attempts
+    if (isRefreshing.current) {
+      console.log('Manual token refresh skipped - refresh already in progress');
+      return;
+    }
+
+    isRefreshing.current = true;
+    
+    try {
+      console.log('Manual token refresh initiated...');
+      await authAPI.refreshToken();
+      console.log('Manual token refresh successful');
+    } catch (error) {
+      console.error('Manual token refresh failed:', error);
+      throw error;
+    } finally {
+      isRefreshing.current = false;
+    }
+  };
+
   const value: AuthContextType = {
     user,
     isLoading,
@@ -176,6 +212,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     logout,
     updateUser,
     refreshOnboardingStatus,
+    manualRefreshToken,
   };
 
   return (

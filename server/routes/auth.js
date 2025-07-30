@@ -314,7 +314,7 @@ router.post('/verify-code',
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production', // Only use secure in production
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // Use 'lax' for development to help with iOS Safari
+        sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
         path: '/'
       };
@@ -449,7 +449,7 @@ router.post('/refresh', verifyToken, async (req, res) => {
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // Use 'lax' for development to help with iOS Safari
+      sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
       path: '/'
     };
@@ -628,7 +628,7 @@ router.post('/logout', verifyToken, (req, res) => {
   res.clearCookie('authToken', {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
     path: '/'
   });
   res.json({ message: 'Logged out successfully' });
@@ -641,7 +641,7 @@ router.post('/clear-expired-token', (req, res) => {
     res.clearCookie('authToken', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
       path: '/'
     });
     
@@ -653,6 +653,22 @@ router.post('/clear-expired-token', (req, res) => {
     console.error('Clear expired token error:', error);
     res.status(500).json({ error: 'Failed to clear token.' });
   }
+});
+
+// Debug endpoint to check cookie status
+router.get('/debug-cookies', (req, res) => {
+  const cookies = req.cookies;
+  const headers = req.headers;
+  
+  res.json({
+    cookies: cookies,
+    hasAuthToken: !!cookies.authToken,
+    userAgent: headers['user-agent'],
+    isIOSSafari: /iPad|iPhone|iPod/.test(headers['user-agent']) && 
+                 /Safari/.test(headers['user-agent']) && 
+                 !/Chrome/.test(headers['user-agent']),
+    cookieHeader: headers.cookie
+  });
 });
 
 // Development bypass route - only available in development mode

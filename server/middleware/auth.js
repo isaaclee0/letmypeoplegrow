@@ -39,7 +39,7 @@ const verifyToken = async (req, res, next) => {
       res.clearCookie('authToken', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
         path: '/'
       });
       

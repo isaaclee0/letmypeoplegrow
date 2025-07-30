@@ -13,6 +13,25 @@ const api = axios.create({
   },
 });
 
+// Track refresh state to prevent concurrent refreshes
+let isRefreshingToken = false;
+let failedQueue: Array<{
+  resolve: (value?: any) => void;
+  reject: (reason?: any) => void;
+}> = [];
+
+const processQueue = (error: any, token: string | null = null) => {
+  failedQueue.forEach(({ resolve, reject }) => {
+    if (error) {
+      reject(error);
+    } else {
+      resolve(token);
+    }
+  });
+  
+  failedQueue = [];
+};
+
 // iOS Safari specific configuration
 const isIOSSafari = () => {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) && 
@@ -43,10 +62,13 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
     
-    // iOS Safari retry mechanism for network errors
-    if (isIOSSafari() && !error.response && !originalRequest._retry && originalRequest.method === 'get') {
-      originalRequest._retry = true;
-      console.log('Retrying request for iOS Safari:', originalRequest.url);
+    // iOS Safari retry mechanism for network errors (limited to avoid loops)
+    if (isIOSSafari() && !error.response && !originalRequest._networkRetry && originalRequest.method === 'get') {
+      originalRequest._networkRetry = true;
+      // Only log for important requests, reduce console spam
+      if (originalRequest.url?.includes('/auth/')) {
+        console.log('Retrying auth request for iOS Safari:', originalRequest.url);
+      }
       
       // Wait a bit before retrying
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -54,6 +76,7 @@ api.interceptors.response.use(
     }
     
     if (error.response?.status === 401 && !originalRequest._retry) {
+      // Prevent infinite retry loops - mark this request as retried
       originalRequest._retry = true;
       
       // Check if it's a token expired error
@@ -73,18 +96,51 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
       
+      // Prevent infinite loop - don't retry refresh requests
+      if (originalRequest.url?.includes('/auth/refresh')) {
+        console.error('Refresh token failed, clearing user data');
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+      
+      // Handle concurrent refresh attempts
+      if (isRefreshingToken) {
+        // Queue this request to be retried after the current refresh completes
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then(() => {
+          return api(originalRequest);
+        }).catch(err => {
+          return Promise.reject(err);
+        });
+      }
+      
+      isRefreshingToken = true;
+      
       try {
         // Try to refresh the token
         await authAPI.refreshToken();
+        // Reduce logging frequency - only log every 10th refresh to avoid spam
+        if (Math.random() < 0.1) {
+          console.log('Token refreshed via interceptor');
+        }
+        processQueue(null);
         // Retry the original request
         return api(originalRequest);
       } catch (refreshError) {
         // If refresh fails, clear user data and redirect to login
+        processQueue(refreshError);
         localStorage.removeItem('user');
         // Only redirect if we're not already on the login page
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshingToken = false;
       }
     }
     return Promise.reject(error);
