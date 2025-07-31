@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-client",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.5",
@@ -54,5 +54,6 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  }
+  },
+  "proxy": "http://church_attendance_server_dev:3001"
 }

@@ -56,7 +56,7 @@ const loadRoutes = () => {
     'auth', 'users', 'gatherings', 'families', 'individuals', 
     'attendance', 'reports', 'notifications', 'onboarding', 
     'invitations', 'csv-import', 'migrations', 'test', 
-    'notification_rules', 'importrange'
+    'notification_rules', 'importrange', 'api-keys'
   ];
 
   // Check external service availability
@@ -155,8 +155,27 @@ app.use(cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Set-Cookie']
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Cache-Control',
+    'Pragma',
+    'Accept',
+    'Accept-Language',
+    'Accept-Encoding',
+    'DNT',
+    'Connection',
+    'Upgrade-Insecure-Requests',
+    'User-Agent',
+    'Sec-Fetch-Dest',
+    'Sec-Fetch-Mode',
+    'Sec-Fetch-Site',
+    'Sec-Fetch-User'
+  ],
+  exposedHeaders: ['Set-Cookie'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Body parsing middleware
@@ -253,6 +272,15 @@ app.get('/ios-debug', (req, res) => {
   } catch (error) {
     res.status(404).json({ error: 'iOS debug page not found' });
   }
+});
+
+// CORS test endpoint
+app.get('/cors-test', (req, res) => {
+  res.status(200).json({ 
+    message: 'CORS is working!',
+    headers: req.headers,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Load and apply routes

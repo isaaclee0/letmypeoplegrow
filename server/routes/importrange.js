@@ -1,468 +1,254 @@
 const express = require('express');
 const Database = require('../config/database');
-const { verifyToken, requireRole } = require('../middleware/auth');
-const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 
-// Public endpoint for IMPORTRANGE - no authentication required for spreadsheet access
-// This allows Google Sheets and Excel to access the data directly
+// Middleware to validate API key and get church context
+const validateApiKey = async (req, res, next) => {
+  try {
+    const apiKey = req.headers['x-api-key'] || req.query.api_key;
+    
+    if (!apiKey) {
+      return res.status(401).json({ error: 'API key required' });
+    }
+
+    // Find the API key and validate it
+    const keyData = await Database.query(`
+      SELECT 
+        ak.id,
+        ak.church_id,
+        ak.permissions,
+        ak.is_active,
+        ak.expires_at,
+        cs.church_name
+      FROM api_keys ak
+      JOIN church_settings cs ON ak.church_id = cs.church_id
+      WHERE ak.api_key = ?
+    `, [apiKey]);
+
+    if (keyData.length === 0) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    const key = keyData[0];
+    
+    // Check if key is active
+    if (!key.is_active) {
+      return res.status(401).json({ error: 'API key is inactive' });
+    }
+
+    // Check if key has expired
+    if (key.expires_at && new Date() > new Date(key.expires_at)) {
+      return res.status(401).json({ error: 'API key has expired' });
+    }
+
+    // Store key info in request for later use
+    req.apiKey = {
+      id: key.id,
+      churchId: key.church_id,
+      permissions: JSON.parse(key.permissions || '[]'),
+      churchName: key.church_name
+    };
+
+    // Log the API access
+    const startTime = Date.now();
+    res.on('finish', async () => {
+      try {
+        await Database.query(`
+          INSERT INTO api_access_logs (api_key_id, church_id, endpoint, ip_address, user_agent, response_status, response_time_ms)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [
+          key.id,
+          key.church_id,
+          req.path,
+          req.ip,
+          req.get('User-Agent'),
+          res.statusCode,
+          Date.now() - startTime
+        ]);
+      } catch (logError) {
+        console.error('Failed to log API access:', logError);
+      }
+    });
+
+    next();
+  } catch (error) {
+    console.error('API key validation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Check if API key has required permission
+const requirePermission = (permission) => {
+  return (req, res, next) => {
+    if (!req.apiKey.permissions.includes(permission)) {
+      return res.status(403).json({ error: `Permission '${permission}' required` });
+    }
+    next();
+  };
+};
+
+// Apply API key validation to all routes
+router.use(validateApiKey);
 
 // Get attendance data for IMPORTRANGE
-router.get('/attendance', async (req, res) => {
+router.get('/attendance', requirePermission('read_attendance'), async (req, res) => {
   try {
-    const { 
-      gatheringTypeId, 
-      startDate, 
-      endDate, 
-      format = 'csv',
-      includeVisitors = 'true',
-      includeAbsent = 'true'
-    } = req.query;
-
-    // Validate required parameters
-    if (!gatheringTypeId) {
-      return res.status(400).json({ 
-        error: 'Missing required parameter: gatheringTypeId',
-        usage: 'Use: /api/importrange/attendance?gatheringTypeId=1&startDate=2024-01-01&endDate=2024-12-31'
-      });
+    const { startDate, endDate, gatheringTypeId, format = 'csv' } = req.query;
+    const churchId = req.apiKey.churchId;
+    
+    // Validate date parameters
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    // Build the query based on parameters
+    // Build the query with church isolation
     let query = `
       SELECT 
-        as_table.session_date as 'Date',
-        gt.name as 'Gathering Type',
-        i.first_name as 'First Name',
-        i.last_name as 'Last Name',
-        f.family_name as 'Family',
-        CASE WHEN ar.present = 1 THEN 'Present' ELSE 'Absent' END as 'Status',
-        as_table.created_at as 'Recorded At'
+        DATE_FORMAT(as_table.session_date, '%d-%m-%Y') as date,
+        gt.name as gathering_name,
+        COALESCE(i.first_name, '') as first_name,
+        COALESCE(i.last_name, '') as last_name,
+        COALESCE(f.family_name, '') as family_name,
+        CASE WHEN ar.present = 1 THEN 'Yes' ELSE 'No' END as present,
+        CASE 
+          WHEN ar.individual_id IS NOT NULL THEN 'Regular Member'
+          WHEN ar.visitor_name IS NOT NULL AND ar.visitor_name != '' THEN 'Visitor'
+          ELSE 'Unknown'
+        END as attendee_type,
+        CASE 
+          WHEN ar.individual_id IS NULL AND ar.visitor_name IS NOT NULL AND ar.visitor_name != '' 
+          THEN ar.visitor_name 
+          ELSE ''
+        END as visitor_name,
+        CASE 
+          WHEN ar.individual_id IS NULL AND ar.visitor_name IS NOT NULL AND ar.visitor_name != '' 
+          THEN ar.visitor_type 
+          ELSE ''
+        END as visitor_type,
+        COALESCE(ar.notes, '') as notes
       FROM attendance_sessions as_table
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-      JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
-      JOIN individuals i ON gl.individual_id = i.id
+      LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+      LEFT JOIN individuals i ON ar.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
-      LEFT JOIN attendance_records ar ON ar.session_id = as_table.id AND ar.individual_id = i.id
-      WHERE as_table.gathering_type_id = ?
-        AND i.is_active = true
-        AND (i.is_visitor = false OR i.is_visitor IS NULL)
+      WHERE as_table.church_id = ? 
+        AND as_table.session_date >= ? 
+        AND as_table.session_date <= ?
     `;
 
-    let params = [gatheringTypeId];
-
-    // Add date filters if provided
-    if (startDate) {
-      query += ' AND as_table.session_date >= ?';
-      params.push(startDate);
-    }
-    if (endDate) {
-      query += ' AND as_table.session_date <= ?';
-      params.push(endDate);
-    }
-
-    // Add status filter
-    if (includeAbsent === 'false') {
-      query += ' AND ar.present = 1';
-    }
-
-    query += ' ORDER BY as_table.session_date DESC, i.last_name, i.first_name';
-
-    const attendanceData = await Database.query(query, params);
-
-    // Add visitors if requested
-    let visitorData = [];
-    if (includeVisitors === 'true') {
-      let visitorQuery = `
-        SELECT 
-          as_table.session_date as 'Date',
-          gt.name as 'Gathering Type',
-          v.name as 'Visitor Name',
-          v.visitor_type as 'Visitor Type',
-          v.visitor_family_group as 'Family Group',
-          'Visitor' as 'Status',
-          as_table.created_at as 'Recorded At'
-        FROM attendance_sessions as_table
-        JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-        JOIN visitors v ON v.session_id = as_table.id
-        WHERE as_table.gathering_type_id = ?
-      `;
-
-      let visitorParams = [gatheringTypeId];
-
-      if (startDate) {
-        visitorQuery += ' AND as_table.session_date >= ?';
-        visitorParams.push(startDate);
-      }
-      if (endDate) {
-        visitorQuery += ' AND as_table.session_date <= ?';
-        visitorParams.push(endDate);
-      }
-
-      visitorQuery += ' ORDER BY as_table.session_date DESC, v.name';
-      visitorData = await Database.query(visitorQuery, visitorParams);
-    }
-
-    // Combine regular attendance and visitor data
-    const allData = [...attendanceData, ...visitorData];
-
-    // Return data in requested format
-    if (format.toLowerCase() === 'json') {
-      res.json({ 
-        data: allData,
-        totalRecords: allData.length,
-        generatedAt: new Date().toISOString()
-      });
-    } else {
-      // Default to CSV format
-      if (allData.length === 0) {
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="attendance_data.csv"');
-        return res.send('Date,Gathering Type,First Name,Last Name,Family,Status,Recorded At\n');
-      }
-
-      // Convert to CSV
-      const headers = Object.keys(allData[0]);
-      const csvContent = [
-        headers.join(','),
-        ...allData.map(row => 
-          headers.map(header => {
-            const value = row[header];
-            // Escape commas and quotes in CSV
-            if (value === null || value === undefined) return '';
-            const stringValue = String(value);
-            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-              return `"${stringValue.replace(/"/g, '""')}"`;
-            }
-            return stringValue;
-          }).join(',')
-        )
-      ].join('\n');
-
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="attendance_data.csv"');
-      res.send(csvContent);
-    }
-
-  } catch (error) {
-    console.error('IMPORTRANGE attendance error:', error);
-    res.status(500).json({ 
-      error: 'Failed to retrieve attendance data for IMPORTRANGE.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Get individuals data for IMPORTRANGE
-router.get('/individuals', async (req, res) => {
-  try {
-    const { 
-      gatheringTypeId, 
-      format = 'csv',
-      includeInactive = 'false'
-    } = req.query;
-
-    let query = `
-      SELECT 
-        i.first_name as 'First Name',
-        i.last_name as 'Last Name',
-        f.family_name as 'Family',
-        gt.name as 'Gathering Type',
-        i.is_active as 'Active',
-        i.created_at as 'Created At',
-        i.updated_at as 'Updated At'
-      FROM individuals i
-      LEFT JOIN families f ON i.family_id = f.id
-      LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
-      LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE 1=1
-    `;
-
-    let params = [];
-
-    if (gatheringTypeId) {
-      query += ' AND gl.gathering_type_id = ?';
-      params.push(gatheringTypeId);
-    }
-
-    if (includeInactive === 'false') {
-      query += ' AND i.is_active = true';
-    }
-
-    query += ' ORDER BY i.last_name, i.first_name';
-
-    const individualsData = await Database.query(query, params);
-
-    // Return data in requested format
-    if (format.toLowerCase() === 'json') {
-      res.json({ 
-        data: individualsData,
-        totalRecords: individualsData.length,
-        generatedAt: new Date().toISOString()
-      });
-    } else {
-      // Default to CSV format
-      if (individualsData.length === 0) {
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="individuals_data.csv"');
-        return res.send('First Name,Last Name,Family,Gathering Type,Active,Created At,Updated At\n');
-      }
-
-      // Convert to CSV
-      const headers = Object.keys(individualsData[0]);
-      const csvContent = [
-        headers.join(','),
-        ...individualsData.map(row => 
-          headers.map(header => {
-            const value = row[header];
-            // Escape commas and quotes in CSV
-            if (value === null || value === undefined) return '';
-            const stringValue = String(value);
-            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-              return `"${stringValue.replace(/"/g, '""')}"`;
-            }
-            return stringValue;
-          }).join(',')
-        )
-      ].join('\n');
-
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="individuals_data.csv"');
-      res.send(csvContent);
-    }
-
-  } catch (error) {
-    console.error('IMPORTRANGE individuals error:', error);
-    res.status(500).json({ 
-      error: 'Failed to retrieve individuals data for IMPORTRANGE.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Get families data for IMPORTRANGE
-router.get('/families', async (req, res) => {
-  try {
-    const { 
-      gatheringTypeId, 
-      format = 'csv'
-    } = req.query;
-
-    let query = `
-      SELECT 
-        f.family_name as 'Family Name',
-        gt.name as 'Gathering Type',
-        COUNT(i.id) as 'Member Count',
-        f.created_at as 'Created At',
-        f.updated_at as 'Updated At'
-      FROM families f
-      LEFT JOIN gathering_types gt ON f.gathering_type_id = gt.id
-      LEFT JOIN individuals i ON f.id = i.family_id AND i.is_active = true
-      WHERE 1=1
-    `;
-
-    let params = [];
-
-    if (gatheringTypeId) {
-      query += ' AND f.gathering_type_id = ?';
-      params.push(gatheringTypeId);
-    }
-
-    query += ' GROUP BY f.id, f.family_name, gt.name, f.created_at, f.updated_at';
-    query += ' ORDER BY f.family_name';
-
-    const familiesData = await Database.query(query, params);
-
-    // Return data in requested format
-    if (format.toLowerCase() === 'json') {
-      res.json({ 
-        data: familiesData,
-        totalRecords: familiesData.length,
-        generatedAt: new Date().toISOString()
-      });
-    } else {
-      // Default to CSV format
-      if (familiesData.length === 0) {
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="families_data.csv"');
-        return res.send('Family Name,Gathering Type,Member Count,Created At,Updated At\n');
-      }
-
-      // Convert to CSV
-      const headers = Object.keys(familiesData[0]);
-      const csvContent = [
-        headers.join(','),
-        ...familiesData.map(row => 
-          headers.map(header => {
-            const value = row[header];
-            // Escape commas and quotes in CSV
-            if (value === null || value === undefined) return '';
-            const stringValue = String(value);
-            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-              return `"${stringValue.replace(/"/g, '""')}"`;
-            }
-            return stringValue;
-          }).join(',')
-        )
-      ].join('\n');
-
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="families_data.csv"');
-      res.send(csvContent);
-    }
-
-  } catch (error) {
-    console.error('IMPORTRANGE families error:', error);
-    res.status(500).json({ 
-      error: 'Failed to retrieve families data for IMPORTRANGE.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Get summary statistics for IMPORTRANGE
-router.get('/summary', async (req, res) => {
-  try {
-    const { 
-      gatheringTypeId, 
-      startDate, 
-      endDate,
-      format = 'csv'
-    } = req.query;
-
-    let query = `
-      SELECT 
-        as_table.session_date as 'Date',
-        gt.name as 'Gathering Type',
-        COUNT(DISTINCT CASE WHEN ar.present = 1 THEN ar.individual_id END) as 'Present Count',
-        COUNT(DISTINCT CASE WHEN ar.present = 0 THEN ar.individual_id END) as 'Absent Count',
-        COUNT(DISTINCT v.id) as 'Visitor Count',
-        COUNT(DISTINCT ar.individual_id) + COUNT(DISTINCT v.id) as 'Total Attendance'
-      FROM attendance_sessions as_table
-      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-      LEFT JOIN attendance_records ar ON ar.session_id = as_table.id
-      LEFT JOIN visitors v ON v.session_id = as_table.id
-      WHERE 1=1
-    `;
-
-    let params = [];
+    const params = [churchId, startDate, endDate];
 
     if (gatheringTypeId) {
       query += ' AND as_table.gathering_type_id = ?';
       params.push(gatheringTypeId);
     }
 
-    if (startDate) {
-      query += ' AND as_table.session_date >= ?';
-      params.push(startDate);
-    }
+    query += ' ORDER BY as_table.session_date DESC, f.family_name, i.last_name, i.first_name';
 
-    if (endDate) {
-      query += ' AND as_table.session_date <= ?';
-      params.push(endDate);
-    }
+    const data = await Database.query(query, params);
 
-    query += ' GROUP BY as_table.session_date, gt.name';
-    query += ' ORDER BY as_table.session_date DESC';
-
-    const summaryData = await Database.query(query, params);
-
-    // Return data in requested format
-    if (format.toLowerCase() === 'json') {
+    if (format === 'json') {
       res.json({ 
-        data: summaryData,
-        totalRecords: summaryData.length,
-        generatedAt: new Date().toISOString()
+        church: req.apiKey.churchName,
+        data: data,
+        totalRecords: data.length
       });
     } else {
-      // Default to CSV format
-      if (summaryData.length === 0) {
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename="summary_data.csv"');
-        return res.send('Date,Gathering Type,Present Count,Absent Count,Visitor Count,Total Attendance\n');
-      }
+      // CSV format for Google Sheets IMPORTRANGE
+      const headers = ['Date', 'Gathering', 'First Name', 'Last Name', 'Family', 'Present', 'Attendee Type', 'Visitor Name', 'Visitor Type', 'Notes'];
+      const csvRows = [headers, ...data.map(row => [
+        row.date,
+        row.gathering_name,
+        row.first_name,
+        row.last_name,
+        row.family_name,
+        row.present,
+        row.attendee_type,
+        row.visitor_name,
+        row.visitor_type,
+        row.notes
+      ])];
 
-      // Convert to CSV
-      const headers = Object.keys(summaryData[0]);
-      const csvContent = [
-        headers.join(','),
-        ...summaryData.map(row => 
-          headers.map(header => {
-            const value = row[header];
-            // Escape commas and quotes in CSV
-            if (value === null || value === undefined) return '';
-            const stringValue = String(value);
-            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-              return `"${stringValue.replace(/"/g, '""')}"`;
-            }
-            return stringValue;
-          }).join(',')
-        )
-      ].join('\n');
+      const csvContent = csvRows
+        .map(row => row.map(field => `"${field}"`).join(','))
+        .join('\n');
 
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="summary_data.csv"');
+      res.setHeader('Content-Disposition', 'attachment; filename="attendance-importrange.csv"');
       res.send(csvContent);
     }
-
   } catch (error) {
-    console.error('IMPORTRANGE summary error:', error);
-    res.status(500).json({ 
-      error: 'Failed to retrieve summary data for IMPORTRANGE.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('IMPORTRANGE attendance error:', error);
+    res.status(500).json({ error: 'Failed to retrieve attendance data.' });
   }
 });
 
-// Help endpoint to show available options
-router.get('/help', (req, res) => {
-  res.json({
-    endpoints: {
-      '/api/importrange/attendance': {
-        description: 'Get attendance data for Google Sheets IMPORTRANGE',
-        parameters: {
-          gatheringTypeId: 'Required: ID of the gathering type',
-          startDate: 'Optional: Start date (YYYY-MM-DD)',
-          endDate: 'Optional: End date (YYYY-MM-DD)',
-          format: 'Optional: csv or json (default: csv)',
-          includeVisitors: 'Optional: true or false (default: true)',
-          includeAbsent: 'Optional: true or false (default: true)'
-        },
-        example: '/api/importrange/attendance?gatheringTypeId=1&startDate=2024-01-01&endDate=2024-12-31'
-      },
-      '/api/importrange/individuals': {
-        description: 'Get individuals data for Google Sheets IMPORTRANGE',
-        parameters: {
-          gatheringTypeId: 'Optional: ID of the gathering type',
-          format: 'Optional: csv or json (default: csv)',
-          includeInactive: 'Optional: true or false (default: false)'
-        },
-        example: '/api/importrange/individuals?gatheringTypeId=1'
-      },
-      '/api/importrange/families': {
-        description: 'Get families data for Google Sheets IMPORTRANGE',
-        parameters: {
-          gatheringTypeId: 'Optional: ID of the gathering type',
-          format: 'Optional: csv or json (default: csv)'
-        },
-        example: '/api/importrange/families?gatheringTypeId=1'
-      },
-      '/api/importrange/summary': {
-        description: 'Get summary statistics for Google Sheets IMPORTRANGE',
-        parameters: {
-          gatheringTypeId: 'Optional: ID of the gathering type',
-          startDate: 'Optional: Start date (YYYY-MM-DD)',
-          endDate: 'Optional: End date (YYYY-MM-DD)',
-          format: 'Optional: csv or json (default: csv)'
-        },
-        example: '/api/importrange/summary?gatheringTypeId=1&startDate=2024-01-01&endDate=2024-12-31'
-      }
-    },
-    usage: {
-      googleSheets: 'Use =IMPORTRANGE("your-api-url", "attendance") in Google Sheets',
-      excel: 'Use Data > From Web to import the CSV URL',
-      note: 'These endpoints are public and do not require authentication for spreadsheet integration'
+// Get summary metrics for IMPORTRANGE
+router.get('/metrics', requirePermission('read_reports'), async (req, res) => {
+  try {
+    const { startDate, endDate, gatheringTypeId } = req.query;
+    const churchId = req.apiKey.churchId;
+    
+    // Validate date parameters
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
     }
+
+    // Get attendance summary
+    const attendanceData = await Database.query(`
+      SELECT 
+        DATE_FORMAT(as_table.session_date, '%d-%m-%Y') as date,
+        gt.name as gathering_name,
+        COUNT(DISTINCT ar.individual_id) as regular_members,
+        COUNT(DISTINCT CASE WHEN ar.visitor_name IS NOT NULL AND ar.visitor_name != '' THEN ar.id END) as visitors,
+        COUNT(DISTINCT CASE WHEN ar.present = 1 THEN ar.individual_id END) as present_members,
+        COUNT(DISTINCT CASE WHEN ar.present = 0 THEN ar.individual_id END) as absent_members
+      FROM attendance_sessions as_table
+      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
+      LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+      WHERE as_table.church_id = ? 
+        AND as_table.session_date >= ? 
+        AND as_table.session_date <= ?
+      ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+      GROUP BY as_table.session_date, as_table.gathering_type_id, gt.name
+      ORDER BY as_table.session_date DESC
+    `, gatheringTypeId ? [churchId, startDate, endDate, gatheringTypeId] : [churchId, startDate, endDate]);
+
+    // Get overall metrics
+    const overallMetrics = await Database.query(`
+      SELECT 
+        COUNT(DISTINCT as_table.id) as total_sessions,
+        COUNT(DISTINCT ar.individual_id) as total_regular_members,
+        COUNT(DISTINCT CASE WHEN ar.visitor_name IS NOT NULL AND ar.visitor_name != '' THEN ar.id END) as total_visitors,
+        AVG(CASE WHEN ar.present = 1 THEN 1 ELSE 0 END) * 100 as average_attendance_rate
+      FROM attendance_sessions as_table
+      LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+      WHERE as_table.church_id = ? 
+        AND as_table.session_date >= ? 
+        AND as_table.session_date <= ?
+      ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+    `, gatheringTypeId ? [churchId, startDate, endDate, gatheringTypeId] : [churchId, startDate, endDate]);
+
+    res.json({
+      church: req.apiKey.churchName,
+      period: { startDate, endDate },
+      summary: overallMetrics[0],
+      dailyData: attendanceData
+    });
+  } catch (error) {
+    console.error('IMPORTRANGE metrics error:', error);
+    res.status(500).json({ error: 'Failed to retrieve metrics data.' });
+  }
+});
+
+// Health check endpoint for IMPORTRANGE
+router.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK',
+    church: req.apiKey.churchName,
+    timestamp: new Date().toISOString(),
+    message: 'IMPORTRANGE API is working correctly'
   });
 });
 

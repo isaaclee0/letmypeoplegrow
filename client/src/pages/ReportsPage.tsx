@@ -6,14 +6,20 @@ import {
   UsersIcon, 
   ArrowTrendingUpIcon,
   CalendarIcon,
-  ArrowDownTrayIcon
+  ArrowDownTrayIcon,
+  KeyIcon,
+  PlusIcon,
+  TrashIcon,
+  EyeIcon,
+  EyeSlashIcon
 } from '@heroicons/react/24/outline';
 
 const ReportsPage: React.FC = () => {
   const { user } = useAuth();
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
-  const [selectedPeriod, setSelectedPeriod] = useState('4');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [metrics, setMetrics] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -21,24 +27,42 @@ const ReportsPage: React.FC = () => {
   // Check if user has access to reports
   const hasReportsAccess = user?.role === 'admin' || user?.role === 'coordinator';
 
+  // Initialize default date range (last 4 weeks)
+  useEffect(() => {
+    const today = new Date();
+    const fourWeeksAgo = new Date(today);
+    fourWeeksAgo.setDate(today.getDate() - 28);
+    
+    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
+  }, []);
+
   const loadGatherings = useCallback(async () => {
     try {
       const response = await gatheringsAPI.getAll();
       const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
-        user?.gatheringAssignments?.some(assignment => assignment.id === g.id)
+        user?.gatheringAssignments?.some((assignment: any) => assignment.id === g.id)
       );
       setGatherings(userGatherings);
+      
+      // Default to first gathering if available
+      if (userGatherings.length > 0 && !selectedGathering) {
+        setSelectedGathering(userGatherings[0]);
+      }
     } catch (err) {
       setError('Failed to load gatherings');
     }
-  }, [user?.gatheringAssignments]);
+  }, [user?.gatheringAssignments, selectedGathering]);
 
   const loadMetrics = useCallback(async () => {
+    if (!selectedGathering || !startDate || !endDate) return;
+    
     setIsLoading(true);
     try {
       const params = {
-        gatheringTypeId: selectedGathering?.id,
-        weeks: parseInt(selectedPeriod)
+        gatheringTypeId: selectedGathering.id,
+        startDate,
+        endDate
       };
       const response = await reportsAPI.getDashboard(params);
       setMetrics(response.data.metrics);
@@ -47,7 +71,7 @@ const ReportsPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedGathering?.id, selectedPeriod]);
+  }, [selectedGathering?.id, startDate, endDate]);
 
   useEffect(() => {
     if (hasReportsAccess) {
@@ -56,18 +80,113 @@ const ReportsPage: React.FC = () => {
   }, [hasReportsAccess, loadGatherings]);
 
   useEffect(() => {
-    if (hasReportsAccess && (selectedGathering || selectedPeriod)) {
+    if (hasReportsAccess && selectedGathering && startDate && endDate) {
       loadMetrics();
     }
-  }, [selectedGathering, selectedPeriod, hasReportsAccess, loadMetrics]);
+  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics]);
 
-  const periodOptions = [
-    { value: '4', label: 'Last 4 weeks' },
-    { value: '8', label: 'Last 8 weeks' },
-    { value: '12', label: 'Last 3 months' },
-    { value: '24', label: 'Last 6 months' },
-    { value: '52', label: 'Year to date' },
+  const quickDateOptions = [
+    { 
+      label: 'Last 4 weeks', 
+      getDates: () => {
+        const today = new Date();
+        const fourWeeksAgo = new Date(today);
+        fourWeeksAgo.setDate(today.getDate() - 28);
+        return {
+          start: fourWeeksAgo.toISOString().split('T')[0],
+          end: today.toISOString().split('T')[0]
+        };
+      }
+    },
+    { 
+      label: 'Last 8 weeks', 
+      getDates: () => {
+        const today = new Date();
+        const eightWeeksAgo = new Date(today);
+        eightWeeksAgo.setDate(today.getDate() - 56);
+        return {
+          start: eightWeeksAgo.toISOString().split('T')[0],
+          end: today.toISOString().split('T')[0]
+        };
+      }
+    },
+    { 
+      label: 'Last 3 months', 
+      getDates: () => {
+        const today = new Date();
+        const threeMonthsAgo = new Date(today);
+        threeMonthsAgo.setMonth(today.getMonth() - 3);
+        return {
+          start: threeMonthsAgo.toISOString().split('T')[0],
+          end: today.toISOString().split('T')[0]
+        };
+      }
+    },
+    { 
+      label: 'Last 6 months', 
+      getDates: () => {
+        const today = new Date();
+        const sixMonthsAgo = new Date(today);
+        sixMonthsAgo.setMonth(today.getMonth() - 6);
+        return {
+          start: sixMonthsAgo.toISOString().split('T')[0],
+          end: today.toISOString().split('T')[0]
+        };
+      }
+    },
+    { 
+      label: 'Year to date', 
+      getDates: () => {
+        const today = new Date();
+        const startOfYear = new Date(today.getFullYear(), 0, 1);
+        return {
+          start: startOfYear.toISOString().split('T')[0],
+          end: today.toISOString().split('T')[0]
+        };
+      }
+    }
   ];
+
+  const handleQuickDateSelect = (option: any) => {
+    const dates = option.getDates();
+    setStartDate(dates.start);
+    setEndDate(dates.end);
+  };
+
+  const handleExportData = async () => {
+    if (!selectedGathering || !startDate || !endDate) {
+      setError('Please select a gathering and date range before exporting');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const params = {
+        gatheringTypeId: selectedGathering.id,
+        startDate,
+        endDate
+      };
+      
+      const response = await reportsAPI.exportData(params);
+      
+      // Create and download the file
+      const blob = new Blob([response.data], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance-report-${selectedGathering.name}-${startDate}-to-${endDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setError('');
+    } catch (err) {
+      setError('Failed to export data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   if (!hasReportsAccess) {
     return (
@@ -95,7 +214,10 @@ const ReportsPage: React.FC = () => {
                 View attendance trends and insights
               </p>
             </div>
-            <button className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+            <button 
+              onClick={handleExportData}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            >
               <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
               Export Data
             </button>
@@ -107,23 +229,52 @@ const ReportsPage: React.FC = () => {
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Period Selection */}
+            {/* Date Range Selection */}
             <div>
-              <label htmlFor="period" className="block text-sm font-medium text-gray-700">
-                Time Period
+              <label htmlFor="date-range" className="block text-sm font-medium text-gray-700">
+                Date Range
               </label>
-              <select
-                id="period"
-                value={selectedPeriod}
-                onChange={(e) => setSelectedPeriod(e.target.value)}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
-              >
-                {periodOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <div className="mt-1 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-2 space-y-2 sm:space-y-0">
+                  <input
+                    type="date"
+                    id="start-date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    max={new Date().toISOString().split('T')[0]}
+                    className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
+                  />
+                  <span className="text-gray-500 text-center sm:text-left">to</span>
+                  <input
+                    type="date"
+                    id="end-date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    max={new Date().toISOString().split('T')[0]}
+                    className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="quick-dates" className="block text-sm font-medium text-gray-700">
+                    Quick Select
+                  </label>
+                  <select
+                    id="quick-dates"
+                    onChange={(e) => {
+                      const option = quickDateOptions.find(opt => opt.label === e.target.value);
+                      if (option) handleQuickDateSelect(option);
+                    }}
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
+                  >
+                    <option value="">Choose a preset...</option>
+                    {quickDateOptions.map((option) => (
+                      <option key={option.label} value={option.label}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
 
             {/* Gathering Selection */}
@@ -135,12 +286,11 @@ const ReportsPage: React.FC = () => {
                 id="gathering"
                 value={selectedGathering?.id || ''}
                 onChange={(e) => {
-                  const gathering = gatherings.find(g => g.id === parseInt(e.target.value));
+                  const gathering = gatherings.find((g: GatheringType) => g.id === parseInt(e.target.value));
                   setSelectedGathering(gathering || null);
                 }}
                 className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
               >
-                <option value="">All gatherings</option>
                 {gatherings.map((gathering) => (
                   <option key={gathering.id} value={gathering.id}>
                     {gathering.name}
@@ -355,6 +505,40 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* API Keys Section - Only for admins */}
+      {user?.role === 'admin' && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-lg leading-6 font-medium text-gray-900">
+                  API Keys for Google Sheets
+                </h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Manage API keys for secure IMPORTRANGE access to your data
+                </p>
+              </div>
+              <button
+                onClick={() => window.location.href = '/settings?tab=api'}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                <KeyIcon className="h-4 w-4 mr-2" />
+                Manage API Keys
+              </button>
+            </div>
+            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <h4 className="text-sm font-medium text-blue-900 mb-2">Google Sheets Integration</h4>
+              <p className="text-sm text-blue-700 mb-3">
+                Create API keys to securely import your attendance data into Google Sheets using IMPORTRANGE.
+              </p>
+              <p className="text-sm text-blue-600">
+                Click "Manage API Keys" above to create and manage your API keys in the Settings page.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

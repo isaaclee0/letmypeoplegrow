@@ -76,7 +76,6 @@ services:
     volumes:
       - ./client:/app
       - /app/node_modules
-      - ./client/.env.development:/app/.env
     environment:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true

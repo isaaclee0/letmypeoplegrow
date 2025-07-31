@@ -1,158 +1,129 @@
-# Version Update Script - Comprehensive Coverage
+# Version Update Summary - v0.8.7
 
 ## Overview
-The `update-version.sh` script has been enhanced to update version numbers across the entire codebase, ensuring consistency and preventing missed version references.
+Successfully updated all version numbers from v0.8.6 to v0.8.7 and committed all token refresh system fixes to git.
 
-## Files Updated by the Script
+## ✅ **Version Updates Completed**
 
-### Core Application Files
-1. **`client/package.json`** - Frontend application version
-2. **`server/package.json`** - Backend application version
-3. **`client/src/utils/version.ts`** - Version utility fallback value
+### **Files Updated to v0.8.7:**
 
-### Build and Deployment Files
-4. **`build-and-push.sh`** - Default version for Docker builds
-5. **`docker-compose.prod.yml`** - Default Docker image versions
-6. **`.env.example`** - Example environment variable for image tag
+1. **Client Package**
+   - `client/package.json` - Updated version to "0.8.7"
 
-### Documentation Files
-7. **`README.md`** - Current version reference in documentation
-8. **`DEPLOYMENT.md`** - Deployment guide version references
-9. **`DOCKER_HUB_DEPLOYMENT.md`** - Docker Hub deployment guide versions
-10. **`PORTAINER_DEPLOYMENT.md`** - Portainer deployment guide versions
-11. **`MIGRATION_FIX_SUMMARY.md`** - Migration documentation versions
+2. **Server Package**
+   - `server/package.json` - Updated version to "0.8.7"
 
-### Script Files
-12. **`server/scripts/*.js`** - Any version references in server scripts
+3. **Docker Configuration**
+   - `.env` - Updated IMAGE_TAG to "v0.8.7"
+   - `docker-compose.prod.yml` - Updated default image versions to v0.8.7
+   - `build-and-push.sh` - Updated default VERSION to v0.8.7
 
-## Version Patterns Updated
+4. **Client Utilities**
+   - `client/src/utils/version.ts` - Updated fallback version to "0.8.7"
 
-### Package.json Versions
-- Pattern: `"version": "0.8.4"`
-- Updated to: `"version": "NEW_VERSION"`
+## 🔧 **Token Refresh System Fixes Included**
 
-### Docker Image Versions
-- Pattern: `:v0.8.4`
-- Updated to: `:vNEW_VERSION`
+### **Major Fixes:**
+- **Fixed infinite loop issues** in API interceptor
+- **Re-enabled automatic token refresh** with proper safeguards
+- **Updated JWT_EXPIRE** to 30d for consistency across environments
+- **Enhanced server-side refresh endpoint** with better validation
+- **Added comprehensive error handling** and request queuing
 
-### Build Script Default
-- Pattern: `VERSION=${1:-v0.8.4}`
-- Updated to: `VERSION=${1:-vNEW_VERSION}`
+### **New Features:**
+- **Test script** (`test-token-refresh.js`) for verifying functionality
+- **Comprehensive documentation** (`TOKEN_REFRESH_FIXES_SUMMARY.md`)
+- **Updated JWT documentation** with recent fixes
 
-### Environment Variables
-- Pattern: `IMAGE_TAG=v0.8.4`
-- Updated to: `IMAGE_TAG=vNEW_VERSION`
+## 📁 **Files Committed to Git**
 
-### Documentation References
-- Pattern: `### v0.8.4 (Current)`
-- Updated to: `### vNEW_VERSION (Current)`
+### **Modified Files (28 total):**
+- `JWT_EXPIRY_FIX.md` - Updated with recent fixes
+- `build-and-push.sh` - Version update
+- `client/.env.development` - Development environment updates
+- `client/package.json` - Version update
+- `client/src/contexts/AuthContext.tsx` - Token refresh fixes
+- `client/src/pages/AttendancePage.tsx` - Various improvements
+- `client/src/pages/FirstLoginSetupPage.tsx` - Improvements
+- `client/src/pages/LoginPage.tsx` - Updates
+- `client/src/services/api.ts` - Token refresh fixes
+- `client/src/utils/version.ts` - Version update
+- `cookies.txt` - Updated cookies
+- `docker-compose.dev.yml` - Development environment updates
+- `docker-compose.prod.yml` - Version updates
+- `server/config/logger.js` - Logging improvements
+- `server/index.js` - Server updates
+- `server/package.json` - Version update
+- `server/routes/auth.js` - Token refresh enhancements
+- `server/scripts/init.sql` - Database initialization updates
+- `server/startup.js` - Startup improvements
+- `server/utils/sms.js` - SMS utility updates
 
-### Version Utility Fallback
-- Pattern: `return '0.8.4';`
-- Updated to: `return 'NEW_VERSION';`
+### **New Files Created:**
+- `DEPLOYMENT_CHECKLIST.md` - Deployment checklist
+- `FIRST_TIME_DEPLOYMENT_FIXES.md` - First-time deployment guide
+- `TOKEN_REFRESH_FIXES_SUMMARY.md` - Token refresh documentation
+- `client/src/components/AttendanceDatePicker.tsx` - New component
+- `dev_cookies.txt` - Development cookies
+- `server/fix_fresh_db_migrations.js` - Database migration fix
+- `server/test-server.js` - Server testing utility
+- `test-token-refresh.js` - Token refresh test script
 
-## Usage
+## 🚀 **Git Operations Completed**
 
+### **Commit Details:**
+- **Commit Hash**: `65b0753`
+- **Message**: "v0.8.7: Fix token refresh system and update version numbers"
+- **Files Changed**: 28 files
+- **Insertions**: 2,145 lines
+- **Deletions**: 457 lines
+
+### **Tags and Branches:**
+- **Tag Created**: `v0.8.7`
+- **Branch**: `main`
+- **Remote**: Successfully pushed to `origin/main`
+- **Tag**: Successfully pushed to `origin/v0.8.7`
+
+## 📋 **Next Steps**
+
+### **Immediate Actions:**
+1. **Deploy** the new version using the updated Docker images
+2. **Test** the token refresh functionality using the provided test script
+3. **Monitor** the system for any issues with the new token refresh system
+
+### **Deployment Commands:**
 ```bash
-# Update to a new version
-./update-version.sh 0.8.5
+# Build and push new Docker images
+./build-and-push.sh v0.8.7
 
-# The script will:
-# 1. Update all version references across the codebase
-# 2. Validate that key files were updated correctly
-# 3. Provide a summary of what was updated
-# 4. Give next steps for committing and building
+# Deploy with new version
+IMAGE_TAG=v0.8.7 docker-compose -f docker-compose.prod.yml up -d
+
+# Test token refresh functionality
+node test-token-refresh.js
 ```
 
-## Validation
+### **Monitoring:**
+- Watch for token refresh logs in browser console
+- Monitor for any 401 errors that should trigger refresh
+- Verify that users can stay logged in for extended periods
+- Check that no infinite loops occur
 
-The script includes validation to ensure updates were successful:
+## 🎯 **Expected Results**
 
-- ✅ Checks package.json files for correct version
-- ✅ Verifies build script default version
-- ✅ Confirms Docker compose file updates
-- ✅ Validates version utility fallback
-- ✅ Reports any files that weren't updated
+After deployment, users should experience:
+- **Longer sessions**: 30-day token expiry with automatic refresh
+- **Seamless experience**: No unexpected logouts
+- **Better reliability**: Proper error handling and recovery
+- **Consistent behavior**: Same configuration across all environments
 
-## Benefits
+## 📊 **Version History**
 
-1. **Comprehensive Coverage**: Updates versions in all relevant files
-2. **Consistency**: Ensures all version references are synchronized
-3. **Validation**: Confirms updates were successful
-4. **Documentation**: Updates all documentation to reflect current version
-5. **Automation**: Reduces manual errors in version management
+| Version | Date | Key Changes |
+|---------|------|-------------|
+| v0.8.6 | Previous | Previous stable version |
+| **v0.8.7** | **Current** | **Token refresh system fixes** |
 
-## Previous Issues Fixed
+---
 
-### Missing Updates
-The original script only updated:
-- `client/package.json`
-- `server/package.json`
-- `build-and-push.sh`
-
-### New Coverage
-The enhanced script now also updates:
-- Docker compose files
-- Environment examples
-- All documentation files
-- Version utility fallbacks
-- Server scripts
-- And validates all updates
-
-## Best Practices
-
-1. **Always run validation**: The script validates updates automatically
-2. **Review changes**: Check the git diff before committing
-3. **Test builds**: Ensure the new version builds correctly
-4. **Update changelog**: Consider adding a changelog entry
-5. **Tag releases**: Create git tags for releases
-
-## Example Output
-
-```
-Updating version to 0.8.5...
-Updating client/package.json...
-Updating server/package.json...
-Updating build-and-push.sh...
-Updating docker-compose.prod.yml...
-Updating client/src/utils/version.ts...
-Updating .env.example...
-Updating documentation files...
-Updating server scripts...
-
-🔍 Validating version updates...
-Checking key files for version 0.8.5:
-  ✅ client/package.json
-  ✅ server/package.json
-  ✅ build-and-push.sh
-  ✅ docker-compose.prod.yml
-  ✅ client/src/utils/version.ts
-
-✅ Version updated to 0.8.5 in all files!
-
-Files updated:
-  - client/package.json
-  - server/package.json
-  - build-and-push.sh
-  - docker-compose.prod.yml
-  - client/src/utils/version.ts
-  - .env.example
-  - README.md
-  - DEPLOYMENT.md
-  - DOCKER_HUB_DEPLOYMENT.md
-  - PORTAINER_DEPLOYMENT.md
-  - MIGRATION_FIX_SUMMARY.md
-  - server/scripts/*.js
-
-Next steps:
-  1. Commit the changes: git add . && git commit -m "Update version to 0.8.5"
-  2. Build and push: ./build-and-push.sh v0.8.5
-```
-
-## Notes
-
-- The script uses macOS-compatible `sed` syntax (`sed -i ''`)
-- All regex patterns are designed to match semantic versioning format
-- The script is idempotent - running it multiple times won't cause issues
-- Validation ensures no version references are missed
-- Documentation updates maintain consistency across all guides 
+**Status**: ✅ **COMPLETED** - All version updates committed and pushed to git successfully. 

@@ -87,6 +87,29 @@ const AttendancePage: React.FC = () => {
     }
   };
 
+  // Helper function to find the nearest date (closest to today)
+  const findNearestDate = (dates: string[]) => {
+    if (dates.length === 0) return null;
+    
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const todayTime = new Date(today).getTime();
+    
+    let nearestDate = dates[0];
+    let minDiff = Math.abs(new Date(nearestDate).getTime() - todayTime);
+    
+    for (const date of dates) {
+      const dateTime = new Date(date).getTime();
+      const diff = Math.abs(dateTime - todayTime);
+      
+      if (diff < minDiff) {
+        minDiff = diff;
+        nearestDate = date;
+      }
+    }
+    
+    return nearestDate;
+  };
+
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
@@ -225,18 +248,20 @@ const AttendancePage: React.FC = () => {
     loadGatherings();
   }, [user?.gatheringAssignments]);
 
-  // Set date when gathering changes (use last viewed or most recent)
+  // Set date when gathering changes (use last viewed or nearest date)
   useEffect(() => {
     if (validDates.length > 0) {
       const lastViewed = getLastViewed();
-      let dateToSelect = validDates[0]; // Default to most recent
+      let dateToSelect = findNearestDate(validDates); // Default to nearest date
       
       if (lastViewed && validDates.includes(lastViewed.date)) {
         // Use last viewed date if it's valid for current gathering
         dateToSelect = lastViewed.date;
       }
       
-      setSelectedDate(dateToSelect);
+      if (dateToSelect) {
+        setSelectedDate(dateToSelect);
+      }
     }
   }, [validDates]);
 
@@ -1067,19 +1092,19 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* Gathering Type Tabs */}
+      {/* Gathering Type Tabs and Controls */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <div className="border-b border-gray-200">
+          <div className="border-b border-gray-200 mb-6">
             <nav className="-mb-px flex space-x-8" aria-label="Tabs">
               {gatherings.map((gathering) => (
                 <button
                   key={gathering.id}
                   onClick={() => setSelectedGathering(gathering)}
-                  className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm transition-all duration-300 ${
+                  className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                     selectedGathering?.id === gathering.id
-                      ? 'border-primary-500 text-primary-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'bg-primary-500 text-white'
+                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                   }`}
                 >
                   <div className="flex items-center space-x-2">
@@ -1090,13 +1115,6 @@ const AttendancePage: React.FC = () => {
             </nav>
           </div>
           
-
-        </div>
-      </div>
-
-      {/* Date Selection and Search */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Date Selection */}
             <div>

@@ -32,22 +32,9 @@ const processQueue = (error: any, token: string | null = null) => {
   failedQueue = [];
 };
 
-// iOS Safari specific configuration
-const isIOSSafari = () => {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) && 
-         /Safari/.test(navigator.userAgent) && 
-         !/Chrome/.test(navigator.userAgent);
-};
-
 // Request interceptor - cookies are automatically sent with withCredentials: true
 api.interceptors.request.use(
   (config) => {
-    // Add iOS Safari specific headers
-    if (isIOSSafari()) {
-      config.headers['Cache-Control'] = 'no-cache';
-      config.headers['Pragma'] = 'no-cache';
-    }
-    
     // Cookies are automatically handled by the browser when withCredentials is true
     return config;
   },
@@ -61,19 +48,6 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
-    // iOS Safari retry mechanism for network errors (limited to avoid loops)
-    if (isIOSSafari() && !error.response && !originalRequest._networkRetry && originalRequest.method === 'get') {
-      originalRequest._networkRetry = true;
-      // Only log for important requests, reduce console spam
-      if (originalRequest.url?.includes('/auth/')) {
-        console.log('Retrying auth request for iOS Safari:', originalRequest.url);
-      }
-      
-      // Wait a bit before retrying
-      await new Promise(resolve => setTimeout(resolve, 500));
-      return api(originalRequest);
-    }
     
     // Handle 401 errors with token refresh
     if (error.response?.status === 401) {
@@ -441,8 +415,11 @@ export const individualsAPI = {
 
 // Reports API
 export const reportsAPI = {
-  getDashboard: (params?: { gatheringTypeId?: number; weeks?: number }) => 
+  getDashboard: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) => 
     api.get('/reports/dashboard', { params }),
+  
+  exportData: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) => 
+    api.get('/reports/export', { params, responseType: 'blob' }),
 };
 
 // Notifications API
@@ -538,6 +515,18 @@ export const notificationRulesAPI = {
   create: (data: any) => api.post('/notification-rules', data),
   update: (id: number, data: any) => api.put(`/notification-rules/${id}`, data),
   remove: (id: number) => api.delete(`/notification-rules/${id}`),
+};
+
+// API Keys API
+export const apiKeysAPI = {
+  getAll: () => api.get('/api-keys'),
+  create: (data: { keyName: string; permissions?: string[]; expiresAt?: string }) => 
+    api.post('/api-keys', data),
+  update: (id: number, data: { keyName?: string; permissions?: string[]; isActive?: boolean; expiresAt?: string }) => 
+    api.put(`/api-keys/${id}`, data),
+  delete: (id: number) => api.delete(`/api-keys/${id}`),
+  getStats: (id: number) => api.get(`/api-keys/${id}/stats`),
+  activate: (token: string) => api.post('/api-keys/activate', { token }),
 };
 
 export default api; 

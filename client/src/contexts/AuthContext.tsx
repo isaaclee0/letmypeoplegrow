@@ -10,7 +10,6 @@ interface AuthContextType {
   logout: () => void;
   updateUser: (userData: Partial<User>) => void;
   refreshOnboardingStatus: () => Promise<void>;
-  manualRefreshToken: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,8 +31,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const isInitializing = useRef(false);
-  const refreshInterval = useRef<NodeJS.Timeout | null>(null);
-  const isRefreshing = useRef(false);
   const lastRedirect = useRef(0); // Track last redirect time for debouncing
 
   useEffect(() => {
@@ -71,8 +68,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           localStorage.setItem('user', JSON.stringify(newUser));
           console.log('✅ User authenticated:', newUser.email);
           
-          startTokenRefresh();
-          
           if (newUser.role === 'admin') {
             try {
               const onboardingResponse = await onboardingAPI.getStatus();
@@ -103,10 +98,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     console.log('🎬 AuthContext: useEffect triggered');
     initializeAuth();
     
-    // Cleanup function to stop token refresh interval
+    // Cleanup function
     return () => {
       console.log('🧹 AuthContext: useEffect cleanup called');
-      stopTokenRefresh();
     };
   }, []);
 
@@ -116,10 +110,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // Token is now handled by cookies, only store user data locally
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(prev => JSON.stringify(prev) !== JSON.stringify(userData) ? userData : prev);
-    
-    // Start periodic token refresh (every 25 days to refresh before 30d expiry)
-    console.log('⏰ AuthContext: Starting token refresh after login');
-    startTokenRefresh();
     
     // Check onboarding status for admin users
     if (userData.role === 'admin') {
@@ -141,7 +131,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Even if logout API fails, clear local state
       console.error('Logout error:', error);
     } finally {
-      stopTokenRefresh();
       localStorage.removeItem('user');
       setUser(null);
       setNeedsOnboarding(false);
@@ -157,62 +146,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const startTokenRefresh = () => {
-    console.log('🔧 startTokenRefresh() called - setting up periodic refresh');
-    
-    if (refreshInterval.current) {
-      clearInterval(refreshInterval.current);
-    }
-    
-    // Refresh token every 25 days (25 * 24 * 60 * 60 * 1000 milliseconds)
-    // This ensures we refresh before the 30-day expiry
-    const intervalMs = 25 * 24 * 60 * 60 * 1000; // 25 days
-    
-    refreshInterval.current = setInterval(async () => {
-      if (isRefreshing.current) {
-        console.log('⚠️ Periodic refresh skipped - refresh already in progress');
-        return;
-      }
-      
-      console.log('⏰ Periodic token refresh triggered');
-      isRefreshing.current = true;
-      
-      try {
-        await authAPI.refreshToken();
-        console.log('✅ Periodic token refresh successful');
-      } catch (error) {
-        console.error('💥 Periodic token refresh failed:', error instanceof Error ? error.message : String(error));
-        
-        // Clear user data on refresh failure
-        localStorage.removeItem('user');
-        setUser(null);
-        
-        // Debounce redirects to prevent rapid redirects (5-second cooldown)
-        const now = Date.now();
-        if (window.location.pathname !== '/login' && now - lastRedirect.current > 5000) {
-          lastRedirect.current = now;
-          console.log('➡️ Redirecting to /login due to periodic refresh failure');
-          window.location.href = '/login';
-        } else {
-          console.log('⚠️ Skipped redirect due to cooldown or already on /login');
-        }
-      } finally {
-        isRefreshing.current = false;
-      }
-    }, intervalMs);
-    
-    console.log(`✅ Periodic token refresh scheduled for every ${intervalMs / (24 * 60 * 60 * 1000)} days`);
-  };
-
-  const stopTokenRefresh = () => {
-    if (refreshInterval.current) {
-      console.log('🧹 Clearing token refresh interval ID:', refreshInterval.current);
-      clearInterval(refreshInterval.current);
-      refreshInterval.current = null;
-    }
-    isRefreshing.current = false;
-    console.log('✅ Token refresh stopped');
-  };
+  
 
   const refreshOnboardingStatus = async () => {
     if (user?.role === 'admin') {
@@ -225,39 +159,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const manualRefreshToken = async () => {
-    console.log('🔄 manualRefreshToken() called at', new Date().toISOString());
-    console.log('🔧 Manual refresh stack trace:', new Error().stack);
-    
-    if (isRefreshing.current) {
-      console.log('⚠️ Manual token refresh skipped - refresh already in progress');
-      return;
-    }
 
-    isRefreshing.current = true;
-    
-    try {
-      console.log('🚀 Manual token refresh initiated...');
-      await authAPI.refreshToken();
-      console.log('✅ Manual token refresh successful');
-    } catch (error) {
-      console.error('💥 Manual token refresh failed:', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : '');
-      
-      // Debounce redirects (reuse redirect cooldown from startTokenRefresh)
-      const now = Date.now();
-      if (window.location.pathname !== '/login' && now - lastRedirect.current > 5000) {
-        lastRedirect.current = now;
-        console.log('➡️ Redirecting to /login');
-        window.location.href = '/login';
-      } else {
-        console.log('⚠️ Skipped redirect due to cooldown or already on /login');
-      }
-      
-      throw error;
-    } finally {
-      isRefreshing.current = false;
-    }
-  };
 
   const value: AuthContextType = {
     user,
@@ -268,7 +170,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     logout,
     updateUser,
     refreshOnboardingStatus,
-    manualRefreshToken,
   };
 
   return (
