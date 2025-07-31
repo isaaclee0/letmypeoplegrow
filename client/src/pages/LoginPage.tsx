@@ -103,20 +103,7 @@ const LoginPage: React.FC = () => {
     }
   };
 
-  const handleDevLogin = async () => {
-    setIsLoading(true);
-    setError('');
-  
-    try {
-      const response = await authAPI.devLogin();
-      await login('', response.data.user);
-      navigate('/app/dashboard');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Development login failed');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+
 
   const handleResendCode = async () => {
     if (cooldownSeconds > 0) return;
@@ -284,19 +271,18 @@ const LoginPage: React.FC = () => {
           </form>
         )}
 
-        {/* Development Login Button - Only show in development */}
+        {/* Development Mode Instructions */}
         {process.env.NODE_ENV === 'development' && (
           <div className="mt-6 pt-6 border-t border-gray-200">
             <div className="text-center">
               <p className="text-sm text-gray-500 mb-3">Development Mode</p>
-              <button
-                type="button"
-                onClick={handleDevLogin}
-                disabled={isLoading}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Logging in...' : 'Login as Development Admin'}
-              </button>
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                <div className="text-sm text-blue-800">
+                  <p className="font-medium mb-1">Quick Development Login:</p>
+                  <p>Email: <code className="bg-blue-100 px-1 rounded">dev@church.local</code></p>
+                  <p>Code: <code className="bg-blue-100 px-1 rounded">000000</code></p>
+                </div>
+              </div>
             </div>
           </div>
         )}

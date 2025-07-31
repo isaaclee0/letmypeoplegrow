@@ -28,7 +28,7 @@ const processQueue = (error: any, token: string | null = null) => {
       resolve(token);
     }
   });
-  
+
   failedQueue = [];
 };
 
@@ -75,13 +75,71 @@ api.interceptors.response.use(
       return api(originalRequest);
     }
     
-    // TEMPORARILY DISABLED: All 401 auto-refresh logic to isolate the issue
+    // Handle 401 errors with token refresh
     if (error.response?.status === 401) {
-      console.log('🚫 TEMP: 401 detected but auto-refresh DISABLED for debugging. Request:', originalRequest.url);
-      console.log('🚫 TEMP: Error data:', error.response?.data);
+      const originalRequest = error.config;
+      const requestUrl = originalRequest.url;
       
-      // Just reject the error for now, no auto-refresh
-      return Promise.reject(error);
+      // Skip refresh for auth endpoints to prevent infinite loops
+      if (requestUrl.includes('/auth/refresh') || requestUrl.includes('/auth/logout')) {
+        console.log('🔒 Auth endpoint 401 - not attempting refresh:', requestUrl);
+        return Promise.reject(error);
+      }
+      
+      // Only log 401s for non-auth endpoints to reduce noise
+      if (!requestUrl.includes('/auth/me')) {
+        console.log('🔒 Authentication required for:', requestUrl);
+      }
+      
+      // Prevent infinite loops by checking if this request is already a retry
+      if (originalRequest._retry) {
+        console.log('⚠️ Request already retried, not attempting refresh again');
+        return Promise.reject(error);
+      }
+      
+      // Attempt token refresh if not already refreshing
+      if (!isRefreshingToken) {
+        isRefreshingToken = true;
+        console.log('🔄 Attempting token refresh...');
+        
+        try {
+          const refreshResponse = await api.post('/auth/refresh');
+          
+          if (refreshResponse.status === 200) {
+            console.log('✅ Token refresh successful');
+            isRefreshingToken = false;
+            processQueue(null, 'refreshed');
+            
+            // Mark request as retried and retry the original request
+            originalRequest._retry = true;
+            return api(originalRequest);
+          }
+        } catch (refreshError: any) {
+          console.log('💥 Token refresh failed:', refreshError.response?.status || refreshError.message);
+          isRefreshingToken = false;
+          processQueue(refreshError, null);
+          
+          // Clear user data and redirect to login
+          localStorage.removeItem('user');
+          if (window.location.pathname !== '/login') {
+            console.log('➡️ Redirecting to login due to refresh failure');
+            window.location.href = '/login';
+          }
+          return Promise.reject(refreshError);
+        }
+      } else {
+        // If already refreshing, queue this request
+        console.log('⏳ Token refresh in progress, queuing request');
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then(() => {
+          // Mark request as retried and retry the original request
+          originalRequest._retry = true;
+          return api(originalRequest);
+        }).catch((err) => {
+          return Promise.reject(err);
+        });
+      }
     }
     return Promise.reject(error);
   }
@@ -165,9 +223,7 @@ export const authAPI = {
   verifyCode: (contact: string, code: string) => 
     api.post('/auth/verify-code', { contact, code }),
     
-  devLogin: () => 
-    api.post('/auth/dev-login'),
-    
+
   register: (data: {
     email: string;
     firstName: string;
@@ -202,9 +258,7 @@ export const authAPI = {
   clearExpiredToken: () => 
     api.post('/auth/clear-expired-token'),
     
-  setDefaultGathering: (gatheringId: number) =>
-    api.post('/auth/set-default-gathering', { gatheringId }),
-    
+
   checkUsers: () => 
     api.get('/auth/check-users'),
 };

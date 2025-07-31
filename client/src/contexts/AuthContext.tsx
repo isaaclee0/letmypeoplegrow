@@ -61,42 +61,38 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }
         }
         
-        const isSafari = navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome');
-        let attempts = 3;
-        
-        while (attempts > 0) {
-          if (isSafari) {
-            console.log('🦸 Safari detected, adding 200ms delay');
-            await new Promise(resolve => setTimeout(resolve, 200)); // Increased from 100ms
-          }
+        try {
+          console.log('🚀 Checking for existing authentication...');
+          const response = await authAPI.getCurrentUser();
+          const newUser = response.data.user;
           
-          try {
-            console.log('🚀 Fetching current user, attempt', 4 - attempts);
-            const response = await authAPI.getCurrentUser();
-            const newUser = response.data.user;
-            
-            // Only update state if the new user data differs to prevent unnecessary re-renders
-            setUser(prev => JSON.stringify(prev) !== JSON.stringify(newUser) ? newUser : prev);
-            localStorage.setItem('user', JSON.stringify(newUser));
-            console.log('✅ Got user:', newUser.email);
-            
-            startTokenRefresh();
-            
-            if (newUser.role === 'admin') {
+          // Only update state if the new user data differs to prevent unnecessary re-renders
+          setUser(prev => JSON.stringify(prev) !== JSON.stringify(newUser) ? newUser : prev);
+          localStorage.setItem('user', JSON.stringify(newUser));
+          console.log('✅ User authenticated:', newUser.email);
+          
+          startTokenRefresh();
+          
+          if (newUser.role === 'admin') {
+            try {
               const onboardingResponse = await onboardingAPI.getStatus();
               setNeedsOnboarding(prev => prev !== !onboardingResponse.data.completed ? !onboardingResponse.data.completed : prev);
+            } catch (onboardingError) {
+              console.log('ℹ️ Could not check onboarding status (this is normal if not authenticated)');
             }
-            return; // Success, exit loop
-          } catch (error) {
-            attempts--;
-            if (attempts === 0) throw error;
-            console.warn('⚠️ Retry failed, attempts remaining:', attempts);
+          }
+        } catch (error: any) {
+          // 401 errors are expected when not logged in - this is normal behavior
+          if (error.response?.status === 401) {
+            console.log('ℹ️ No active session found (user needs to login)');
+            localStorage.removeItem('user');
+            setUser(null);
+          } else {
+            console.error('💥 Unexpected auth initialization error:', error instanceof Error ? error.message : String(error));
+            localStorage.removeItem('user');
+            setUser(null);
           }
         }
-      } catch (error) {
-        console.error('💥 Auth initialization failed:', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : '');
-        localStorage.removeItem('user');
-        setUser(null);
       } finally {
         setIsLoading(false);
         isInitializing.current = false;
@@ -162,11 +158,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const startTokenRefresh = () => {
-    console.log('🔧 startTokenRefresh() called at', new Date().toISOString());
-    console.log('🔧 Stack trace:', new Error().stack);
+    console.log('🔧 startTokenRefresh() called - setting up periodic refresh');
     
     if (refreshInterval.current) {
-      console.log('⚠️ Clearing existing token refresh interval ID:', refreshInterval.current);
       clearInterval(refreshInterval.current);
     }
     
@@ -174,24 +168,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // This ensures we refresh before the 30-day expiry
     const intervalMs = 25 * 24 * 60 * 60 * 1000; // 25 days
     
-    console.log(`⏰ Setting token refresh interval to ${intervalMs}ms (${intervalMs / (24 * 60 * 60 * 1000)} days)`);
-    
     refreshInterval.current = setInterval(async () => {
-      console.log('🕐 SCHEDULED token refresh timer triggered (25-day interval) at', new Date().toISOString());
-      
       if (isRefreshing.current) {
-        console.log('⚠️ Skipping scheduled refresh - already in progress');
+        console.log('⚠️ Periodic refresh skipped - refresh already in progress');
         return;
       }
       
+      console.log('⏰ Periodic token refresh triggered');
       isRefreshing.current = true;
       
       try {
-        console.log('🔄 Executing SCHEDULED token refresh...');
         await authAPI.refreshToken();
-        console.log('✅ Scheduled token refresh completed successfully');
+        console.log('✅ Periodic token refresh successful');
       } catch (error) {
-        console.error('💥 Scheduled token refresh failed:', error instanceof Error ? error.message : String(error), error instanceof Error ? error.stack : '');
+        console.error('💥 Periodic token refresh failed:', error instanceof Error ? error.message : String(error));
+        
+        // Clear user data on refresh failure
         localStorage.removeItem('user');
         setUser(null);
         
@@ -199,7 +191,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const now = Date.now();
         if (window.location.pathname !== '/login' && now - lastRedirect.current > 5000) {
           lastRedirect.current = now;
-          console.log('➡️ Redirecting to /login');
+          console.log('➡️ Redirecting to /login due to periodic refresh failure');
           window.location.href = '/login';
         } else {
           console.log('⚠️ Skipped redirect due to cooldown or already on /login');
@@ -209,7 +201,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
     }, intervalMs);
     
-    console.log('✅ Token refresh interval created with ID:', refreshInterval.current);
+    console.log(`✅ Periodic token refresh scheduled for every ${intervalMs / (24 * 60 * 60 * 1000)} days`);
   };
 
   const stopTokenRefresh = () => {

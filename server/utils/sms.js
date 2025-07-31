@@ -3,19 +3,44 @@ const crypto = require('crypto');
 const { getInternationalFormat, maskPhoneNumber, validatePhoneNumber } = require('./phoneNumber');
 const Database = require('../config/database');
 
-// Configure Twilio
+// Configure Twilio with validation
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const fromNumber = process.env.TWILIO_FROM_NUMBER;
 
 let twilioClient = null;
 
-// Initialize Twilio client if credentials are available
-if (accountSid && authToken) {
-  twilioClient = twilio(accountSid, authToken);
-} else {
-  console.warn('⚠️ Twilio credentials not configured. SMS functionality will be disabled.');
-}
+// Initialize Twilio client if credentials are available and valid
+const initializeTwilio = () => {
+  try {
+    if (accountSid && authToken && fromNumber) {
+      // Validate accountSid format
+      if (!accountSid.startsWith('AC')) {
+        console.warn('⚠️ Invalid Twilio Account SID format. SMS functionality will be disabled.');
+        return null;
+      }
+      
+      // Validate authToken format (should be 32 characters)
+      if (authToken.length !== 32) {
+        console.warn('⚠️ Invalid Twilio Auth Token format. SMS functionality will be disabled.');
+        return null;
+      }
+      
+      twilioClient = twilio(accountSid, authToken);
+      console.log('✅ Twilio client initialized successfully');
+      return twilioClient;
+    } else {
+      console.warn('⚠️ Twilio credentials not configured. SMS functionality will be disabled.');
+      return null;
+    }
+  } catch (error) {
+    console.warn('⚠️ Failed to initialize Twilio client:', error.message);
+    return null;
+  }
+};
+
+// Initialize Twilio client
+twilioClient = initializeTwilio();
 
 // Get church country context for phone number parsing
 const getChurchCountry = async () => {

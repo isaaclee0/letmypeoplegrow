@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, GatheringType, Individual, Visitor } from '../services/api';
+import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import { 
   CalendarIcon, 
@@ -42,9 +43,53 @@ const AttendancePage: React.FC = () => {
   const [error, setError] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isSettingDefault, setIsSettingDefault] = useState(false);
-  const [justSetDefault, setJustSetDefault] = useState<number | null>(null);
+  
+  // Helper functions for localStorage
+  const saveLastViewed = (gatheringId: number, date: string) => {
+    const lastViewed = {
+      gatheringId,
+      date,
+      timestamp: Date.now()
+    };
+    localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
+  };
+  
+  const getLastViewed = () => {
+    try {
+      const saved = localStorage.getItem('attendance_last_viewed');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Only use if less than 30 days old
+        if (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) {
+          return { gatheringId: parsed.gatheringId, date: parsed.date };
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse last viewed data:', e);
+    }
+    return null;
+  };
+  
+  // Helper function to get date status
+  const getDateStatus = (date: string) => {
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const selectedDateTime = new Date(date).getTime();
+    const todayTime = new Date(today).getTime();
+    
+    if (selectedDateTime < todayTime) {
+      const daysDiff = Math.floor((todayTime - selectedDateTime) / (1000 * 60 * 60 * 24));
+      return { type: 'past', daysDiff };
+    } else if (selectedDateTime > todayTime) {
+      const daysDiff = Math.floor((selectedDateTime - todayTime) / (1000 * 60 * 60 * 24));
+      return { type: 'future', daysDiff };
+    } else {
+      return { type: 'today', daysDiff: 0 };
+    }
+  };
+
   const [groupByFamily, setGroupByFamily] = useState(true);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement>(null);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
@@ -71,6 +116,20 @@ const AttendancePage: React.FC = () => {
     autoFillSurname: false
   });
 
+  // Handle click outside to close date picker
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(event.target as Node)) {
+        setShowDatePicker(false);
+      }
+    };
+
+    if (showDatePicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showDatePicker]);
+
   // Calculate valid dates for the selected gathering
   const validDates = useMemo(() => {
     if (!selectedGathering) return [];
@@ -90,19 +149,24 @@ const AttendancePage: React.FC = () => {
 
     const dates: string[] = [];
     const today = startOfDay(new Date());
-    const startDate = addWeeks(today, -8); // Start 8 weeks ago
+    // Extended range for better testing and historical data entry:
+    // - Past: 6 months back for historical attendance entry
+    // - Future: 4 weeks ahead for testing upcoming meetings
+    const startDate = addWeeks(today, -26); // Start 26 weeks ago (6 months)
     const endDate = addWeeks(today, 4); // End 4 weeks from now
 
     let currentDate = startOfWeek(startDate, { weekStartsOn: 0 }); // Start from Sunday
     currentDate = addDays(currentDate, targetDay);
 
     while (isBefore(currentDate, endDate)) {
-      // Only include dates that are today or in the past
-      if (isBefore(currentDate, today) || format(currentDate, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')) {
-        const dateStr = format(currentDate, 'yyyy-MM-dd');
-        
-        // Apply frequency filtering
-        let shouldInclude = true;
+      // Include all dates within the range for maximum flexibility:
+      // - Historical data entry (past dates)
+      // - Current attendance (today)  
+      // - Testing and preparation (future dates)
+      const dateStr = format(currentDate, 'yyyy-MM-dd');
+      
+      // Apply frequency filtering
+      let shouldInclude = true;
         if (selectedGathering.frequency === 'biweekly') {
           // For biweekly, only include every other occurrence
           const weekDiff = Math.floor((currentDate.getTime() - startDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
@@ -120,10 +184,10 @@ const AttendancePage: React.FC = () => {
           shouldInclude = format(currentDate, 'yyyy-MM-dd') === format(firstTargetDay, 'yyyy-MM-dd');
         }
 
-        if (shouldInclude) {
-          dates.push(dateStr);
-        }
+      if (shouldInclude) {
+        dates.push(dateStr);
       }
+      
       currentDate = addWeeks(currentDate, 1);
     }
 
@@ -140,10 +204,18 @@ const AttendancePage: React.FC = () => {
         );
         setGatherings(userGatherings);
         
-        // Set default gathering or first available gathering
+        // Set last viewed gathering or first available gathering
         if (userGatherings.length > 0) {
-          const defaultGathering = userGatherings.find((g: GatheringType) => g.id === user?.defaultGatheringId);
-          setSelectedGathering(defaultGathering || userGatherings[0]);
+          const lastViewed = getLastViewed();
+          let gatheringToSelect = null;
+          
+          if (lastViewed) {
+            // Try to find the last viewed gathering
+            gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId);
+          }
+          
+          // Fall back to first available gathering
+          setSelectedGathering(gatheringToSelect || userGatherings[0]);
         }
       } catch (err) {
         setError('Failed to load gatherings');
@@ -151,13 +223,20 @@ const AttendancePage: React.FC = () => {
     };
 
     loadGatherings();
-  }, [user?.defaultGatheringId, user?.gatheringAssignments]); // Add specific dependencies
+  }, [user?.gatheringAssignments]);
 
-  // Set default date when gathering changes
+  // Set date when gathering changes (use last viewed or most recent)
   useEffect(() => {
     if (validDates.length > 0) {
-      // Set to the most recent valid date (first in the sorted array)
-      setSelectedDate(validDates[0]);
+      const lastViewed = getLastViewed();
+      let dateToSelect = validDates[0]; // Default to most recent
+      
+      if (lastViewed && validDates.includes(lastViewed.date)) {
+        // Use last viewed date if it's valid for current gathering
+        dateToSelect = lastViewed.date;
+      }
+      
+      setSelectedDate(dateToSelect);
     }
   }, [validDates]);
 
@@ -196,6 +275,9 @@ const AttendancePage: React.FC = () => {
       } else {
         setGroupByFamily(true); // Default to true
       }
+      
+      // Save as last viewed
+      saveLastViewed(selectedGathering.id, selectedDate);
     }
   }, [selectedGathering, selectedDate, loadAttendanceData]);
 
@@ -413,34 +495,7 @@ const AttendancePage: React.FC = () => {
     return () => clearInterval(cleanupInterval);
   }, []);
 
-  // Set default gathering
-  const setDefaultGathering = async (gatheringId: number) => {
-    setIsSettingDefault(true);
-    try {
-      await authAPI.setDefaultGathering(gatheringId);
-      // Refresh user data to get the updated default
-      const response = await authAPI.getCurrentUser();
-      updateUser(response.data.user);
-      // Update the selected gathering immediately if it's the one we just set as default
-      if (selectedGathering && selectedGathering.id === gatheringId) {
-        // The gathering is already selected, no need to change it
-      } else {
-        // Find and select the newly set default gathering
-        const newDefaultGathering = gatherings.find(g => g.id === gatheringId);
-        if (newDefaultGathering) {
-          setSelectedGathering(newDefaultGathering);
-        }
-      }
-      // Set visual feedback
-      setJustSetDefault(gatheringId);
-      // Clear the feedback after 3 seconds
-      setTimeout(() => setJustSetDefault(null), 3000);
-    } catch (err) {
-      setError('Failed to set default gathering');
-    } finally {
-      setIsSettingDefault(false);
-    }
-  };
+
 
   // Handle add visitor
   const handleAddVisitor = async () => {
@@ -1025,38 +1080,17 @@ const AttendancePage: React.FC = () => {
                     selectedGathering?.id === gathering.id
                       ? 'border-primary-500 text-primary-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  } ${
-                    justSetDefault === gathering.id 
-                      ? 'bg-yellow-50 border-yellow-300 text-yellow-700 shadow-sm' 
-                      : ''
                   }`}
                 >
                   <div className="flex items-center space-x-2">
-                    <span className={justSetDefault === gathering.id ? 'font-semibold' : ''}>
-                      {gathering.name}
-                    </span>
-                    {user?.defaultGatheringId === gathering.id && (
-                      <StarIcon className={`h-4 w-4 text-yellow-500 ${justSetDefault === gathering.id ? 'animate-pulse' : ''}`} />
-                    )}
+                    <span>{gathering.name}</span>
                   </div>
                 </button>
               ))}
             </nav>
           </div>
           
-          {/* Set Default Link */}
-          {selectedGathering && user?.defaultGatheringId !== selectedGathering.id && (
-            <div className="mt-3">
-              <button
-                onClick={() => setDefaultGathering(selectedGathering.id)}
-                disabled={isSettingDefault}
-                className="text-sm text-primary-600 hover:text-primary-700 flex items-center space-x-1"
-              >
-                <StarIcon className="h-3 w-3" />
-                <span>{isSettingDefault ? 'Setting...' : 'Set as default'}</span>
-              </button>
-            </div>
-          )}
+
         </div>
       </div>
 
@@ -1066,46 +1100,80 @@ const AttendancePage: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Date Selection */}
             <div>
-              <label htmlFor="date" className="block text-sm font-medium text-gray-700">
-                Date
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Meeting Date
+                {selectedDate && (() => {
+                  const status = getDateStatus(selectedDate);
+                  if (status.type === 'past') {
+                    return (
+                      <span className="ml-2 px-2 py-1 text-xs bg-amber-100 text-amber-800 rounded-full">
+                        {status.daysDiff === 1 ? 'Yesterday' : `${status.daysDiff} days ago`}
+                      </span>
+                    );
+                  } else if (status.type === 'future') {
+                    return (
+                      <span className="ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
+                        {status.daysDiff === 1 ? 'Tomorrow' : `In ${status.daysDiff} days`}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
               </label>
-              <div className="mt-1 relative">
+              <div className="relative">
                 {validDates.length > 0 ? (
-                  <select
-                    id="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                  >
-                    {validDates.map((date) => {
-                      const dateObj = new Date(date);
-                      const isToday = format(dateObj, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
-                      const displayText = isToday 
-                      ? `Today (${format(dateObj, 'MMM d, yyyy')})`
-                      : format(dateObj, 'MMM d, yyyy');
-                      
-                      return (
-                        <option key={date} value={date}>
-                          {displayText}
-                        </option>
-                      );
-                    })}
-                  </select>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePicker(!showDatePicker)}
+                      className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full px-3 py-2 sm:text-sm border border-gray-300 rounded-md bg-white text-left hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-900">
+                          {selectedDate ? (
+                            (() => {
+                              const dateObj = new Date(selectedDate);
+                              const isToday = format(dateObj, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd');
+                              return isToday 
+                                ? `Today (${format(dateObj, 'MMM d, yyyy')})`
+                                : format(dateObj, 'EEEE, MMM d, yyyy');
+                            })()
+                          ) : (
+                            'Select a date'
+                          )}
+                        </span>
+                        <CalendarIcon className="h-5 w-5 text-gray-400" />
+                      </div>
+                    </button>
+                    
+                    {showDatePicker && (
+                      <div ref={datePickerRef} className="absolute top-full left-0 mt-2 z-50">
+                        <AttendanceDatePicker
+                          selectedDate={selectedDate}
+                          onDateChange={(date) => {
+                            setSelectedDate(date);
+                            setShowDatePicker(false);
+                          }}
+                          validDates={validDates}
+                          gatheringName={selectedGathering?.name}
+                        />
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="text-sm text-gray-500 py-2 px-3 border border-gray-300 rounded-md bg-gray-50">
                     No valid dates available for this gathering schedule
                   </div>
                 )}
-                <CalendarIcon className="h-5 w-5 text-gray-400 absolute right-3 top-2 pointer-events-none" />
               </div>
             </div>
 
             {/* Search/Filter Bar */}
             <div>
-              <label htmlFor="search" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
                 Filter Families
               </label>
-              <div className="mt-1 relative">
+              <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
                 </div>
@@ -1115,7 +1183,7 @@ const AttendancePage: React.FC = () => {
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="Search by family member name..."
-                  className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border-gray-300 rounded-md"
+                  className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
                 />
               </div>
             </div>

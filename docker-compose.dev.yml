@@ -48,6 +48,9 @@ services:
       OTC_EXPIRE_MINUTES: 10
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au
+      # External services should be configured in server/.env file
+      # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
+      # BREVO_API_KEY
     ports:
       - "3002:3001"
     volumes:

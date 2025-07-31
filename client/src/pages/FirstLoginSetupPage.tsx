@@ -33,12 +33,14 @@ const FirstLoginSetupPage: React.FC = () => {
     setError('');
 
     try {
-      await authAPI.setDefaultGathering(selectedGathering);
-      
-      // Update user context
-      if (user) {
-        updateUser({ ...user, defaultGatheringId: selectedGathering });
-      }
+      // Save the selected gathering as last viewed instead of setting as default
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+      const lastViewed = {
+        gatheringId: selectedGathering,
+        date: today,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
       
       // Redirect attendance takers directly to attendance page
       if (user?.role === 'attendance_taker') {
@@ -48,7 +50,7 @@ const FirstLoginSetupPage: React.FC = () => {
       }
 
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to set default gathering');
+      setError('Failed to save your preference');
     } finally {
       setIsLoading(false);
     }
@@ -76,7 +78,7 @@ const FirstLoginSetupPage: React.FC = () => {
             Welcome, {user.firstName}!
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            Let's set up your default gathering view
+            Let's set up your preferred gathering view
           </p>
         </div>
 
@@ -84,10 +86,10 @@ const FirstLoginSetupPage: React.FC = () => {
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Choose Your Default Gathering
+                Choose Your Preferred Gathering
               </h3>
               <p className="text-sm text-gray-600 mb-4">
-                This will be your default view when you log in. You can change this later in your settings.
+                This will be your starting view when you log in. The system will remember your last viewed gathering and date.
               </p>
             </div>
 
@@ -163,11 +165,11 @@ const FirstLoginSetupPage: React.FC = () => {
                 {isLoading ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Setting...
+                    Saving...
                   </>
                 ) : (
                   <>
-                    Set Default
+                    Continue
                     <ArrowRightIcon className="ml-2 h-4 w-4" />
                   </>
                 )}

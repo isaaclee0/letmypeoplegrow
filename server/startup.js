@@ -58,11 +58,98 @@ async function initializeDatabase() {
       console.log('✅ Default admin user created');
     }
 
+    // Initialize development test data if in development mode
+    if (process.env.NODE_ENV === 'development') {
+      await initializeDevelopmentData();
+    }
+
     console.log('🎉 Database initialization check completed!');
     
   } catch (error) {
     console.error('❌ Database initialization failed:', error);
     throw error;
+  }
+}
+
+async function initializeDevelopmentData() {
+  try {
+    console.log('🔧 Development mode: Checking for test data...');
+    
+    // Check if gathering types exist
+    const gatheringTypes = await Database.query('SELECT COUNT(*) as count FROM gathering_types');
+    if (gatheringTypes[0].count === 0) {
+      console.log('📅 Creating development gathering types...');
+      
+      // Create Sunday Morning Service
+      await Database.query(`
+        INSERT INTO gathering_types (name, description, is_active, created_at, updated_at) 
+        VALUES ('Sunday Morning Service', 'Main worship service on Sunday mornings at 10:00 AM', true, NOW(), NOW())
+      `);
+      
+      // Create Youth Group
+      await Database.query(`
+        INSERT INTO gathering_types (name, description, is_active, created_at, updated_at) 
+        VALUES ('Youth Group', 'Weekly youth ministry gathering', true, NOW(), NOW())
+      `);
+      
+      console.log('✅ Development gathering types created');
+    }
+    
+    // Check if families exist
+    const families = await Database.query('SELECT COUNT(*) as count FROM families');
+    if (families[0].count === 0) {
+      console.log('👨‍👩‍👧‍👦 Creating development families from template data...');
+      
+      // Development test families based on import_template.csv
+      const testFamilies = [
+        {
+          name: 'Smith, John and Jane',
+          members: [
+            { firstName: 'John', lastName: 'Smith' },
+            { firstName: 'Jane', lastName: 'Smith' }
+          ]
+        },
+        {
+          name: 'Johnson, Mike',
+          members: [
+            { firstName: 'Mike', lastName: 'Johnson' }
+          ]
+        },
+        {
+          name: 'Williams, David and Sarah',
+          members: [
+            { firstName: 'Sarah', lastName: 'Williams' },
+            { firstName: 'David', lastName: 'Williams' }
+          ]
+        }
+      ];
+      
+      for (const family of testFamilies) {
+        // Insert family
+        const familyResult = await Database.query(`
+          INSERT INTO families (family_name, created_at, updated_at) 
+          VALUES (?, NOW(), NOW())
+        `, [family.name]);
+        
+        const familyId = familyResult.insertId;
+        
+        // Insert family members
+        for (const member of family.members) {
+          await Database.query(`
+            INSERT INTO individuals (family_id, first_name, last_name, created_at, updated_at) 
+            VALUES (?, ?, ?, NOW(), NOW())
+          `, [familyId, member.firstName, member.lastName]);
+        }
+        
+        console.log(`✅ Created family: ${family.name}`);
+      }
+    }
+    
+    console.log('🎉 Development test data initialization completed!');
+    
+  } catch (error) {
+    console.error('❌ Development data initialization failed:', error);
+    // Don't throw error - this is just test data, shouldn't break the server
   }
 }
 

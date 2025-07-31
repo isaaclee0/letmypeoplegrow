@@ -11,6 +11,37 @@ const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Root auth endpoint - provides basic auth status
+router.get('/', (req, res) => {
+  // Check external service availability
+  const externalServices = {
+    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
+               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
+  };
+
+  const hasExternalServices = externalServices.twilio || externalServices.brevo;
+
+  res.json({
+    message: 'Authentication service is running',
+    status: hasExternalServices ? 'full' : 'limited',
+    externalServices: externalServices,
+    endpoints: {
+      'request-code': hasExternalServices ? 'POST - Request one-time code' : 'POST - Disabled (no external services)',
+      'verify-code': hasExternalServices ? 'POST - Verify one-time code' : 'POST - Disabled (no external services)',
+      'me': 'GET - Get current user info',
+      'logout': 'POST - Logout user'
+    },
+    environment: process.env.NODE_ENV || 'development',
+    development: process.env.NODE_ENV === 'development' ? {
+      note: 'In development mode, use "dev@church.local" with code "000000" to login',
+      devUser: 'dev@church.local',
+      devCode: '000000'
+    } : null,
+    note: !hasExternalServices ? 'Configure Twilio and/or Brevo API keys to enable full authentication' : null
+  });
+});
+
 // Rate limiting for auth endpoints
 // const authLimiter = rateLimit({
 //   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -87,14 +118,57 @@ router.post('/request-code',
 
       // Check if user exists and is active
       const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
-      const users = await Database.query(
+      let users = await Database.query(
         `SELECT id, email, mobile_number, primary_contact_method, role, is_active FROM users WHERE ${whereClause}`,
         [isEmail ? contact : normalizedContact]
       );
 
       if (users.length === 0) {
-        const contactMethod = isEmail ? 'email address' : 'phone number';
-        return res.status(404).json({ error: `No user found with this ${contactMethod}.` });
+        // Development mode: Auto-create dev user if requesting code for dev@church.local
+        if (process.env.NODE_ENV === 'development' && contact === 'dev@church.local') {
+          console.log('🔧 Development mode: Auto-creating dev user for dev@church.local');
+          
+          try {
+            // Create development admin user
+            const result = await Database.query(`
+              INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed)
+              VALUES (?, 'admin', 'Development', 'Admin', true, true)
+            `, ['dev@church.local']);
+            
+            // Set up church settings to bypass onboarding
+            await Database.query(`
+              INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [
+              'Development Church',
+              'AU',
+              'Australia/Sydney',
+              'Let My People Grow',
+              'dev@church.local',
+              true
+            ]);
+            
+            console.log('✅ Development user and church settings created');
+            
+            // Re-query for the newly created user
+            const newUsers = await Database.query(
+              'SELECT id, email, mobile_number, primary_contact_method, role, is_active FROM users WHERE email = ?',
+              ['dev@church.local']
+            );
+            
+            if (newUsers.length > 0) {
+              users = newUsers;
+            } else {
+              throw new Error('Failed to create development user');
+            }
+          } catch (error) {
+            console.error('Failed to create development user:', error);
+            return res.status(500).json({ error: 'Failed to create development user' });
+          }
+        } else {
+          const contactMethod = isEmail ? 'email address' : 'phone number';
+          return res.status(404).json({ error: `No user found with this ${contactMethod}.` });
+        }
       }
 
       const user = users[0];
@@ -148,13 +222,45 @@ router.post('/request-code',
         VALUES (?, ?, ?, ?)
       `, [finalContact, finalContactMethod, code, expiresAt]);
 
+      // Check if external services are available
+      const externalServices = {
+        twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
+                   process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+        brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
+      };
+
+      const hasRequiredService = (finalContactMethod === 'email' && externalServices.brevo) || 
+                                (finalContactMethod === 'sms' && externalServices.twilio);
+
+      if (!hasRequiredService) {
+        // In development mode, we can still proceed without external services
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`⚠️  Development mode: ${finalContactMethod.toUpperCase()} service not configured, but proceeding with code generation`);
+        } else {
+          return res.status(503).json({
+            error: 'Service temporarily unavailable',
+            message: `${finalContactMethod.toUpperCase()} service is not configured`,
+            externalServices: externalServices,
+            note: 'Configure external services to enable authentication'
+          });
+        }
+      }
+
       // Send code via appropriate method (don't wait for it to complete)
       setImmediate(async () => {
         try {
           if (finalContactMethod === 'email') {
-            await sendOTCEmail(finalContact, code);
+            if (externalServices.brevo) {
+              await sendOTCEmail(finalContact, code);
+            } else {
+              console.log(`📧 Development mode: Email code ${code} for ${finalContact} (Brevo not configured)`);
+            }
           } else {
-            await sendOTCSMS(finalContact, code);
+            if (externalServices.twilio) {
+              await sendOTCSMS(finalContact, code);
+            } else {
+              console.log(`📱 Development mode: SMS code ${code} for ${finalContact} (Twilio not configured)`);
+            }
           }
         } catch (error) {
           console.error(`Failed to send OTC via ${finalContactMethod}:`, error);
@@ -241,30 +347,38 @@ router.post('/verify-code',
 
       const user = users[0];
 
-      // Find the most recent valid OTC for this contact
-      const otcRecords = await Database.query(`
-        SELECT id, contact_identifier, contact_type FROM otc_codes 
-        WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = false AND expires_at > NOW()
-        ORDER BY created_at DESC LIMIT 1
-      `, [normalizedContact, contactType, code]);
-
-      // Also check if they have alternative contact methods with valid codes
+      // Development bypass: Accept "000000" for dev@church.local in development mode
       let validOtcRecord = null;
-      if (otcRecords.length > 0) {
-        validOtcRecord = otcRecords[0];
-      } else if (user.email && user.mobile_number) {
-        // Check alternative contact method
-        const altContactType = contactType === 'email' ? 'sms' : 'email';
-        const altContact = contactType === 'email' ? user.mobile_number : user.email;
-        
-        const altOtcRecords = await Database.query(`
+      if (process.env.NODE_ENV === 'development' && 
+          user.email === 'dev@church.local' && 
+          code === '000000') {
+        console.log('🔓 Development bypass: Accepting "000000" for dev@church.local');
+        validOtcRecord = { id: 'dev-bypass' };
+      } else {
+        // Find the most recent valid OTC for this contact
+        const otcRecords = await Database.query(`
           SELECT id, contact_identifier, contact_type FROM otc_codes 
           WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = false AND expires_at > NOW()
           ORDER BY created_at DESC LIMIT 1
-        `, [altContact, altContactType, code]);
-        
-        if (altOtcRecords.length > 0) {
-          validOtcRecord = altOtcRecords[0];
+        `, [normalizedContact, contactType, code]);
+
+        // Also check if they have alternative contact methods with valid codes
+        if (otcRecords.length > 0) {
+          validOtcRecord = otcRecords[0];
+        } else if (user.email && user.mobile_number) {
+          // Check alternative contact method
+          const altContactType = contactType === 'email' ? 'sms' : 'email';
+          const altContact = contactType === 'email' ? user.mobile_number : user.email;
+          
+          const altOtcRecords = await Database.query(`
+            SELECT id, contact_identifier, contact_type FROM otc_codes 
+            WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = false AND expires_at > NOW()
+            ORDER BY created_at DESC LIMIT 1
+          `, [altContact, altContactType, code]);
+          
+          if (altOtcRecords.length > 0) {
+            validOtcRecord = altOtcRecords[0];
+          }
         }
       }
 
@@ -272,11 +386,13 @@ router.post('/verify-code',
         return res.status(401).json({ error: 'Invalid or expired verification code.' });
       }
 
-      // Mark code as used
-      await Database.query(
-        'UPDATE otc_codes SET used = true WHERE id = ?',
-        [validOtcRecord.id]
-      );
+      // Mark code as used (skip for development bypass)
+      if (validOtcRecord.id !== 'dev-bypass') {
+        await Database.query(
+          'UPDATE otc_codes SET used = true WHERE id = ?',
+          [validOtcRecord.id]
+        );
+      }
 
       // Clean up old codes for this user's contact methods
       const cleanupTasks = [];
@@ -433,6 +549,16 @@ router.get('/me', verifyToken, async (req, res) => {
 router.post('/refresh', verifyToken, async (req, res) => {
   try {
     const user = req.user;
+    console.log(`🔄 Token refresh requested for user: ${user.email} (ID: ${user.id})`);
+    
+    // Validate user is still active
+    if (!user.is_active) {
+      console.log(`❌ Token refresh denied - user ${user.email} is inactive`);
+      return res.status(401).json({ 
+        error: 'User account is inactive.',
+        code: 'USER_INACTIVE'
+      });
+    }
     
     // Generate new token
     const token = jwt.sign(
@@ -460,11 +586,24 @@ router.post('/refresh', verifyToken, async (req, res) => {
     }
     
     res.cookie('authToken', token, cookieOptions);
-    res.json({ message: 'Token refreshed successfully' });
+    console.log(`✅ Token refreshed successfully for user: ${user.email}`);
+    res.json({ 
+      message: 'Token refreshed successfully',
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        firstName: user.first_name,
+        lastName: user.last_name
+      }
+    });
 
   } catch (error) {
-    console.error('Refresh token error:', error);
-    res.status(500).json({ error: 'Failed to refresh token.' });
+    console.error('💥 Refresh token error:', error);
+    res.status(500).json({ 
+      error: 'Failed to refresh token.',
+      code: 'REFRESH_FAILED'
+    });
   }
 });
 
@@ -669,91 +808,6 @@ router.get('/debug-cookies', (req, res) => {
                  !/Chrome/.test(headers['user-agent']),
     cookieHeader: headers.cookie
   });
-});
-
-// Development bypass route - only available in development mode
-router.post('/dev-login', async (req, res) => {
-  console.log('Dev login route hit');
-  try {
-    // Only allow in development mode
-    if (process.env.NODE_ENV === 'production') {
-      console.log('Dev login blocked - production mode');
-      return res.status(404).json({ error: 'Route not found' });
-    }
-
-    // Get or create a development admin user
-    let devUser = await Database.query(
-      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed, default_gathering_id FROM users WHERE email = ?',
-      ['dev@church.local']
-    );
-
-    if (devUser.length === 0) {
-      // Create development admin user
-      const result = await Database.query(`
-        INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed)
-        VALUES (?, 'admin', 'Development', 'Admin', true, true)
-      `, ['dev@church.local']);
-      
-      devUser = [{
-        id: result.insertId,
-        email: 'dev@church.local',
-        role: 'admin',
-        first_name: 'Development',
-        last_name: 'Admin',
-        is_active: true,
-        first_login_completed: true,
-        default_gathering_id: null
-      }];
-    }
-
-    const user = devUser[0];
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        userId: Number(user.id), 
-        email: user.email, 
-        mobile: user.mobile_number,
-        role: user.role 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || '30d' }
-    );
-
-    // Set HTTP-only cookie with the token
-    const cookieOptions = {
-      httpOnly: true,
-      secure: false, // Always false for development
-      sameSite: 'lax', // More permissive for development
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
-      path: '/'
-    };
-    
-    res.cookie('authToken', token, cookieOptions);
-
-    // Get user's gathering assignments (empty for dev user)
-    const assignments = [];
-
-    res.json({
-      message: 'Development login successful',
-      user: {
-        id: Number(user.id),
-        email: user.email,
-        mobileNumber: user.mobile_number,
-        primaryContactMethod: 'email',
-        role: user.role,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        isFirstLogin: false,
-        defaultGatheringId: user.default_gathering_id ? Number(user.default_gathering_id) : null,
-        gatheringAssignments: assignments
-      }
-    });
-
-  } catch (error) {
-    console.error('Development login error:', error);
-    res.status(500).json({ error: 'Development login failed.' });
-  }
 });
 
 module.exports = router; 

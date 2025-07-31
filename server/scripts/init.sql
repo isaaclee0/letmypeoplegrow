@@ -303,4 +303,13 @@ CREATE TABLE IF NOT EXISTS onboarding_progress (
 INSERT IGNORE INTO users (email, role, first_name, last_name, is_active, first_login_completed) 
 VALUES ('admin@church.local', 'admin', 'System', 'Administrator', true, true);
 
--- No default gathering types - users will create their own during onboarding 
+-- No default gathering types - users will create their own during onboarding
+
+-- Mark baseline migrations as completed to prevent them from appearing as pending
+-- These migrations are already included in the init.sql schema above
+INSERT IGNORE INTO migrations (version, name, description, execution_time_ms, status, executed_at) VALUES
+('001', 'fix_audit_log', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()),
+('002', 'add_contact_fields', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()),
+('003', 'enhance_visitors_table', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()),
+('004', 'fix_attendance_duplicates', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()),
+('005', 'add_attendance_updated_at', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()); 

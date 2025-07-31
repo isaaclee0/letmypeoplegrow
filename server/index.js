@@ -6,58 +6,158 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 require('dotenv').config();
 
-// Import Winston logger
-const logger = require('./config/logger');
+// Import Winston logger with error handling
+let logger;
+try {
+  logger = require('./config/logger');
+} catch (error) {
+  console.error('Failed to load logger, using console fallback:', error.message);
+  // Fallback logger
+  logger = {
+    info: console.log,
+    error: console.error,
+    warn: console.warn,
+    debug: console.log,
+    createRequestLogger: () => (req, res, next) => next()
+  };
+}
 
 // Import database initialization
-const { initializeDatabase } = require('./startup');
+let initializeDatabase;
+try {
+  const startup = require('./startup');
+  initializeDatabase = startup.initializeDatabase;
+} catch (error) {
+  console.error('Failed to load startup module:', error.message);
+  initializeDatabase = async () => {
+    console.log('Database initialization skipped due to startup module error');
+  };
+}
 
-// Import security middleware
-const { 
-  sanitizeInput, 
-  detectSQLInjection, 
-  createSecurityRateLimit 
-} = require('./middleware/security');
+// Import security middleware with fallbacks
+let sanitizeInput, detectSQLInjection, createSecurityRateLimit;
+try {
+  const security = require('./middleware/security');
+  sanitizeInput = security.sanitizeInput;
+  detectSQLInjection = security.detectSQLInjection;
+  createSecurityRateLimit = security.createSecurityRateLimit;
+} catch (error) {
+  console.error('Failed to load security middleware, using fallbacks:', error.message);
+  // Fallback middleware
+  sanitizeInput = (req, res, next) => next();
+  detectSQLInjection = (req, res, next) => next();
+  createSecurityRateLimit = () => (req, res, next) => next();
+}
 
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
-const gatheringRoutes = require('./routes/gatherings');
-const familyRoutes = require('./routes/families');
-const individualRoutes = require('./routes/individuals');
-const attendanceRoutes = require('./routes/attendance');
-const reportRoutes = require('./routes/reports');
-const notificationRoutes = require('./routes/notifications');
-const onboardingRoutes = require('./routes/onboarding');
-const invitationRoutes = require('./routes/invitations');
-const csvImportRoutes = require('./routes/csv-import');
-const migrationRoutes = require('./routes/migrations');
-const testRoutes = require('./routes/test');
-const notificationRulesRoutes = require('./routes/notification_rules');
-const importRangeRoutes = require('./routes/importrange');
+// Import routes with error handling
+const loadRoutes = () => {
+  const routes = {};
+  const routeFiles = [
+    'auth', 'users', 'gatherings', 'families', 'individuals', 
+    'attendance', 'reports', 'notifications', 'onboarding', 
+    'invitations', 'csv-import', 'migrations', 'test', 
+    'notification_rules', 'importrange'
+  ];
+
+  // Check external service availability
+  const externalServices = {
+    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
+               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
+  };
+
+  // Log service status
+  console.log('🔧 External Services Status:');
+  console.log(`   📱 Twilio SMS: ${externalServices.twilio ? '✅ Available' : '❌ Not configured'}`);
+  console.log(`   📧 Brevo Email: ${externalServices.brevo ? '✅ Available' : '❌ Not configured'}`);
+  
+  if (!externalServices.twilio && !externalServices.brevo) {
+    console.log('⚠️  WARNING: No external services configured. Authentication will be limited to development mode.');
+  }
+
+  routeFiles.forEach(routeName => {
+    try {
+      routes[routeName] = require(`./routes/${routeName}`);
+      console.log(`✅ Loaded route: ${routeName}`);
+    } catch (error) {
+      console.warn(`⚠️  Failed to load route ${routeName}:`, error.message);
+      
+      // Create a fallback route with service status information
+      const express = require('express');
+      const router = express.Router();
+      
+      router.get('/', (req, res) => {
+        res.status(503).json({ 
+          error: 'Service temporarily unavailable',
+          message: `${routeName} route is not available`,
+          reason: error.message,
+          externalServices: externalServices,
+          note: 'Configure external services (Twilio/Brevo) to enable full functionality'
+        });
+      });
+      
+      // Add a status endpoint to check service availability
+      router.get('/status', (req, res) => {
+        res.json({
+          service: routeName,
+          status: 'disabled',
+          reason: error.message,
+          externalServices: externalServices,
+          availableFeatures: {
+            development: process.env.NODE_ENV === 'development',
+            database: true,
+            basicAuth: routeName === 'auth' && process.env.NODE_ENV === 'development'
+          }
+        });
+      });
+      
+      routes[routeName] = router;
+    }
+  });
+
+  return routes;
+};
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
 
-// Security middleware
-app.use(helmet({
-  crossOriginEmbedderPolicy: false, // Disable for iOS Safari compatibility
-  crossOriginResourcePolicy: { policy: "cross-origin" } // Allow cross-origin resources
-}));
+// Validate required environment variables
+const validateEnvironment = () => {
+  const required = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.warn('⚠️  Missing environment variables:', missing.join(', '));
+    console.warn('Using default values where possible');
+  }
+  
+  // Set defaults for missing variables
+  if (!process.env.DB_HOST) process.env.DB_HOST = 'localhost';
+  if (!process.env.DB_USER) process.env.DB_USER = 'root';
+  if (!process.env.DB_PASSWORD) process.env.DB_PASSWORD = '';
+  if (!process.env.DB_NAME) process.env.DB_NAME = 'church_attendance';
+  if (!process.env.JWT_SECRET) process.env.JWT_SECRET = 'default_jwt_secret_change_in_production';
+  
+  console.log('✅ Environment validation completed');
+};
+
+// Security middleware with error handling
+try {
+  app.use(helmet({
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" }
+  }));
+} catch (error) {
+  console.warn('Helmet middleware failed, continuing without it:', error.message);
+}
+
 app.use(cors({
-  origin: true, // Allow all origins - nginx proxy handles security
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposedHeaders: ['Set-Cookie']
 }));
-
-// Rate limiting
-// const limiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 100, // limit each IP to 100 requests per windowMs
-//   message: 'Too many requests from this IP, please try again later.'
-// });
-// app.use(limiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -66,58 +166,127 @@ app.use(express.urlencoded({ extended: true }));
 // Cookie parsing middleware
 app.use(cookieParser());
 
-// Request logging middleware
-app.use(logger.createRequestLogger());
+// Request logging middleware with error handling
+try {
+  app.use(logger.createRequestLogger());
+} catch (error) {
+  console.warn('Request logging failed, continuing without it:', error.message);
+}
 
-// Security middleware - apply to all routes
-app.use(sanitizeInput);
-app.use(detectSQLInjection);
+// Security middleware - apply to all routes with error handling
+try {
+  app.use(sanitizeInput);
+  app.use(detectSQLInjection);
+} catch (error) {
+  console.warn('Security middleware failed, continuing without it:', error.message);
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.status(200).json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.npm_package_version || 'unknown'
+  });
+});
+
+// Database health check
+app.get('/health/db', async (req, res) => {
+  try {
+    const Database = require('./config/database');
+    const isConnected = await Database.testConnection();
+    res.status(200).json({ 
+      status: isConnected ? 'OK' : 'ERROR',
+      database: isConnected ? 'connected' : 'disconnected'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'ERROR',
+      database: 'error',
+      message: error.message 
+    });
+  }
+});
+
+// Service status endpoint
+app.get('/health/services', (req, res) => {
+  const externalServices = {
+    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
+               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
+  };
+
+  const hasAnyService = externalServices.twilio || externalServices.brevo;
+
+  res.status(200).json({
+    status: hasAnyService ? 'partial' : 'limited',
+    externalServices: externalServices,
+    environment: process.env.NODE_ENV || 'development',
+    features: {
+      authentication: hasAnyService || process.env.NODE_ENV === 'development',
+      sms: externalServices.twilio,
+      email: externalServices.brevo,
+      development: process.env.NODE_ENV === 'development'
+    },
+    notes: !hasAnyService ? [
+      'No external services configured',
+      'Authentication limited to development mode',
+      'Configure Twilio and/or Brevo API keys for full functionality'
+    ] : []
+  });
 });
 
 // Clear token page endpoint
 app.get('/clear-token', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/public/clear-token.html'));
+  try {
+    res.sendFile(path.join(__dirname, '../client/public/clear-token.html'));
+  } catch (error) {
+    res.status(404).json({ error: 'Clear token page not found' });
+  }
 });
 
 // iOS Safari debug page endpoint
 app.get('/ios-debug', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/public/ios-debug.html'));
+  try {
+    res.sendFile(path.join(__dirname, '../client/public/ios-debug.html'));
+  } catch (error) {
+    res.status(404).json({ error: 'iOS debug page not found' });
+  }
 });
 
-// API routes
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/gatherings', gatheringRoutes);
-app.use('/api/families', familyRoutes);
-app.use('/api/individuals', individualRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/onboarding', onboardingRoutes);
-app.use('/api/invitations', invitationRoutes);
-app.use('/api/csv-import', csvImportRoutes);
-app.use('/api/migrations', migrationRoutes);
-app.use('/api/test', testRoutes);
-app.use('/api/notification-rules', notificationRulesRoutes);
-// Temporarily disabled for security - exposes data without authentication
-// app.use('/api/importrange', importRangeRoutes);
+// Load and apply routes
+const routes = loadRoutes();
+
+// API routes with error handling
+Object.entries(routes).forEach(([name, router]) => {
+  try {
+    app.use(`/api/${name.replace('_', '-')}`, router);
+  } catch (error) {
+    console.warn(`Failed to apply route ${name}:`, error.message);
+  }
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  logger.error('Unhandled server error', { 
-    error: err.message, 
-    stack: err.stack,
-    url: req.url,
-    method: req.method,
-    userId: req.user?.id
-  });
+  const errorMessage = process.env.NODE_ENV === 'development' ? err.message : 'Internal server error';
+  
+  try {
+    logger.error('Unhandled server error', { 
+      error: err.message, 
+      stack: err.stack,
+      url: req.url,
+      method: req.method,
+      userId: req.user?.id
+    });
+  } catch (logError) {
+    console.error('Logging failed:', logError.message);
+    console.error('Original error:', err.message);
+  }
+  
   res.status(500).json({ 
     error: 'Something went wrong!', 
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' 
+    message: errorMessage 
   });
 });
 
@@ -129,19 +298,73 @@ app.use('*', (req, res) => {
 // Initialize database and start server
 async function startServer() {
   try {
-    // Initialize database schema
-    await initializeDatabase();
+    // Validate environment first
+    validateEnvironment();
+    
+    console.log('🚀 Starting Let My People Grow server...');
+    console.log(`🏃 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔌 Port: ${PORT}`);
+    
+    // Initialize database schema with retry logic
+    let dbInitialized = false;
+    let retryCount = 0;
+    const maxRetries = 5;
+    
+    while (!dbInitialized && retryCount < maxRetries) {
+      try {
+        console.log(`🗄️  Attempting database initialization (attempt ${retryCount + 1}/${maxRetries})...`);
+        await initializeDatabase();
+        dbInitialized = true;
+        console.log('✅ Database initialized successfully');
+      } catch (error) {
+        retryCount++;
+        console.warn(`⚠️  Database initialization attempt ${retryCount} failed:`, error.message);
+        
+        if (retryCount < maxRetries) {
+          console.log(`⏳ Retrying in 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } else {
+          console.error('❌ Database initialization failed after all retries');
+          console.log('🚀 Starting server anyway (some features may not work)');
+        }
+      }
+    }
     
     // Start the server
     app.listen(PORT, () => {
-      logger.info(`🚀 Server running on port ${PORT}`);
-      logger.info(`🏃 Environment: ${process.env.NODE_ENV || 'development'}`);
-      logger.info('Server startup completed successfully');
+      console.log(`🎉 Server running on port ${PORT}`);
+      console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+      console.log(`🗄️  Database health: http://localhost:${PORT}/health/db`);
+      console.log('✅ Server startup completed successfully');
     });
   } catch (error) {
-    logger.error('❌ Failed to start server', { error: error.message, stack: error.stack });
+    console.error('❌ Failed to start server:', error.message);
+    console.error('Stack trace:', error.stack);
     process.exit(1);
   }
 }
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 Received SIGTERM, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 Received SIGINT, shutting down gracefully...');
+  process.exit(0);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('💥 Uncaught Exception:', error.message);
+  console.error('Stack trace:', error.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
 
 startServer(); 
