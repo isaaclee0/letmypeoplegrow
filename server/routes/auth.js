@@ -534,6 +534,7 @@ router.get('/me', verifyToken, async (req, res) => {
         lastName: user.last_name,
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
+        church_id: user.church_id,
         gatheringAssignments: assignmentsWithNumbers,
         unreadNotifications: Number(notificationCount[0].count)
       }

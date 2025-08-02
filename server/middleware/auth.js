@@ -20,7 +20,7 @@ const verifyToken = async (req, res, next) => {
     
     // Get user details from database
     const users = await Database.query(
-      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed FROM users WHERE id = ? AND is_active = true',
+      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed, church_id FROM users WHERE id = ? AND is_active = true',
       [decoded.userId]
     );
 

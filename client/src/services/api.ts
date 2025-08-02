@@ -130,6 +130,7 @@ export interface User {
   lastName: string;
   isFirstLogin?: boolean;
   defaultGatheringId?: number;
+  church_id?: string;
   gatheringAssignments: GatheringType[];
   unreadNotifications?: number;
 }
@@ -517,16 +518,11 @@ export const notificationRulesAPI = {
   remove: (id: number) => api.delete(`/notification-rules/${id}`),
 };
 
-// API Keys API
-export const apiKeysAPI = {
-  getAll: () => api.get('/api-keys'),
-  create: (data: { keyName: string; permissions?: string[]; expiresAt?: string }) => 
-    api.post('/api-keys', data),
-  update: (id: number, data: { keyName?: string; permissions?: string[]; isActive?: boolean; expiresAt?: string }) => 
-    api.put(`/api-keys/${id}`, data),
-  delete: (id: number) => api.delete(`/api-keys/${id}`),
-  getStats: (id: number) => api.get(`/api-keys/${id}/stats`),
-  activate: (token: string) => api.post('/api-keys/activate', { token }),
+// Settings API
+export const settingsAPI = {
+  getAll: () => api.get('/settings'),
+  getDataAccess: () => api.get('/settings/data-access'),
+  updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
 };
 
 export default api; 

@@ -56,7 +56,7 @@ const loadRoutes = () => {
     'auth', 'users', 'gatherings', 'families', 'individuals', 
     'attendance', 'reports', 'notifications', 'onboarding', 
     'invitations', 'csv-import', 'migrations', 'test', 
-    'notification_rules', 'importrange', 'api-keys'
+    'notification_rules', 'importrange', 'settings'
   ];
 
   // Check external service availability
@@ -178,6 +178,20 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
+
+
+// Development cache-busting middleware
+if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
+  app.use((req, res, next) => {
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    next();
+  });
+}
+
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -283,6 +297,8 @@ app.get('/cors-test', (req, res) => {
   });
 });
 
+
+
 // Load and apply routes
 const routes = loadRoutes();
 
@@ -293,6 +309,116 @@ Object.entries(routes).forEach(([name, router]) => {
   } catch (error) {
     console.warn(`Failed to apply route ${name}:`, error.message);
   }
+});
+
+// Google Sheets test endpoints (AFTER routes are loaded)
+app.get('/api/sheets-test', (req, res) => {
+  console.log('📊 Google Sheets test endpoint called');
+  console.log('📊 User-Agent:', req.get('User-Agent'));
+  console.log('📊 Accept:', req.get('Accept'));
+  console.log('📊 All headers:', req.headers);
+  
+  const testData = [
+    ['Date', 'Name', 'Status'],
+    ['2025-01-01', 'John Doe', 'Present'],
+    ['2025-01-01', 'Jane Smith', 'Present'],
+    ['2025-01-08', 'John Doe', 'Absent']
+  ];
+  
+  const csvContent = testData
+    .map(row => row.map(field => `"${field}"`).join(','))
+    .join('\n');
+  
+  // Try different Content-Type for Google Sheets
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.send(csvContent);
+  
+  console.log('📊 CSV sent successfully');
+});
+
+// Ultra-simple Google Sheets test endpoint
+app.get('/api/simple-test', (req, res) => {
+  console.log('🔧 Simple test endpoint called by:', req.get('User-Agent'));
+  console.log('🔧 All headers:', JSON.stringify(req.headers, null, 2));
+  
+  // Minimal CSV content
+  const csvContent = 'Date,Name,Status\n2025-01-01,John Doe,Present\n2025-01-01,Jane Smith,Present';
+  
+  // Only essential headers
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.send(csvContent);
+  
+  console.log('🔧 Simple CSV sent successfully');
+});
+
+// Public Google Sheets test endpoint (completely bypasses all middleware)
+app.get('/api/public-csv', (req, res) => {
+  console.log('🌐 Public CSV endpoint called by:', req.get('User-Agent'));
+  console.log('🌐 All headers:', JSON.stringify(req.headers, null, 2));
+  
+  // Very simple CSV - no quotes, no extra characters
+  const csvContent = 'A,B,C\n1,2,3\n4,5,6';
+  
+  // Remove all problematic headers
+  res.removeHeader('Content-Security-Policy');
+  res.removeHeader('X-Frame-Options');
+  res.removeHeader('X-Content-Type-Options');
+  res.removeHeader('X-XSS-Protection');
+  res.removeHeader('Strict-Transport-Security');
+  res.removeHeader('X-Download-Options');
+  res.removeHeader('X-Permitted-Cross-Domain-Policies');
+  res.removeHeader('Referrer-Policy');
+  res.removeHeader('X-DNS-Prefetch-Control');
+  res.removeHeader('Origin-Agent-Cluster');
+  res.removeHeader('Cross-Origin-Opener-Policy');
+  res.removeHeader('Cross-Origin-Resource-Policy');
+  res.removeHeader('Cache-Control');
+  res.removeHeader('Pragma');
+  res.removeHeader('Expires');
+  
+  // Set only essential headers - no charset
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.send(csvContent);
+  
+  console.log('🌐 Public CSV sent successfully');
+});
+
+// Ultra-simple endpoint for IMPORTDATA testing
+app.get('/api/importdata-test', (req, res) => {
+  console.log('📋 IMPORTDATA test endpoint called by:', req.get('User-Agent'));
+  
+  // Minimal CSV content
+  const csvContent = 'Name,Value\nTest,123';
+  
+  // Only essential headers
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.send(csvContent);
+  
+  console.log('📋 IMPORTDATA test CSV sent successfully');
+});
+
+// Test endpoint outside /api/ path
+app.get('/csv-test', (req, res) => {
+  console.log('📋 CSV test endpoint called by:', req.get('User-Agent'));
+  
+  // Minimal CSV content
+  const csvContent = 'Name,Value\nTest,123';
+  
+  // Only essential headers
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  res.send(csvContent);
+  
+  console.log('📋 CSV test sent successfully');
 });
 
 // Error handling middleware

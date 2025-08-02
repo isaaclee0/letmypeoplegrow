@@ -13,6 +13,25 @@
       name="description"
       content="Let My People Grow - Church Attendance Tracking and Reporting"
     />
+    <!-- Development cache-busting headers - only in development -->
+    <script>
+      if (window.location.hostname === 'development.letmypeoplegrow.com.au' || 
+          window.location.hostname === 'localhost' || 
+          window.location.hostname.includes('127.0.0.1')) {
+        // Add cache-busting meta tags for development only
+        const metaTags = [
+          { httpEquiv: 'Cache-Control', content: 'no-cache, no-store, must-revalidate' },
+          { httpEquiv: 'Pragma', content: 'no-cache' },
+          { httpEquiv: 'Expires', content: '0' }
+        ];
+        metaTags.forEach(tag => {
+          const meta = document.createElement('meta');
+          meta.setAttribute('http-equiv', tag.httpEquiv);
+          meta.setAttribute('content', tag.content);
+          document.head.appendChild(meta);
+        });
+      }
+    </script>
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <!--
       manifest.json provides metadata used when your web app is installed on a

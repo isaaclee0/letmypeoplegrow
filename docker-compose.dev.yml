@@ -85,6 +85,20 @@ services:
       - app-network-dev
     command: npm start
 
+  # Cloudflare Tunnel
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflare_tunnel_dev
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token eyJhIjoiYzczNGNkZjcxZmU2ZmQ1NTExYTJmOGEyNDQ3ZWQwM2YiLCJ0IjoiN2Y2YmZiYTctZmE3NS00NmVkLTg1MTktZWQ3YjYzNGE5ODBhIiwicyI6Ik9XUmtPVEk0TmpVdFpUTXpZaTAwTW1Ka0xXSTVZVEl0T1RCbFpEYzNNV1ptTVdObSJ9
+    depends_on:
+      - client
+      - server
+    networks:
+      - app-network-dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   db_data_dev:
 
