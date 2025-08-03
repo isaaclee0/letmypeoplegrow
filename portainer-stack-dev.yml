@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  db:
+    image: mariadb:10.6
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${DB_NAME:-church_attendance}
+      MYSQL_USER: ${DB_USER:-church_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-church_password}
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data_dev:/var/lib/mysql
+      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - app-network-dev
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "${DB_USER:-church_user}", "-p${DB_PASSWORD:-church_password}", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Node.js Backend Server (Development)
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server.dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:3003}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-church_attendance}
+      DB_USER: ${DB_USER:-church_user}
+      DB_PASSWORD: ${DB_PASSWORD:-church_password}
+      JWT_SECRET: ${JWT_SECRET:-your_secure_jwt_secret_change_this_in_production}
+      JWT_EXPIRE: ${JWT_EXPIRE:-30d}
+      OTC_EXPIRE_MINUTES: ${OTC_EXPIRE_MINUTES:-10}
+      OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS:-60}
+      EMAIL_FROM: ${EMAIL_FROM:-hello@letmypeoplegrow.com.au}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-"Let My People Grow"}
+      EMAIL_DOMAIN: ${EMAIL_DOMAIN:-letmypeoplegrow.com.au}
+      CHURCH_NAME: ${CHURCH_NAME:-"Let My People Grow"}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER}
+      BREVO_API_KEY: ${BREVO_API_KEY}
+    ports:
+      - "3004:3001"
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+      - ./server/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network-dev
+    command: npm run dev
+
+  # React Frontend Client (Development)
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client.dev
+    restart: unless-stopped
+    environment:
+      REACT_APP_API_URL: /api
+      CHOKIDAR_USEPOLLING: true
+    ports:
+      - "3003:3000"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - server
+    networks:
+      - app-network-dev
+      - npm_proxy
+    command: npm start
+
+volumes:
+  db_data_dev:
+
+networks:
+  app-network-dev:
+    driver: bridge
+  npm_proxy:
+    external: true 

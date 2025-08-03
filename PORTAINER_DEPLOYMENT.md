@@ -55,7 +55,7 @@ BREVO_API_KEY=your_brevo_api_key
    - Choose **Repository** tab
    - Enter your Git repository URL
    - Set the **Repository reference** (branch/tag)
-   - Set the **Compose path** to `portainer-stack.yml`
+   - Set the **Compose path** to: `portainer-stack.yml`
    - Add your environment variables
    - Click **Deploy the stack**
 
@@ -63,8 +63,7 @@ BREVO_API_KEY=your_brevo_api_key
    - Download the `portainer-stack.yml` file
    - In Portainer, go to **Stacks** → **Add stack**
    - Choose **Upload** tab
-   - Upload the `portainer-stack.yml` file
-   - Add your environment variables
+   - Upload the file and add environment variables
    - Click **Deploy the stack**
 
 ### 3. Network Configuration
@@ -117,8 +116,31 @@ This stack is configured for **production deployment**:
 
 ### For Development
 
-If you need a development environment, use the `docker-compose.dev.yml` file instead:
+If you need a development environment, use the `portainer-stack-dev.yml` file:
 
+#### Development Stack Features:
+- **Hot reloading** - Code changes trigger automatic rebuilds
+- **Source code mounting** - Direct access to source files
+- **Development dependencies** - Full development tooling
+- **Debugging enabled** - Better error messages and debugging
+- **Database exposed** - Port 3307 for direct database access
+
+#### Deploy Development Stack:
+1. In Portainer, go to **Stacks** → **Add stack**
+2. Choose **Repository** tab
+3. Enter your Git repository URL
+4. Set **Compose path** to: `portainer-stack-dev.yml`
+5. Add environment variables (same as production)
+6. Click **Deploy the stack**
+
+#### Development Ports:
+| Service | Internal Port | External Port | Purpose |
+|---------|---------------|---------------|---------|
+| Frontend | 3000 | 3003 | React development server |
+| Backend | 3001 | 3004 | Node.js development server |
+| Database | 3306 | 3307 | MariaDB (direct access) |
+
+#### Local Development Alternative:
 ```bash
 # Local development
 docker-compose -f docker-compose.dev.yml up
@@ -150,6 +172,11 @@ docker-compose -f docker-compose.dev.yml up
    - Check container logs in Portainer
    - Test connectivity: `curl http://localhost:3004/api/health`
 
+6. **Development stack build issues**
+   - Ensure Docker has enough resources for building
+   - Check that all source files are accessible
+   - Verify Dockerfile.dev files exist in the repository
+
 ### Logs and Debugging
 
 1. **View container logs** in Portainer:
@@ -168,6 +195,12 @@ docker-compose -f docker-compose.dev.yml up
 4. **Test frontend accessibility**:
    ```bash
    curl http://localhost:3003
+   ```
+
+5. **Development database access**:
+   ```bash
+   # For development stack
+   docker exec -it letmypeoplegrow_dev-db-1 mariadb -u church_user -p
    ```
 
 ## Security Considerations
