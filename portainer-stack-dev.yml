@@ -70,7 +70,7 @@ services:
     container_name: church_attendance_client_dev
     restart: unless-stopped
     environment:
-      REACT_APP_API_URL: /api
+      REACT_APP_API_URL: http://server:3001/api
       CHOKIDAR_USEPOLLING: true
       WATCHPACK_POLLING: true
     volumes:
