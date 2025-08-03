@@ -4,7 +4,6 @@ services:
   # MariaDB Database
   db:
     image: mariadb:10.6
-    container_name: church_attendance_db
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_password}
@@ -27,7 +26,6 @@ services:
   # Node.js Backend Server
   server:
     image: staugustine1/letmypeoplegrow-server:latest
-    container_name: church_attendance_server
     restart: on-failure:3
     environment:
       NODE_ENV: ${NODE_ENV:-production}
@@ -63,7 +61,6 @@ services:
   # React Frontend Client
   client:
     image: staugustine1/letmypeoplegrow-client:latest
-    container_name: church_attendance_client
     restart: unless-stopped
     ports:
       - "3003:3000"
