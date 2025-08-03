@@ -55,5 +55,5 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://church_attendance_server_dev:3001"
+  "proxy": "http://server:3001"
 }
