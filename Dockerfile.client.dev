@@ -14,6 +14,9 @@ ENV REACT_APP_VERSION=$VERSION
 # Install dependencies
 RUN npm install
 
+# Copy client source code
+COPY client/ ./
+
 # Expose port
 EXPOSE 3000
 
