@@ -87,13 +87,13 @@ services:
 
   # Nginx for API routing (Development)
   nginx:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx.dev
     container_name: church_attendance_nginx_dev
     restart: unless-stopped
     ports:
       - "3005:80"
-    volumes:
-      - ./nginx-dev.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - client
       - server
