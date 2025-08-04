@@ -74,6 +74,9 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: true
       WATCHPACK_POLLING: true
+      WDS_SOCKET_HOST: development.letmypeoplegrow.com.au
+      WDS_SOCKET_PORT: 443
+      WDS_SOCKET_PATH: /ws
     ports:
       - "3003:3000"
     volumes:
