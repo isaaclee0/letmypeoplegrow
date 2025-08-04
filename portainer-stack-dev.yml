@@ -72,7 +72,6 @@ services:
     container_name: church_attendance_client_dev
     restart: unless-stopped
     environment:
-      REACT_APP_API_URL: https://development.letmypeoplegrow.com.au/api
       CHOKIDAR_USEPOLLING: true
       WATCHPACK_POLLING: true
     ports:
@@ -85,6 +84,22 @@ services:
       - app-network-dev
       - npm_proxy
     command: npm start
+
+  # Nginx for API routing (Development)
+  nginx:
+    image: nginx:alpine
+    container_name: church_attendance_nginx_dev
+    restart: unless-stopped
+    ports:
+      - "3005:80"
+    volumes:
+      - ./nginx-dev.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - client
+      - server
+    networks:
+      - app-network-dev
+      - npm_proxy
 
 volumes:
   db_data_dev:
