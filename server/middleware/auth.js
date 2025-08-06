@@ -20,7 +20,7 @@ const verifyToken = async (req, res, next) => {
     
     // Get user details from database
     const users = await Database.query(
-      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed, church_id FROM users WHERE id = ? AND is_active = true',
+      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed FROM users WHERE id = ? AND is_active = true',
       [decoded.userId]
     );
 
@@ -102,7 +102,7 @@ const requireGatheringAccess = async (req, res, next) => {
   }
 };
 
-// Audit log middleware
+// Audit log middleware with deduplication
 const auditLog = (action) => {
   return async (req, res, next) => {
     // Store original json method
@@ -114,18 +114,91 @@ const auditLog = (action) => {
       if (res.statusCode < 400 && req.user) {
         setImmediate(async () => {
           try {
-            await Database.query(`
-              INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
+            // Extract service and date information from request
+            let serviceName = null;
+            let serviceDate = null;
+            
+            // For attendance routes, extract gathering type and date
+            if (req.params.gatheringTypeId && req.params.date) {
+              try {
+                const gatheringResult = await Database.query(
+                  'SELECT name FROM gathering_types WHERE id = ?',
+                  [req.params.gatheringTypeId]
+                );
+                if (gatheringResult.length > 0) {
+                  serviceName = gatheringResult[0].name;
+                }
+                serviceDate = req.params.date;
+              } catch (error) {
+                console.error('Error getting gathering info:', error);
+              }
+            }
+            
+            // Check for existing similar action within 5 minutes
+            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+            const existingAction = await Database.query(`
+              SELECT id, new_values FROM audit_log 
+              WHERE user_id = ? 
+                AND action = ? 
+                AND created_at > ?
+                AND table_name = ?
+              ORDER BY created_at DESC 
+              LIMIT 1
             `, [
               req.user.id,
               action,
-              req.body?.table || null,
-              req.body?.id || data?.id || null,
-              req.body ? JSON.stringify(req.body) : null,
-              req.ip,
-              req.get('User-Agent')
+              fiveMinutesAgo,
+              req.body?.table || 'attendance_sessions'
             ]);
+            
+            if (existingAction.length > 0) {
+              // Update existing action instead of creating new one
+              const existingValues = existingAction[0].new_values ? JSON.parse(existingAction[0].new_values) : {};
+              const newValues = req.body ? JSON.stringify(req.body) : null;
+              
+              // Merge the values and update the timestamp
+              await Database.query(`
+                UPDATE audit_log 
+                SET new_values = ?, 
+                    created_at = NOW(),
+                    table_name = ?,
+                    record_id = ?
+                WHERE id = ?
+              `, [
+                JSON.stringify({
+                  ...existingValues,
+                  latestUpdate: new Date().toISOString(),
+                  serviceName: serviceName,
+                  serviceDate: serviceDate,
+                  actionCount: (existingValues.actionCount || 1) + 1
+                }),
+                req.body?.table || 'attendance_sessions',
+                req.body?.id || data?.id || null,
+                existingAction[0].id
+              ]);
+            } else {
+              // Create new action
+              const enhancedBody = {
+                ...req.body,
+                serviceName: serviceName,
+                serviceDate: serviceDate,
+                actionCount: 1,
+                firstAction: new Date().toISOString()
+              };
+              
+              await Database.query(`
+                INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+              `, [
+                req.user.id,
+                action,
+                req.body?.table || 'attendance_sessions',
+                req.body?.id || data?.id || null,
+                JSON.stringify(enhancedBody),
+                req.ip,
+                req.get('User-Agent')
+              ]);
+            }
           } catch (error) {
             console.error('Audit log error:', error);
           }

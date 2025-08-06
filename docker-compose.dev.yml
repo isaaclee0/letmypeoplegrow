@@ -37,7 +37,7 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3001
-      CLIENT_URL: http://localhost:3000
+      CLIENT_URL: http://church_attendance_client_dev:3003
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: church_attendance
@@ -51,8 +51,6 @@ services:
       # External services should be configured in server/.env file
       # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
       # BREVO_API_KEY
-    ports:
-      - "3002:3001"
     volumes:
       - ./server:/app
       - /app/node_modules
@@ -62,6 +60,7 @@ services:
         condition: service_healthy
     networks:
       - app-network-dev
+      - npm_proxy
     command: npm run dev
 
   # React Frontend Client (Development)
@@ -72,36 +71,32 @@ services:
     container_name: church_attendance_client_dev
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3003:3003"
     volumes:
       - ./client:/app
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
-    depends_on:
-      - server
-    networks:
-      - app-network-dev
-    command: npm start
+      - PORT=3003
+      - FAST_REFRESH=false
+      - WDS_SOCKET_HOST=localhost
+      - WDS_SOCKET_PORT=0
+      - WDS_SOCKET_PATH=
+      - WDS_SOCKET_PROTOCOL=
 
-  # Cloudflare Tunnel
-  cloudflare-tunnel:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflare_tunnel_dev
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run --token eyJhIjoiYzczNGNkZjcxZmU2ZmQ1NTExYTJmOGEyNDQ3ZWQwM2YiLCJ0IjoiN2Y2YmZiYTctZmE3NS00NmVkLTg1MTktZWQ3YjYzNGE5ODBhIiwicyI6Ik9XUmtPVEk0TmpVdFpUTXpZaTAwTW1Ka0xXSTVZVEl0T1RCbFpEYzNNV1ptTVdObSJ9
     depends_on:
-      - client
       - server
     networks:
       - app-network-dev
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - npm_proxy
+    command: npm start
 
 volumes:
   db_data_dev:
 
 networks:
   app-network-dev:
-    driver: bridge 
+    driver: bridge
+  npm_proxy:
+    external: true 

@@ -429,7 +429,7 @@ router.post('/verify-code',
       // Set HTTP-only cookie with the token
       const cookieOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production', // Only use secure in production
+        secure: req.secure || process.env.NODE_ENV === 'production', // Use secure if request is HTTPS or in production
         sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
         path: '/'
@@ -534,7 +534,6 @@ router.get('/me', verifyToken, async (req, res) => {
         lastName: user.last_name,
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
-        church_id: user.church_id,
         gatheringAssignments: assignmentsWithNumbers,
         unreadNotifications: Number(notificationCount[0].count)
       }
@@ -575,7 +574,7 @@ router.post('/refresh', verifyToken, async (req, res) => {
     // Set new HTTP-only cookie with the refreshed token
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: req.secure || process.env.NODE_ENV === 'production',
       sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
       path: '/'
@@ -767,7 +766,7 @@ router.get('/check-users', async (req, res) => {
 router.post('/logout', verifyToken, (req, res) => {
   res.clearCookie('authToken', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: req.secure || process.env.NODE_ENV === 'production',
     sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
     path: '/'
   });
@@ -780,7 +779,7 @@ router.post('/clear-expired-token', (req, res) => {
     // Clear the auth cookie
     res.clearCookie('authToken', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: req.secure || process.env.NODE_ENV === 'production',
       sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
       path: '/'
     });

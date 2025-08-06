@@ -1,6 +1,6 @@
 const express = require('express');
 const Database = require('../config/database');
-const { verifyToken, requireRole } = require('../middleware/auth');
+const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
@@ -66,7 +66,7 @@ router.get('/', async (req, res) => {
 });
 
 // Create gathering type (Admin/Coordinator)
-router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_GATHERING_TYPE'), async (req, res) => {
   try {
     const { name, description, dayOfWeek, startTime, durationMinutes, frequency, setAsDefault } = req.body;
     
@@ -100,7 +100,7 @@ router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
 });
 
 // Update gathering type (Admin/Coordinator)
-router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHERING_TYPE'), async (req, res) => {
   try {
     const gatheringId = parseInt(req.params.id);
     const { name, description, dayOfWeek, startTime, durationMinutes, frequency } = req.body;
@@ -159,7 +159,7 @@ router.get('/:id/members', async (req, res) => {
 });
 
 // Delete gathering type (Admin only)
-router.delete('/:id', requireRole(['admin']), async (req, res) => {
+router.delete('/:id', requireRole(['admin']), auditLog('DELETE_GATHERING_TYPE'), async (req, res) => {
   try {
     const { id } = req.params;
     

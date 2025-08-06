@@ -1,6 +1,6 @@
 const express = require('express');
 const Database = require('../config/database');
-const { verifyToken, requireRole } = require('../middleware/auth');
+const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 
@@ -78,7 +78,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
 });
 
 // Deduplicate individuals (Admin only)
-router.post('/deduplicate', requireRole(['admin']), async (req, res) => {
+router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVIDUALS'), async (req, res) => {
   try {
     const { keepId, deleteIds, mergeAssignments } = req.body;
     
@@ -173,7 +173,7 @@ router.get('/', async (req, res) => {
 });
 
 // Create individual (Admin/Coordinator)
-router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVIDUAL'), async (req, res) => {
   try {
     const { firstName, lastName, familyId } = req.body;
     
@@ -193,7 +193,7 @@ router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
 });
 
 // Update individual (Admin/Coordinator)
-router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
     const { firstName, lastName, familyId } = req.body;
@@ -219,7 +219,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
 });
 
 // Delete individual (Admin/Coordinator) - Soft delete by setting is_active = false
-router.delete('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -244,7 +244,7 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), async (req, res) =>
 });
 
 // Assign individual to gathering (Admin/Coordinator)
-router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']), async (req, res) => {
+router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']), auditLog('ASSIGN_INDIVIDUAL_TO_GATHERING'), async (req, res) => {
   try {
     const { id, gatheringId } = req.params;
     

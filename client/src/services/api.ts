@@ -302,6 +302,9 @@ export const attendanceAPI = {
     isChild: boolean;
   }>) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/regulars`, { people }),
+    
+  addVisitorFamilyToService: (gatheringTypeId: number, date: string, familyId: number) => 
+    api.post(`/attendance/${gatheringTypeId}/${date}/visitor-family/${familyId}`),
 };
 
 // Users API
@@ -383,6 +386,20 @@ export const familiesAPI = {
     
   create: (data: { familyName: string; familyIdentifier?: string }) => 
     api.post('/families', data),
+    
+  createVisitorFamily: (data: {
+    familyName: string;
+    visitorType: 'local' | 'traveller';
+    notes?: string;
+    people: Array<{
+      firstName: string;
+      lastName: string;
+      firstUnknown: boolean;
+      lastUnknown: boolean;
+      isChild: boolean;
+    }>;
+  }) => 
+    api.post('/families/visitor', data),
 };
 
 // Individuals API

@@ -3,6 +3,20 @@
 
 USE church_attendance;
 
+-- Create migrations table first
+CREATE TABLE IF NOT EXISTS migrations (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  version VARCHAR(50) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  execution_time_ms INT DEFAULT 0,
+  status ENUM('pending', 'success', 'failed') DEFAULT 'pending',
+  executed_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_version (version),
+  INDEX idx_status (status)
+) ENGINE=InnoDB;
+
 -- Create users table
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -299,13 +313,57 @@ CREATE TABLE IF NOT EXISTS onboarding_progress (
   INDEX idx_step (current_step)
 ) ENGINE=InnoDB;
 
--- Create default admin user
-INSERT IGNORE INTO users (email, role, first_name, last_name, is_active, first_login_completed) 
-VALUES ('admin@church.local', 'admin', 'System', 'Administrator', true, true);
+-- ========================================
+-- DEVELOPMENT DATA INITIALIZATION
+-- ========================================
 
--- No default gathering types - users will create their own during onboarding
+-- Create development users with different roles
+INSERT IGNORE INTO users (id, email, role, first_name, last_name, is_active, first_login_completed) VALUES
+(1, 'admin@church.local', 'admin', 'Development', 'Admin', true, true),
+(2, 'dev@church.local', 'admin', 'Development', 'User', true, true),
+(3, 'coord@church.local', 'coordinator', 'Development', 'Coordinator', true, true),
+(4, 'at@church.local', 'attendance_taker', 'Development', 'Attendance Taker', true, true);
 
--- Mark baseline migrations as completed to prevent them from appearing as pending
+-- Create church settings
+INSERT IGNORE INTO church_settings (id, church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed) VALUES
+(1, 'Development Church', 'AU', 'Australia/Sydney', 'Development Church', 'dev@church.local', true);
+
+-- Create gathering types
+INSERT IGNORE INTO gathering_types (id, name, description, day_of_week, start_time, duration_minutes, frequency, group_by_family, is_active, created_by) VALUES
+(1, 'Sunday Morning Service', 'Main worship service on Sunday mornings at 10:00 AM', 'Sunday', '10:00:00', 90, 'weekly', true, true, 1),
+(2, 'Youth Group', 'Youth ministry meeting on Friday evenings', 'Friday', '19:00:00', 120, 'weekly', false, true, 1);
+
+-- Assign all users to all gathering types
+INSERT IGNORE INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by) VALUES
+(1, 1, 1), (1, 2, 1),  -- Admin
+(2, 1, 1), (2, 2, 1),  -- Dev user
+(3, 1, 1), (3, 2, 1),  -- Coordinator
+(4, 1, 1), (4, 2, 1);  -- Attendance Taker
+
+-- Create development families
+INSERT IGNORE INTO families (id, family_name, family_identifier, created_by) VALUES
+(1, 'Smith Family', 'SMITH001', 1),
+(2, 'Johnson Family', 'JOHNSON001', 1),
+(3, 'Williams Family', 'WILLIAMS001', 1);
+
+-- Create development individuals
+INSERT IGNORE INTO individuals (id, first_name, last_name, family_id, date_of_birth, is_regular_attendee, is_active, created_by) VALUES
+(1, 'John', 'Smith', 1, '1980-05-15', true, true, 1),
+(2, 'Sarah', 'Smith', 1, '1982-08-22', true, true, 1),
+(3, 'Emma', 'Smith', 1, '2010-03-10', true, true, 1),
+(4, 'Michael', 'Johnson', 2, '1975-12-03', true, true, 1),
+(5, 'Lisa', 'Johnson', 2, '1978-07-18', true, true, 1),
+(6, 'David', 'Williams', 3, '1985-01-25', true, true, 1),
+(7, 'Jennifer', 'Williams', 3, '1987-11-08', true, true, 1),
+(8, 'Sophie', 'Williams', 3, '2012-09-14', true, true, 1);
+
+-- Add all individuals to Sunday Morning Service gathering list
+INSERT IGNORE INTO gathering_lists (gathering_type_id, individual_id, added_by) VALUES
+(1, 1, 1), (1, 2, 1), (1, 3, 1),  -- Smith Family
+(1, 4, 1), (1, 5, 1),              -- Johnson Family  
+(1, 6, 1), (1, 7, 1), (1, 8, 1);  -- Williams Family
+
+-- Mark all migrations as completed to prevent them from appearing as pending
 -- These migrations are already included in the init.sql schema above
 INSERT IGNORE INTO migrations (version, name, description, execution_time_ms, status, executed_at) VALUES
 ('001', 'fix_audit_log', 'Baseline migration - included in init.sql schema', 0, 'success', NOW()),

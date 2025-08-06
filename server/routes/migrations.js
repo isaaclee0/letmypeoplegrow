@@ -266,6 +266,12 @@ function getMigrationDescription(version) {
     '001_fix_audit_log': 'Fix audit_log table structure - add entity_type and entity_id columns',
     '002_add_contact_fields': 'Add is_visitor flag to individuals table',
     '003_enhance_visitors_table': 'Enhance visitors table with additional fields',
+    '004_fix_attendance_duplicates': 'Fix attendance duplicates by adding unique constraints',
+    '005_add_attendance_updated_at': 'Add updated_at column to attendance_records table',
+    '006_add_church_isolation': 'Add church isolation support with church_id columns',
+    '007_add_data_access_setting': 'Add data access setting for church isolation',
+    '008_remove_api_keys_tables': 'Remove unused API keys tables',
+    '009_add_visitor_family_support': 'Add visitor family support to families table',
 
     // Add more descriptions as migrations are created
   };

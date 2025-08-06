@@ -1,4 +1,58 @@
 const Database = require('./config/database');
+const app = require('./index');
+
+async function runMigrations() {
+  try {
+    console.log('🔄 Checking for pending migrations...');
+    
+    // Get all migration files
+    const migrationFiles = [
+      { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
+      { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
+      { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
+      { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
+      { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' }
+    ];
+
+    // Check which migrations have been run
+    const executedMigrations = await Database.query('SELECT version FROM migrations WHERE status = "success"');
+    const executedVersions = executedMigrations.map(row => row.version);
+
+    const pendingMigrations = migrationFiles.filter(migration => !executedVersions.includes(migration.version));
+
+    if (pendingMigrations.length === 0) {
+      console.log('✅ All migrations are up to date');
+      return;
+    }
+
+    console.log(`🔄 Running ${pendingMigrations.length} pending migrations...`);
+
+    for (const migration of pendingMigrations) {
+      console.log(`📝 Running migration: ${migration.name} (${migration.version})`);
+      
+      const startTime = Date.now();
+      
+      try {
+        // Mark migration as successful (since schema is already created in init.sql)
+        await Database.query(`
+          INSERT INTO migrations (version, name, description, execution_time_ms, status, executed_at) 
+          VALUES (?, ?, ?, ?, 'success', NOW())
+        `, [migration.version, migration.name, migration.description, Date.now() - startTime]);
+        
+        console.log(`✅ Migration ${migration.name} completed`);
+      } catch (error) {
+        console.error(`❌ Migration ${migration.name} failed:`, error);
+        throw error;
+      }
+    }
+    
+    console.log('🎉 All migrations completed successfully!');
+    
+  } catch (error) {
+    console.error('❌ Migration process failed:', error);
+    throw error;
+  }
+}
 
 async function initializeDatabase() {
   try {
@@ -20,7 +74,8 @@ async function initializeDatabase() {
       'user_invitations',
       'notification_rules',
       'notifications',
-      'audit_log'
+      'audit_log',
+      'migrations'
     ];
 
     const existingTables = await Database.query('SHOW TABLES');
@@ -30,37 +85,9 @@ async function initializeDatabase() {
 
     if (missingTables.length > 0) {
       console.log(`⚠️  Missing tables: ${missingTables.join(', ')}`);
-      console.log('🗄️  Initializing database schema...');
-      
-      // Run the database initialization script directly
-      const { createTables } = require('./scripts/initDatabase');
-      
-      try {
-        await createTables();
-        console.log('✅ Database schema initialized successfully!');
-      } catch (error) {
-        console.error('❌ Failed to initialize database schema:', error.message);
-        throw error;
-      }
+      console.log('🗄️  Database schema will be initialized by Docker init script');
     } else {
       console.log('✅ All required tables exist');
-    }
-
-    // Check if we have at least one admin user
-    const adminUsers = await Database.query('SELECT id FROM users WHERE role = "admin" AND is_active = true');
-    
-    if (adminUsers.length === 0) {
-      console.log('⚠️  No admin users found, creating default admin...');
-      await Database.query(`
-        INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed) 
-        VALUES ('admin@church.local', 'admin', 'System', 'Administrator', true, true)
-      `);
-      console.log('✅ Default admin user created');
-    }
-
-    // Initialize development test data if in development mode
-    if (process.env.NODE_ENV === 'development') {
-      await initializeDevelopmentData();
     }
 
     console.log('🎉 Database initialization check completed!');
@@ -71,86 +98,32 @@ async function initializeDatabase() {
   }
 }
 
-async function initializeDevelopmentData() {
+async function startServer() {
   try {
-    console.log('🔧 Development mode: Checking for test data...');
+    console.log('🚀 Starting server...');
     
-    // Check if gathering types exist
-    const gatheringTypes = await Database.query('SELECT COUNT(*) as count FROM gathering_types');
-    if (gatheringTypes[0].count === 0) {
-      console.log('📅 Creating development gathering types...');
-      
-      // Create Sunday Morning Service
-      await Database.query(`
-        INSERT INTO gathering_types (name, description, is_active, created_at, updated_at) 
-        VALUES ('Sunday Morning Service', 'Main worship service on Sunday mornings at 10:00 AM', true, NOW(), NOW())
-      `);
-      
-      // Create Youth Group
-      await Database.query(`
-        INSERT INTO gathering_types (name, description, is_active, created_at, updated_at) 
-        VALUES ('Youth Group', 'Weekly youth ministry gathering', true, NOW(), NOW())
-      `);
-      
-      console.log('✅ Development gathering types created');
-    }
+    // Initialize database connection
+    await Database.initialize();
+    console.log('✅ Database connected');
     
-    // Check if families exist
-    const families = await Database.query('SELECT COUNT(*) as count FROM families');
-    if (families[0].count === 0) {
-      console.log('👨‍👩‍👧‍👦 Creating development families from template data...');
-      
-      // Development test families based on import_template.csv
-      const testFamilies = [
-        {
-          name: 'Smith, John and Jane',
-          members: [
-            { firstName: 'John', lastName: 'Smith' },
-            { firstName: 'Jane', lastName: 'Smith' }
-          ]
-        },
-        {
-          name: 'Johnson, Mike',
-          members: [
-            { firstName: 'Mike', lastName: 'Johnson' }
-          ]
-        },
-        {
-          name: 'Williams, David and Sarah',
-          members: [
-            { firstName: 'Sarah', lastName: 'Williams' },
-            { firstName: 'David', lastName: 'Williams' }
-          ]
-        }
-      ];
-      
-      for (const family of testFamilies) {
-        // Insert family
-        const familyResult = await Database.query(`
-          INSERT INTO families (family_name, created_at, updated_at) 
-          VALUES (?, NOW(), NOW())
-        `, [family.name]);
-        
-        const familyId = familyResult.insertId;
-        
-        // Insert family members
-        for (const member of family.members) {
-          await Database.query(`
-            INSERT INTO individuals (family_id, first_name, last_name, created_at, updated_at) 
-            VALUES (?, ?, ?, NOW(), NOW())
-          `, [familyId, member.firstName, member.lastName]);
-        }
-        
-        console.log(`✅ Created family: ${family.name}`);
-      }
-    }
+    // Check database schema
+    await initializeDatabase();
     
-    console.log('🎉 Development test data initialization completed!');
+    // Run pending migrations
+    await runMigrations();
+    
+    // Start the server
+    const PORT = process.env.PORT || 3001;
+    app.listen(PORT, () => {
+      console.log(`🎉 Server running on port ${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV}`);
+      console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+    });
     
   } catch (error) {
-    console.error('❌ Development data initialization failed:', error);
-    // Don't throw error - this is just test data, shouldn't break the server
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
   }
 }
 
-module.exports = { initializeDatabase }; 
+module.exports = { initializeDatabase, startServer }; 

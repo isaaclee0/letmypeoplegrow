@@ -56,7 +56,7 @@ const loadRoutes = () => {
     'auth', 'users', 'gatherings', 'families', 'individuals', 
     'attendance', 'reports', 'notifications', 'onboarding', 
     'invitations', 'csv-import', 'migrations', 'test', 
-    'notification_rules', 'importrange', 'settings'
+    'notification_rules', 'importrange', 'settings', 'activities'
   ];
 
   // Check external service availability
@@ -180,17 +180,7 @@ app.use(cors({
 
 
 
-// Development cache-busting middleware
-if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
-  app.use((req, res, next) => {
-    res.set({
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    });
-    next();
-  });
-}
+
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));

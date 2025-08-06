@@ -1,6 +1,6 @@
 const express = require('express');
 const Database = require('../config/database');
-const { verifyToken, requireGatheringAccess } = require('../middleware/auth');
+const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware/auth');
 const { requireIsVisitorColumn, requireLastAttendedColumn } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 
@@ -11,6 +11,7 @@ router.use(verifyToken);
 router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
+    const { search } = req.query; // Add search parameter
     
     // Get attendance session
     const sessions = await Database.query(`
@@ -38,27 +39,124 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       `, [sessionId]);
     }
 
-    // Get regular attendees with attendance status (always return the list)
-    const attendanceList = await Database.query(`
+    // Get regular attendees and visitor families with attendance status
+    let attendanceListQuery = `
       SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
-             COALESCE(ar.present, false) as present
+             COALESCE(ar.present, false) as present,
+             i.is_visitor,
+             f.familyType,
+             f.lastAttended,
+             v.last_attended as old_visitor_last_attended
       FROM gathering_lists gl
       JOIN individuals i ON gl.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
+      LEFT JOIN (
+        SELECT name, MAX(last_attended) as last_attended
+        FROM visitors 
+        GROUP BY name
+      ) v ON v.name = CONCAT(i.first_name, ' ', i.last_name)
       WHERE gl.gathering_type_id = ? 
-        AND i.is_active = true 
-        AND (i.is_visitor = false OR i.is_visitor IS NULL)
-      ORDER BY i.last_name, i.first_name
-    `, [sessionId, gatheringTypeId]);
+        AND i.is_active = true
+    `;
+
+    // Calculate date ranges for filtering
+    const currentDate = new Date(date);
+    const sixWeeksAgo = new Date(currentDate);
+    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42); // 6 weeks = 42 days
+    
+    const twoWeeksAgo = new Date(currentDate);
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14); // 2 weeks = 14 days
+
+    let attendanceListParams = [sessionId, gatheringTypeId];
+
+    // Add filtering logic
+    if (search && search.trim()) {
+      // When searching, include all visitors regardless of absence
+      attendanceListQuery += ` AND (
+        i.first_name LIKE ? OR 
+        i.last_name LIKE ? OR 
+        f.family_name LIKE ?
+      )`;
+      const searchTerm = `%${search.trim()}%`;
+      attendanceListParams.push(searchTerm, searchTerm, searchTerm);
+    } else {
+      // When not searching, filter visitors based on absence duration
+      // Include regular families, new visitor families, and old visitors within time limit
+      attendanceListQuery += ` AND (
+        f.familyType = 'regular' OR 
+        f.familyType IS NULL OR
+        (f.familyType = 'visitor' AND f.lastAttended >= ?) OR
+        (i.is_visitor = true AND f.familyType IS NULL AND v.last_attended >= ?)
+      )`;
+      // Use the more restrictive date (2 weeks for temporary, 6 weeks for potential regular)
+      attendanceListParams.push(twoWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0]);
+    }
+
+    attendanceListQuery += ` ORDER BY i.last_name, i.first_name`;
+
+    const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+
+    // Get potential visitor attendees based on absence duration
+
+    // Build the visitor query with filtering logic
+    let visitorQuery = `
+      SELECT DISTINCT 
+        v.name, 
+        v.visitor_type, 
+        v.visitor_family_group, 
+        v.notes, 
+        v.last_attended,
+        f.family_name, 
+        f.id as family_id,
+        CASE 
+          WHEN v.visitor_type = 'potential_regular' THEN 
+            v.last_attended >= ?
+          WHEN v.visitor_type = 'temporary_other' THEN 
+            v.last_attended >= ?
+          ELSE true
+        END as within_absence_limit
+      FROM visitors v
+      LEFT JOIN individuals i ON i.first_name = SUBSTRING_INDEX(v.name, ' ', 1) 
+        AND i.last_name = SUBSTRING(v.name, LENGTH(SUBSTRING_INDEX(v.name, ' ', 1)) + 2)
+        AND i.is_visitor = true
+      LEFT JOIN families f ON i.family_id = f.id
+      WHERE v.session_id IS NOT NULL
+    `;
+
+    let visitorParams = [sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0]];
+
+    // Add search filter if provided
+    if (search && search.trim()) {
+      visitorQuery += ` AND (v.name LIKE ? OR f.family_name LIKE ?)`;
+      const searchTerm = `%${search.trim()}%`;
+      visitorParams.push(searchTerm, searchTerm);
+    } else {
+      // Only apply absence filtering when not searching
+      visitorQuery += ` AND (
+        (v.visitor_type = 'potential_regular' AND v.last_attended >= ?) OR
+        (v.visitor_type = 'temporary_other' AND v.last_attended >= ?)
+      )`;
+      visitorParams.push(sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0]);
+    }
+
+    visitorQuery += ` ORDER BY v.last_attended DESC, v.name`;
+
+    const potentialVisitors = await Database.query(visitorQuery, visitorParams);
 
     // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion
     const responseData = processApiResponse({
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
-        present: attendee.present === 1 || attendee.present === true
+        present: attendee.present === 1 || attendee.present === true,
+        isVisitor: Boolean(attendee.is_visitor),
+        lastAttended: attendee.last_attended
       })),
-      visitors
+      visitors,
+      potentialVisitors: potentialVisitors.map(visitor => ({
+        ...visitor,
+        withinAbsenceLimit: visitor.within_absence_limit === 1 || visitor.within_absence_limit === true
+      }))
     });
 
     res.json(responseData);
@@ -69,7 +167,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
 });
 
 // Record attendance
-router.post('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) => {
+router.post('/:gatheringTypeId/:date', requireGatheringAccess, auditLog('RECORD_ATTENDANCE'), async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { attendanceRecords, visitors } = req.body;
@@ -180,7 +278,7 @@ router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (r
 });
 
 // Add visitor to a session and create individual
-router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (req, res) => {
+router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog('ADD_VISITOR'), async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { name, visitorType, visitorFamilyGroup, familyName, notes, people } = req.body;
@@ -317,8 +415,18 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, async (r
           }
         }
 
-        // Visitors should not be added to gathering_lists or attendance_records
-        // They are tracked separately in the visitors table
+        // Add visitor to gathering list so they appear in subsequent weeks
+        const existingGatheringList = await conn.query(`
+          SELECT id FROM gathering_lists 
+          WHERE gathering_type_id = ? AND individual_id = ?
+        `, [gatheringTypeId, individualId]);
+
+        if (existingGatheringList.length === 0) {
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            VALUES (?, ?, ?)
+          `, [gatheringTypeId, individualId, req.user.id]);
+        }
 
         createdIndividuals.push({
           id: individualId,
@@ -547,7 +655,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
 });
 
 // Add regular attendee to a gathering from attendance page
-router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, async (req, res) => {
+router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, auditLog('ADD_REGULAR_ATTENDEE'), async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { people } = req.body;
@@ -741,6 +849,102 @@ router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAcc
   } catch (error) {
     console.error('Delete visitor error:', error);
     res.status(500).json({ error: 'Failed to delete visitor.' });
+  }
+});
+
+// Add visitor family to service
+router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGatheringAccess, auditLog('ADD_VISITOR_FAMILY_TO_SERVICE'), async (req, res) => {
+  try {
+    const { gatheringTypeId, date, familyId } = req.params;
+
+    await Database.transaction(async (conn) => {
+      // Verify the family exists and is a visitor family
+      const familyResult = await conn.query(`
+        SELECT id, family_name, familyType 
+        FROM families 
+        WHERE id = ? AND familyType = 'visitor'
+      `, [familyId]);
+
+      if (familyResult.length === 0) {
+        return res.status(404).json({ error: 'Visitor family not found' });
+      }
+
+      // Get or create attendance session
+      let sessionResult = await conn.query(`
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+      `, [gatheringTypeId, date, req.user.id]);
+
+      let sessionId;
+      if (sessionResult.insertId) {
+        sessionId = Number(sessionResult.insertId);
+      } else {
+        const sessions = await conn.query(
+          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          [gatheringTypeId, date]
+        );
+        sessionId = Number(sessions[0].id);
+      }
+
+      // Get all individuals in the visitor family
+      const individuals = await conn.query(`
+        SELECT id, first_name, last_name 
+        FROM individuals 
+        WHERE family_id = ? AND is_active = true
+      `, [familyId]);
+
+      if (individuals.length === 0) {
+        return res.status(400).json({ error: 'No individuals found in visitor family' });
+      }
+
+      const createdIndividuals = [];
+
+      // Add each individual to the gathering list and mark as present
+      for (const individual of individuals) {
+        // Add to gathering list if not already there
+        const existingGatheringList = await conn.query(`
+          SELECT id FROM gathering_lists 
+          WHERE gathering_type_id = ? AND individual_id = ?
+        `, [gatheringTypeId, individual.id]);
+
+        if (existingGatheringList.length === 0) {
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            VALUES (?, ?, ?)
+          `, [gatheringTypeId, individual.id, req.user.id]);
+        }
+
+        // Mark as present in attendance records
+        await conn.query(`
+          INSERT INTO attendance_records (session_id, individual_id, present, recorded_by)
+          VALUES (?, ?, true, ?)
+          ON DUPLICATE KEY UPDATE present = VALUES(present), recorded_by = VALUES(recorded_by), updated_at = NOW()
+        `, [sessionId, individual.id, req.user.id]);
+
+        createdIndividuals.push({
+          id: Number(individual.id),
+          firstName: individual.first_name,
+          lastName: individual.last_name,
+          present: true
+        });
+      }
+
+      // Update family's last attended date
+      await conn.query(`
+        UPDATE families 
+        SET lastAttended = ? 
+        WHERE id = ?
+      `, [date, familyId]);
+
+      res.json({ 
+        message: 'Visitor family added to service successfully',
+        individuals: createdIndividuals
+      });
+    });
+  } catch (error) {
+    console.error('Add visitor family to service error:', error);
+    res.status(500).json({ error: 'Failed to add visitor family to service.' });
   }
 });
 

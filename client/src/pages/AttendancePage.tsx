@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
-import { gatheringsAPI, attendanceAPI, authAPI, GatheringType, Individual, Visitor } from '../services/api';
+import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import { 
@@ -118,13 +118,18 @@ const AttendancePage: React.FC = () => {
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
-  const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
+  const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number | string]: boolean }>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
     visitor: Visitor | null;
     deleteFamily: boolean;
     message: string;
   }>({ visitor: null, deleteFamily: false, message: '' });
+
+  // Add state for recent visitors
+  const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
+  const [showRecentVisitors, setShowRecentVisitors] = useState(false);
+  const [allVisitors, setAllVisitors] = useState<Visitor[]>([]);
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
     personType: 'visitor', // 'regular' or 'visitor'
@@ -305,6 +310,109 @@ const AttendancePage: React.FC = () => {
       saveLastViewed(selectedGathering.id, selectedDate);
     }
   }, [selectedGathering, selectedDate, loadAttendanceData]);
+
+  // Load recent visitors when gathering changes
+  useEffect(() => {
+    const loadRecentVisitors = async () => {
+      if (!selectedGathering) return;
+      
+      try {
+        const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+        setRecentVisitors(response.data.visitors || []);
+      } catch (err) {
+        console.error('Failed to load recent visitors:', err);
+      }
+    };
+
+    loadRecentVisitors();
+  }, [selectedGathering]);
+
+  // Combine current visitors with recent visitors from last 6 weeks
+  useEffect(() => {
+    if (!selectedGathering) return;
+
+    const loadAllVisitors = async () => {
+      try {
+        // Get current visitors for this date
+        const currentResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
+        const currentVisitors = currentResponse.data.visitors || [];
+
+        // Get recent visitors from last 6 weeks
+        const sixWeeksAgo = new Date();
+        sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42); // 6 weeks = 42 days
+
+        const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+        const allRecentVisitors = recentResponse.data.visitors || [];
+        
+        // Filter recent visitors to only include those from last 6 weeks
+        const recentVisitorsLast6Weeks = allRecentVisitors.filter((visitor: Visitor) => {
+          if (!visitor.lastAttended) return false;
+          const lastAttendedDate = new Date(visitor.lastAttended);
+          return lastAttendedDate >= sixWeeksAgo;
+        });
+
+        // Combine current visitors with recent visitors, avoiding duplicates
+        const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
+        const combinedVisitors = [
+          ...currentVisitors,
+          ...recentVisitorsLast6Weeks.filter((v: Visitor) => !currentVisitorIds.has(v.id))
+        ];
+
+        setAllVisitors(combinedVisitors);
+        
+        // Initialize visitor attendance state
+        const initialVisitorAttendance: { [key: number | string]: boolean } = {};
+        combinedVisitors.forEach((visitor: Visitor, index: number) => {
+          // Use visitor ID if available, otherwise use a temporary key
+          const visitorKey = visitor.id || `temp_${index}`;
+          // Current visitors are checked by default, recent visitors are unchecked
+          initialVisitorAttendance[visitorKey] = currentVisitors.some((cv: Visitor) => cv.id === visitor.id);
+        });
+        setVisitorAttendance(initialVisitorAttendance);
+      } catch (err) {
+        console.error('Failed to load all visitors:', err);
+      }
+    };
+
+    loadAllVisitors();
+  }, [selectedGathering, selectedDate]);
+
+  // Function to quickly add a recent visitor
+  const quickAddRecentVisitor = async (recentVisitor: Visitor) => {
+    if (!selectedGathering) return;
+    
+    try {
+      // Parse the visitor name to extract people
+      const nameParts = recentVisitor.name.trim().split(' & ');
+      const people = nameParts.map(namePart => {
+        const personParts = namePart.trim().split(' ');
+        const firstName = personParts[0] || 'Unknown';
+        const lastName = personParts.slice(1).join(' ') || 'Unknown';
+        return {
+          firstName: firstName === 'Unknown' ? '' : firstName,
+          lastName: lastName === 'Unknown' ? '' : lastName,
+          firstUnknown: firstName === 'Unknown',
+          lastUnknown: lastName === 'Unknown',
+          isChild: false
+        };
+      });
+
+      // Add as visitor
+      const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
+        people,
+        visitorType: recentVisitor.visitorType,
+        notes: recentVisitor.notes
+      });
+
+      showSuccess(`Added ${recentVisitor.name} from recent visitors`);
+      
+      // Reload attendance data
+      await loadAttendanceData();
+    } catch (err: any) {
+      console.error('Failed to add recent visitor:', err);
+      setError(err.response?.data?.error || 'Failed to add recent visitor');
+    }
+  };
 
   const toggleAttendance = async (individualId: number) => {
     const now = Date.now();
@@ -686,18 +794,30 @@ const AttendancePage: React.FC = () => {
         // Add as regular attendee (to People and gathering list)
         response = await attendanceAPI.addRegularAttendee(selectedGathering.id, selectedDate, people);
       } else {
-        // Add as visitor
-        response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
-          people,
-          visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
-          notes: notes ? notes : undefined
+        // NEW APPROACH: Create visitor family in People system and add to service
+        // Generate family name from the people
+        const familyName = generateFamilyName(people);
+        
+        // Create visitor family in People system
+        const familyResponse = await familiesAPI.createVisitorFamily({
+          familyName,
+          visitorType: visitorForm.visitorType === 'local' ? 'local' : 'traveller',
+          notes: notes ? notes : undefined,
+          people
         });
+        
+        // Add the family to the current service
+        response = await attendanceAPI.addVisitorFamilyToService(
+          selectedGathering.id, 
+          selectedDate, 
+          familyResponse.data.familyId
+        );
       }
 
       // Show success toast
       if (response.data.individuals && response.data.individuals.length > 0) {
         const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
-        const personTypeText = visitorForm.personType === 'regular' ? 'Added to regular attendees' : 'Added as visitor';
+        const personTypeText = visitorForm.personType === 'regular' ? 'Added to regular attendees' : 'Added as visitor family';
         showSuccess(`${personTypeText}: ${names}`);
       } else {
         showSuccess('Added successfully');
@@ -754,7 +874,9 @@ const AttendancePage: React.FC = () => {
 
       const notes = visitorForm.notes.trim();
 
-      // Update visitor in backend
+      // NEW APPROACH: Update visitor family in People system
+      // For now, we'll keep the old approach for editing since it's more complex
+      // TODO: Implement proper editing of visitor families in People system
       const response = await attendanceAPI.updateVisitor(selectedGathering.id, selectedDate, editingVisitor.id!, {
         people,
         visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
@@ -822,40 +944,19 @@ const AttendancePage: React.FC = () => {
     return groups;
   }, {} as any);
 
-  // Filter families based on search term
-  const filteredGroupedAttendees = Object.values(groupedAttendees).filter((group: any) => {
-    if (!searchTerm.trim()) return true;
-    
-    const searchLower = searchTerm.toLowerCase();
-    
-    // Check if any family member's name contains the search term
-    return group.members.some((member: Individual) => {
-      const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
-      return fullName.includes(searchLower);
-    });
-  });
-
-  // Sort members within each group
-  filteredGroupedAttendees.forEach((group: any) => {
-    group.members.sort((a: Individual, b: Individual) => {
-      // Sort by last name, then first name
-      const lastNameComparison = a.lastName.localeCompare(b.lastName);
-      if (lastNameComparison !== 0) return lastNameComparison;
-      return a.firstName.localeCompare(b.firstName);
-    });
-  });
-
   // Group visitors by family
   const groupedVisitors = useMemo(() => {
     if (!groupByFamily) {
-      return [{ familyId: null, familyName: null, members: visitors, isFamily: false }];
+      return [{ familyId: null, familyName: null, members: allVisitors, isFamily: false, groupKey: 'ungrouped' }];
     }
 
-    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean } } = {};
+    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean; groupKey: string } } = {};
 
-    visitors.forEach(visitor => {
+    allVisitors.forEach((visitor, index) => {
       // Group by visitor_family_group if it exists, otherwise treat as individual
-      const groupKey = visitor.visitorFamilyGroup ? `family_${visitor.visitorFamilyGroup}` : `individual_${visitor.id}`;
+      // Use a fallback for visitors without IDs to ensure unique keys
+      const visitorId = visitor.id || `temp_${index}`;
+      const groupKey = visitor.visitorFamilyGroup ? `family_${visitor.visitorFamilyGroup}` : `individual_${visitorId}`;
       
       if (!grouped[groupKey]) {
         const isFamily = !!visitor.visitorFamilyGroup;
@@ -863,7 +964,7 @@ const AttendancePage: React.FC = () => {
         
         if (isFamily) {
           // For families, collect all names and create a family name
-          const familyMembers = visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
+          const familyMembers = allVisitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
           
           // Use first two members added (by ID order, not alphabetically)
           const sortedMembers = familyMembers.sort((a, b) => (a.id || 0) - (b.id || 0));
@@ -946,17 +1047,54 @@ const AttendancePage: React.FC = () => {
           familyId: null,
           familyName,
           members: [],
-          isFamily
+          isFamily,
+          groupKey
         };
       }
       grouped[groupKey].members.push(visitor);
     });
 
     return Object.values(grouped);
-  }, [visitors, groupByFamily]);
+  }, [allVisitors, groupByFamily]);
+
+  // Filter families based on search term
+  const filteredGroupedAttendees = Object.values(groupedAttendees).filter((group: any) => {
+    if (!searchTerm.trim()) return true;
+    
+    const searchLower = searchTerm.toLowerCase();
+    
+    // Check if any family member's name contains the search term
+    return group.members.some((member: Individual) => {
+      const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
+      return fullName.includes(searchLower);
+    });
+  });
+
+  // Filter visitors based on search term
+  const filteredGroupedVisitors = groupedVisitors.filter((group: any) => {
+    if (!searchTerm.trim()) return true;
+    
+    const searchLower = searchTerm.toLowerCase();
+    
+    // Check if any visitor's name contains the search term
+    return group.members.some((visitor: Visitor) => {
+      const visitorName = visitor.name.toLowerCase();
+      return visitorName.includes(searchLower);
+    });
+  });
+
+  // Sort members within each group
+  filteredGroupedAttendees.forEach((group: any) => {
+    group.members.sort((a: Individual, b: Individual) => {
+      // Sort by last name, then first name
+      const lastNameComparison = a.lastName.localeCompare(b.lastName);
+      if (lastNameComparison !== 0) return lastNameComparison;
+      return a.firstName.localeCompare(b.firstName);
+    });
+  });
 
   // Add toggle function for visitors
-  const toggleVisitorAttendance = (visitorId: number) => {
+  const toggleVisitorAttendance = (visitorId: number | string) => {
     setVisitorAttendance(prev => ({
       ...prev,
       [visitorId]: !prev[visitorId]
@@ -965,19 +1103,19 @@ const AttendancePage: React.FC = () => {
 
   // Add toggle all family function for visitors
   const toggleAllVisitorFamily = (familyGroup: number | string) => {
-    const familyVisitors = visitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
-    const familyVisitorIds = familyVisitors.map(visitor => visitor.id!).filter(id => id !== undefined);
+    const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
+    const familyVisitorKeys = familyVisitors.map((visitor, index) => visitor.id || `temp_${index}`);
     
     // Count how many family members are currently present
-    const presentCount = familyVisitorIds.filter(id => visitorAttendance[id]).length;
+    const presentCount = familyVisitorKeys.filter(key => visitorAttendance[key]).length;
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
     
     setVisitorAttendance(prev => {
       const updated = { ...prev };
-      familyVisitorIds.forEach(id => {
-        updated[id] = shouldCheckAll;
+      familyVisitorKeys.forEach(key => {
+        updated[key] = shouldCheckAll;
       });
       return updated;
     });
@@ -986,8 +1124,11 @@ const AttendancePage: React.FC = () => {
   // Helper function to count actual number of people in visitor records
   const getVisitorPeopleCount = useMemo(() => {
     // Count only visitors that are marked as present
-    return visitors.filter(visitor => visitor.id && visitorAttendance[visitor.id]).length;
-  }, [visitors, visitorAttendance]);
+    return allVisitors.filter((visitor, index) => {
+      const visitorKey = visitor.id || `temp_${index}`;
+      return visitorAttendance[visitorKey];
+    }).length;
+  }, [allVisitors, visitorAttendance]);
 
   // Helper function to get the appropriate modal title
   const getAddModalTitle = () => {
@@ -1012,6 +1153,76 @@ const AttendancePage: React.FC = () => {
     } else {
       const pluralType = visitorForm.personType === 'visitor' ? 'Visitors' : 'People';
       return `Add ${pluralType}`;
+    }
+  };
+
+  // Helper function to generate family name from people array
+  const generateFamilyName = (people: Array<{
+    firstName: string;
+    lastName: string;
+    firstUnknown: boolean;
+    lastUnknown: boolean;
+    isChild: boolean;
+  }>) => {
+    if (people.length === 0) return 'Visitor Family';
+    
+    // Use first two people to generate family name
+    const firstTwoPeople = people.slice(0, 2);
+    
+    const firstNames = firstTwoPeople.map(person => {
+      return (!person.firstUnknown && person.firstName && person.firstName !== 'Unknown') ? person.firstName : null;
+    }).filter(name => name !== null);
+    
+    const surnames = firstTwoPeople.map(person => {
+      return (!person.lastUnknown && person.lastName && person.lastName !== 'Unknown') ? person.lastName : null;
+    }).filter(name => name !== null);
+    
+    // Handle unknown surnames - use first two first names
+    if (surnames.length === 0 && firstNames.length > 0) {
+      if (firstNames.length === 1) {
+        return firstNames[0];
+      } else {
+        return `${firstNames[0]} and ${firstNames[1]}`;
+      }
+    } else if (surnames.length > 0) {
+      // Follow the pattern: SURNAME, firstname and firstname OR SURNAME1, firstname1 and SURNAME2, firstname2
+      const uniqueSurnames = Array.from(new Set(surnames));
+      
+      if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
+        // All have the same surname - use pattern: SURNAME, firstname and firstname
+        const surname = uniqueSurnames[0].toUpperCase();
+        if (firstNames.length === 1) {
+          return `${surname}, ${firstNames[0]}`;
+        } else {
+          return `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
+        }
+      } else if (firstNames.length > 0 && surnames.length > 0) {
+        // Different surnames - use pattern: SURNAME1, firstname1 and SURNAME2, firstname2
+        const nameWithSurname = firstTwoPeople.map(person => {
+          const firstName = !person.firstUnknown && person.firstName && person.firstName !== 'Unknown' ? person.firstName : null;
+          const lastName = !person.lastUnknown && person.lastName && person.lastName !== 'Unknown' ? person.lastName : null;
+          
+          if (firstName && lastName) {
+            return `${lastName.toUpperCase()}, ${firstName}`;
+          } else if (firstName) {
+            return firstName;
+          } else {
+            return null;
+          }
+        }).filter(name => name !== null);
+        
+        if (nameWithSurname.length === 1) {
+          return nameWithSurname[0];
+        } else if (nameWithSurname.length === 2) {
+          return `${nameWithSurname[0]} and ${nameWithSurname[1]}`;
+        } else {
+          return 'Visitor Family';
+        }
+      } else {
+        return 'Visitor Family';
+      }
+    } else {
+      return 'Visitor Family';
     }
   };
 
@@ -1091,6 +1302,8 @@ const AttendancePage: React.FC = () => {
           </div>
         </div>
       )}
+
+
 
       {/* Gathering Type Tabs and Controls */}
       <div className="bg-white shadow rounded-lg">
@@ -1189,7 +1402,7 @@ const AttendancePage: React.FC = () => {
             {/* Search/Filter Bar */}
             <div>
               <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
-                Filter Families
+                Filter Families & Visitors
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -1200,7 +1413,7 @@ const AttendancePage: React.FC = () => {
                   id="search"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search by family member name..."
+                  placeholder="Search by family member or visitor name..."
                   className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
                 />
               </div>
@@ -1349,17 +1562,19 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
+
+
       {/* Visitors Section */}
-      {visitors.length > 0 && (
+      {allVisitors.length > 0 && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
               Visitors ({getVisitorPeopleCount})
             </h3>
             <div className="space-y-4">
-              {groupedVisitors.map((group: any) => (
+              {filteredGroupedVisitors.map((group: any) => (
                 <div 
-                  key={group.familyId || `visitor-group-${group.members[0].id}`} 
+                  key={group.groupKey || `visitor-group-${group.members[0]?.id || 'unknown'}`} 
                   className={groupByFamily && group.familyName ? "border border-gray-200 rounded-lg p-4" : ""}
                 >
                   {groupByFamily && group.familyName && (
@@ -1403,7 +1618,10 @@ const AttendancePage: React.FC = () => {
                         >
                           {(() => {
                             const familyVisitors = group.members;
-                            const presentCount = familyVisitors.filter((visitor: any) => visitor.id && visitorAttendance[visitor.id]).length;
+                            const presentCount = familyVisitors.filter((visitor: any, index: number) => {
+                              const visitorKey = visitor.id || `temp_${index}`;
+                              return visitorAttendance[visitorKey];
+                            }).length;
                             return presentCount >= 2 ? 'Uncheck all family' : 'Check all family';
                           })()}
                         </button>
@@ -1411,16 +1629,17 @@ const AttendancePage: React.FC = () => {
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-                    {group.members.map((person: any) => {
+                    {group.members.map((person: any, index: number) => {
                       const parts = person.name.trim().split(' ');
                       const firstName = parts[0];
                       const lastName = parts.slice(1).join(' ');
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
-                      const isPresent = person.id ? visitorAttendance[person.id] : false;
+                      const visitorKey = person.id || `temp_${index}`;
+                      const isPresent = visitorAttendance[visitorKey] || false;
 
                       return (
                         <label
-                          key={person.id}
+                          key={visitorKey}
                           className={`flex items-center cursor-pointer transition-colors ${
                             groupByFamily && group.familyName
                               ? `p-3 rounded-md border-2 ${
@@ -1438,7 +1657,7 @@ const AttendancePage: React.FC = () => {
                           <input
                             type="checkbox"
                             checked={Boolean(isPresent)}
-                            onChange={() => person.id && toggleVisitorAttendance(person.id)}
+                            onChange={() => toggleVisitorAttendance(visitorKey)}
                             className="sr-only"
                           />
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
