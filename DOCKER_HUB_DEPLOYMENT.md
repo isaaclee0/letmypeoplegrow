@@ -3,7 +3,7 @@
 ## ✅ Successfully Completed
 
 ### 1. Git Version Management
-- **Current Version**: `v0.1.1`
+- **Current Version**: `v0.9.0`
 - **Git Tag**: `v0.1.1` (commit: `bad316b`)
 - **All changes committed and pushed** to GitHub
 

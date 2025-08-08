@@ -41,7 +41,7 @@ This guide explains how to deploy the Let My People Grow application using Docke
 
 The main configuration is done through the `.env` file. Key variables include:
 
-- `IMAGE_TAG`: The Docker image version to use (default: v0.1.1)
+- `IMAGE_TAG`: The Docker image version to use (default: v0.9.0)
 - `DB_PASSWORD`: Database password
 - `JWT_SECRET`: Secret key for JWT tokens
 - `EMAIL_FROM`: Email address for sending notifications
@@ -65,10 +65,10 @@ NODE_ENV=production
 
 ## Available Images
 
-### Current Version: v0.1.1
+### Current Version: v0.9.0
 
-- **Server**: `staugustine1/letmypeoplegrow-server:v0.1.1`
-- **Client**: `staugustine1/letmypeoplegrow-client:v0.1.1`
+- **Server**: `staugustine1/letmypeoplegrow-server:v0.9.0`
+- **Client**: `staugustine1/letmypeoplegrow-client:v0.9.0`
 
 ### Updating to a New Version
 

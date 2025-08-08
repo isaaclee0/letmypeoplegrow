@@ -22,7 +22,7 @@ This checklist ensures a successful first-time deployment of the Let My People G
 #### Root `.env` file:
 ```bash
 # Docker Image Configuration
-IMAGE_TAG=v0.3.3
+IMAGE_TAG=v0.9.0
 
 # Database Configuration
 DB_ROOT_PASSWORD=your_secure_root_password
@@ -136,7 +136,7 @@ sudo docker-compose -f docker-compose.dev.yml logs -f
   "status": "OK",
   "timestamp": "2024-01-01T12:00:00.000Z",
   "environment": "development",
-  "version": "0.8.6"
+  "version": "0.9.0"
 }
 
 // Database health check response
