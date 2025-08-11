@@ -106,7 +106,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         LEFT JOIN gathering_lists gl ON as_table.gathering_type_id = gl.gathering_type_id
         LEFT JOIN individuals i ON gl.individual_id = i.id
         WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-        AND i.is_active = true
+         AND (i.is_active = true OR ar.present = true)
         AND as_table.church_id = ?
         ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
         GROUP BY as_table.session_date, as_table.gathering_type_id
@@ -139,7 +139,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
           SELECT COUNT(DISTINCT i.id) as total
           FROM individuals i
           JOIN gathering_lists gl ON i.id = gl.individual_id
-          WHERE i.is_active = true
+           WHERE i.is_active = true
           AND i.church_id = ?
           ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
         `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
@@ -219,7 +219,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         JOIN attendance_sessions as_table ON ar.session_id = as_table.id
         JOIN individuals i ON ar.individual_id = i.id
         WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-        AND i.people_type IN ('local_visitor', 'traveller_visitor')
+         AND i.people_type IN ('local_visitor', 'traveller_visitor')
         AND ar.present = true
         ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
       `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);

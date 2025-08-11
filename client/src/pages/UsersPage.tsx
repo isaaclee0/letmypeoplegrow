@@ -425,15 +425,6 @@ const UsersPage: React.FC = () => {
                 Manage users, send invitations, and assign gathering access
               </p>
             </div>
-            <div className="flex space-x-3">
-              <button
-                onClick={() => setShowInviteModal(true)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-              >
-                <PlusIcon className="h-4 w-4 mr-2" />
-                Invite User
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -471,7 +462,14 @@ const UsersPage: React.FC = () => {
           {/* Mobile Card Layout */}
           <div className="block md:hidden space-y-4">
             {users.map((user) => (
-              <div key={user.id} className="bg-gray-50 rounded-lg p-4 border">
+              <div key={user.id} className="relative bg-gray-50 rounded-lg p-4 border">
+                <button
+                  onClick={() => handleEditUser(user)}
+                  className="absolute top-3 right-3 inline-flex items-center justify-center h-9 w-9 rounded-full text-gray-600 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  aria-label={`Edit ${user.firstName} ${user.lastName}`}
+                >
+                  <PencilIcon className="h-5 w-5" />
+                </button>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center space-x-3 mb-2">
@@ -508,27 +506,13 @@ const UsersPage: React.FC = () => {
                     </div>
                     
                     <div className="flex space-x-3">
-                      <ActionMenu
-                        items={[
-                          {
-                            label: 'Edit User',
-                            icon: <PencilIcon className="h-4 w-4" />,
-                            onClick: () => handleEditUser(user),
-                          },
-                          {
-                            label: 'Assign Gatherings',
-                            icon: <UserGroupIcon className="h-4 w-4" />,
-                            onClick: () => handleAssignGatherings(user),
-                          },
-                          {
-                            label: 'Deactivate User',
-                            icon: <TrashIcon className="h-4 w-4" />,
-                            onClick: () => showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`),
-                            className: 'text-red-600 hover:bg-red-50',
-                            hidden: currentUser?.role !== 'admin'
-                          },
-                        ]}
-                      />
+                      <button
+                        onClick={() => handleAssignGatherings(user)}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <UserGroupIcon className="h-4 w-4 mr-2" />
+                        Assign Gatherings
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -592,28 +576,21 @@ const UsersPage: React.FC = () => {
                       {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex space-x-2">
-                        <ActionMenu
-                          items={[
-                            {
-                              label: 'Edit User',
-                              icon: <PencilIcon className="h-4 w-4" />,
-                              onClick: () => handleEditUser(user),
-                            },
-                            {
-                              label: 'Assign Gatherings',
-                              icon: <UserGroupIcon className="h-4 w-4" />,
-                              onClick: () => handleAssignGatherings(user),
-                            },
-                            {
-                              label: 'Deactivate User',
-                              icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`),
-                              className: 'text-red-600 hover:bg-red-50',
-                              hidden: currentUser?.role !== 'admin'
-                            },
-                          ]}
-                        />
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => handleEditUser(user)}
+                          className="inline-flex items-center justify-center h-9 w-9 rounded-full text-gray-600 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          aria-label={`Edit ${user.firstName} ${user.lastName}`}
+                        >
+                          <PencilIcon className="h-5 w-5" />
+                        </button>
+                        <button
+                          onClick={() => handleAssignGatherings(user)}
+                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          <UserGroupIcon className="h-4 w-4 mr-2" />
+                          Assign
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -623,6 +600,15 @@ const UsersPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Floating Add Button */}
+      <button
+        onClick={() => setShowInviteModal(true)}
+        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
+        aria-label="Invite User"
+      >
+        <PlusIcon className="h-7 w-7" />
+      </button>
 
       {/* Pending Invitations Section */}
       {invitations.length > 0 && (
@@ -1103,7 +1089,19 @@ const UsersPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center mt-6 space-y-2 sm:space-y-0">
+                <div>
+                  {currentUser?.role === 'admin' && (
+                    <button
+                      onClick={() => selectedUser && showDeactivateConfirmation(selectedUser.id, `${selectedUser.firstName} ${selectedUser.lastName}`)}
+                      className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                    >
+                      <TrashIcon className="h-4 w-4 mr-2" />
+                      Deactivate User
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3">
                 <button
                   onClick={() => {
                     setShowEditUserModal(false);
@@ -1127,6 +1125,7 @@ const UsersPage: React.FC = () => {
                 >
                   Save Changes
                 </button>
+                </div>
               </div>
             </div>
           </div>

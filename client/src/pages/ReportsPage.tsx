@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType } from '../services/api';
+import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI } from '../services/api';
 import { 
   ChartBarIcon, 
   UsersIcon, 
   ArrowTrendingUpIcon,
   CalendarIcon,
-  ArrowDownTrayIcon,
-  XMarkIcon
+  ArrowDownTrayIcon
 } from '@heroicons/react/24/outline';
+import 'chart.js/auto';
+import { Line } from 'react-chartjs-2';
 
 const ReportsPage: React.FC = () => {
   const { user } = useAuth();
@@ -17,8 +18,16 @@ const ReportsPage: React.FC = () => {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [metrics, setMetrics] = useState<any>(null);
+  const [prevYearMetrics, setPrevYearMetrics] = useState<any>(null);
+  const [monthlyVisitors, setMonthlyVisitors] = useState<Array<{ month: string; avgVisitors: number }>>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingVisitors, setIsLoadingVisitors] = useState(false);
   const [error, setError] = useState('');
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; streak: number }>>([]);
+  const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number }>>([]);
+  const [showAllAbsences, setShowAllAbsences] = useState(false);
+  const [showAllVisitors, setShowAllVisitors] = useState(false);
   // DISABLED: External data access feature is currently disabled
   // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
 
@@ -102,6 +111,168 @@ const ReportsPage: React.FC = () => {
     }
   }, [selectedGathering?.id, startDate, endDate]);
 
+  // Load recent session details to derive absence streaks and recent visitors
+  const loadAbsenceAndVisitorDetails = useCallback(async () => {
+    if (!selectedGathering || !metrics?.attendanceData) return;
+    setIsLoadingDetails(true);
+    try {
+      const sessionDatesDesc: string[] = [...metrics.attendanceData]
+        .map((s: any) => s.date)
+        .sort((a: string, b: string) => b.localeCompare(a));
+      const MAX_SESSIONS = 12;
+      const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
+
+      const responses = await Promise.all(
+        limitedDates.map((d: string) => attendanceAPI.get(selectedGathering.id, d))
+      );
+
+      type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
+      const regularMap = new Map<number, RegularEntry>();
+      const visitorCounts = new Map<string, { name: string; count: number }>();
+      const now = new Date();
+
+      responses.forEach((resp: any, idx: number) => {
+        const data = resp.data as { attendanceList?: any[]; visitors?: any[] };
+        const sessionDateStr = limitedDates[idx];
+        const sessionDate = new Date(sessionDateStr);
+        const withinSixWeeks = (now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24) <= 42;
+
+        const list = data.attendanceList || [];
+        list.forEach((ind: any) => {
+          if (typeof ind.id !== 'number') return;
+          const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, statuses: [] as boolean[] };
+          existing.statuses.push(!!ind.present);
+          regularMap.set(ind.id, existing);
+        });
+
+        if (withinSixWeeks) {
+          const visitors = data.visitors || [];
+          visitors.forEach((v: any) => {
+            if (!v.present) return;
+            const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
+            const name = v.name || 'Visitor';
+            const existing = visitorCounts.get(key) || { name, count: 0 };
+            existing.count += 1;
+            visitorCounts.set(key, existing);
+          });
+        }
+      });
+
+      const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; streak: number }> = [];
+      Array.from(regularMap.entries()).forEach(([id, entry]) => {
+        let streak = 0;
+        for (const present of entry.statuses) {
+          if (present) break;
+          streak += 1;
+        }
+        if (streak >= 2) {
+          absenceArr.push({ individualId: id, firstName: entry.firstName, lastName: entry.lastName, streak });
+        }
+      });
+      absenceArr.sort((a, b) => (b.streak - a.streak) || a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+      setAbsenceList(absenceArr);
+
+      const visitorsArr = Array.from(visitorCounts.entries())
+        .map(([key, val]) => ({ key, name: val.name, count: val.count }))
+        .filter((v) => v.count >= 2)
+        .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
+      setRecentVisitors(visitorsArr);
+      setShowAllAbsences(false);
+      setShowAllVisitors(false);
+    } catch (e) {
+      // ignore
+    } finally {
+      setIsLoadingDetails(false);
+    }
+  }, [selectedGathering?.id, metrics?.attendanceData]);
+
+  const loadPrevYearMetrics = useCallback(async () => {
+    if (!selectedGathering || !startDate || !endDate) return;
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const prevStart = new Date(start);
+      const prevEnd = new Date(end);
+      prevStart.setFullYear(prevStart.getFullYear() - 1);
+      prevEnd.setFullYear(prevEnd.getFullYear() - 1);
+      const params = {
+        gatheringTypeId: selectedGathering.id,
+        startDate: prevStart.toISOString().split('T')[0],
+        endDate: prevEnd.toISOString().split('T')[0]
+      };
+      const response = await reportsAPI.getDashboard(params);
+      setPrevYearMetrics(response.data.metrics);
+    } catch (err) {
+      // Non-fatal if prev year not available
+      setPrevYearMetrics(null);
+    }
+  }, [selectedGathering?.id, startDate, endDate]);
+
+  const getMonthKey = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  };
+
+  const listMonthsInclusive = (startIso: string, endIso: string) => {
+    const startD = new Date(startIso + 'T00:00:00');
+    startD.setDate(1);
+    const endD = new Date(endIso + 'T00:00:00');
+    endD.setDate(1);
+    const months: string[] = [];
+    const cursor = new Date(startD);
+    while (cursor <= endD) {
+      const y = cursor.getFullYear();
+      const m = String(cursor.getMonth() + 1).padStart(2, '0');
+      months.push(`${y}-${m}`);
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return months;
+  };
+
+  const monthStartEnd = (yyyyMm: string) => {
+    const [y, m] = yyyyMm.split('-').map((v) => parseInt(v, 10));
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 0);
+    return {
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0]
+    };
+  };
+
+  const loadMonthlyVisitors = useCallback(async () => {
+    if (!selectedGathering || !startDate || !endDate) return;
+    setIsLoadingVisitors(true);
+    try {
+      const months = listMonthsInclusive(startDate, endDate);
+      const results: Array<{ month: string; avgVisitors: number }> = [];
+      for (const month of months) {
+        const { start, end } = monthStartEnd(month);
+        const params = {
+          gatheringTypeId: selectedGathering.id,
+          startDate: start,
+          endDate: end
+        };
+        const resp = await reportsAPI.getDashboard(params);
+        const m = resp.data.metrics;
+        // Average visitors per session for that month
+        const sessionCount = m.totalSessions || 0;
+        const avgVisitors = sessionCount > 0 ? Math.round((m.totalVisitors || 0) / sessionCount) : 0;
+        results.push({ month, avgVisitors });
+      }
+      setMonthlyVisitors(results);
+    } catch (e) {
+      // Non-fatal
+      setMonthlyVisitors([]);
+    } finally {
+      setIsLoadingVisitors(false);
+    }
+  }, [selectedGathering?.id, startDate, endDate]);
+
+  // Load recent session details to derive absence streaks and recent visitors
+  // duplicate removed
+
   useEffect(() => {
     if (hasReportsAccess) {
       loadGatherings();
@@ -110,10 +281,178 @@ const ReportsPage: React.FC = () => {
   }, [hasReportsAccess, loadGatherings]); // Removed loadDataAccessSettings from dependency array
 
   useEffect(() => {
-    if (hasReportsAccess && selectedGathering && startDate && endDate) {
+    if (!hasReportsAccess || !selectedGathering || !startDate || !endDate) return;
       loadMetrics();
+    loadPrevYearMetrics();
+    loadMonthlyVisitors();
+  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics, loadPrevYearMetrics, loadMonthlyVisitors]);
+
+  useEffect(() => {
+    if (!hasReportsAccess || !selectedGathering || !metrics?.attendanceData?.length) return;
+    loadAbsenceAndVisitorDetails();
+  }, [hasReportsAccess, selectedGathering, metrics?.attendanceData, loadAbsenceAndVisitorDetails]);
+
+  const monthlyAttendanceAverages = useMemo(() => {
+    if (!metrics?.attendanceData) return [] as Array<{ month: string; avg: number }>;
+    const byMonth: Record<string, { presentSum: number; sessions: number }> = {};
+    metrics.attendanceData.forEach((s: any) => {
+      const key = getMonthKey(s.date);
+      if (!byMonth[key]) byMonth[key] = { presentSum: 0, sessions: 0 };
+      byMonth[key].presentSum += s.present || 0;
+      byMonth[key].sessions += 1;
+    });
+    return Object.keys(byMonth)
+      .sort()
+      .map((k) => ({ month: k, avg: Math.round(byMonth[k].presentSum / byMonth[k].sessions) }));
+  }, [metrics?.attendanceData]);
+
+  const monthlyAttendancePrevYear = useMemo(() => {
+    if (!prevYearMetrics?.attendanceData) return [] as Array<{ month: string; avg: number }>;
+    const byMonth: Record<string, { presentSum: number; sessions: number }> = {};
+    prevYearMetrics.attendanceData.forEach((s: any) => {
+      const key = getMonthKey(s.date);
+      if (!byMonth[key]) byMonth[key] = { presentSum: 0, sessions: 0 };
+      byMonth[key].presentSum += s.present || 0;
+      byMonth[key].sessions += 1;
+    });
+    return Object.keys(byMonth)
+      .sort()
+      .map((k) => ({ month: k, avg: Math.round(byMonth[k].presentSum / byMonth[k].sessions) }));
+  }, [prevYearMetrics?.attendanceData]);
+
+  const attendanceChartLabels = useMemo(() => {
+    if (!startDate || !endDate) return [] as string[];
+    return listMonthsInclusive(startDate, endDate);
+  }, [startDate, endDate]);
+
+  const attendanceChartData = useMemo(() => {
+    const currentMap: Record<string, number> = {};
+    monthlyAttendanceAverages.forEach((m) => (currentMap[m.month] = m.avg));
+    const prevMap: Record<string, number> = {};
+    monthlyAttendancePrevYear.forEach((m) => (prevMap[m.month] = m.avg));
+    // Map prev year values to the same month names of current labels minus one year
+    const prevSeriesAligned = attendanceChartLabels.map((label) => {
+      const [y, mm] = label.split('-');
+      const prevLabel = `${parseInt(y, 10) - 1}-${mm}`;
+      return prevMap[prevLabel] ?? 0;
+    });
+    return {
+      labels: attendanceChartLabels,
+      datasets: [
+        {
+          label: 'Avg Attendance',
+          data: attendanceChartLabels.map((l) => currentMap[l] ?? 0),
+          borderColor: 'rgba(37, 99, 235, 1)',
+          backgroundColor: 'rgba(37, 99, 235, 0.15)',
+          tension: 0.3,
+          fill: true,
+        },
+        {
+          label: 'Avg Attendance (Prev Year)',
+          data: prevSeriesAligned,
+          borderColor: 'rgba(156, 163, 175, 1)',
+          backgroundColor: 'rgba(156, 163, 175, 0.1)',
+          borderDash: [6, 6],
+          tension: 0.3,
+          fill: false,
+        }
+      ]
+    };
+  }, [attendanceChartLabels, monthlyAttendanceAverages, monthlyAttendancePrevYear]);
+
+  const visitorsChartLabels = useMemo(() => {
+    if (!startDate || !endDate) return [] as string[];
+    return listMonthsInclusive(startDate, endDate);
+  }, [startDate, endDate]);
+
+  const visitorsChartData = useMemo(() => {
+    const map: Record<string, number> = {};
+    monthlyVisitors.forEach((m) => (map[m.month] = m.avgVisitors));
+    return {
+      labels: visitorsChartLabels,
+      datasets: [
+        {
+          label: 'Avg Visitors per Session',
+          data: visitorsChartLabels.map((l) => map[l] ?? 0),
+          borderColor: 'rgba(16, 185, 129, 1)',
+          backgroundColor: 'rgba(16, 185, 129, 0.15)',
+          tension: 0.3,
+          fill: true,
+        }
+      ]
+    };
+  }, [visitorsChartLabels, monthlyVisitors]);
+
+  const loadAttendanceDetails = useCallback(async () => {
+    if (!selectedGathering || !metrics?.attendanceData) return;
+    setIsLoadingDetails(true);
+    try {
+      const sessionDatesDesc: string[] = [...metrics.attendanceData]
+        .map((s: any) => s.date)
+        .sort((a: string, b: string) => b.localeCompare(a));
+      const MAX_SESSIONS = 12;
+      const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
+
+      const responses = await Promise.all(
+        limitedDates.map((d: string) => attendanceAPI.get(selectedGathering.id, d))
+      );
+
+      type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
+      const regularMap = new Map<number, RegularEntry>();
+      const visitorCounts = new Map<string, { name: string; count: number }>();
+      const now = new Date();
+
+      responses.forEach((resp: any, idx: number) => {
+        const data = resp.data as { attendanceList?: any[]; visitors?: any[] };
+        const sessionDateStr = limitedDates[idx];
+        const sessionDate = new Date(sessionDateStr);
+        const withinSixWeeks = (now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24) <= 42;
+
+        const list = data.attendanceList || [];
+        list.forEach((ind: any) => {
+          if (typeof ind.id !== 'number') return;
+          const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, statuses: [] as boolean[] };
+          existing.statuses.push(Boolean(ind.present));
+          regularMap.set(ind.id, existing);
+        });
+
+        if (withinSixWeeks) {
+          const visitors = data.visitors || [];
+          visitors.forEach((v: any) => {
+            if (!v.present) return;
+            const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
+            const name = v.name || 'Visitor';
+            const existing = visitorCounts.get(key) || { name, count: 0 };
+            existing.count += 1;
+            visitorCounts.set(key, existing);
+          });
+        }
+      });
+
+      const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; streak: number }> = [];
+      Array.from(regularMap.entries()).forEach(([id, entry]) => {
+        let streak = 0;
+        for (const present of entry.statuses) {
+          if (present) break;
+          streak += 1;
+        }
+        if (streak >= 2) {
+          absenceArr.push({ individualId: id, firstName: entry.firstName, lastName: entry.lastName, streak });
+        }
+      });
+      absenceArr.sort((a, b) => (b.streak - a.streak) || a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+      setAbsenceList(absenceArr);
+
+      const visitorsArr = Array.from(visitorCounts.entries()).map(([key, val]) => ({ key, name: val.name, count: val.count }))
+        .filter((v) => v.count >= 2)
+        .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
+      setRecentVisitors(visitorsArr);
+    } catch (e) {
+      // ignore
+    } finally {
+      setIsLoadingDetails(false);
     }
-  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics]);
+  }, [selectedGathering?.id, metrics?.attendanceData]);
 
   const quickDateOptions = [
     { 
@@ -478,40 +817,32 @@ const ReportsPage: React.FC = () => {
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Attendance Trend Chart */}
+        {/* Attendance over time (monthly averages) with YoY */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
-              Attendance Trend
-            </h3>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Average Attendance per Month</h3>
             <div className="mt-6">
               {isLoading ? (
                 <div className="flex justify-center items-center h-64">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                 </div>
-              ) : metrics?.attendanceData && metrics.attendanceData.length > 0 ? (
-                <div className="space-y-4">
-                  {metrics.attendanceData.slice(0, 8).map((session: any, index: number) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div className="flex-1">
-                        <div className="text-sm font-medium text-gray-900">
-                          {new Date(session.date).toLocaleDateString()}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          {session.present} present, {session.absent} absent
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-lg font-semibold text-primary-600">
-                          {session.present}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          of {session.total}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              ) : attendanceChartLabels.length > 0 ? (
+                <Line
+                  data={attendanceChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                      x: { grid: { display: false } },
+                      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+                    },
+                    plugins: {
+                      legend: { position: 'top' as const },
+                      tooltip: { mode: 'index' as const, intersect: false }
+                    }
+                  }}
+                  height={300}
+                />
               ) : (
                 <div className="flex justify-center items-center h-64">
                   <div className="text-gray-500">
@@ -524,42 +855,38 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Visitor Analysis */}
+        {/* Visitors over time (monthly averages) */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
-              Visitor Analysis
-            </h3>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Average Visitors per Month</h3>
             <div className="mt-6">
-              {isLoading ? (
-                <div className="flex justify-center items-center h-32">
+              {isLoadingVisitors ? (
+                <div className="flex justify-center items-center h-64">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                 </div>
+              ) : visitorsChartLabels.length > 0 ? (
+                <Line
+                  data={visitorsChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                      x: { grid: { display: false } },
+                      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+                    },
+                    plugins: {
+                      legend: { position: 'top' as const },
+                      tooltip: { mode: 'index' as const, intersect: false }
+                    }
+                  }}
+                  height={300}
+                />
               ) : (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div className="flex-1">
-                      <div className="text-sm font-medium text-gray-900">
-                        Total Visitors
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        Unique visitors who attended during this period
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-semibold text-primary-600">
-                        {metrics?.totalVisitors || 0}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        visitors
-                      </div>
-                    </div>
+                <div className="flex justify-center items-center h-64">
+                  <div className="text-gray-500">
+                    <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
+                    <p className="text-sm">No visitor data available for the selected period</p>
                   </div>
-                  {metrics?.totalVisitors === 0 && (
-                    <div className="text-center py-4">
-                      <p className="text-sm text-gray-500">No visitors recorded for the selected period</p>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -567,37 +894,94 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Detailed Reports Section */}
+      {/* Absence and Recent Visitors Panels */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Regulars Absent Panel */}
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Regulars With Recent Absences</h3>
+            <p className="mt-1 text-sm text-gray-500">Based on consecutive absences in the latest sessions for this gathering.</p>
+            <div className="mt-4">
+              {isLoadingDetails ? (
+                <div className="flex justify-center items-center h-40">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                </div>
+              ) : absenceList.length === 0 ? (
+                <div className="text-sm text-gray-500">No concerning absences right now.</div>
+              ) : (
+                <>
+                <ul className="divide-y divide-gray-200">
+                  {(showAllAbsences ? absenceList : absenceList.slice(0, 5)).map((p) => {
+                    const base = 'px-3 py-2 flex items-center justify-between';
+                    const color = p.streak >= 3 ? 'bg-orange-200' : 'bg-orange-100';
+                    return (
+                      <li key={p.individualId} className={`${base} ${color} rounded`}> 
+                        <span className="font-medium text-gray-900">{p.firstName} {p.lastName}</span>
+                        <span className="text-sm text-gray-700">Missed {p.streak} {p.streak === 1 ? 'service' : 'services'} in a row</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {absenceList.length > 5 && (
+                  <div className="mt-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllAbsences((v) => !v)}
+                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                    >
+                      {showAllAbsences ? 'Show less' : `Show all (${absenceList.length})`}
+                    </button>
+                  </div>
+                )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Visitors Panel */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900">
-            Detailed Reports
-          </h3>
-          <div className="mt-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <button className="p-4 border border-gray-300 rounded-lg hover:border-gray-400 text-left">
-                <h4 className="font-medium text-gray-900">Attendance Summary</h4>
-                <p className="text-sm text-gray-500 mt-1">
-                  Comprehensive attendance data export
-                </p>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Recent Visitors (last 6 weeks)</h3>
+            <p className="mt-1 text-sm text-gray-500">Shows how many times a visitor has attended this gathering.</p>
+            <div className="mt-4">
+              {isLoadingDetails ? (
+                <div className="flex justify-center items-center h-40">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                </div>
+              ) : recentVisitors.length === 0 ? (
+                <div className="text-sm text-gray-500">No recent visitors yet.</div>
+              ) : (
+                <>
+                <ul className="divide-y divide-gray-200">
+                  {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
+                    const base = 'px-3 py-2 flex items-center justify-between';
+                    const color = v.count >= 3 ? 'bg-green-200' : 'bg-green-100';
+                    return (
+                      <li key={v.key} className={`${base} ${color} rounded`}>
+                        <span className="font-medium text-gray-900">{v.name}</span>
+                        <span className="text-sm text-gray-700">Attended {v.count} {v.count === 1 ? 'time' : 'times'}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {recentVisitors.length > 5 && (
+                  <div className="mt-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllVisitors((v) => !v)}
+                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                    >
+                      {showAllVisitors ? 'Show less' : `Show all (${recentVisitors.length})`}
               </button>
-              <button className="p-4 border border-gray-300 rounded-lg hover:border-gray-400 text-left">
-                <h4 className="font-medium text-gray-900">Visitor Report</h4>
-                <p className="text-sm text-gray-500 mt-1">
-                  Visitor patterns and follow-up data
-                </p>
-              </button>
-              <button className="p-4 border border-gray-300 rounded-lg hover:border-gray-400 text-left">
-                <h4 className="font-medium text-gray-900">Family Analytics</h4>
-                <p className="text-sm text-gray-500 mt-1">
-                  Family participation insights
-                </p>
-              </button>
+                  </div>
+                )}
+                </>
+              )}
             </div>
           </div>
         </div>
       </div>
-
 
       {/* Commented out Spreadsheet Instructions Modal for now - CSV export is sufficient */}
     </div>

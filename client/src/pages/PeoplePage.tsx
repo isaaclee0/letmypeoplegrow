@@ -20,6 +20,8 @@ interface Person {
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   familyId?: number;
   familyName?: string;
+  // Optional last attendance metadata if provided by API
+  lastAttendanceDate?: string;
   gatheringAssignments?: Array<{
     id: number;
     name: string;
@@ -31,6 +33,8 @@ interface Family {
   familyName: string;
   memberCount: number;
   familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
+  // Optional last attended metadata if provided by API
+  lastAttended?: string;
 }
 
 const PeoplePage: React.FC = () => {
@@ -39,6 +43,7 @@ const PeoplePage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [people, setPeople] = useState<Person[]>([]);
+  const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -136,6 +141,10 @@ const PeoplePage: React.FC = () => {
     peopleCount: number;
   }>({ gatheringId: null, peopleCount: 0 });
 
+  // UI state for visitor sections
+  const [showArchivedVisitors, setShowArchivedVisitors] = useState(false);
+  const [showArchivedPeople, setShowArchivedPeople] = useState(false);
+
   // Color palette for gatherings
   const gatheringColors = [
     'bg-blue-500',
@@ -159,6 +168,7 @@ const PeoplePage: React.FC = () => {
     loadPeople();
     loadFamilies();
     loadGatheringTypes();
+    loadArchivedPeople();
   }, []);
 
   const loadPeople = async () => {
@@ -197,6 +207,15 @@ const PeoplePage: React.FC = () => {
       setFamilies(response.data.families || []);
     } catch (err: any) {
       setError('Failed to load families');
+    }
+  };
+
+  const loadArchivedPeople = async () => {
+    try {
+      const response = await individualsAPI.getArchived();
+      setArchivedPeople(response.data.people || []);
+    } catch (err: any) {
+      console.error('Failed to load archived people', err);
     }
   };
 
@@ -321,6 +340,36 @@ const PeoplePage: React.FC = () => {
     );
   };
 
+  const archivePerson = async (personId: number) => {
+    try {
+      setIsLoading(true);
+      setError('');
+      await individualsAPI.delete(personId); // soft delete (archive)
+      await loadPeople();
+      await loadArchivedPeople();
+      showSuccess('Person archived');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to archive person');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const restorePerson = async (personId: number) => {
+    try {
+      setIsLoading(true);
+      setError('');
+      await individualsAPI.restore(personId);
+      await loadPeople();
+      await loadArchivedPeople();
+      showSuccess('Person restored');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to restore person');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // const selectAllPeople = () => {
   //   setSelectedPeople([...people.map(person => person.id)]);
   // };
@@ -333,6 +382,10 @@ const PeoplePage: React.FC = () => {
 
   // Group people by family
   const groupedPeople = people.reduce((groups, person) => {
+    // Only include regular attendees in this main list
+    if (person.peopleType !== 'regular') {
+      return groups;
+    }
     if (person.familyId && person.familyName) {
       // Group by family if person has a family
       const familyKey = `family_${person.familyId}`;
@@ -358,6 +411,37 @@ const PeoplePage: React.FC = () => {
     }
     return groups;
   }, {} as any);
+
+  // Group visitors by family (separate from regular list)
+  const groupedVisitors = useMemo(() => {
+    return people.reduce((groups, person) => {
+      if (person.peopleType !== 'local_visitor' && person.peopleType !== 'traveller_visitor') {
+        return groups;
+      }
+      if (person.familyId && person.familyName) {
+        const familyKey = `family_${person.familyId}`;
+        if (!groups[familyKey]) {
+          groups[familyKey] = {
+            familyId: person.familyId,
+            familyName: person.familyName,
+            members: [] as Person[]
+          };
+        }
+        groups[familyKey].members.push(person);
+      } else {
+        const individualGroupKey = 'individuals';
+        if (!groups[individualGroupKey]) {
+          groups[individualGroupKey] = {
+            familyId: null,
+            familyName: null,
+            members: [] as Person[]
+          };
+        }
+        groups[individualGroupKey].members.push(person);
+      }
+      return groups;
+    }, {} as any);
+  }, [people]);
 
   // Filter groups based on search term and family selection
   const filteredGroupedPeople = Object.values(groupedPeople).filter((group: any) => {
@@ -406,8 +490,72 @@ const PeoplePage: React.FC = () => {
     });
   });
 
+  // Build visitor groups filtered by selected gathering
+  const filteredVisitorGroups = useMemo(() => {
+    const groupsArray: any[] = Object.values(groupedVisitors);
+    // Apply gathering filter if selected
+    const result = groupsArray.filter((group: any) => {
+      if (selectedGathering !== null) {
+        const hasInGathering = group.members.some((member: Person) =>
+          member.gatheringAssignments?.some(g => g.id === selectedGathering)
+        );
+        if (!hasInGathering) return false;
+        group.members = group.members.filter((member: Person) =>
+          member.gatheringAssignments?.some(g => g.id === selectedGathering)
+        );
+        if (group.members.length === 0) return false;
+      }
+      return true;
+    });
+    // Sort members in each group
+    result.forEach((group: any) => {
+      group.members.sort((a: Person, b: Person) => {
+        const ln = a.lastName.localeCompare(b.lastName);
+        if (ln !== 0) return ln;
+        return a.firstName.localeCompare(b.firstName);
+      });
+    });
+    return result;
+  }, [groupedVisitors, selectedGathering]);
+
+  // Split visitors into recent (<= 6 weeks) and older (> 6 weeks)
+  const SIX_WEEKS_DAYS = 42;
+  const parseISO = (s?: string) => {
+    if (!s) return undefined;
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? undefined : d;
+  };
+  const daysSince = (d?: Date) => {
+    if (!d) return Infinity;
+    const ms = Date.now() - d.getTime();
+    return ms / (1000 * 60 * 60 * 24);
+  };
+  const getGroupLastAttended = (group: any): number => {
+    // Prefer family's lastAttended if available
+    if (group.familyId) {
+      const fam = families.find(f => f.id === group.familyId);
+      const famDate = parseISO(fam?.lastAttended as any);
+      if (famDate) return daysSince(famDate);
+    }
+    // Fallback to latest member lastAttendanceDate if present
+    let latest: Date | undefined = undefined;
+    group.members.forEach((m: Person) => {
+      const d = parseISO((m as any).lastAttendanceDate as any);
+      if (d && (!latest || d > latest)) latest = d;
+    });
+    return daysSince(latest);
+  };
+
+  const recentVisitorGroups = useMemo(() => {
+    return filteredVisitorGroups.filter(group => getGroupLastAttended(group) <= SIX_WEEKS_DAYS);
+  }, [filteredVisitorGroups, families]);
+
+  const olderVisitorGroups = useMemo(() => {
+    return filteredVisitorGroups.filter(group => getGroupLastAttended(group) > SIX_WEEKS_DAYS);
+  }, [filteredVisitorGroups, families]);
+
   // Calculate people count for display
-  const peopleCount: number = filteredGroupedPeople.reduce((total: number, group: any) => total + group.members.filter((p: Person) => p.peopleType === 'regular').length, 0);
+  const peopleCount: number = filteredGroupedPeople.reduce((total: number, group: any) => total + group.members.length, 0);
 
   const openAddModal = (mode: 'person' | 'family' | 'csv' | 'copy-paste') => {
     setAddModalMode(mode);
@@ -897,6 +1045,8 @@ const PeoplePage: React.FC = () => {
         </div>
       )}
 
+      
+
       {/* Person Editor Modal */}
       {showPersonEditor && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
@@ -938,14 +1088,7 @@ const PeoplePage: React.FC = () => {
                   <div className="text-xs text-gray-500 mt-1">Leave blank for no family</div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">People Type</label>
-                  <select value={personEditorData.peopleType} onChange={(e) => setPersonEditorData(d => ({ ...d, peopleType: e.target.value as any }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500">
-                    <option value="regular">Regular</option>
-                    <option value="local_visitor">Local Visitor</option>
-                    <option value="traveller_visitor">Traveller Visitor</option>
-                  </select>
-                </div>
+                {/* People Type is governed by Family. Hidden in person editor. */}
 
                 {gatheringTypes.length > 0 && (
                   <div>
@@ -984,7 +1127,6 @@ const PeoplePage: React.FC = () => {
                         firstName: personEditorData.firstName.trim(),
                         lastName: personEditorData.lastName.trim(),
                         familyId: familyIdToUse,
-                        peopleType: personEditorData.peopleType,
                       });
 
                       // Sync gathering assignments
@@ -1243,6 +1385,13 @@ const PeoplePage: React.FC = () => {
                         }
                       }
 
+                      // Propagate family type to all desired members (enforce rule)
+                      for (const id of desiredMembersArr) {
+                        const p = peopleMap.get(id);
+                        if (!p) continue;
+                        await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
+                      }
+
                       // If family became empty, delete it
                       if (desiredMembersArr.length === 0) {
                         await familiesAPI.delete(familyEditor.familyId);
@@ -1366,6 +1515,24 @@ const PeoplePage: React.FC = () => {
                             return group.familyName;
                           })()}
                         </h4>
+                       {(() => {
+                         const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
+                         const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
+                         return (
+                           <>
+                             {hasLocalVisitor && (
+                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                 Local Visitor
+                               </span>
+                             )}
+                             {hasTravellerVisitor && (
+                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                 Traveller Visitor
+                               </span>
+                             )}
+                           </>
+                         );
+                       })()}
                         <button
                           onClick={() => {
                             const fam = families.find(f => f.id === group.familyId);
@@ -1449,9 +1616,9 @@ const PeoplePage: React.FC = () => {
                               onClick: () => handleEditPerson(person)
                             },
                             {
-                              label: 'Delete',
+                              label: 'Archive',
                               icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => showDeleteConfirmation(person.id, `${person.firstName} ${person.lastName}`),
+                              onClick: () => archivePerson(person.id),
                               className: 'text-red-600 hover:bg-red-50'
                             }
                           ]}
@@ -1475,35 +1642,12 @@ const PeoplePage: React.FC = () => {
                 Visitors ({people.filter(p => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor').length})
               </h3>
             </div>
-            
             <div className="space-y-4">
-              {filteredGroupedPeople
-                .filter((group: any) => {
-                  // Filter to only show groups with visitors
-                  const hasVisitors = group.members.some((p: Person) => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor');
-                  if (!hasVisitors) return false;
-                  
-                  // If filtering by gathering, only show visitors assigned to that gathering
-                  if (selectedGathering !== null) {
-                    const hasVisitorInGathering = group.members.some((p: Person) => 
-                      (p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor') && p.gatheringAssignments?.some(gathering => gathering.id === selectedGathering)
-                    );
-                    if (!hasVisitorInGathering) return false;
-                    
-                    // Filter members to only show visitors assigned to the selected gathering
-                    group.members = group.members.filter((p: Person) => 
-                      (p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor') && p.gatheringAssignments?.some(gathering => gathering.id === selectedGathering)
-                    );
-                    
-                    // Don't show empty groups
-                    if (group.members.length === 0) return false;
-                  } else {
-                    // If not filtering by gathering, only show visitors
-                    group.members = group.members.filter((p: Person) => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor');
-                  }
-                  
-                  return true;
-                })
+              {/* Recent Visitors (last 6 weeks) */}
+              {recentVisitorGroups.length > 0 && (
+                <>
+                  <h4 className="text-md font-medium text-gray-800">Recent (last 6 weeks)</h4>
+                  {recentVisitorGroups
                 .map((group: any) => (
                   <div key={`visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
                     {group.familyName && (
@@ -1519,9 +1663,24 @@ const PeoplePage: React.FC = () => {
                               return group.familyName;
                             })()}
                           </h4>
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                            Visitor Family
-                          </span>
+                          {(() => {
+                            const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
+                            const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
+                            return (
+                              <>
+                                {hasLocalVisitor && (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    Local Visitor
+                                  </span>
+                                )}
+                                {hasTravellerVisitor && (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 ml-2">
+                                    Traveller Visitor
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
                           <button
                             onClick={() => {
                               const fam = families.find(f => f.id === group.familyId);
@@ -1582,7 +1741,7 @@ const PeoplePage: React.FC = () => {
                                 {person.firstName} {person.lastName}
                               </div>
                               <div className="text-xs text-gray-500">
-                                Visitor
+                                {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
                               </div>
                               {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
                                 <div className="flex items-center space-x-1 mt-1">
@@ -1604,19 +1763,88 @@ const PeoplePage: React.FC = () => {
                                 icon: <PencilIcon className="h-4 w-4" />,
                                 onClick: () => handleEditPerson(person)
                               },
-                              {
-                                label: 'Delete',
-                                icon: <TrashIcon className="h-4 w-4" />,
-                                onClick: () => showDeleteConfirmation(person.id, `${person.firstName} ${person.lastName}`),
-                                className: 'text-red-600 hover:bg-red-50'
-                              }
+                                {
+                                  label: 'Archive',
+                                  icon: <TrashIcon className="h-4 w-4" />,
+                                  onClick: () => archivePerson(person.id),
+                                  className: 'text-red-600 hover:bg-red-50'
+                                }
                             ]}
                           />
                         </div>
                       ))}
                     </div>
                   </div>
-                ))}
+                  ))}
+                </>
+              )}
+
+              {/* Less recently attended visitors (suggested word: Infrequent) */}
+              {olderVisitorGroups.length > 0 && (
+                <div className="mt-6">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-md font-medium text-gray-800">Infrequent (not seen in 6+ weeks)</h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowArchivedVisitors(v => !v)}
+                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                    >
+                      {showArchivedVisitors ? 'Hide' : `Show (${olderVisitorGroups.reduce((acc, g) => acc + g.members.length, 0)})`}
+                    </button>
+                  </div>
+                  {showArchivedVisitors && (
+                    <div className="space-y-4 mt-3">
+                      {olderVisitorGroups.map((group: any) => (
+                        <div key={`older-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
+                          {group.familyName && (
+                            <div className="flex justify-between items-center mb-3">
+                              <div className="flex items-center space-x-2">
+                                <h4 className="text-md font-medium text-gray-900">
+                                  {(() => {
+                                    const parts = group.familyName.split(', ');
+                                    if (parts.length >= 2) {
+                                      return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
+                                    }
+                                    return group.familyName;
+                                  })()}
+                                </h4>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-sm text-gray-500">
+                                  {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                            {group.members.map((person: Person) => (
+                              <div key={person.id} className="flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300">
+                                <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-gray-900 truncate">
+                                      {person.firstName} {person.lastName}
+                                    </div>
+                                    <div className="text-xs text-gray-500">
+                                      {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <ActionMenu
+                                  items={[{
+                                    label: 'Edit',
+                                    icon: <PencilIcon className="h-4 w-4" />,
+                                    onClick: () => handleEditPerson(person)
+                                  }]}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -100,7 +100,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
     }
 
     // Get regular attendees and visitor families with attendance status
-          let attendanceListQuery = `
+    let attendanceListQuery = `
       SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
              COALESCE(ar.present, false) as present,
              i.people_type,
@@ -112,7 +112,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       -- Removed old visitors table reference - now using unified individuals/families system
       WHERE gl.gathering_type_id = ? 
-        AND i.is_active = true
+        AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
         AND i.church_id = ?
     `;
 

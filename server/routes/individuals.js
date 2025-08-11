@@ -170,6 +170,49 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get archived (inactive) individuals
+router.get('/archived', async (req, res) => {
+  try {
+    const individuals = await Database.query(`
+      SELECT 
+        i.id,
+        i.first_name,
+        i.last_name,
+        i.people_type,
+        i.family_id,
+        f.family_name,
+        i.is_active,
+        i.created_at,
+        GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
+        GROUP_CONCAT(DISTINCT gt.name) as gathering_names
+      FROM individuals i
+      LEFT JOIN families f ON i.family_id = f.id
+      LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
+      LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
+      WHERE i.is_active = false AND i.church_id = ?
+      GROUP BY i.id
+      ORDER BY i.last_name, i.first_name
+    `, [req.user.church_id]);
+
+    const processedIndividuals = individuals.map(individual => ({
+      ...individual,
+      isActive: Boolean(individual.is_active),
+      peopleType: individual.people_type,
+      gatheringAssignments: individual.gathering_ids ? 
+        individual.gathering_ids.split(',').map((id, index) => ({
+          id: Number(id),
+          name: individual.gathering_names.split(',')[index]
+        })) : []
+    }));
+
+    const responseData = processApiResponse({ people: processedIndividuals });
+    res.json(responseData);
+  } catch (error) {
+    console.error('Get archived individuals error:', error);
+    res.status(500).json({ error: 'Failed to retrieve archived individuals.' });
+  }
+});
+
 // Create individual (Admin/Coordinator)
 router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVIDUAL'), async (req, res) => {
   try {
@@ -248,6 +291,28 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_IN
   } catch (error) {
     console.error('Delete individual error:', error);
     res.status(500).json({ error: 'Failed to delete individual.' });
+  }
+});
+
+// Restore individual (set is_active = true)
+router.post('/:id/restore', requireRole(['admin', 'coordinator']), auditLog('RESTORE_INDIVIDUAL'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await Database.query(`
+      UPDATE individuals 
+      SET is_active = true, updated_at = NOW()
+      WHERE id = ? AND church_id = ?
+    `, [id, req.user.church_id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Individual not found' });
+    }
+
+    res.json({ message: 'Individual restored successfully', id: Number(id) });
+  } catch (error) {
+    console.error('Restore individual error:', error);
+    res.status(500).json({ error: 'Failed to restore individual.' });
   }
 });
 

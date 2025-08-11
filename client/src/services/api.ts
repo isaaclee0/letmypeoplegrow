@@ -416,6 +416,8 @@ export const familiesAPI = {
 export const individualsAPI = {
   getAll: () => 
     api.get('/individuals'),
+  getArchived: () =>
+    api.get('/individuals/archived'),
     
   create: (data: {
     firstName: string;
@@ -434,6 +436,8 @@ export const individualsAPI = {
     
   delete: (id: number) => 
     api.delete(`/individuals/${id}`),
+  restore: (id: number) =>
+    api.post(`/individuals/${id}/restore`),
     
   assignToGathering: (individualId: number, gatheringId: number) => 
     api.post(`/individuals/${individualId}/gatherings/${gatheringId}`),
