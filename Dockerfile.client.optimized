@@ -11,24 +11,25 @@ COPY client/package*.json ./
 ARG VERSION
 ENV REACT_APP_VERSION=$VERSION
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies for Vite build
+RUN npm ci
 
 # Copy only necessary source files
 COPY client/public ./public
 COPY client/src ./src
+COPY client/index.html ./index.html
 COPY client/tsconfig.json ./
 COPY client/tailwind.config.js ./
 COPY client/postcss.config.js ./
 
-# Build the app
+# Build the app (Vite -> dist)
 RUN npm run build
 
 # Production stage
 FROM nginx:alpine
 
-# Copy built app from builder stage
-COPY --from=builder /app/build /usr/share/nginx/html
+# Copy built app from builder stage (Vite dist)
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf

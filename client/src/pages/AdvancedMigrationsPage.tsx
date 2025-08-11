@@ -50,7 +50,8 @@ const AdvancedMigrationsPage: React.FC = () => {
   } = useAdvancedMigration();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'schema' | 'planning' | 'execution' | 'history'>('overview');
-  const [showRiskModal, setShowRiskModal] = useState(false);
+  const [isCreatePlanOpen, setIsCreatePlanOpen] = useState(false);
+  const [desiredSchemaJson, setDesiredSchemaJson] = useState('');
 
   const handleRefresh = async () => {
     clearErrors();
@@ -100,6 +101,21 @@ const AdvancedMigrationsPage: React.FC = () => {
       await generatePlan(desiredSchema);
     } catch (error) {
       console.error('Failed to generate test plan:', error);
+    }
+  };
+
+  const handleOpenCreatePlan = () => {
+    setDesiredSchemaJson('');
+    setIsCreatePlanOpen(true);
+  };
+
+  const handleCreatePlanFromJson = async () => {
+    try {
+      const parsed = JSON.parse(desiredSchemaJson);
+      await generatePlan(parsed);
+      setIsCreatePlanOpen(false);
+    } catch (e: any) {
+      alert(`Invalid JSON: ${e.message}`);
     }
   };
 
@@ -414,6 +430,16 @@ const AdvancedMigrationsPage: React.FC = () => {
                 </button>
               </div>
 
+              <div className="mt-2">
+                <button
+                  onClick={handleOpenCreatePlan}
+                  className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  <DocumentTextIcon className="h-4 w-4 mr-2" />
+                  Create Plan from JSON
+                </button>
+              </div>
+
               {planError && (
                 <div className="bg-red-50 border border-red-200 rounded-md p-4">
                   <div className="flex">
@@ -570,6 +596,32 @@ const AdvancedMigrationsPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {isCreatePlanOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-medium text-gray-900">Create Plan from Desired Schema JSON</h3>
+              <button onClick={() => setIsCreatePlanOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <XCircleIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="text-sm text-gray-600 mb-2">Paste a desired schema JSON matching the format from Schema Analysis.</p>
+              <textarea
+                className="w-full h-64 border border-gray-300 rounded p-2 font-mono text-sm"
+                placeholder="{ \"tables\": [], \"columns\": [], \"indexes\": [], \"foreignKeys\": [], \"constraints\": [] }"
+                value={desiredSchemaJson}
+                onChange={(e) => setDesiredSchemaJson(e.target.value)}
+              />
+            </div>
+            <div className="px-4 py-3 border-t border-gray-200 flex justify-end space-x-2">
+              <button onClick={() => setIsCreatePlanOpen(false)} className="px-3 py-2 text-sm rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button onClick={handleCreatePlanFromJson} className="px-3 py-2 text-sm rounded bg-primary-600 text-white hover:bg-primary-700">Generate Plan</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
