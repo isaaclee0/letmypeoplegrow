@@ -610,7 +610,7 @@ const AdvancedMigrationsPage: React.FC = () => {
               <p className="text-sm text-gray-600 mb-2">Paste a desired schema JSON matching the format from Schema Analysis.</p>
               <textarea
                 className="w-full h-64 border border-gray-300 rounded p-2 font-mono text-sm"
-                placeholder="{ \"tables\": [], \"columns\": [], \"indexes\": [], \"foreignKeys\": [], \"constraints\": [] }"
+                placeholder={`{ "tables": [], "columns": [], "indexes": [], "foreignKeys": [], "constraints": [] }`}
                 value={desiredSchemaJson}
                 onChange={(e) => setDesiredSchemaJson(e.target.value)}
               />
