@@ -10,10 +10,10 @@ import {
   PhoneIcon,
   PlusIcon,
   TrashIcon,
-  EyeIcon,
   CheckIcon,
   XMarkIcon,
   PaperAirplaneIcon,
+  PencilIcon,
 } from '@heroicons/react/24/outline';
 
 interface User {
@@ -64,6 +64,7 @@ const UsersPage: React.FC = () => {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showUserDetails, setShowUserDetails] = useState(false);
   const [showAssignGatherings, setShowAssignGatherings] = useState(false);
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userAssignments, setUserAssignments] = useState<GatheringType[]>([]);
   const [availableGatherings, setAvailableGatherings] = useState<GatheringType[]>([]);
@@ -81,6 +82,15 @@ const UsersPage: React.FC = () => {
 
   const [assignForm, setAssignForm] = useState({
     gatheringIds: [] as number[]
+  });
+
+  const [editForm, setEditForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    mobileNumber: '',
+    primaryContactMethod: 'email' as 'email' | 'sms',
+    role: 'attendance_taker' as 'admin' | 'coordinator' | 'attendance_taker'
   });
 
   // Confirmation modal states
@@ -289,6 +299,87 @@ const UsersPage: React.FC = () => {
     }
   };
 
+  const handleEditUser = (user: User) => {
+    setSelectedUser(user);
+    setEditForm({
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email || '',
+      mobileNumber: user.mobileNumber || '',
+      primaryContactMethod: user.primaryContactMethod,
+      role: user.role
+    });
+    setShowEditUserModal(true);
+  };
+
+  const handleSaveUserEdit = async () => {
+    if (!selectedUser) return;
+
+    try {
+      setError('');
+      
+      // Validate form
+      if (!editForm.firstName || !editForm.lastName) {
+        const errorMsg = 'First name and last name are required';
+        setError(errorMsg);
+        return;
+      }
+
+      if (editForm.primaryContactMethod === 'email' && !editForm.email) {
+        const errorMsg = 'Email is required when primary contact method is email';
+        setError(errorMsg);
+        return;
+      }
+
+      if (editForm.primaryContactMethod === 'sms' && !editForm.mobileNumber) {
+        const errorMsg = 'Mobile number is required when primary contact method is SMS';
+        setError(errorMsg);
+        return;
+      }
+
+      if (!editForm.email && !editForm.mobileNumber) {
+        const errorMsg = 'Either email or mobile number must be provided';
+        setError(errorMsg);
+        return;
+      }
+
+      // Prepare update data
+      const updateData = {
+        firstName: editForm.firstName,
+        lastName: editForm.lastName,
+        email: editForm.primaryContactMethod === 'email' ? editForm.email : undefined,
+        mobileNumber: editForm.primaryContactMethod === 'sms' ? editForm.mobileNumber : undefined,
+        primaryContactMethod: editForm.primaryContactMethod,
+        role: editForm.role
+      };
+
+      await usersAPI.update(selectedUser.id, updateData);
+      
+      setSuccess('User updated successfully');
+      setShowEditUserModal(false);
+      setSelectedUser(null);
+      setEditForm({
+        firstName: '',
+        lastName: '',
+        email: '',
+        mobileNumber: '',
+        primaryContactMethod: 'email',
+        role: 'attendance_taker'
+      });
+      loadData();
+      
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || 'Failed to update user';
+      setError(errorMessage);
+      console.error('Failed to update user:', {
+        error: errorMessage,
+        formData: editForm,
+        response: err.response?.data,
+        status: err.response?.status
+      });
+    }
+  };
+
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
       case 'admin':
@@ -420,9 +511,9 @@ const UsersPage: React.FC = () => {
                       <ActionMenu
                         items={[
                           {
-                            label: 'View Details',
-                            icon: <EyeIcon className="h-4 w-4" />,
-                            onClick: () => handleViewUserDetails(user),
+                            label: 'Edit User',
+                            icon: <PencilIcon className="h-4 w-4" />,
+                            onClick: () => handleEditUser(user),
                           },
                           {
                             label: 'Assign Gatherings',
@@ -454,13 +545,7 @@ const UsersPage: React.FC = () => {
                     User
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Contact
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Role
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Gatherings
@@ -483,33 +568,25 @@ const UsersPage: React.FC = () => {
                             {user.firstName} {user.lastName}
                           </div>
                           <div className="text-sm text-gray-500">
-                            {user.primaryContactMethod === 'email' ? 'Email User' : 'SMS User'}
+                            {user.primaryContactMethod === 'email' ? (
+                              <div className="flex items-center">
+                                <EnvelopeIcon className="h-4 w-4 mr-1" />
+                                {user.email}
+                              </div>
+                            ) : (
+                              <div className="flex items-center">
+                                <PhoneIcon className="h-4 w-4 mr-1" />
+                                {user.mobileNumber}
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {user.primaryContactMethod === 'email' ? (
-                          <div className="flex items-center">
-                            <EnvelopeIcon className="h-4 w-4 mr-2 text-gray-400" />
-                            {user.email}
-                          </div>
-                        ) : (
-                          <div className="flex items-center">
-                            <PhoneIcon className="h-4 w-4 mr-2 text-gray-400" />
-                            {user.mobileNumber}
-                          </div>
-                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
                         {user.role.replace('_', ' ')}
                       </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(user)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
@@ -519,9 +596,9 @@ const UsersPage: React.FC = () => {
                         <ActionMenu
                           items={[
                             {
-                              label: 'View Details',
-                              icon: <EyeIcon className="h-4 w-4" />,
-                              onClick: () => handleViewUserDetails(user),
+                              label: 'Edit User',
+                              icon: <PencilIcon className="h-4 w-4" />,
+                              onClick: () => handleEditUser(user),
                             },
                             {
                               label: 'Assign Gatherings',
@@ -750,23 +827,35 @@ const UsersPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Assign to Gatherings (Optional)</label>
-                  <select
-                    multiple
-                    value={inviteForm.gatheringIds.map(String)}
-                    onChange={(e) => {
-                      const selectedOptions = Array.from(e.target.selectedOptions, option => parseInt(option.value));
-                      setInviteForm({ ...inviteForm, gatheringIds: selectedOptions });
-                    }}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                  >
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Assign to Gatherings (Optional)</label>
+                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
                     {gatherings.map((gathering) => (
-                      <option key={gathering.id} value={gathering.id}>
-                        {gathering.name}
-                      </option>
+                      <label key={gathering.id} className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={inviteForm.gatheringIds.includes(gathering.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setInviteForm({
+                                ...inviteForm,
+                                gatheringIds: [...inviteForm.gatheringIds, gathering.id]
+                              });
+                            } else {
+                              setInviteForm({
+                                ...inviteForm,
+                                gatheringIds: inviteForm.gatheringIds.filter(id => id !== gathering.id)
+                              });
+                            }
+                          }}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">{gathering.name}</span>
+                      </label>
                     ))}
-                  </select>
-                  <p className="mt-1 text-sm text-gray-500">Hold Ctrl/Cmd to select multiple gatherings</p>
+                  </div>
+                  {gatherings.length === 0 && (
+                    <p className="mt-1 text-sm text-gray-500">No gatherings available</p>
+                  )}
                 </div>
               </div>
 
@@ -863,23 +952,35 @@ const UsersPage: React.FC = () => {
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Select Gatherings</label>
-                  <select
-                    multiple
-                    value={assignForm.gatheringIds.map(String)}
-                    onChange={(e) => {
-                      const selectedOptions = Array.from(e.target.selectedOptions, option => parseInt(option.value));
-                      setAssignForm({ ...assignForm, gatheringIds: selectedOptions });
-                    }}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                  >
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Select Gatherings</label>
+                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
                     {availableGatherings.map((gathering) => (
-                      <option key={gathering.id} value={gathering.id}>
-                        {gathering.name}
-                      </option>
+                      <label key={gathering.id} className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={assignForm.gatheringIds.includes(gathering.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setAssignForm({
+                                ...assignForm,
+                                gatheringIds: [...assignForm.gatheringIds, gathering.id]
+                              });
+                            } else {
+                              setAssignForm({
+                                ...assignForm,
+                                gatheringIds: assignForm.gatheringIds.filter(id => id !== gathering.id)
+                              });
+                            }
+                          }}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">{gathering.name}</span>
+                      </label>
                     ))}
-                  </select>
-                  <p className="mt-1 text-sm text-gray-500">Hold Ctrl/Cmd to select multiple gatherings</p>
+                  </div>
+                  {availableGatherings.length === 0 && (
+                    <p className="mt-1 text-sm text-gray-500">No gatherings available</p>
+                  )}
                 </div>
               </div>
 
@@ -895,6 +996,136 @@ const UsersPage: React.FC = () => {
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
                 >
                   Save Assignments
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {showEditUserModal && selectedUser && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Edit User - {selectedUser.firstName} {selectedUser.lastName}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowEditUserModal(false);
+                    setSelectedUser(null);
+                    setEditForm({
+                      firstName: '',
+                      lastName: '',
+                      email: '',
+                      mobileNumber: '',
+                      primaryContactMethod: 'email',
+                      role: 'attendance_taker'
+                    });
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">First Name</label>
+                    <input
+                      type="text"
+                      value={editForm.firstName}
+                      onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                    <input
+                      type="text"
+                      value={editForm.lastName}
+                      onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Primary Contact Method</label>
+                  <select
+                    value={editForm.primaryContactMethod}
+                    onChange={(e) => setEditForm({ ...editForm, primaryContactMethod: e.target.value as 'email' | 'sms' })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="email">Email</option>
+                    <option value="sms">SMS</option>
+                  </select>
+                </div>
+
+                {editForm.primaryContactMethod === 'email' ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Email</label>
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Mobile Number</label>
+                    <input
+                      type="tel"
+                      value={editForm.mobileNumber}
+                      onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Role</label>
+                  <select
+                    value={editForm.role}
+                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value as 'admin' | 'coordinator' | 'attendance_taker' })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="attendance_taker">Attendance Taker</option>
+                    <option value="coordinator">Coordinator</option>
+                    {currentUser?.role === 'admin' && (
+                      <option value="admin">Admin</option>
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
+                <button
+                  onClick={() => {
+                    setShowEditUserModal(false);
+                    setSelectedUser(null);
+                    setEditForm({
+                      firstName: '',
+                      lastName: '',
+                      email: '',
+                      mobileNumber: '',
+                      primaryContactMethod: 'email',
+                      role: 'attendance_taker'
+                    });
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveUserEdit}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
+                >
+                  Save Changes
                 </button>
               </div>
             </div>

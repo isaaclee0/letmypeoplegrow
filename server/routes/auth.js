@@ -3,6 +3,7 @@ const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const moment = require('moment');
+const crypto = require('crypto');
 
 const Database = require('../config/database');
 const { sendOTCEmail } = require('../utils/email');
@@ -13,14 +14,13 @@ const router = express.Router();
 
 // Root auth endpoint - provides basic auth status
 router.get('/', (req, res) => {
-  // Check external service availability
+  // Check external service availability - Twilio temporarily disabled
   const externalServices = {
-    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
-               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    twilio: false, // Temporarily disabled
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
-  const hasExternalServices = externalServices.twilio || externalServices.brevo;
+  const hasExternalServices = externalServices.brevo; // Only email service available
 
   res.json({
     message: 'Authentication service is running',
@@ -42,22 +42,31 @@ router.get('/', (req, res) => {
   });
 });
 
-// Rate limiting for auth endpoints
-// const authLimiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 5, // limit each IP to 5 requests per windowMs
-//   message: { error: 'Too many authentication attempts, please try again later.' }
-// });
+// Rate limiting for auth endpoints - enabled in all environments
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: process.env.NODE_ENV === 'development' ? 20 : 5, // More lenient in development
+  message: { error: 'Too many authentication attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Skip successful requests to avoid penalizing normal usage
+  skipSuccessfulRequests: true
+});
 
-// Disabled rate limiting for development/testing
-// const otcLimiter = rateLimit({
-//   windowMs: 60 * 1000, // 1 minute
-//   max: 10, // limit each IP to 10 OTC requests per minute (increased for testing)
-//   message: { error: 'Please wait before requesting another code.' }
-// });
+// Rate limiting for OTC requests - enabled in all environments
+const otcLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: process.env.NODE_ENV === 'development' ? 30 : 10, // More lenient in development
+  message: { error: 'Please wait before requesting another code.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Skip successful requests to avoid penalizing normal usage
+  skipSuccessfulRequests: true
+});
 
 // Request One-Time Code (supports both email and SMS)
 router.post('/request-code',
+  otcLimiter,
   [
     body('contact')
       .trim()
@@ -119,7 +128,7 @@ router.post('/request-code',
       // Check if user exists and is active
       const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
       let users = await Database.query(
-        `SELECT id, email, mobile_number, primary_contact_method, role, is_active FROM users WHERE ${whereClause}`,
+        `SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE ${whereClause}`,
         [isEmail ? contact : normalizedContact]
       );
 
@@ -129,30 +138,48 @@ router.post('/request-code',
           console.log('🔧 Development mode: Auto-creating dev user for dev@church.local');
           
           try {
+            // Use existing church_id from church_settings if available
+            const existingSettings = await Database.query(
+              'SELECT church_id FROM church_settings WHERE onboarding_completed = 1 LIMIT 1'
+            );
+            
+            let churchId;
+            if (existingSettings.length > 0) {
+              churchId = existingSettings[0].church_id;
+              console.log('✅ Using existing church_id:', churchId);
+            } else {
+              // Generate a simple church_id for development
+              churchId = 'devch1';
+              console.log('🆕 Using simple church_id:', churchId);
+            }
+            
             // Create development admin user
             const result = await Database.query(`
-              INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed)
-              VALUES (?, 'admin', 'Development', 'Admin', true, true)
-            `, ['dev@church.local']);
+              INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed, church_id)
+              VALUES (?, 'admin', 'Development', 'Admin', true, true, ?)
+            `, ['dev@church.local', churchId]);
             
-            // Set up church settings to bypass onboarding
-            await Database.query(`
-              INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed)
-              VALUES (?, ?, ?, ?, ?, ?)
-            `, [
-              'Development Church',
-              'AU',
-              'Australia/Sydney',
-              'Let My People Grow',
-              'dev@church.local',
-              true
-            ]);
+            // Set up church settings to bypass onboarding (only if they don't exist)
+            if (existingSettings.length === 0) {
+              await Database.query(`
+                INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed, church_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+              `, [
+                'Development Church',
+                'AU',
+                'Australia/Sydney',
+                'Let My People Grow',
+                'dev@church.local',
+                true,
+                churchId
+              ]);
+            }
             
             console.log('✅ Development user and church settings created');
             
             // Re-query for the newly created user
             const newUsers = await Database.query(
-              'SELECT id, email, mobile_number, primary_contact_method, role, is_active FROM users WHERE email = ?',
+              'SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE email = ?',
               ['dev@church.local']
             );
             
@@ -256,11 +283,8 @@ router.post('/request-code',
               console.log(`📧 Development mode: Email code ${code} for ${finalContact} (Brevo not configured)`);
             }
           } else {
-            if (externalServices.twilio) {
-              await sendOTCSMS(finalContact, code);
-            } else {
-              console.log(`📱 Development mode: SMS code ${code} for ${finalContact} (Twilio not configured)`);
-            }
+            // SMS functionality temporarily disabled
+            console.log(`📱 SMS functionality temporarily disabled. Code would be: ${code} for ${finalContact}`);
           }
         } catch (error) {
           console.error(`Failed to send OTC via ${finalContactMethod}:`, error);
@@ -292,6 +316,7 @@ router.post('/request-code',
 
 // Verify One-Time Code and login (supports both email and SMS)
 router.post('/verify-code',
+  authLimiter,
   // authLimiter, // Temporarily disabled for development
   [
     body('contact')
@@ -333,7 +358,7 @@ router.post('/verify-code',
       // Get user by contact method
       const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
       const users = await Database.query(
-        `SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id FROM users WHERE ${whereClause}`,
+        `SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE ${whereClause}`,
         [isEmail ? contact : normalizedContact]
       );
 
@@ -420,7 +445,8 @@ router.post('/verify-code',
           userId: user.id, 
           email: user.email, 
           mobile: user.mobile_number,
-          role: user.role 
+          role: user.role,
+          churchId: user.church_id
         },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRE || '30d' }
@@ -545,8 +571,17 @@ router.get('/me', verifyToken, async (req, res) => {
   }
 });
 
-// Refresh token
-router.post('/refresh', verifyToken, async (req, res) => {
+// Refresh token - additional rate limiting for JWT refresh attacks
+const refreshLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: process.env.NODE_ENV === 'development' ? 50 : 10, // Stricter limits for refresh tokens
+  message: { error: 'Too many token refresh attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true
+});
+
+router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, res) => {
   try {
     const user = req.user;
     console.log(`🔄 Token refresh requested for user: ${user.email} (ID: ${user.id})`);
@@ -565,7 +600,8 @@ router.post('/refresh', verifyToken, async (req, res) => {
       { 
         userId: user.id, 
         email: user.email, 
-        role: user.role 
+        role: user.role,
+        churchId: user.church_id
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '30d' }
@@ -688,11 +724,15 @@ router.post('/register',
         return res.status(409).json({ error: 'A user with this email address already exists.' });
       }
 
+      // Get or create church ID for new user
+      const { getOrCreateChurchId } = require('../utils/churchIdGenerator');
+      const churchId = await getOrCreateChurchId('New Church'); // Default name for direct registration
+      
       // Create new user
       const result = await Database.query(`
-        INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed)
-        VALUES (?, ?, ?, ?, true, false)
-      `, [email, firstName, lastName, userRole]);
+        INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed, church_id)
+        VALUES (?, ?, ?, ?, true, false, ?)
+      `, [email, firstName, lastName, userRole, churchId]);
 
       const userId = result.insertId;
 

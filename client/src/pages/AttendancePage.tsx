@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay } from 'date-fns';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition } from 'react';
+import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
@@ -13,19 +13,19 @@ import {
   StarIcon,
   XMarkIcon,
   PencilIcon,
-  TrashIcon
+  TrashIcon,
+  EllipsisHorizontalIcon
 } from '@heroicons/react/24/outline';
 
 interface PersonForm {
   firstName: string;
-  firstNameUnknown: boolean;
   lastName: string;
   lastNameUnknown: boolean;
+  fillLastNameFromAbove: boolean;
 }
 
 interface VisitorFormState {
-  personType: string;
-  visitorType: string;
+  personType: 'regular' | 'local_visitor' | 'traveller_visitor';
   notes: string;
   persons: PersonForm[];
   autoFillSurname: boolean;
@@ -43,6 +43,15 @@ const AttendancePage: React.FC = () => {
   const [error, setError] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [isPending, startTransition] = useTransition();
+  // Refs to avoid stale closures and reduce heavy deps in effects
+  const attendanceListRef = useRef<Individual[]>([]);
+  const lastUserModificationRef = useRef<{ [key: number]: number }>({});
+  // Maps to minimize re-render scope for attendance toggles
+  const [presentById, setPresentById] = useState<Record<number, boolean>>({});
+  const [savingById, setSavingById] = useState<Record<number, boolean>>({});
+  const presentByIdRef = useRef<Record<number, boolean>>({});
   
   // Helper functions for localStorage
   const saveLastViewed = (gatheringId: number, date: string) => {
@@ -53,6 +62,18 @@ const AttendancePage: React.FC = () => {
     };
     localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
   };
+
+  // Keep present map in sync with loaded attendance list
+  useEffect(() => {
+    const map: Record<number, boolean> = {};
+    attendanceList.forEach((p) => { map[p.id] = Boolean(p.present); });
+    setPresentById(map);
+    presentByIdRef.current = map;
+  }, [attendanceList]);
+
+  useEffect(() => {
+    presentByIdRef.current = presentById;
+  }, [presentById]);
   
   const getLastViewed = () => {
     try {
@@ -87,6 +108,18 @@ const AttendancePage: React.FC = () => {
     }
   };
 
+  const handleGroupByFamilyChange = useCallback((checked: boolean) => {
+    setGroupByFamily(checked);
+    // Save the setting for this gathering with improved localStorage handling
+    if (!selectedGathering) return; // Guard for no selectedGathering
+    
+    try {
+      localStorage.setItem(`gathering_${selectedGathering.id}_groupByFamily`, JSON.stringify(checked));
+    } catch (error) {
+      console.warn('Failed to save groupByFamily setting to localStorage:', error);
+    }
+  }, [selectedGathering]);
+
   // Helper function to find the nearest date (closest to today)
   const findNearestDate = (dates: string[]) => {
     if (dates.length === 0) return null;
@@ -112,13 +145,14 @@ const AttendancePage: React.FC = () => {
 
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showGatheringDropdown, setShowGatheringDropdown] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
   const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
-  const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number | string]: boolean }>({});
+  const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
     visitor: Visitor | null;
@@ -130,33 +164,44 @@ const AttendancePage: React.FC = () => {
   const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
   const [showRecentVisitors, setShowRecentVisitors] = useState(false);
   const [allVisitors, setAllVisitors] = useState<Visitor[]>([]);
+  // Keep a raw pool of recent visitors (without 6-week filter) for search visibility
+  const [allRecentVisitorsPool, setAllRecentVisitorsPool] = useState<Visitor[]>([]);
+  const POLL_INTERVAL_MS = 15000;
+
+  // Keep refs in sync
+  useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
+  useEffect(() => { lastUserModificationRef.current = lastUserModification; }, [lastUserModification]);
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
-    personType: 'visitor', // 'regular' or 'visitor'
-    visitorType: 'local', // 'local' or 'traveller'
+    personType: 'local_visitor', // 'regular', 'local_visitor', or 'traveller_visitor'
     notes: '',
     persons: [{
       firstName: '',
-      firstNameUnknown: false,
       lastName: '',
-      lastNameUnknown: false
+      lastNameUnknown: false,
+      fillLastNameFromAbove: false
     }],
     autoFillSurname: false
   });
 
-  // Handle click outside to close date picker
+  // Handle click outside to close date picker and gathering dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (datePickerRef.current && !datePickerRef.current.contains(event.target as Node)) {
         setShowDatePicker(false);
       }
+      // Close gathering dropdown when clicking outside
+      const target = event.target as Element;
+      if (!target.closest('[data-gathering-dropdown]')) {
+        setShowGatheringDropdown(false);
+      }
     };
 
-    if (showDatePicker) {
+    if (showDatePicker || showGatheringDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker]);
+  }, [showDatePicker, showGatheringDropdown]);
 
   // Calculate valid dates for the selected gathering
   const validDates = useMemo(() => {
@@ -319,6 +364,7 @@ const AttendancePage: React.FC = () => {
       try {
         const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
         setRecentVisitors(response.data.visitors || []);
+        setAllRecentVisitorsPool(response.data.visitors || []);
       } catch (err) {
         console.error('Failed to load recent visitors:', err);
       }
@@ -337,17 +383,19 @@ const AttendancePage: React.FC = () => {
         const currentResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
         const currentVisitors = currentResponse.data.visitors || [];
 
-        // Get recent visitors from last 6 weeks
-        const sixWeeksAgo = new Date();
-        sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42); // 6 weeks = 42 days
+        // Use already loaded recent visitors pool if available; otherwise fetch once
+        let allRecentVisitors = allRecentVisitorsPool;
+        if (!allRecentVisitors || allRecentVisitors.length === 0) {
+          const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+          allRecentVisitors = recentResponse.data.visitors || [];
+          setAllRecentVisitorsPool(allRecentVisitors);
+        }
 
-        const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-        const allRecentVisitors = recentResponse.data.visitors || [];
-        
         // Filter recent visitors to only include those from last 6 weeks
-        const recentVisitorsLast6Weeks = allRecentVisitors.filter((visitor: Visitor) => {
+        const sixWeeksAgo = startOfDay(addDays(new Date(), -42));
+        const recentVisitorsLast6Weeks = (allRecentVisitors || []).filter((visitor: Visitor) => {
           if (!visitor.lastAttended) return false;
-          const lastAttendedDate = new Date(visitor.lastAttended);
+          const lastAttendedDate = startOfDay(parseISO(visitor.lastAttended));
           return lastAttendedDate >= sixWeeksAgo;
         });
 
@@ -361,12 +409,12 @@ const AttendancePage: React.FC = () => {
         setAllVisitors(combinedVisitors);
         
         // Initialize visitor attendance state
-        const initialVisitorAttendance: { [key: number | string]: boolean } = {};
-        combinedVisitors.forEach((visitor: Visitor, index: number) => {
-          // Use visitor ID if available, otherwise use a temporary key
-          const visitorKey = visitor.id || `temp_${index}`;
-          // Current visitors are checked by default, recent visitors are unchecked
-          initialVisitorAttendance[visitorKey] = currentVisitors.some((cv: Visitor) => cv.id === visitor.id);
+        const initialVisitorAttendance: { [key: number]: boolean } = {};
+        combinedVisitors.forEach((visitor: Visitor) => {
+          if (visitor.id) {
+            // Current visitors are checked by default, recent visitors are unchecked
+            initialVisitorAttendance[visitor.id] = currentVisitors.some((cv: Visitor) => cv.id === visitor.id);
+          }
         });
         setVisitorAttendance(initialVisitorAttendance);
       } catch (err) {
@@ -375,7 +423,7 @@ const AttendancePage: React.FC = () => {
     };
 
     loadAllVisitors();
-  }, [selectedGathering, selectedDate]);
+  }, [selectedGathering, selectedDate, allRecentVisitorsPool]);
 
   // Function to quickly add a recent visitor
   const quickAddRecentVisitor = async (recentVisitor: Visitor) => {
@@ -386,23 +434,33 @@ const AttendancePage: React.FC = () => {
       const nameParts = recentVisitor.name.trim().split(' & ');
       const people = nameParts.map(namePart => {
         const personParts = namePart.trim().split(' ');
-        const firstName = personParts[0] || 'Unknown';
-        const lastName = personParts.slice(1).join(' ') || 'Unknown';
+        const firstName = personParts[0] || '';
+        const lastName = personParts.slice(1).join(' ') || '';
         return {
-          firstName: firstName === 'Unknown' ? '' : firstName,
-          lastName: lastName === 'Unknown' ? '' : lastName,
-          firstUnknown: firstName === 'Unknown',
-          lastUnknown: lastName === 'Unknown',
+          firstName: firstName || 'Unknown',
+          lastName: lastName || 'Unknown',
+          firstUnknown: false,
+          lastUnknown: lastName === '',
           isChild: false
         };
       });
 
-      // Add as visitor
-      const response = await attendanceAPI.addVisitor(selectedGathering.id, selectedDate, {
-        people,
-        visitorType: recentVisitor.visitorType,
-        notes: recentVisitor.notes
+      // Add as visitor using the new system
+      // First create the visitor family
+      const familyName = generateFamilyName(people);
+      const familyResponse = await familiesAPI.createVisitorFamily({
+        familyName,
+        peopleType: recentVisitor.visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor',
+        notes: recentVisitor.notes,
+        people
       });
+      
+      // Then add the family to the service
+      const response = await attendanceAPI.addVisitorFamilyToService(
+        selectedGathering.id, 
+        selectedDate, 
+        familyResponse.data.familyId
+      );
 
       showSuccess(`Added ${recentVisitor.name} from recent visitors`);
       
@@ -414,44 +472,41 @@ const AttendancePage: React.FC = () => {
     }
   };
 
+  // Simple queue to serialize attendance writes per individual and reduce API thrash
+  const pendingWritesRef = useRef<Map<number, Promise<void>>>(new Map());
+
   const toggleAttendance = async (individualId: number) => {
     const now = Date.now();
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
-    
-    setAttendanceList(prev => {
-      return prev.map(person => 
-        person.id === individualId 
-          ? { ...person, present: !person.present, isSaving: true }
-          : person
-      );
-    });
+    // Compute new present using refs to avoid stale state reads
+    const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
+    const newPresent = !currentPresent;
+
+    setSavingById(prev => ({ ...prev, [individualId]: true }));
+    setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
 
     if (!selectedGathering || !selectedDate) return;
 
-    try {
-      await attendanceAPI.record(selectedGathering.id, selectedDate, {
-        attendanceRecords: [{ individualId, present: !attendanceList.find(p => p.id === individualId)?.present }],
-        visitors: []
-      });
-
-      setAttendanceList(prev => 
-        prev.map(person => 
-          person.id === individualId 
-            ? { ...person, isSaving: false }
-            : person
-        )
-      );
-    } catch (err) {
-      console.error('Failed to save attendance change:', err);
-      setError('Failed to save change');
-      setAttendanceList(prev => 
-        prev.map(person => 
-          person.id === individualId 
-            ? { ...person, isSaving: false, present: !person.present } // Revert on error
-            : person
-        )
-      );
-    }
+    // Serialize per-individual writes to avoid race conditions and 500s under rapid toggling
+    const run = async () => {
+      try {
+        await attendanceAPI.record(selectedGathering.id, selectedDate, {
+          attendanceRecords: [{ individualId, present: newPresent }],
+          visitors: []
+        });
+        setSavingById(prev => ({ ...prev, [individualId]: false }));
+      } catch (err) {
+        console.error('Failed to save attendance change:', err);
+        setError('Failed to save change');
+        setSavingById(prev => ({ ...prev, [individualId]: false }));
+        setPresentById(prev => ({ ...prev, [individualId]: currentPresent }));
+      } finally {
+        pendingWritesRef.current.delete(individualId);
+      }
+    };
+    const current = pendingWritesRef.current.get(individualId);
+    const p = current ? current.then(run) : run();
+    pendingWritesRef.current.set(individualId, Promise.resolve(p));
   };
 
   const toggleAllFamily = async (familyId: number) => {
@@ -522,92 +577,46 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  // Update polling effect
+  // Update polling effect (avoid re-creating interval on each render; use refs for deps)
   useEffect(() => {
-    if (!selectedGathering || !selectedDate) {
-      return;
+    if (!selectedGathering || !selectedDate) return;
+
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
     }
 
-    const startPolling = () => {
-      pollingIntervalRef.current = setInterval(async () => {
-        try {
-          const response = await attendanceAPI.get(selectedGathering!.id, selectedDate);
-          const newAttendanceList = response.data.attendanceList || [];
-          const newVisitors = response.data.visitors || [];
-          
-          console.log('Polling: Current list length:', attendanceList.length, 'New list length:', newAttendanceList.length);
-          
-          // Check for concurrent updates by comparing attendance states
-          let hasConcurrentUpdates = false;
-          if (attendanceList.length > 0 && newAttendanceList.length > 0) {
-            const currentMap = new Map(attendanceList.map((p: Individual) => [p.id, p.present]));
-            const newMap = new Map(newAttendanceList.map((p: Individual) => [p.id, p.present]));
-            
-            newMap.forEach((newPresent, id) => {
-              const currentPresent = currentMap.get(id as number);
-              if (currentPresent !== undefined && currentPresent !== newPresent) {
-                const userModifiedTime = lastUserModification[id as number];
-                const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
-                
-                // If user hasn't modified recently and values differ, it's a concurrent update
-                if (timeSinceUserModification > 15000) {
-                  hasConcurrentUpdates = true;
-                }
-              }
-            });
-          }
-          
-          setAttendanceList(prev => {
-            // Create a map of current people by ID for quick lookup
-            const currentPeopleMap = new Map(prev.map(p => [p.id, p]));
-            
-            // Process new data from server
-            const updatedList = newAttendanceList.map((newPerson: Individual) => {
-              const currentPerson = currentPeopleMap.get(newPerson.id);
-              
-              if (!currentPerson) {
-                // New person from server
-                return { ...newPerson, isSaving: false };
-              }
-              
-              // Check if user has modified this person recently (within last 15 seconds)
-              const userModifiedTime = lastUserModification[newPerson.id];
-              const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
-              
-              if (currentPerson.isSaving) {
-                // Person is currently being saved, keep current state
-                return currentPerson;
-              } else if (timeSinceUserModification <= 15000) { // 15 seconds (increased window)
-                // User modified recently, keep user's version
-                return {
-                  ...newPerson,
-                  present: currentPerson.present, // Keep user's present value
-                  isSaving: false
-                };
-              } else {
-                // Safe to update from server
-                return { ...newPerson, isSaving: false };
-              }
-            });
-            
-            return updatedList;
-          });
-          
-          setVisitors(newVisitors);
-        } catch (err) {
-          console.error('Polling error:', err);
-        }
-      }, 10000); // Poll every 10 seconds (reduced frequency)
-    };
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
+        const newAttendanceList = response.data.attendanceList || [];
+        const newVisitors = response.data.visitors || [];
 
-    startPolling();
+        setAttendanceList(prev => {
+          const currentPeopleMap = new Map(prev.map(p => [p.id, p]));
+          const updatedList = newAttendanceList.map((newPerson: Individual) => {
+            const currentPerson = currentPeopleMap.get(newPerson.id);
+            if (!currentPerson) return { ...newPerson, isSaving: false };
+            const userModifiedTime = lastUserModificationRef.current[newPerson.id];
+            const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
+            if (currentPerson.isSaving) return currentPerson;
+            if (timeSinceUserModification <= 15000) {
+              return { ...newPerson, present: currentPerson.present, isSaving: false };
+            }
+            return { ...newPerson, isSaving: false };
+          });
+          return updatedList;
+        });
+
+        setVisitors(newVisitors);
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, POLL_INTERVAL_MS);
 
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
-  }, [selectedGathering, selectedDate, lastUserModification, attendanceList]);
+  }, [selectedGathering, selectedDate]);
 
   // Clean up old modification timestamps (older than 30 seconds)
   useEffect(() => {
@@ -633,16 +642,15 @@ const AttendancePage: React.FC = () => {
   // Handle add visitor
   const handleAddVisitor = async () => {
     // Set default person type based on user role
-    const defaultPersonType = user?.role === 'admin' || user?.role === 'coordinator' ? 'visitor' : 'visitor';
+    const defaultPersonType = user?.role === 'admin' || user?.role === 'coordinator' ? 'local_visitor' : 'local_visitor';
     setVisitorForm({
       personType: defaultPersonType,
-      visitorType: 'local',
       notes: '',
       persons: [{
         firstName: '',
-        firstNameUnknown: false,
         lastName: '',
-        lastNameUnknown: false
+        lastNameUnknown: false,
+        fillLastNameFromAbove: false
       }],
       autoFillSurname: false
     });
@@ -655,21 +663,20 @@ const AttendancePage: React.FC = () => {
       ? visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup)
       : [visitor]; // If no family group, just edit the individual visitor
     
-    const personsData = familyMembers.map(member => {
+    const personsData = familyMembers.map((member, index) => {
       const parts = member.name.trim().split(' ');
       const firstName = parts[0] || '';
       const lastName = parts.slice(1).join(' ') || '';
       return {
         firstName: firstName === 'Unknown' ? '' : firstName,
-        firstNameUnknown: firstName === 'Unknown',
         lastName: lastName === 'Unknown' ? '' : lastName,
-        lastNameUnknown: lastName === 'Unknown'
+        lastNameUnknown: lastName === 'Unknown',
+        fillLastNameFromAbove: index > 0 // For editing, assume subsequent people should fill from above
       };
     });
     
     setVisitorForm({
-      personType: 'visitor',
-      visitorType: visitor.visitorType === 'potential_regular' ? 'local' : 'traveller',
+      personType: visitor.visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor',
       notes: visitor.notes || '',
       persons: personsData,
       autoFillSurname: false
@@ -723,10 +730,15 @@ const AttendancePage: React.FC = () => {
   // Add functions to manage persons array
   const addPerson = () => {
     setVisitorForm(prev => {
-      const newPerson = { firstName: '', firstNameUnknown: false, lastName: '', lastNameUnknown: false };
+      const newPerson = { 
+        firstName: '', 
+        lastName: '', 
+        lastNameUnknown: false, 
+        fillLastNameFromAbove: true // Default to checked for subsequent people
+      };
       
-      // Auto-fill surname if enabled and first person has a surname
-      if (prev.autoFillSurname && prev.persons.length > 0) {
+      // Auto-fill surname from first person if they have one
+      if (prev.persons.length > 0) {
         const firstPerson = prev.persons[0];
         if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
           newPerson.lastName = firstPerson.lastName;
@@ -751,12 +763,38 @@ const AttendancePage: React.FC = () => {
     setVisitorForm(prev => {
       const newPersons = [...prev.persons];
       newPersons[index] = { ...newPersons[index], ...updates };
-      if (updates.firstNameUnknown !== undefined) {
-        newPersons[index].firstName = updates.firstNameUnknown ? '' : newPersons[index].firstName;
-      }
+      
+      // Handle last name unknown checkbox
       if (updates.lastNameUnknown !== undefined) {
         newPersons[index].lastName = updates.lastNameUnknown ? '' : newPersons[index].lastName;
+        // If setting to unknown, also uncheck fill from above
+        if (updates.lastNameUnknown) {
+          newPersons[index].fillLastNameFromAbove = false;
+        }
       }
+      
+      // Handle fill from above checkbox
+      if (updates.fillLastNameFromAbove !== undefined) {
+        if (updates.fillLastNameFromAbove && index > 0) {
+          // Fill from first person's last name
+          const firstPerson = newPersons[0];
+          if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
+            newPersons[index].lastName = firstPerson.lastName;
+            newPersons[index].lastNameUnknown = false;
+          }
+        }
+        // If unchecking fill from above, don't clear the name (let user decide)
+      }
+      
+      // If updating first person's last name, update all others who have fillLastNameFromAbove checked
+      if (index === 0 && updates.lastName !== undefined) {
+        for (let i = 1; i < newPersons.length; i++) {
+          if (newPersons[i].fillLastNameFromAbove && !newPersons[i].lastNameUnknown) {
+            newPersons[i].lastName = updates.lastName;
+          }
+        }
+      }
+      
       return { ...prev, persons: newPersons };
     });
   };
@@ -767,21 +805,21 @@ const AttendancePage: React.FC = () => {
     try {
       // Validate form
       for (const person of visitorForm.persons) {
-        if (!person.firstName.trim() && !person.firstNameUnknown) {
+        if (!person.firstName.trim()) {
           setError('First name is required for all persons');
           return;
         }
         if (!person.lastName.trim() && !person.lastNameUnknown) {
-          setError('Last name is required for all persons');
+          setError('Last name is required for all persons (or check "Unknown")');
           return;
         }
       }
 
       // Build people array
       const people = visitorForm.persons.map(person => ({
-        firstName: person.firstNameUnknown ? 'Unknown' : person.firstName.trim(),
+        firstName: person.firstName.trim(),
         lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
-        firstUnknown: person.firstNameUnknown,
+        firstUnknown: false,
         lastUnknown: person.lastNameUnknown,
         isChild: false // No distinction
       }));
@@ -801,7 +839,7 @@ const AttendancePage: React.FC = () => {
         // Create visitor family in People system
         const familyResponse = await familiesAPI.createVisitorFamily({
           familyName,
-          visitorType: visitorForm.visitorType === 'local' ? 'local' : 'traveller',
+          peopleType: visitorForm.personType,
           notes: notes ? notes : undefined,
           people
         });
@@ -828,14 +866,13 @@ const AttendancePage: React.FC = () => {
       
       // Reset form and close modal
       setVisitorForm({
-        personType: 'visitor',
-        visitorType: 'local',
+        personType: 'local_visitor',
         notes: '',
         persons: [{
           firstName: '',
-          firstNameUnknown: false,
           lastName: '',
-          lastNameUnknown: false
+          lastNameUnknown: false,
+          fillLastNameFromAbove: false
         }],
         autoFillSurname: false
       });
@@ -853,21 +890,21 @@ const AttendancePage: React.FC = () => {
     try {
       // Validate form
       for (const person of visitorForm.persons) {
-        if (!person.firstName.trim() && !person.firstNameUnknown) {
+        if (!person.firstName.trim()) {
           setError('First name is required for all persons');
           return;
         }
         if (!person.lastName.trim() && !person.lastNameUnknown) {
-          setError('Last name is required for all persons');
+          setError('Last name is required for all persons (or check "Unknown")');
           return;
         }
       }
 
       // Build people array
       const people = visitorForm.persons.map(person => ({
-        firstName: person.firstNameUnknown ? 'Unknown' : person.firstName.trim(),
+        firstName: person.firstName.trim(),
         lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
-        firstUnknown: person.firstNameUnknown,
+        firstUnknown: false,
         lastUnknown: person.lastNameUnknown,
         isChild: false // No distinction
       }));
@@ -879,7 +916,7 @@ const AttendancePage: React.FC = () => {
       // TODO: Implement proper editing of visitor families in People system
       const response = await attendanceAPI.updateVisitor(selectedGathering.id, selectedDate, editingVisitor.id!, {
         people,
-        visitorType: visitorForm.visitorType === 'local' ? 'potential_regular' : 'temporary_other',
+        visitorType: visitorForm.personType === 'local_visitor' ? 'potential_regular' : 'temporary_other',
         notes: notes ? notes : undefined
       });
 
@@ -896,14 +933,13 @@ const AttendancePage: React.FC = () => {
       
       // Reset form and close modal
       setVisitorForm({
-        personType: 'visitor',
-        visitorType: 'local',
+        personType: 'local_visitor',
         notes: '',
         persons: [{
           firstName: '',
-          firstNameUnknown: false,
           lastName: '',
-          lastNameUnknown: false
+          lastNameUnknown: false,
+          fillLastNameFromAbove: false
         }],
         autoFillSurname: false
       });
@@ -916,172 +952,140 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  // Group attendees by family and filter based on search term
-  const groupedAttendees = attendanceList.reduce((groups, person) => {
-    if (groupByFamily && person.familyId) {
-      // Group by family if setting is enabled and person has a family
-      const familyKey = `family_${person.familyId}`;
-      if (!groups[familyKey]) {
-        groups[familyKey] = {
-          family_id: person.familyId,
-          family_name: person.familyName,
-          members: []
-        };
+  // Group attendees by family and filter based on search term (memoized)
+  const groupedAttendees = useMemo(() => {
+    const groups: any = {};
+    attendanceList.forEach(person => {
+      if (groupByFamily && person.familyId) {
+        const familyKey = `family_${person.familyId}`;
+        if (!groups[familyKey]) {
+          groups[familyKey] = {
+            family_id: person.familyId,
+            family_name: person.familyName,
+            members: [] as Individual[],
+          };
+        }
+        groups[familyKey].members.push(person);
+      } else {
+        const individualGroupKey = 'individuals';
+        if (!groups[individualGroupKey]) {
+          groups[individualGroupKey] = {
+            family_id: null,
+            family_name: null,
+            members: [] as Individual[],
+          };
+        }
+        groups[individualGroupKey].members.push(person);
       }
-      groups[familyKey].members.push(person);
-    } else {
-      // List all individuals in a single group
-      const individualGroupKey = 'individuals';
-      if (!groups[individualGroupKey]) {
-        groups[individualGroupKey] = {
-          family_id: null,
-          family_name: null,
-          members: []
-        };
-      }
-      groups[individualGroupKey].members.push(person);
-    }
+    });
     return groups;
-  }, {} as any);
+  }, [attendanceList, groupByFamily]);
 
-  // Group visitors by family
-  const groupedVisitors = useMemo(() => {
+  // Group visitors helper, accepts any input array
+  const groupVisitors = useCallback((visitorsInput: Visitor[]) => {
     if (!groupByFamily) {
-      return [{ familyId: null, familyName: null, members: allVisitors, isFamily: false, groupKey: 'ungrouped' }];
+      return [{ familyId: null, familyName: null, members: visitorsInput, isFamily: false, groupKey: 'ungrouped' }];
     }
 
     const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean; groupKey: string } } = {};
 
-    allVisitors.forEach((visitor, index) => {
-      // Group by visitor_family_group if it exists, otherwise treat as individual
-      // Use a fallback for visitors without IDs to ensure unique keys
+    visitorsInput.forEach((visitor, index) => {
       const visitorId = visitor.id || `temp_${index}`;
       const groupKey = visitor.visitorFamilyGroup ? `family_${visitor.visitorFamilyGroup}` : `individual_${visitorId}`;
-      
       if (!grouped[groupKey]) {
         const isFamily = !!visitor.visitorFamilyGroup;
-        let familyName = null;
-        
+        let familyName = null as string | null;
         if (isFamily) {
-          // For families, collect all names and create a family name
-          const familyMembers = allVisitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
-          
-          // Use first two members added (by ID order, not alphabetically)
+          const familyMembers = visitorsInput.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
           const sortedMembers = familyMembers.sort((a, b) => (a.id || 0) - (b.id || 0));
           const firstTwoMembers = sortedMembers.slice(0, 2);
-          
           const firstNames = firstTwoMembers.map(member => {
             const parts = member.name.trim().split(' ');
             const firstName = parts[0];
             return (firstName && firstName !== 'Unknown' && !firstName.match(/^Child$/i)) ? firstName : null;
-          }).filter(name => name !== null);
-          
+          }).filter(name => name !== null) as string[];
           const surnames = firstTwoMembers.map(member => {
             const parts = member.name.trim().split(' ');
             const lastName = parts.slice(1).join(' ');
             return (lastName && lastName !== 'Unknown') ? lastName : null;
-          }).filter(name => name !== null);
-          
-          // Handle unknown surnames - use first two first names
+          }).filter(name => name !== null) as string[];
           if (surnames.length === 0 && firstNames.length > 0) {
-            if (firstNames.length === 1) {
-              familyName = firstNames[0];
-            } else {
-              familyName = `${firstNames[0]} and ${firstNames[1]}`;
-            }
+            familyName = firstNames.length === 1 ? firstNames[0] : `${firstNames[0]} and ${firstNames[1]}`;
           } else {
-            // Follow the pattern: SURNAME, firstname and firstname OR SURNAME1, firstname1 and SURNAME2, firstname2
             const uniqueSurnames = Array.from(new Set(surnames));
-            
             if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
-              // All have the same surname - use pattern: SURNAME, firstname and firstname
               const surname = uniqueSurnames[0].toUpperCase();
-              if (firstNames.length === 1) {
-                familyName = `${surname}, ${firstNames[0]}`;
-              } else {
-                familyName = `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
-              }
+              familyName = firstNames.length === 1 ? `${surname}, ${firstNames[0]}` : `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
             } else if (firstNames.length > 0 && surnames.length > 0) {
-              // Different surnames - use pattern: SURNAME1, firstname1 and SURNAME2, firstname2
               const nameWithSurname = firstTwoMembers.map(member => {
                 const parts = member.name.trim().split(' ');
                 const firstName = parts[0];
                 const lastName = parts.slice(1).join(' ');
-                
                 if (firstName && firstName !== 'Unknown' && lastName && lastName !== 'Unknown') {
                   return `${lastName.toUpperCase()}, ${firstName}`;
                 } else if (firstName && firstName !== 'Unknown') {
                   return firstName;
-                } else {
-                  return null;
                 }
-              }).filter(name => name !== null);
-              
-              if (nameWithSurname.length === 1) {
-                familyName = nameWithSurname[0];
-              } else if (nameWithSurname.length === 2) {
-                familyName = `${nameWithSurname[0]} and ${nameWithSurname[1]}`;
-              } else {
-                familyName = 'Visitor Family';
-              }
+                return null;
+              }).filter(name => name !== null) as string[];
+              familyName = nameWithSurname.length === 1
+                ? nameWithSurname[0]
+                : nameWithSurname.length === 2
+                  ? `${nameWithSurname[0]} and ${nameWithSurname[1]}`
+                  : 'Visitor Family';
             } else {
               familyName = 'Visitor Family';
             }
           }
         } else {
-          // For individuals, generate familyName
           const parts = visitor.name.trim().split(' ');
           const firstName = parts[0] || 'Unknown';
           const lastName = parts.slice(1).join(' ') || 'Unknown';
-          
-          if (lastName !== 'Unknown') {
-            familyName = `${lastName.toUpperCase()}, ${firstName}`;
-          } else if (firstName !== 'Unknown') {
-            familyName = firstName;
-          } else {
-            familyName = 'Unknown Visitor';
-          }
+          familyName = lastName !== 'Unknown' ? `${lastName.toUpperCase()}, ${firstName}` : (firstName !== 'Unknown' ? firstName : 'Unknown Visitor');
         }
-        
-        grouped[groupKey] = {
-          familyId: null,
-          familyName,
-          members: [],
-          isFamily,
-          groupKey
-        };
+        grouped[groupKey] = { familyId: null, familyName, members: [], isFamily, groupKey };
       }
       grouped[groupKey].members.push(visitor);
     });
-
     return Object.values(grouped);
-  }, [allVisitors, groupByFamily]);
+  }, [groupByFamily]);
 
-  // Filter families based on search term
-  const filteredGroupedAttendees = Object.values(groupedAttendees).filter((group: any) => {
-    if (!searchTerm.trim()) return true;
-    
-    const searchLower = searchTerm.toLowerCase();
-    
-    // Check if any family member's name contains the search term
-    return group.members.some((member: Individual) => {
-      const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
-      return fullName.includes(searchLower);
-    });
-  });
+  // Build displayed visitors groups: if searching, include all recent visitors (even >6 weeks); otherwise only within 6 weeks
+  const displayedGroupedVisitors = useMemo(() => {
+    const search = searchTerm.trim().toLowerCase();
+    if (search) {
+      const poolMap = new Map<number | string, Visitor>();
+      allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); else poolMap.set(`c_${v.name}`, v); });
+      allRecentVisitorsPool.forEach(v => { if (v.id && !poolMap.has(v.id)) poolMap.set(v.id, v); });
+      const pool = Array.from(poolMap.values());
+      const filtered = pool.filter(v => v.name.toLowerCase().includes(search));
+      return groupVisitors(filtered);
+    }
+    return groupVisitors(allVisitors);
+  }, [searchTerm, allVisitors, allRecentVisitorsPool, groupVisitors]);
 
-  // Filter visitors based on search term
-  const filteredGroupedVisitors = groupedVisitors.filter((group: any) => {
-    if (!searchTerm.trim()) return true;
-    
-    const searchLower = searchTerm.toLowerCase();
-    
-    // Check if any visitor's name contains the search term
-    return group.members.some((visitor: Visitor) => {
-      const visitorName = visitor.name.toLowerCase();
-      return visitorName.includes(searchLower);
+  // Filter families based on search term and sort members (memoized)
+  const filteredGroupedAttendees = useMemo(() => {
+    const groups = Object.values(groupedAttendees) as any[];
+    const filtered = groups.filter((group: any) => {
+      if (!searchTerm.trim()) return true;
+      const searchLower = searchTerm.toLowerCase();
+      return group.members.some((member: Individual) => {
+        const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
+        return fullName.includes(searchLower);
+      });
     });
-  });
+    filtered.forEach((group: any) => {
+      group.members = [...group.members].sort((a: Individual, b: Individual) => {
+        const lastNameComparison = a.lastName.localeCompare(b.lastName);
+        if (lastNameComparison !== 0) return lastNameComparison;
+        return a.firstName.localeCompare(b.firstName);
+      });
+    });
+    return filtered;
+  }, [groupedAttendees, searchTerm]);
+
+  const filteredGroupedVisitors = displayedGroupedVisitors;
 
   // Sort members within each group
   filteredGroupedAttendees.forEach((group: any) => {
@@ -1094,7 +1098,7 @@ const AttendancePage: React.FC = () => {
   });
 
   // Add toggle function for visitors
-  const toggleVisitorAttendance = (visitorId: number | string) => {
+  const toggleVisitorAttendance = (visitorId: number) => {
     setVisitorAttendance(prev => ({
       ...prev,
       [visitorId]: !prev[visitorId]
@@ -1104,18 +1108,18 @@ const AttendancePage: React.FC = () => {
   // Add toggle all family function for visitors
   const toggleAllVisitorFamily = (familyGroup: number | string) => {
     const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
-    const familyVisitorKeys = familyVisitors.map((visitor, index) => visitor.id || `temp_${index}`);
+    const familyVisitorIds = familyVisitors.map(visitor => visitor.id).filter((id): id is number => id !== undefined);
     
     // Count how many family members are currently present
-    const presentCount = familyVisitorKeys.filter(key => visitorAttendance[key]).length;
+    const presentCount = familyVisitorIds.filter(id => visitorAttendance[id]).length;
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
     
     setVisitorAttendance(prev => {
       const updated = { ...prev };
-      familyVisitorKeys.forEach(key => {
-        updated[key] = shouldCheckAll;
+      familyVisitorIds.forEach(id => {
+        updated[id] = shouldCheckAll;
       });
       return updated;
     });
@@ -1124,21 +1128,20 @@ const AttendancePage: React.FC = () => {
   // Helper function to count actual number of people in visitor records
   const getVisitorPeopleCount = useMemo(() => {
     // Count only visitors that are marked as present
-    return allVisitors.filter((visitor, index) => {
-      const visitorKey = visitor.id || `temp_${index}`;
-      return visitorAttendance[visitorKey];
+    return allVisitors.filter((visitor) => {
+      return visitor.id && visitorAttendance[visitor.id];
     }).length;
   }, [allVisitors, visitorAttendance]);
 
   // Helper function to get the appropriate modal title
   const getAddModalTitle = () => {
     const totalPeople = visitorForm.persons.length;
-    const personType = visitorForm.personType === 'visitor' ? 'Visitor' : 'Person';
+    const personType = visitorForm.personType === 'regular' ? 'Person' : 'Visitor';
     
     if (totalPeople === 1) {
       return `Add ${personType}`;
     } else {
-      const pluralType = visitorForm.personType === 'visitor' ? 'Visitors' : 'People';
+      const pluralType = visitorForm.personType === 'regular' ? 'People' : 'Visitors';
       return `Add ${pluralType} (${totalPeople})`;
     }
   };
@@ -1146,12 +1149,12 @@ const AttendancePage: React.FC = () => {
   // Helper function to get the appropriate button text
   const getAddButtonText = () => {
     const totalPeople = visitorForm.persons.length;
-    const personType = visitorForm.personType === 'visitor' ? 'Visitor' : 'Person';
+    const personType = visitorForm.personType === 'regular' ? 'Person' : 'Visitor';
     
     if (totalPeople === 1) {
       return `Add ${personType}`;
     } else {
-      const pluralType = visitorForm.personType === 'visitor' ? 'Visitors' : 'People';
+      const pluralType = visitorForm.personType === 'regular' ? 'People' : 'Visitors';
       return `Add ${pluralType}`;
     }
   };
@@ -1163,19 +1166,19 @@ const AttendancePage: React.FC = () => {
     firstUnknown: boolean;
     lastUnknown: boolean;
     isChild: boolean;
-  }>) => {
+  }>): string => {
     if (people.length === 0) return 'Visitor Family';
     
     // Use first two people to generate family name
     const firstTwoPeople = people.slice(0, 2);
     
     const firstNames = firstTwoPeople.map(person => {
-      return (!person.firstUnknown && person.firstName && person.firstName !== 'Unknown') ? person.firstName : null;
-    }).filter(name => name !== null);
+      return (person.firstName && person.firstName !== 'Unknown') ? person.firstName : null;
+    }).filter((name): name is string => name !== null);
     
     const surnames = firstTwoPeople.map(person => {
       return (!person.lastUnknown && person.lastName && person.lastName !== 'Unknown') ? person.lastName : null;
-    }).filter(name => name !== null);
+    }).filter((name): name is string => name !== null);
     
     // Handle unknown surnames - use first two first names
     if (surnames.length === 0 && firstNames.length > 0) {
@@ -1199,7 +1202,7 @@ const AttendancePage: React.FC = () => {
       } else if (firstNames.length > 0 && surnames.length > 0) {
         // Different surnames - use pattern: SURNAME1, firstname1 and SURNAME2, firstname2
         const nameWithSurname = firstTwoPeople.map(person => {
-          const firstName = !person.firstUnknown && person.firstName && person.firstName !== 'Unknown' ? person.firstName : null;
+          const firstName = person.firstName && person.firstName !== 'Unknown' ? person.firstName : null;
           const lastName = !person.lastUnknown && person.lastName && person.lastName !== 'Unknown' ? person.lastName : null;
           
           if (firstName && lastName) {
@@ -1209,7 +1212,7 @@ const AttendancePage: React.FC = () => {
           } else {
             return null;
           }
-        }).filter(name => name !== null);
+        }).filter((name): name is string => name !== null);
         
         if (nameWithSurname.length === 1) {
           return nameWithSurname[0];
@@ -1235,6 +1238,57 @@ const AttendancePage: React.FC = () => {
     } else {
       return 'Update Visitors';
     }
+  };
+
+  // Gatherings order management (drag & drop) with localStorage persistence
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [orderedGatherings, setOrderedGatherings] = useState<GatheringType[]>([]);
+  const draggingGatheringId = useRef<number | null>(null);
+
+  const loadSavedOrder = useCallback((items: GatheringType[]) => {
+    if (!user?.id) return items;
+    try {
+      const saved = localStorage.getItem(`user_${user.id}_gathering_order`);
+      if (!saved) return items;
+      const orderIds: number[] = JSON.parse(saved);
+      const idToItem = new Map(items.map(i => [i.id, i]));
+      const ordered: GatheringType[] = [];
+      orderIds.forEach(id => {
+        const item = idToItem.get(id);
+        if (item) ordered.push(item);
+      });
+      items.forEach(i => { if (!orderIds.includes(i.id)) ordered.push(i); });
+      return ordered;
+    } catch (e) {
+      console.warn('Failed to parse saved gathering order', e);
+      return items;
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    setOrderedGatherings(loadSavedOrder(gatherings));
+  }, [gatherings, loadSavedOrder]);
+
+  const saveOrder = useCallback((items: GatheringType[]) => {
+    if (!user?.id) return;
+    const ids = items.map(i => i.id);
+    localStorage.setItem(`user_${user.id}_gathering_order`, JSON.stringify(ids));
+  }, [user?.id]);
+
+  const onDragStart = (id: number) => { draggingGatheringId.current = id; };
+  const onDragOver = (e: React.DragEvent<HTMLButtonElement>) => { e.preventDefault(); };
+  const onDrop = (targetId: number) => {
+    const sourceId = draggingGatheringId.current;
+    draggingGatheringId.current = null;
+    if (sourceId == null || sourceId === targetId) return;
+    const current = [...orderedGatherings];
+    const fromIndex = current.findIndex(g => g.id === sourceId);
+    const toIndex = current.findIndex(g => g.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = current.splice(fromIndex, 1);
+    current.splice(toIndex, 0, moved);
+    setOrderedGatherings(current);
+    saveOrder(current);
   };
 
   return (
@@ -1276,13 +1330,13 @@ const AttendancePage: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">
-                  {attendanceList.filter(person => person.present).length + getVisitorPeopleCount}
+                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
                 </div>
                 <div className="text-sm text-gray-500">Total Present</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-primary-600">
-                  {attendanceList.filter(person => person.present).length}
+                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                 </div>
                 <div className="text-sm text-gray-500">Regular Attendees</div>
               </div>
@@ -1294,7 +1348,7 @@ const AttendancePage: React.FC = () => {
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-400">
-                  {attendanceList.filter(person => !person.present).length}
+                  {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                 </div>
                 <div className="text-sm text-gray-500">Absent</div>
               </div>
@@ -1309,10 +1363,99 @@ const AttendancePage: React.FC = () => {
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="border-b border-gray-200 mb-6">
-            <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-              {gatherings.map((gathering) => (
+            {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
+            <div className="md:hidden">
+              <div className="flex items-center space-x-2">
+                {/* Reorder toggle */}
+                <button
+                  type="button"
+                  onClick={() => setIsReorderMode(v => !v)}
+                  className={`py-1 px-2 text-xs rounded border ${isReorderMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                  title="Reorder gatherings"
+                >
+                  <PencilIcon className="h-4 w-4" />
+                </button>
+                {/* First 2 tabs */}
+                {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering) => (
+                  <button
+                    key={gathering.id}
+                    draggable={isReorderMode}
+                    onDragStart={() => onDragStart(gathering.id)}
+                    onDragOver={onDragOver}
+                    onDrop={() => onDrop(gathering.id)}
+                    onClick={() => setSelectedGathering(gathering)}
+                    className={`flex-1 whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
+                      selectedGathering?.id === gathering.id
+                        ? 'bg-primary-500 text-white'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center">
+                      <span className="truncate">{gathering.name}</span>
+                    </div>
+                  </button>
+                ))}
+                
+
+                
+                {/* Dropdown for additional tabs */}
+                {(orderedGatherings.length ? orderedGatherings : gatherings).length > 2 && (
+                  <div className="relative" data-gathering-dropdown>
+                    <button
+                      onClick={() => setShowGatheringDropdown(!showGatheringDropdown)}
+                      className="py-2 px-3 font-medium text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-t-lg border border-gray-300"
+                    >
+                      <EllipsisHorizontalIcon className="h-5 w-5" />
+                    </button>
+                    
+                    {showGatheringDropdown && (
+                      <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
+                        <div className="py-1">
+                          {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering) => (
+                            <button
+                              key={gathering.id}
+                              draggable={isReorderMode}
+                              onDragStart={() => onDragStart(gathering.id)}
+                              onDragOver={onDragOver}
+                              onDrop={() => onDrop(gathering.id)}
+                              onClick={() => {
+                                setSelectedGathering(gathering);
+                                setShowGatheringDropdown(false);
+                              }}
+                              className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${
+                                selectedGathering?.id === gathering.id
+                                  ? 'bg-primary-50 text-primary-700 font-medium'
+                                  : 'text-gray-700'
+                              }`}
+                            >
+                              {gathering.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Desktop: Show all tabs with reorder */}
+            <nav className="hidden md:flex -mb-px space-x-2 items-center" aria-label="Tabs">
+              <button
+                type="button"
+                onClick={() => setIsReorderMode(v => !v)}
+                className={`py-1 px-2 text-xs rounded border ${isReorderMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                title="Reorder gatherings"
+              >
+                <PencilIcon className="h-4 w-4" />
+              </button>
+              {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
                 <button
                   key={gathering.id}
+                  draggable={isReorderMode}
+                  onDragStart={() => onDragStart(gathering.id)}
+                  onDragOver={onDragOver}
+                  onDrop={() => onDrop(gathering.id)}
                   onClick={() => setSelectedGathering(gathering)}
                   className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                     selectedGathering?.id === gathering.id
@@ -1426,14 +1569,7 @@ const AttendancePage: React.FC = () => {
                   id="groupByFamily"
                   type="checkbox"
                   checked={groupByFamily}
-                  onChange={(e) => {
-                    const newValue = e.target.checked;
-                    setGroupByFamily(newValue);
-                    // Save the setting for this gathering
-                    if (selectedGathering) {
-                      localStorage.setItem(`gathering_${selectedGathering.id}_groupByFamily`, newValue.toString());
-                    }
-                  }}
+                  onChange={(e) => handleGroupByFamilyChange(e.target.checked)}
                   className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                 />
                 <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900">
@@ -1499,7 +1635,14 @@ const AttendancePage: React.FC = () => {
                     {groupByFamily && group.family_name && (
                       <div className="flex justify-between items-center mb-3">
                         <h4 className="text-md font-medium text-gray-900">
-                          {group.family_name}
+                          {(() => {
+                            // Convert surname to uppercase: "SURNAME, firstname and firstname"
+                            const parts = group.family_name.split(', ');
+                            if (parts.length >= 2) {
+                              return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
+                            }
+                            return group.family_name;
+                          })()}
                         </h4>
                         <button
                           onClick={() => toggleAllFamily(group.family_id)}
@@ -1514,45 +1657,49 @@ const AttendancePage: React.FC = () => {
                       </div>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-                      {group.members.map((person: Individual) => (
-                        <label
-                          key={person.id}
-                          className={`flex items-center cursor-pointer transition-colors ${
-                            groupByFamily 
-                              ? `p-3 rounded-md border-2 ${
-                                  person.present
-                                    ? 'border-primary-500 bg-primary-50'
-                                    : 'border-gray-200 hover:border-gray-300'
-                                } ${person.isSaving ? 'opacity-75' : ''}`
-                              : `p-2 rounded-md ${
-                                  person.present
-                                    ? 'bg-primary-50'
-                                    : 'hover:bg-gray-50'
-                                } ${person.isSaving ? 'opacity-75' : ''}`
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean(person.present)}
-                            onChange={() => toggleAttendance(person.id)}
-                            className="sr-only"
-                            disabled={person.isSaving}
-                          />
-                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                            person.present ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
-                          } ${person.isSaving ? 'animate-pulse' : ''}`}>
-                            {person.present && (
-                              <CheckIcon className="h-3 w-3 text-white" />
-                            )}
-                          </div>
-                          <span className="ml-3 text-sm font-medium text-gray-900">
-                            {person.firstName} {person.lastName}
-                            {person.isSaving && (
-                              <span className="ml-2 text-xs text-gray-500">Saving...</span>
-                            )}
-                          </span>
-                        </label>
-                      ))}
+                      {group.members.map((person: Individual) => {
+                        const isPresent = (presentById[person.id] ?? person.present) as boolean;
+                        const isSaving = Boolean(savingById[person.id] || person.isSaving);
+                        return (
+                          <label
+                            key={person.id}
+                            className={`flex items-center cursor-pointer transition-colors ${
+                              groupByFamily 
+                                ? `p-3 rounded-md border-2 ${
+                                    isPresent
+                                      ? 'border-primary-500 bg-primary-50'
+                                      : 'border-gray-200 hover:border-gray-300'
+                                  } ${isSaving ? 'opacity-75' : ''}`
+                                : `p-2 rounded-md ${
+                                    isPresent
+                                      ? 'bg-primary-50'
+                                      : 'hover:bg-gray-50'
+                                  } ${isSaving ? 'opacity-75' : ''}`
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(isPresent)}
+                              onChange={() => toggleAttendance(person.id)}
+                              className="sr-only"
+                              disabled={isSaving}
+                            />
+                            <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                              isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
+                            } ${isSaving ? 'animate-pulse' : ''}`}>
+                              {isPresent && (
+                                <CheckIcon className="h-3 w-3 text-white" />
+                              )}
+                            </div>
+                            <span className="ml-3 text-sm font-medium text-gray-900">
+                              {person.firstName} {person.lastName}
+                              {isSaving && (
+                                <span className="ml-2 text-xs text-gray-500">Saving...</span>
+                              )}
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -1565,7 +1712,7 @@ const AttendancePage: React.FC = () => {
 
 
       {/* Visitors Section */}
-      {allVisitors.length > 0 && (
+      {filteredGroupedVisitors.length > 0 && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
@@ -1581,7 +1728,14 @@ const AttendancePage: React.FC = () => {
                     <div className="flex justify-between items-center mb-3">
                       <div className="flex items-center space-x-3">
                         <h4 className="text-md font-medium text-gray-900">
-                          {group.familyName}
+                          {(() => {
+                            // Convert surname to uppercase: "SURNAME, firstname and firstname"
+                            const parts = group.familyName.split(', ');
+                            if (parts.length >= 2) {
+                              return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
+                            }
+                            return group.familyName;
+                          })()}
                         </h4>
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           group.members[0].visitorType === 'potential_regular' 
@@ -1593,6 +1747,7 @@ const AttendancePage: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.preventDefault();
+                            e.stopPropagation();
                             handleEditVisitor(group.members[0]);
                           }}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -1603,6 +1758,7 @@ const AttendancePage: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.preventDefault();
+                            e.stopPropagation();
                             handleDeleteVisitor(group.members[0], group.members.length > 1);
                           }}
                           className="p-1 text-gray-400 hover:text-red-600 transition-colors"
@@ -1618,9 +1774,8 @@ const AttendancePage: React.FC = () => {
                         >
                           {(() => {
                             const familyVisitors = group.members;
-                            const presentCount = familyVisitors.filter((visitor: any, index: number) => {
-                              const visitorKey = visitor.id || `temp_${index}`;
-                              return visitorAttendance[visitorKey];
+                            const presentCount = familyVisitors.filter((visitor: any) => {
+                              return visitor.id && visitorAttendance[visitor.id];
                             }).length;
                             return presentCount >= 2 ? 'Uncheck all family' : 'Check all family';
                           })()}
@@ -1634,12 +1789,11 @@ const AttendancePage: React.FC = () => {
                       const firstName = parts[0];
                       const lastName = parts.slice(1).join(' ');
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
-                      const visitorKey = person.id || `temp_${index}`;
-                      const isPresent = visitorAttendance[visitorKey] || false;
+                      const isPresent = person.id ? visitorAttendance[person.id] || false : false;
 
                       return (
                         <label
-                          key={visitorKey}
+                          key={person.id || `visitor_${index}`}
                           className={`flex items-center cursor-pointer transition-colors ${
                             groupByFamily && group.familyName
                               ? `p-3 rounded-md border-2 ${
@@ -1657,7 +1811,7 @@ const AttendancePage: React.FC = () => {
                           <input
                             type="checkbox"
                             checked={Boolean(isPresent)}
-                            onChange={() => toggleVisitorAttendance(visitorKey)}
+                            onChange={() => person.id && toggleVisitorAttendance(person.id)}
                             className="sr-only"
                           />
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
@@ -1684,6 +1838,7 @@ const AttendancePage: React.FC = () => {
                                 <button
                                   onClick={(e) => {
                                     e.preventDefault();
+                                    e.stopPropagation();
                                     handleEditVisitor(person);
                                   }}
                                   className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
@@ -1694,6 +1849,7 @@ const AttendancePage: React.FC = () => {
                                 <button
                                   onClick={(e) => {
                                     e.preventDefault();
+                                    e.stopPropagation();
                                     handleDeleteVisitor(person, false);
                                   }}
                                   className="p-0.5 text-gray-400 hover:text-red-600 transition-colors"
@@ -1752,12 +1908,23 @@ const AttendancePage: React.FC = () => {
                         <input
                           type="radio"
                           name="personType"
-                          value="visitor"
-                          checked={visitorForm.personType === 'visitor'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value })}
+                          value="local_visitor"
+                          checked={visitorForm.personType === 'local_visitor'}
+                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
                         />
-                        <span className="ml-2 text-sm text-gray-900">Visitor</span>
+                        <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="personType"
+                          value="traveller_visitor"
+                          checked={visitorForm.personType === 'traveller_visitor'}
+                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
                       </label>
                       <label className="flex items-center">
                         <input
@@ -1765,7 +1932,7 @@ const AttendancePage: React.FC = () => {
                           name="personType"
                           value="regular"
                           checked={visitorForm.personType === 'regular'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value })}
+                          onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
                         />
                         <span className="ml-2 text-sm text-gray-900">Regular Attendee</span>
@@ -1774,38 +1941,7 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Visitor Type (only show if person type is visitor) */}
-                {visitorForm.personType === 'visitor' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Visitor Type
-                    </label>
-                    <div className="flex space-x-4">
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="visitorType"
-                          value="local"
-                          checked={visitorForm.visitorType === 'local'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                        />
-                        <span className="ml-2 text-sm text-gray-900">Local (might attend regularly)</span>
-                      </label>
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          name="visitorType"
-                          value="traveller"
-                          checked={visitorForm.visitorType === 'traveller'}
-                          onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                        />
-                        <span className="ml-2 text-sm text-gray-900">Traveller (just passing through)</span>
-                      </label>
-                    </div>
-                  </div>
-                )}
+
 
                 {/* Persons List */}
                 <div>
@@ -1825,22 +1961,10 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.firstName}
                           onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                          disabled={person.firstNameUnknown}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           placeholder="First name"
+                          required
                         />
-                        <div className="flex items-center mt-1">
-                          <input
-                            id={`personFirstNameUnknown-${index}`}
-                            type="checkbox"
-                            checked={person.firstNameUnknown}
-                            onChange={(e) => updatePerson(index, { firstNameUnknown: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                          />
-                          <label htmlFor={`personFirstNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                            Unknown
-                          </label>
-                        </div>
                       </div>
                       <div className="relative">
                         <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700">
@@ -1851,21 +1975,40 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.lastName}
                           onChange={(e) => updatePerson(index, { lastName: e.target.value })}
-                          disabled={person.lastNameUnknown}
+                          disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
                           className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
                           placeholder="Last name"
                         />
-                        <div className="flex items-center mt-1">
-                          <input
-                            id={`personLastNameUnknown-${index}`}
-                            type="checkbox"
-                            checked={person.lastNameUnknown}
-                            onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                          />
-                          <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                            Unknown
-                          </label>
+                        <div className="flex flex-col space-y-1 mt-1">
+                          {/* For person 1 or any person: Unknown checkbox */}
+                          <div className="flex items-center">
+                            <input
+                              id={`personLastNameUnknown-${index}`}
+                              type="checkbox"
+                              checked={person.lastNameUnknown}
+                              onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                              Unknown
+                            </label>
+                          </div>
+                          {/* For person 2+: Fill from above checkbox */}
+                          {index > 0 && (
+                            <div className="flex items-center">
+                              <input
+                                id={`personFillLastName-${index}`}
+                                type="checkbox"
+                                checked={person.fillLastNameFromAbove}
+                                onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
+                                disabled={person.lastNameUnknown}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                                Fill from above
+                              </label>
+                            </div>
+                          )}
                         </div>
                         {index > 0 && (
                           <button
@@ -1890,20 +2033,7 @@ const AttendancePage: React.FC = () => {
                               Add Another Person
                             </button>
                           )}
-                          {/* Auto-fill checkbox appears under person 1 when there are 2+ people */}
-                          {visitorForm.persons.length >= 2 && (
-                            <div className="flex items-center">
-                              <input
-                                type="checkbox"
-                                checked={visitorForm.autoFillSurname}
-                                onChange={(e) => setVisitorForm({ ...visitorForm, autoFillSurname: e.target.checked })}
-                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                              />
-                              <label className="ml-2 block text-sm text-gray-900">
-                                Auto-fill surname for all future additions
-                              </label>
-                            </div>
-                          )}
+
                         </div>
                       )}
                     </div>
@@ -1921,7 +2051,7 @@ const AttendancePage: React.FC = () => {
                 )}
 
                 {/* Notes field - only for visitors */}
-                {visitorForm.personType === 'visitor' && (
+                {(visitorForm.personType === 'local_visitor' || visitorForm.personType === 'traveller_visitor') && (
                   <div>
                     <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
                       Notes
@@ -1976,33 +2106,44 @@ const AttendancePage: React.FC = () => {
               </div>
               
               <form onSubmit={(e) => { e.preventDefault(); handleSubmitEditVisitor(); }} className="space-y-4">
-                {/* Visitor Type */}
+                {/* Person Type */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Visitor Type
+                    Person Type
                   </label>
                   <div className="flex space-x-4">
                     <label className="flex items-center">
                       <input
                         type="radio"
-                        name="visitorType"
-                        value="local"
-                        checked={visitorForm.visitorType === 'local'}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
+                        name="editPersonType"
+                        value="local_visitor"
+                        checked={visitorForm.personType === 'local_visitor'}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
                         className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
                       />
-                      <span className="ml-2 text-sm text-gray-900">Local (might attend regularly)</span>
+                      <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
                     </label>
                     <label className="flex items-center">
                       <input
                         type="radio"
-                        name="visitorType"
-                        value="traveller"
-                        checked={visitorForm.visitorType === 'traveller'}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, visitorType: e.target.value })}
+                        name="editPersonType"
+                        value="traveller_visitor"
+                        checked={visitorForm.personType === 'traveller_visitor'}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
                         className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
                       />
-                      <span className="ml-2 text-sm text-gray-900">Traveller (just passing through)</span>
+                      <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="editPersonType"
+                        value="regular"
+                        checked={visitorForm.personType === 'regular'}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      />
+                      <span className="ml-2 text-sm text-gray-900">Regular Attendee</span>
                     </label>
                   </div>
                 </div>
@@ -2025,22 +2166,10 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.firstName}
                           onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                          disabled={person.firstNameUnknown}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           placeholder="First name"
+                          required
                         />
-                        <div className="flex items-center mt-1">
-                          <input
-                            id={`editPersonFirstNameUnknown-${index}`}
-                            type="checkbox"
-                            checked={person.firstNameUnknown}
-                            onChange={(e) => updatePerson(index, { firstNameUnknown: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                          />
-                          <label htmlFor={`editPersonFirstNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                            Unknown
-                          </label>
-                        </div>
                       </div>
                       <div className="relative">
                         <label htmlFor={`editPersonLastName-${index}`} className="block text-sm font-medium text-gray-700">
@@ -2051,21 +2180,40 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.lastName}
                           onChange={(e) => updatePerson(index, { lastName: e.target.value })}
-                          disabled={person.lastNameUnknown}
+                          disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
                           className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
                           placeholder="Last name"
                         />
-                        <div className="flex items-center mt-1">
-                          <input
-                            id={`editPersonLastNameUnknown-${index}`}
-                            type="checkbox"
-                            checked={person.lastNameUnknown}
-                            onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                          />
-                          <label htmlFor={`editPersonLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                            Unknown
-                          </label>
+                        <div className="flex flex-col space-y-1 mt-1">
+                          {/* For person 1 or any person: Unknown checkbox */}
+                          <div className="flex items-center">
+                            <input
+                              id={`editPersonLastNameUnknown-${index}`}
+                              type="checkbox"
+                              checked={person.lastNameUnknown}
+                              onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`editPersonLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                              Unknown
+                            </label>
+                          </div>
+                          {/* For person 2+: Fill from above checkbox */}
+                          {index > 0 && (
+                            <div className="flex items-center">
+                              <input
+                                id={`editPersonFillLastName-${index}`}
+                                type="checkbox"
+                                checked={person.fillLastNameFromAbove}
+                                onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
+                                disabled={person.lastNameUnknown}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <label htmlFor={`editPersonFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                                Fill from above
+                              </label>
+                            </div>
+                          )}
                         </div>
                         {index > 0 && (
                           <button
@@ -2090,20 +2238,7 @@ const AttendancePage: React.FC = () => {
                               Add Another Person
                             </button>
                           )}
-                          {/* Auto-fill checkbox appears under person 1 when there are 2+ people */}
-                          {visitorForm.persons.length >= 2 && (
-                            <div className="flex items-center">
-                              <input
-                                type="checkbox"
-                                checked={visitorForm.autoFillSurname}
-                                onChange={(e) => setVisitorForm({ ...visitorForm, autoFillSurname: e.target.checked })}
-                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                              />
-                              <label className="ml-2 block text-sm text-gray-900">
-                                Auto-fill surname for all future additions
-                              </label>
-                            </div>
-                          )}
+
                         </div>
                       )}
                     </div>

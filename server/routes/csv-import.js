@@ -89,15 +89,26 @@ router.post('/upload/:gatheringId',
             SELECT i.id, i.first_name, i.last_name, f.family_name
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id
-            WHERE LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?)
-          `, [firstName.trim(), lastName.trim()]);
+            WHERE LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?) AND i.church_id = ?
+          `, [firstName.trim(), lastName.trim(), req.user.church_id]);
 
           if (existingIndividual.length > 0) {
+            console.log('Found duplicate:', {
+              input: { firstName: firstName.trim(), lastName: lastName.trim(), familyName },
+              existing: existingIndividual[0]
+            });
+            
             duplicates.push({
               firstName: firstName.trim(),
               lastName: lastName.trim(),
               familyName: familyName,
-              existing: existingIndividual[0]
+              existing: {
+                id: Number(existingIndividual[0].id),
+                first_name: existingIndividual[0].first_name,
+                last_name: existingIndividual[0].last_name,
+                family_name: existingIndividual[0].family_name
+              },
+              reason: 'Person already exists in database'
             });
             continue;
           }
@@ -106,8 +117,8 @@ router.post('/upload/:gatheringId',
           const inGathering = await conn.query(`
             SELECT 1 FROM gathering_lists gl
             JOIN individuals i ON gl.individual_id = i.id
-            WHERE gl.gathering_type_id = ? AND LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?)
-          `, [gatheringId, firstName.trim(), lastName.trim()]);
+            WHERE gl.gathering_type_id = ? AND LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?) AND i.church_id = ?
+          `, [gatheringId, firstName.trim(), lastName.trim(), req.user.church_id]);
 
           if (inGathering.length > 0) {
             duplicates.push({
@@ -125,38 +136,38 @@ router.post('/upload/:gatheringId',
           if (familyName && familyName.trim()) {
             if (!familyMap.has(familyName)) {
               // Check if family already exists
-              const existingFamily = await conn.query(
-                'SELECT id FROM families WHERE LOWER(family_name) = LOWER(?)',
-                [familyName]
-              );
+                const existingFamily = await conn.query(
+                  'SELECT id FROM families WHERE LOWER(family_name) = LOWER(?) AND church_id = ?',
+                  [familyName, req.user.church_id]
+                );
 
               if (existingFamily.length > 0) {
-                familyMap.set(familyName, existingFamily[0].id);
+                familyMap.set(familyName, Number(existingFamily[0].id));
               } else {
                 const familyResult = await conn.query(`
-                  INSERT INTO families (family_name, family_identifier, created_by)
+                  INSERT INTO families (family_name, created_by, church_id)
                   VALUES (?, ?, ?)
-                `, [familyName, familyName, req.user.id]);
-                familyMap.set(familyName, familyResult.insertId);
+                `, [familyName, req.user.id, req.user.church_id]);
+                familyMap.set(familyName, Number(familyResult.insertId));
               }
             }
-            familyId = familyMap.get(familyName);
+            familyId = Number(familyMap.get(familyName));
           }
 
           // Create individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by)
-            VALUES (?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id]);
+            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
 
           // Add to gathering list
           await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
             VALUES (?, ?, ?)
-          `, [gatheringId, individualResult.insertId, req.user.id]);
+          `, [gatheringId, individualResult.insertId, req.user.id, req.user.church_id]);
 
           individuals.push({
-            id: individualResult.insertId,
+            id: Number(individualResult.insertId),
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             familyName: familyName
@@ -219,32 +230,47 @@ router.post('/copy-paste/:gatheringId?',
     }
 
     try {
+      console.log('Received copy-paste data:', data);
+      console.log('Gathering ID:', gatheringId);
+      
       // Parse tabular data (handle various formats)
       const lines = data.trim().split('\n');
       const results = [];
+      
+      console.log('Parsed lines:', lines.length);
       
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
         
+        console.log(`Processing line ${i + 1}:`, line);
+        
         // Handle different delimiters (comma, tab, semicolon)
         let columns;
         if (line.includes('\t')) {
           columns = line.split('\t');
+          console.log('Using tab delimiter');
         } else if (line.includes(';')) {
           columns = line.split(';');
+          console.log('Using semicolon delimiter');
         } else {
           columns = line.split(',');
+          console.log('Using comma delimiter');
         }
+        
+        console.log('Raw columns:', columns);
         
         // Clean up columns (remove quotes, trim whitespace)
         const cleanColumns = columns.map(col => 
           col.replace(/^["']|["']$/g, '').trim()
         );
         
+        console.log('Clean columns:', cleanColumns);
+        
         // Skip header row if it looks like headers
         if (i === 0 && (cleanColumns[0].toLowerCase().includes('first') || 
                        cleanColumns[0].toLowerCase().includes('name'))) {
+          console.log('Skipping header row');
           continue;
         }
         
@@ -254,18 +280,26 @@ router.post('/copy-paste/:gatheringId?',
           const lastName = cleanColumns[1];
           const familyName = cleanColumns[2] || '';
           
+          console.log('Parsed row:', { firstName, lastName, familyName });
+          
           if (firstName && lastName) {
             results.push({
               'FIRST NAME': firstName,
               'LAST NAME': lastName,
               'FAMILY NAME': familyName
             });
+          } else {
+            console.log('Skipping row - missing first or last name');
           }
+        } else {
+          console.log('Skipping row - insufficient columns');
         }
       }
 
+      console.log('Final results:', results);
+
       if (results.length === 0) {
-        return res.status(400).json({ error: 'No valid data found' });
+        return res.status(400).json({ error: 'No valid data found. Please check your format and try again.' });
       }
 
       // Process the data similar to CSV import
@@ -291,8 +325,8 @@ router.post('/copy-paste/:gatheringId?',
             SELECT i.id, i.first_name, i.last_name, f.family_name
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id
-            WHERE LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?)
-          `, [firstName.trim(), lastName.trim()]);
+            WHERE LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?) AND i.church_id = ?
+          `, [firstName.trim(), lastName.trim(), req.user.church_id]);
 
           if (existingIndividual.length > 0) {
             duplicates.push({
@@ -309,8 +343,8 @@ router.post('/copy-paste/:gatheringId?',
             const inGathering = await conn.query(`
               SELECT 1 FROM gathering_lists gl
               JOIN individuals i ON gl.individual_id = i.id
-              WHERE gl.gathering_type_id = ? AND LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?)
-            `, [gatheringId, firstName.trim(), lastName.trim()]);
+              WHERE gl.gathering_type_id = ? AND LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?) AND i.church_id = ?
+            `, [gatheringId, firstName.trim(), lastName.trim(), req.user.church_id]);
 
             if (inGathering.length > 0) {
               duplicates.push({
@@ -330,39 +364,39 @@ router.post('/copy-paste/:gatheringId?',
             if (!familyMap.has(familyName)) {
               // Check if family already exists
               const existingFamily = await conn.query(
-                'SELECT id FROM families WHERE LOWER(family_name) = LOWER(?)',
-                [familyName]
+                'SELECT id FROM families WHERE LOWER(family_name) = LOWER(?) AND church_id = ?',
+                [familyName, req.user.church_id]
               );
 
               if (existingFamily.length > 0) {
-                familyMap.set(familyName, existingFamily[0].id);
+                familyMap.set(familyName, Number(existingFamily[0].id));
               } else {
-                const familyResult = await conn.query(`
-                  INSERT INTO families (family_name, family_identifier, created_by)
-                  VALUES (?, ?, ?)
-                `, [familyName, familyName, req.user.id]);
-                familyMap.set(familyName, familyResult.insertId);
+              const familyResult = await conn.query(`
+                INSERT INTO families (family_name, created_by, church_id)
+                VALUES (?, ?, ?)
+              `, [familyName, req.user.id, req.user.church_id]);
+                familyMap.set(familyName, Number(familyResult.insertId));
               }
             }
-            familyId = familyMap.get(familyName);
+            familyId = Number(familyMap.get(familyName));
           }
 
           // Create individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by)
-            VALUES (?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id]);
+            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
 
           // Add to gathering list if gatheringId provided
           if (gatheringId) {
             await conn.query(`
-              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-              VALUES (?, ?, ?)
-            `, [gatheringId, individualResult.insertId, req.user.id]);
+              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+              VALUES (?, ?, ?, ?)
+            `, [gatheringId, Number(individualResult.insertId), req.user.id, req.user.church_id]);
           }
 
           individuals.push({
-            id: individualResult.insertId,
+            id: Number(individualResult.insertId),
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             familyName: familyName
@@ -370,8 +404,24 @@ router.post('/copy-paste/:gatheringId?',
         }
       });
 
+      console.log('Import completed successfully:', {
+        imported: individuals.length,
+        families: familyMap.size,
+        duplicates: duplicates.length,
+        skipped: skipped.length
+      });
+
+      // Create a more detailed message
+      let message = `Import completed`;
+      if (duplicates.length > 0) {
+        message += `. ${duplicates.length} duplicate(s) found and skipped.`;
+      }
+      if (individuals.length > 0) {
+        message += ` ${individuals.length} new person(s) imported.`;
+      }
+
       res.json({
-        message: `Import completed`,
+        message: message,
         imported: individuals.length,
         families: familyMap.size,
         duplicates: duplicates.length,
@@ -379,14 +429,21 @@ router.post('/copy-paste/:gatheringId?',
         assignedToService: !!gatheringId,
         details: {
           imported: individuals,
-          duplicates: duplicates,
+          duplicates: duplicates.map(d => ({
+            firstName: d.firstName,
+            lastName: d.lastName,
+            familyName: d.familyName,
+            reason: d.reason,
+            existingFamily: d.existing?.family_name || 'No family'
+          })),
           skipped: skipped
         }
       });
 
     } catch (error) {
       console.error('Copy-paste import error:', error);
-      res.status(500).json({ error: 'Failed to process data' });
+      console.error('Error stack:', error.stack);
+      res.status(500).json({ error: 'Failed to process data: ' + error.message });
     }
   }
 );
@@ -417,8 +474,8 @@ router.post('/mass-assign/:gatheringId',
           try {
             // Check if individual exists and is active
             const individual = await conn.query(
-              'SELECT id FROM individuals WHERE id = ? AND is_active = true',
-              [individualId]
+              'SELECT id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              [individualId, req.user.church_id]
             );
 
             if (individual.length === 0) {
@@ -428,8 +485,8 @@ router.post('/mass-assign/:gatheringId',
 
             // Check if already assigned to this gathering
             const existingAssignment = await conn.query(
-              'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
-              [gatheringId, individualId]
+              'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?',
+              [gatheringId, individualId, req.user.church_id]
             );
 
             if (existingAssignment.length > 0) {
@@ -439,9 +496,9 @@ router.post('/mass-assign/:gatheringId',
 
             // Assign to gathering
             await conn.query(`
-              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-              VALUES (?, ?, ?)
-            `, [gatheringId, individualId, req.user.id]);
+              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+              VALUES (?, ?, ?, ?)
+            `, [gatheringId, individualId, req.user.id, req.user.church_id]);
 
             results.assigned++;
 
@@ -479,8 +536,8 @@ router.delete('/mass-remove/:gatheringId',
     try {
       const result = await Database.query(`
         DELETE FROM gathering_lists 
-        WHERE gathering_type_id = ? AND individual_id IN (${individualIds.map(() => '?').join(',')})
-      `, [gatheringId, ...individualIds]);
+        WHERE gathering_type_id = ? AND individual_id IN (${individualIds.map(() => '?').join(',')}) AND church_id = ?
+      `, [gatheringId, ...individualIds, req.user.church_id]);
 
       res.json({
         message: 'Mass removal completed',
@@ -490,6 +547,153 @@ router.delete('/mass-remove/:gatheringId',
     } catch (error) {
       console.error('Mass remove error:', error);
       res.status(500).json({ error: 'Failed to remove individuals from service' });
+    }
+  }
+);
+
+// Mass update people type (regular vs visitor)
+router.put('/mass-update-type',
+  requireRole(['admin', 'coordinator']),
+  auditLog('MASS_UPDATE_PEOPLE_TYPE'),
+  async (req, res) => {
+    const { individualIds, isVisitor } = req.body;
+    
+    if (!individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
+      return res.status(400).json({ error: 'Individual IDs array is required' });
+    }
+
+    if (typeof isVisitor !== 'boolean') {
+      return res.status(400).json({ error: 'isVisitor boolean flag is required' });
+    }
+
+    try {
+      const results = {
+        updated: 0,
+        notFound: 0,
+        errors: []
+      };
+
+      await Database.transaction(async (conn) => {
+        for (const individualId of individualIds) {
+          try {
+            // Check if individual exists
+            const individual = await conn.query(
+              'SELECT id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              [individualId, req.user.church_id]
+            );
+
+            if (individual.length === 0) {
+              results.notFound++;
+              continue;
+            }
+
+            // Update the individual's people type (legacy API defaults visitors to local_visitor)
+            const peopleType = isVisitor ? 'local_visitor' : 'regular';
+            await conn.query(
+              'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+              [peopleType, individualId, req.user.church_id]
+            );
+
+            results.updated++;
+          } catch (error) {
+            console.error(`Error updating individual ${individualId}:`, error);
+            results.errors.push({ individualId, error: error.message });
+          }
+        }
+      });
+
+      res.json({
+        message: `Mass update completed`,
+        updated: results.updated,
+        notFound: results.notFound,
+        errors: results.errors.length
+      });
+
+    } catch (error) {
+      console.error('Mass update people type error:', error);
+      res.status(500).json({ error: 'Failed to update people type' });
+    }
+  }
+);
+
+// Mass update people type with granular types (regular, local_visitor, traveller_visitor)
+router.put('/mass-update-people-type',
+  requireRole(['admin', 'coordinator']),
+  auditLog('MASS_UPDATE_PEOPLE_TYPE_GRANULAR'),
+  async (req, res) => {
+    const { individualIds, peopleType } = req.body;
+    
+    if (!individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
+      return res.status(400).json({ error: 'Individual IDs array is required' });
+    }
+
+    if (!peopleType || !['regular', 'local_visitor', 'traveller_visitor'].includes(peopleType)) {
+      return res.status(400).json({ error: 'Valid peopleType is required (regular, local_visitor, traveller_visitor)' });
+    }
+
+    try {
+      const results = {
+        updated: 0,
+        notFound: 0,
+        errors: []
+      };
+
+      await Database.transaction(async (conn) => {
+        for (const individualId of individualIds) {
+          try {
+            // Check if individual exists
+            const individual = await conn.query(
+              'SELECT id, family_id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              [individualId, req.user.church_id]
+            );
+
+            if (individual.length === 0) {
+              results.notFound++;
+              continue;
+            }
+
+            // Update the individual's people type
+            await conn.query(
+              'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE id = ?',
+              [peopleType, individualId]
+            );
+
+            // Also update the family type if this person has a family
+            const familyId = individual[0].family_id;
+            if (familyId) {
+              // Check if all family members now have the same people_type
+              const familyMembers = await conn.query(
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+                [familyId]
+              );
+
+              // If all family members have the same type, update the family type to match
+              if (familyMembers.length === 1) {
+                await conn.query(
+                  'UPDATE families SET familyType = ?, updated_at = NOW() WHERE id = ?',
+                  [peopleType, familyId]
+                );
+              }
+            }
+
+            results.updated++;
+          } catch (error) {
+            console.error(`Error updating individual ${individualId}:`, error);
+            results.errors.push({ individualId, error: error.message });
+          }
+        }
+      });
+
+      res.json({
+        message: `Mass update completed`,
+        updated: results.updated,
+        notFound: results.notFound,
+        errors: results.errors.length
+      });
+
+    } catch (error) {
+      console.error('Mass update people type error:', error);
+      res.status(500).json({ error: 'Failed to update people type' });
     }
   }
 );

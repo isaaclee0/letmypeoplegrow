@@ -141,7 +141,6 @@ export interface GatheringType {
   description?: string;
   dayOfWeek: string;
   startTime: string;
-  durationMinutes: number;
   frequency: string;
   isActive: boolean;
   memberCount?: number;
@@ -152,15 +151,16 @@ export interface Individual {
   id: number;
   firstName: string;
   lastName: string;
+  peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   familyId?: number;
   familyName?: string;
   present?: boolean;
-  isVisitor?: boolean;
   isSaving?: boolean;
 }
 
 export interface Visitor {
   id?: number;
+  individualId?: number;
   name: string;
   visitorType: 'potential_regular' | 'temporary_other';
   visitorFamilyGroup?: string;
@@ -248,7 +248,6 @@ export const gatheringsAPI = {
     description?: string;
     dayOfWeek: string;
     startTime: string;
-    durationMinutes: number;
     frequency: string;
     setAsDefault?: boolean;
   }) => 
@@ -259,7 +258,6 @@ export const gatheringsAPI = {
     description?: string;
     dayOfWeek: string;
     startTime: string;
-    durationMinutes: number;
     frequency: string;
   }) => 
     api.put(`/gatherings/${gatheringId}`, data),
@@ -338,17 +336,7 @@ export const usersAPI = {
     api.post(`/users/${userId}/gatherings`, { gatheringIds }),
 };
 
-// Migrations API
-export const migrationsAPI = {
-  getStatus: () => 
-    api.get('/migrations/status'),
-    
-  runMigration: (version: string) => 
-    api.post(`/migrations/run/${version}`),
-    
-  runAllMigrations: () => 
-    api.post('/migrations/run-all'),
-};
+// Advanced Migrations API is now in advancedMigrationsAPI.ts
 
 // Invitations API
 export const invitationsAPI = {
@@ -384,12 +372,18 @@ export const familiesAPI = {
   getAll: () => 
     api.get('/families'),
     
-  create: (data: { familyName: string; familyIdentifier?: string }) => 
+  create: (data: { familyName: string }) => 
     api.post('/families', data),
+    
+  update: (id: number, data: { familyName?: string; familyType?: 'regular' | 'local_visitor' | 'traveller_visitor' }) =>
+    api.put(`/families/${id}`, data),
+    
+  delete: (id: number) =>
+    api.delete(`/families/${id}`),
     
   createVisitorFamily: (data: {
     familyName: string;
-    visitorType: 'local' | 'traveller';
+    peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
     notes?: string;
     people: Array<{
       firstName: string;
@@ -400,6 +394,22 @@ export const familiesAPI = {
     }>;
   }) => 
     api.post('/families/visitor', data),
+    
+  merge: (data: {
+    keepFamilyId: number;
+    mergeFamilyIds: number[];
+    newFamilyName?: string;
+    newFamilyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
+  }) => 
+    api.post('/families/merge', data),
+    
+  mergeIndividuals: (data: {
+    individualIds: number[];
+    familyName: string;
+    familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
+    mergeAssignments?: boolean;
+  }) => 
+    api.post('/families/merge-individuals', data),
 };
 
 // Individuals API
@@ -418,6 +428,7 @@ export const individualsAPI = {
     firstName: string;
     lastName: string;
     familyId?: number;
+    peopleType?: 'regular' | 'local_visitor' | 'traveller_visitor';
   }) => 
     api.put(`/individuals/${id}`, data),
     
@@ -429,6 +440,13 @@ export const individualsAPI = {
     
   unassignFromGathering: (individualId: number, gatheringId: number) => 
     api.delete(`/individuals/${individualId}/gatherings/${gatheringId}`),
+    
+  deduplicate: (data: {
+    keepId: number;
+    deleteIds: number[];
+    mergeAssignments?: boolean;
+  }) => 
+    api.post('/individuals/deduplicate', data),
 };
 
 // Reports API
@@ -471,7 +489,6 @@ export const onboardingAPI = {
     description?: string;
     dayOfWeek: string;
     startTime: string;
-    durationMinutes: number;
     frequency: string;
     groupByFamily?: boolean;
   }) => 
@@ -526,6 +543,12 @@ export const csvImportAPI = {
     
   massRemove: (gatheringId: number, individualIds: number[]) => 
     api.delete(`/csv-import/mass-remove/${gatheringId}`, { data: { individualIds } }),
+    
+  massUpdateType: (individualIds: number[], isVisitor: boolean) => 
+    api.put('/csv-import/mass-update-type', { individualIds, isVisitor }),
+    
+  massUpdatePeopleType: (individualIds: number[], peopleType: 'regular' | 'local_visitor' | 'traveller_visitor') => 
+    api.put('/csv-import/mass-update-people-type', { individualIds, peopleType }),
 };
 
 export const notificationRulesAPI = {
@@ -538,8 +561,9 @@ export const notificationRulesAPI = {
 // Settings API
 export const settingsAPI = {
   getAll: () => api.get('/settings'),
-  getDataAccess: () => api.get('/settings/data-access'),
-  updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
+  // DISABLED: External data access feature is currently disabled
+  // getDataAccess: () => api.get('/settings/data-access'),
+  // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
 };
 
 export default api; 

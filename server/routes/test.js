@@ -5,61 +5,66 @@ const { parsePhoneNumberSmart } = require('../utils/phoneNumber');
 
 const router = express.Router();
 
-// Test SMS configuration and send test message
+// Test SMS configuration and send test message - TEMPORARILY DISABLED
 router.post('/sms', verifyToken, requireRole(['admin']), async (req, res) => {
-  try {
-    const { phoneNumber } = req.body;
-    
-    // Default to your test number if none provided
-    const testNumber = phoneNumber || '+61427906691';
-    
-    console.log('🧪 Testing SMS with Twilio...');
-    console.log('📱 Test number:', testNumber);
-    console.log('📤 From number:', process.env.TWILIO_FROM_NUMBER);
-    
-    // Test SMS configuration first
-    const configTest = await testSMSConfig();
-    if (!configTest) {
-      return res.status(500).json({ 
-        error: 'SMS configuration test failed. Check your Twilio credentials.' 
-      });
-    }
-    
-    // Parse the phone number to show formatting details
-    const parseResult = parsePhoneNumberSmart(testNumber, 'AU');
-    console.log('📋 Phone number parsing result:', parseResult);
-    
-    // Send test SMS
-    const testCode = '123456';
-    const result = await sendOTCSMS(testNumber, testCode);
-    
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Test SMS sent successfully!',
-        messageId: result.messageId,
-        testNumber: testNumber,
-        fromNumber: process.env.TWILIO_FROM_NUMBER,
-        parseResult: parseResult,
-        note: 'Check the target phone for the test message with code: 123456'
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: result.error,
-        testNumber: testNumber,
-        fromNumber: process.env.TWILIO_FROM_NUMBER,
-        parseResult: parseResult
-      });
-    }
-    
-  } catch (error) {
-    console.error('SMS test error:', error);
-    res.status(500).json({ 
-      error: 'SMS test failed',
-      details: error.message 
-    });
-  }
+  res.status(503).json({ 
+    error: 'SMS functionality temporarily disabled',
+    message: 'SMS testing is not available at this time'
+  });
+  
+  // try {
+  //   const { phoneNumber } = req.body;
+  //   
+  //   // Default to your test number if none provided
+  //   const testNumber = phoneNumber || '+61427906691';
+  //   
+  //   console.log('🧪 Testing SMS with Twilio...');
+  //   console.log('📱 Test number:', testNumber);
+  //   console.log('📤 From number:', process.env.TWILIO_FROM_NUMBER);
+  //   
+  //   // Test SMS configuration first
+  //   const configTest = await testSMSConfig();
+  //   if (!configTest) {
+  //     return res.status(500).json({ 
+  //       error: 'SMS configuration test failed. Check your Twilio credentials.' 
+  //     });
+  //   }
+  //   
+  //   // Parse the phone number to show formatting details
+  //   const parseResult = parsePhoneNumberSmart(testNumber, 'AU');
+  //   console.log('📋 Phone number parsing result:', parseResult);
+  //   
+  //   // Send test SMS
+  //   const testCode = '123456';
+  //   const result = await sendOTCSMS(testNumber, testCode);
+  //   
+  //   if (result.success) {
+  //     res.json({
+  //       success: true,
+  //       message: 'Test SMS sent successfully!',
+  //       messageId: result.messageId,
+  //       testNumber: testNumber,
+  //       fromNumber: process.env.TWILIO_FROM_NUMBER,
+  //       parseResult: parseResult,
+  //       note: 'Check the target phone for the test message with code: 123456'
+  //     });
+  //   } else {
+  //     res.status(500).json({
+  //       success: false,
+  //       error: result.error,
+  //       testNumber: testNumber,
+  //       fromNumber: process.env.TWILIO_FROM_NUMBER,
+  //       parseResult: parseResult
+  //     });
+  //   }
+  //   
+  // } catch (error) {
+  //   console.error('SMS test error:', error);
+  //   res.status(500).json({ 
+  //     error: 'SMS test failed',
+  //     details: error.message 
+  //   });
+  // }
 });
 
 // Test phone number parsing for various Australian formats

@@ -1,16 +1,15 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { MigrationProvider } from './contexts/MigrationContext';
+import { AdvancedMigrationProvider } from './contexts/AdvancedMigrationContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
-import DashboardPage from './pages/DashboardPage';
 import AttendancePage from './pages/AttendancePage';
 import ReportsPage from './pages/ReportsPage';
 import ManageGatheringsPage from './pages/ManageGatheringsPage';
 import PeoplePage from './pages/PeoplePage';
 import UsersPage from './pages/UsersPage';
-import MigrationsPage from './pages/MigrationsPage';
+import AdvancedMigrationsPage from './pages/AdvancedMigrationsPage';
 import OnboardingPage from './pages/OnboardingPage';
 import AcceptInvitationPage from './pages/AcceptInvitationPage';
 import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
@@ -53,10 +52,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     }
   }
 
-  // Redirect attendance takers directly to attendance page
-  if (user?.role === 'attendance_taker' && window.location.pathname === '/app/dashboard') {
-    return <Navigate to="/app/attendance" replace />;
-  }
+  // No dashboard page; attendance takers and others can navigate within app
 
   return <>{children}</>;
 };
@@ -69,7 +65,7 @@ const RoleProtectedRoute: React.FC<{
   const { user } = useAuth();
 
   if (!user || !allowedRoles.includes(user.role)) {
-    return <Navigate to="/app/dashboard" replace />;
+    return <Navigate to="/app/attendance" replace />;
   }
 
   return <>{children}</>;
@@ -84,12 +80,8 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
 
   if (isAuthenticated && user) {
-    // Redirect based on user role
-    if (user.role === 'attendance_taker') {
-      return <Navigate to="/app/attendance" replace />;
-    } else {
-      return <Navigate to="/app/dashboard" replace />;
-    }
+    // All authenticated users land on attendance by default
+    return <Navigate to="/app/attendance" replace />;
   }
 
   return <>{children}</>;
@@ -98,7 +90,7 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
-      <MigrationProvider>
+      <AdvancedMigrationProvider>
         <ToastContainer>
             <Router>
               <div className="min-h-screen bg-gray-50">
@@ -163,8 +155,7 @@ function App() {
                 </ProtectedRoute>
               }
             >
-              <Route index element={<Navigate to="/app/dashboard" replace />} />
-              <Route path="dashboard" element={<DashboardPage />} />
+              <Route index element={<Navigate to="/app/attendance" replace />} />
               <Route path="attendance" element={<AttendancePage />} />
               <Route path="people" element={<PeoplePage />} />
               <Route path="gatherings" element={<ManageGatheringsPage />} />
@@ -181,7 +172,7 @@ function App() {
                 path="migrations" 
                 element={
                   <RoleProtectedRoute allowedRoles={['admin']}>
-                    <MigrationsPage />
+                    <AdvancedMigrationsPage />
                   </RoleProtectedRoute>
                 } 
               />
@@ -196,7 +187,7 @@ function App() {
         </div>
               </Router>
         </ToastContainer>
-      </MigrationProvider>
+      </AdvancedMigrationProvider>
     </AuthProvider>
   );
 }

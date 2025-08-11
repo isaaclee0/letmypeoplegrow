@@ -65,7 +65,7 @@ echo "🔧 Updating root .env for production security..."
 
 cat > .env << 'EOF'
 # Docker Image Configuration
-IMAGE_TAG=v0.9.0
+IMAGE_TAG=v0.9.1
 
 # Database Configuration - CHANGE THESE IN PRODUCTION
 DB_ROOT_PASSWORD=CHANGE_THIS_TO_A_SECURE_PASSWORD

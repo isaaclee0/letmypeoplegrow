@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   description TEXT,
   day_of_week ENUM('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'),
   start_time TIME,
-  duration_minutes INT DEFAULT 90,
+
   frequency ENUM('weekly', 'biweekly', 'monthly') DEFAULT 'weekly',
   group_by_family BOOLEAN DEFAULT true,
   is_active BOOLEAN DEFAULT true,
@@ -329,9 +329,9 @@ INSERT IGNORE INTO church_settings (id, church_name, country_code, timezone, ema
 (1, 'Development Church', 'AU', 'Australia/Sydney', 'Development Church', 'dev@church.local', true);
 
 -- Create gathering types
-INSERT IGNORE INTO gathering_types (id, name, description, day_of_week, start_time, duration_minutes, frequency, group_by_family, is_active, created_by) VALUES
-(1, 'Sunday Morning Service', 'Main worship service on Sunday mornings at 10:00 AM', 'Sunday', '10:00:00', 90, 'weekly', true, true, 1),
-(2, 'Youth Group', 'Youth ministry meeting on Friday evenings', 'Friday', '19:00:00', 120, 'weekly', false, true, 1);
+INSERT IGNORE INTO gathering_types (id, name, description, day_of_week, start_time, frequency, group_by_family, is_active, created_by) VALUES
+  (1, 'Sunday Morning Service', 'Main worship service on Sunday mornings at 10:00 AM', 'Sunday', '10:00:00', 'weekly', true, true, 1),
+  (2, 'Youth Group', 'Youth ministry meeting on Friday evenings', 'Friday', '19:00:00', 'weekly', false, true, 1);
 
 -- Assign all users to all gathering types
 INSERT IGNORE INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by) VALUES

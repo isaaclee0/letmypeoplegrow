@@ -5,7 +5,7 @@
 # If no version is provided, uses the default version
 
 # Default version (change this when releasing new versions)
-VERSION=${1:-v0.9.0}
+VERSION=${1:-v0.9.1}
 
 # Configuration
 REGISTRY="staugustine1"
@@ -17,11 +17,18 @@ echo "Building and pushing version: $VERSION"
 # Use Docker Build Cloud for faster builds
 BUILDER="cloud-staugustine1-oneclick"
 
-# Check if builder exists
+# Check if builder exists and is working
 if ! docker buildx inspect $BUILDER >/dev/null 2>&1; then
     echo "Builder $BUILDER not found. Creating local builder..."
     docker buildx create --use --name cloud-builder --driver docker-container
     BUILDER="cloud-builder"
+else
+    # Test if cloud builder is working, fallback to local if not
+    if ! docker buildx build --builder $BUILDER --platform linux/amd64 --dry-run . >/dev/null 2>&1; then
+        echo "Cloud builder not working. Using local builder..."
+        docker buildx create --use --name cloud-builder --driver docker-container
+        BUILDER="cloud-builder"
+    fi
 fi
 
 echo "Using builder: $BUILDER"

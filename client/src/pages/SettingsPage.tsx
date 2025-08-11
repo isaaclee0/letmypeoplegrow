@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { settingsAPI } from '../services/api';
 import {
-  Cog6ToothIcon,
+  PencilIcon,
   InformationCircleIcon,
   ShieldCheckIcon,
   ShieldExclamationIcon,
@@ -11,16 +11,18 @@ import {
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'general' | 'system' | 'privacy'>('general');
-  const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
+  // Commented out data access functionality for now
+  // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
+  // const [isUpdating, setIsUpdating] = useState(false);
 
   const tabs = [
-    { id: 'general', name: 'General', icon: Cog6ToothIcon },
+    { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
     { id: 'privacy', name: 'Data Privacy', icon: ShieldCheckIcon },
   ];
 
-  // Data Access Control Functions
+  // Commented out Data Access Control Functions for now
+  /*
   const loadDataAccessSettings = useCallback(async () => {
     try {
       const response = await settingsAPI.getDataAccess();
@@ -48,11 +50,12 @@ const SettingsPage: React.FC = () => {
       setIsUpdating(false);
     }
   };
+  */
 
-  // Load settings when component mounts
-  useEffect(() => {
-    loadDataAccessSettings();
-  }, [loadDataAccessSettings]);
+  // Commented out loading settings since we removed the functionality
+  // useEffect(() => {
+  //   loadDataAccessSettings();
+  // }, [loadDataAccessSettings]);
 
   // Handle URL parameters for tab selection
   useEffect(() => {
@@ -204,43 +207,29 @@ const SettingsPage: React.FC = () => {
                         </p>
                         <div className="mt-3">
                           <div className="flex items-center space-x-2">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                              dataAccessEnabled 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {dataAccessEnabled ? (
-                                <>
-                                  <ShieldCheckIcon className="w-3 h-3 mr-1" />
-                                  Enabled
-                                </>
-                              ) : (
-                                <>
-                                  <ShieldExclamationIcon className="w-3 h-3 mr-1" />
-                                  Disabled
-                                </>
-                              )}
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              <ShieldExclamationIcon className="w-3 h-3 mr-1" />
+                              Disabled
                             </span>
                             <span className="text-xs text-gray-500">
-                              {dataAccessEnabled 
-                                ? 'Data can be accessed from external applications' 
-                                : 'Data is only accessible within this application'
-                              }
+                              Data is only accessible within this application
                             </span>
                           </div>
                         </div>
                       </div>
                       <div className="ml-6">
                         <button
-                          onClick={() => updateDataAccess(!dataAccessEnabled)}
-                          disabled={isUpdating}
+                          // onClick={() => updateDataAccess(!dataAccessEnabled)}
+                          disabled={true} // Disabled as API is removed
                           className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
-                            dataAccessEnabled ? 'bg-primary-600' : 'bg-gray-200'
+                            // dataAccessEnabled ? 'bg-primary-600' : 'bg-gray-200'
+                            'bg-gray-200' // Disabled as API is removed
                           }`}
                         >
                           <span
                             className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                              dataAccessEnabled ? 'translate-x-5' : 'translate-x-0'
+                              // dataAccessEnabled ? 'translate-x-5' : 'translate-x-0'
+                              'translate-x-0' // Disabled as API is removed
                             }`}
                           />
                         </button>
@@ -275,7 +264,7 @@ const SettingsPage: React.FC = () => {
                   </div>
 
                                      {/* Usage Instructions */}
-                   {dataAccessEnabled && (
+                   {/* {dataAccessEnabled && (
                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                        <div className="flex">
                          <div className="flex-shrink-0">
@@ -302,7 +291,7 @@ const SettingsPage: React.FC = () => {
                          </div>
                        </div>
                      </div>
-                   )}
+                   )} */}
                 </div>
               )}
             </div>

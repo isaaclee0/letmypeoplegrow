@@ -36,8 +36,8 @@ router.post('/send',
         return true;
       }),
     body('primaryContactMethod')
-      .isIn(['email', 'sms'])
-      .withMessage('Primary contact method must be email or sms'),
+      .isIn(['email']) // SMS temporarily disabled
+      .withMessage('Primary contact method must be email'),
     body('role')
       .isIn(['coordinator', 'attendance_taker'])
       .withMessage('Valid role is required'),
@@ -91,10 +91,11 @@ router.post('/send',
         console.log('❌ [INVITATION_DEBUG] Email required but not provided');
         return res.status(400).json({ error: 'Email is required when primary contact method is email' });
       }
-      if (primaryContactMethod === 'sms' && !mobileNumber) {
-        console.log('❌ [INVITATION_DEBUG] Mobile number required but not provided');
-        return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
-      }
+      // SMS functionality temporarily disabled
+      // if (primaryContactMethod === 'sms' && !mobileNumber) {
+      //   console.log('❌ [INVITATION_DEBUG] Mobile number required but not provided');
+      //   return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
+      // }
 
       // Check if user is coordinator and trying to create admin
       if (req.user.role === 'coordinator' && role === 'admin') {
@@ -126,13 +127,13 @@ router.post('/send',
       if (email) {
         console.log('📧 [INVITATION_DEBUG] Checking for existing user with email:', email);
         existingUserChecks.push(
-          Database.query('SELECT id FROM users WHERE email = ?', [email])
+          Database.query('SELECT id FROM users WHERE email = ? AND church_id = ?', [email, req.user.church_id])
         );
       }
       if (normalizedMobile) {
         console.log('📱 [INVITATION_DEBUG] Checking for existing user with mobile:', normalizedMobile);
         existingUserChecks.push(
-          Database.query('SELECT id FROM users WHERE mobile_number = ?', [normalizedMobile])
+          Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ?', [normalizedMobile, req.user.church_id])
         );
       }
 
@@ -150,13 +151,13 @@ router.post('/send',
       if (email) {
         console.log('📧 [INVITATION_DEBUG] Checking for pending invitation with email:', email);
         existingInvitationChecks.push(
-          Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = false AND expires_at > NOW()', [email])
+          Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = false AND expires_at > NOW() AND church_id = ?', [email, req.user.church_id])
         );
       }
       if (normalizedMobile) {
         console.log('📱 [INVITATION_DEBUG] Checking for pending invitation with mobile:', normalizedMobile);
         existingInvitationChecks.push(
-          Database.query('SELECT id FROM user_invitations WHERE mobile_number = ? AND accepted = false AND expires_at > NOW()', [normalizedMobile])
+          Database.query('SELECT id FROM user_invitations WHERE mobile_number = ? AND accepted = false AND expires_at > NOW() AND church_id = ?', [normalizedMobile, req.user.church_id])
         );
       }
 
@@ -172,8 +173,8 @@ router.post('/send',
       if (req.user.role === 'coordinator' && gatheringIds.length > 0) {
         console.log('🔍 [INVITATION_DEBUG] Validating gathering access for coordinator');
         const userGatherings = await Database.query(
-          'SELECT gathering_type_id FROM user_gathering_assignments WHERE user_id = ?',
-          [req.user.id]
+          'SELECT gathering_type_id FROM user_gathering_assignments WHERE user_id = ? AND church_id = ?',
+          [req.user.id, req.user.church_id]
         );
         const userGatheringIds = userGatherings.map(g => g.gathering_type_id);
         console.log('🔍 [INVITATION_DEBUG] User gathering IDs:', userGatheringIds);
@@ -199,9 +200,9 @@ router.post('/send',
         // Create invitation
         console.log('💾 [INVITATION_DEBUG] Creating invitation record');
         const invitationResult = await conn.query(`
-          INSERT INTO user_invitations (email, mobile_number, primary_contact_method, role, first_name, last_name, invited_by, invitation_token, expires_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.id, invitationToken, expiresAt]);
+          INSERT INTO user_invitations (email, mobile_number, primary_contact_method, role, first_name, last_name, invited_by, invitation_token, expires_at, church_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.id, invitationToken, expiresAt, req.user.church_id]);
         
         console.log('✅ [INVITATION_DEBUG] Invitation record created with ID:', invitationResult.insertId);
 
@@ -218,9 +219,8 @@ router.post('/send',
           const emailResult = await sendInvitationEmail(email, firstName, lastName, role, invitationLink, req.user);
           console.log('📧 [INVITATION_DEBUG] Email invitation result:', emailResult);
         } else {
-          console.log('📱 [INVITATION_DEBUG] Sending SMS invitation');
-          const smsResult = await sendInvitationSMS(normalizedMobile, firstName, lastName, role, invitationLink, req.user);
-          console.log('📱 [INVITATION_DEBUG] SMS invitation result:', smsResult);
+          // SMS functionality temporarily disabled
+          console.log('📱 SMS invitation functionality temporarily disabled');
         }
 
         // If gathering IDs are provided, store them for later assignment
@@ -259,10 +259,10 @@ router.get('/pending', requireRole(['admin', 'coordinator']), async (req, res) =
              u.first_name as invited_by_first_name, u.last_name as invited_by_last_name
       FROM user_invitations ui
       JOIN users u ON ui.invited_by = u.id
-      WHERE ui.accepted = false AND ui.expires_at > NOW()
+      WHERE ui.accepted = false AND ui.expires_at > NOW() AND ui.church_id = ?
     `;
     
-    let params = [];
+    let params = [req.user.church_id];
 
     // Coordinators can only see invitations they sent
     if (req.user.role === 'coordinator') {
@@ -294,8 +294,8 @@ router.post('/resend/:id',
         SELECT ui.*, u.first_name as invited_by_first_name, u.last_name as invited_by_last_name
         FROM user_invitations ui
         JOIN users u ON ui.invited_by = u.id
-        WHERE ui.id = ? AND ui.accepted = false
-      `, [id]);
+        WHERE ui.id = ? AND ui.accepted = false AND ui.church_id = ?
+      `, [id, req.user.church_id]);
 
       if (invitations.length === 0) {
         return res.status(404).json({ error: 'Invitation not found or already accepted' });
@@ -350,8 +350,8 @@ router.delete('/:id',
 
       // Check invitation exists and permissions
       const invitations = await Database.query(
-        'SELECT invited_by FROM user_invitations WHERE id = ? AND accepted = false',
-        [id]
+        'SELECT invited_by FROM user_invitations WHERE id = ? AND accepted = false AND church_id = ?',
+        [id, req.user.church_id]
       );
 
       if (invitations.length === 0) {
@@ -363,7 +363,7 @@ router.delete('/:id',
         return res.status(403).json({ error: 'Cannot cancel invitation you did not send' });
       }
 
-      await Database.query('DELETE FROM user_invitations WHERE id = ?', [id]);
+      await Database.query('DELETE FROM user_invitations WHERE id = ? AND church_id = ?', [id, req.user.church_id]);
 
       res.json({ message: 'Invitation cancelled successfully' });
 
@@ -451,13 +451,14 @@ router.post('/complete/:token',
       await Database.transaction(async (conn) => {
         // Create user account
         const userResult = await conn.query(`
-          INSERT INTO users (email, role, first_name, last_name, is_active, is_invited, first_login_completed)
-          VALUES (?, ?, ?, ?, true, true, false)
+          INSERT INTO users (email, role, first_name, last_name, is_active, is_invited, first_login_completed, church_id)
+          VALUES (?, ?, ?, ?, true, true, false, ?)
         `, [
           invitation.email,
           invitation.role,
           invitation.first_name,
-          invitation.last_name
+          invitation.last_name,
+          invitation.church_id
         ]);
 
         const userId = userResult.insertId;
@@ -465,11 +466,11 @@ router.post('/complete/:token',
         // Assign gatherings
         if (gatheringAssignments.length > 0) {
           const assignmentValues = gatheringAssignments.map(gatheringId => [
-            userId, gatheringId, invitation.invited_by
+            userId, gatheringId, invitation.invited_by, invitation.church_id
           ]);
           
           await conn.batch(
-            'INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by) VALUES (?, ?, ?)',
+            'INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id) VALUES (?, ?, ?, ?)',
             assignmentValues
           );
 

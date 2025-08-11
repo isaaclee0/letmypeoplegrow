@@ -1,11 +1,13 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
+const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 router.use(verifyToken);
+router.use(ensureChurchIsolation);
 
 // Get potential duplicates based on name matching
 router.get('/duplicates', requireRole(['admin']), async (req, res) => {
@@ -26,11 +28,11 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
       LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE i.is_active = true
+      WHERE i.is_active = true AND i.church_id = ?
       GROUP BY i.id, i.first_name, i.last_name
       HAVING name_count > 1
       ORDER BY LOWER(i.last_name), LOWER(i.first_name), i.created_at
-    `);
+    `, [req.user.church_id]);
     
     // Convert BigInt values to regular numbers and process gathering assignments
     const processedIndividuals = individuals.map(individual => ({
@@ -95,8 +97,8 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
           const assignments = await conn.query(`
             SELECT gathering_type_id
             FROM gathering_lists
-            WHERE individual_id = ?
-          `, [deleteId]);
+            WHERE individual_id = ? AND church_id = ?
+          `, [deleteId, req.user.church_id]);
           
           // Add assignments to the kept individual (if not already assigned)
           for (const assignment of assignments) {
@@ -127,19 +129,15 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 // Get all individuals with their family and gathering assignments
 router.get('/', async (req, res) => {
   try {
-    // Check if is_visitor column exists
-    await requireIsVisitorColumn();
-    
     const individuals = await Database.query(`
       SELECT 
         i.id,
         i.first_name,
         i.last_name,
+        i.people_type,
         i.family_id,
         f.family_name,
-        f.family_identifier,
         i.is_active,
-        i.is_visitor,
         i.created_at,
         GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
         GROUP_CONCAT(DISTINCT gt.name) as gathering_names
@@ -147,16 +145,16 @@ router.get('/', async (req, res) => {
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
       LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE i.is_active = true
+      WHERE i.is_active = true AND i.church_id = ?
       GROUP BY i.id
       ORDER BY i.last_name, i.first_name
-    `);
+    `, [req.user.church_id]);
     
     // Process gathering assignments and use systematic conversion utility
     const processedIndividuals = individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
-      isVisitor: Boolean(individual.is_visitor),
+      peopleType: individual.people_type,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
           id: Number(id),
@@ -178,9 +176,9 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVID
     const { firstName, lastName, familyId } = req.body;
     
     const result = await Database.query(`
-      INSERT INTO individuals (first_name, last_name, family_id, created_by)
-      VALUES (?, ?, ?, ?)
-    `, [firstName, lastName, familyId || null, req.user.id]);
+      INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
+      VALUES (?, ?, ?, ?, ?)
+    `, [firstName, lastName, familyId || null, req.user.id, req.user.church_id]);
 
     res.status(201).json({ 
       message: 'Individual created successfully',
@@ -196,19 +194,29 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVID
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, familyId } = req.body;
-    
-    const result = await Database.query(`
-      UPDATE individuals 
-      SET first_name = ?, last_name = ?, family_id = ?, updated_at = NOW()
-      WHERE id = ?
-    `, [firstName, lastName, familyId || null, id]);
+    const { firstName, lastName, familyId, peopleType } = req.body;
+
+    // Build dynamic update to allow optional peopleType
+    const fields = ['first_name = ?', 'last_name = ?', 'family_id = ?'];
+    const values = [firstName, lastName, familyId || null];
+
+    if (peopleType && ['regular', 'local_visitor', 'traveller_visitor'].includes(peopleType)) {
+      fields.push('people_type = ?');
+      values.push(peopleType);
+    }
+
+    values.push(id, req.user.church_id);
+
+    const result = await Database.query(
+      `UPDATE individuals SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`,
+      values
+    );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Individual not found' });
     }
 
-    res.json({ 
+    res.json({
       message: 'Individual updated successfully',
       id: Number(id)
     });
@@ -226,8 +234,8 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_IN
     const result = await Database.query(`
       UPDATE individuals 
       SET is_active = false, updated_at = NOW()
-      WHERE id = ?
-    `, [id]);
+      WHERE id = ? AND church_id = ?
+    `, [id, req.user.church_id]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Individual not found' });
@@ -250,8 +258,8 @@ router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']
     
     // Check if assignment already exists
     const existingAssignment = await Database.query(
-      'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
-      [gatheringId, id]
+      'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?',
+      [gatheringId, id, req.user.church_id]
     );
     
     if (existingAssignment.length > 0) {
@@ -259,8 +267,8 @@ router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']
       await Database.query(`
         UPDATE gathering_lists 
         SET added_by = ?, added_at = NOW()
-        WHERE gathering_type_id = ? AND individual_id = ?
-      `, [req.user.id, gatheringId, id]);
+        WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?
+      `, [req.user.id, gatheringId, id, req.user.church_id]);
       
       res.json({ 
         message: 'Individual assignment updated successfully'
@@ -268,9 +276,9 @@ router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']
     } else {
       // Create new assignment
       await Database.query(`
-        INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-        VALUES (?, ?, ?)
-      `, [gatheringId, id, req.user.id]);
+        INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+        VALUES (?, ?, ?, ?)
+      `, [gatheringId, id, req.user.id, req.user.church_id]);
       
       res.json({ 
         message: 'Individual assigned to gathering successfully'
@@ -289,8 +297,8 @@ router.delete('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator
     
     // Check if assignment exists
     const existingAssignment = await Database.query(
-      'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
-      [gatheringId, id]
+      'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?',
+      [gatheringId, id, req.user.church_id]
     );
     
     if (existingAssignment.length === 0) {
@@ -302,8 +310,8 @@ router.delete('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator
       // Delete the assignment
       await Database.query(`
         DELETE FROM gathering_lists 
-        WHERE gathering_type_id = ? AND individual_id = ?
-      `, [gatheringId, id]);
+        WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?
+      `, [gatheringId, id, req.user.church_id]);
 
       res.json({ 
         message: 'Individual unassigned from gathering successfully'

@@ -40,9 +40,9 @@ const createSampleAttendanceSessions = async (gatheringId, dayOfWeek, userId) =>
       
       // Create attendance session
       const sessionResult = await Database.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
-        VALUES (?, ?, ?)
-      `, [gatheringId, formattedDate, userId]);
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+        VALUES (?, ?, ?, ?)
+      `, [gatheringId, formattedDate, userId, req.user.church_id]);
       
       sessions.push({
         id: Number(sessionResult.insertId),
@@ -67,8 +67,8 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
   try {
     // Check if progress record exists
     const existingProgress = await Database.query(
-      'SELECT id FROM onboarding_progress WHERE user_id = ?',
-      [userId]
+      'SELECT id FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
+      [userId, req.user.church_id]
     );
 
     if (existingProgress.length > 0) {
@@ -83,8 +83,8 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
       // Update completed steps
       if (completedSteps.length > 0) {
         const currentCompleted = await Database.query(
-          'SELECT completed_steps FROM onboarding_progress WHERE user_id = ?',
-          [userId]
+          'SELECT completed_steps FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
+          [userId, req.user.church_id]
         );
         
         let existingCompleted = [];
@@ -174,12 +174,12 @@ const upload = multer({
 // Check onboarding status
 router.get('/status', verifyToken, requireRole(['admin']), async (req, res) => {
   try {
-    const settings = await Database.query('SELECT * FROM church_settings LIMIT 1');
+    const settings = await Database.query('SELECT * FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
     
     // Get user's onboarding progress
     const progress = await Database.query(
-      'SELECT * FROM onboarding_progress WHERE user_id = ?',
-      [req.user.id]
+      'SELECT * FROM onboarding_progress WHERE user_id = ? AND church_id = ?',
+      [req.user.id, req.user.church_id]
     );
     
     res.json({
@@ -249,33 +249,35 @@ router.post('/church-info',
       const { churchName, countryCode, timezone, emailFromName, emailFromAddress } = req.body;
 
       // Check if settings already exist
-      const existingSettings = await Database.query('SELECT id FROM church_settings LIMIT 1');
+      const existingSettings = await Database.query('SELECT id FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
       
       if (existingSettings.length > 0) {
         // Update existing settings
         await Database.query(`
           UPDATE church_settings 
           SET church_name = ?, country_code = ?, timezone = ?, email_from_name = ?, email_from_address = ?, updated_at = NOW()
-          WHERE id = ?
+          WHERE id = ? AND church_id = ?
         `, [
           churchName,
           countryCode.toUpperCase(),
           timezone || 'America/New_York',
           emailFromName || 'Let My People Grow',
           emailFromAddress || 'noreply@redeemercc.org.au',
-          existingSettings[0].id
+          existingSettings[0].id,
+          req.user.church_id
         ]);
       } else {
         // Create new settings
         await Database.query(`
-          INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, church_id)
+          VALUES (?, ?, ?, ?, ?, ?)
         `, [
           churchName,
           countryCode.toUpperCase(),
           timezone || 'America/New_York',
           emailFromName || 'Let My People Grow',
-          emailFromAddress || 'noreply@redeemercc.org.au'
+          emailFromAddress || 'noreply@redeemercc.org.au',
+          req.user.church_id
         ]);
       }
 
@@ -310,9 +312,7 @@ router.post('/gathering',
     body('startTime')
       .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
       .withMessage('Valid start time is required (HH:MM format)'),
-    body('durationMinutes')
-      .isInt({ min: 15, max: 480 })
-      .withMessage('Duration must be between 15 and 480 minutes'),
+
     body('frequency')
       .isIn(['weekly', 'biweekly', 'monthly'])
       .withMessage('Valid frequency is required')
@@ -324,12 +324,12 @@ router.post('/gathering',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { name, description, dayOfWeek, startTime, durationMinutes, frequency } = req.body;
+      const { name, description, dayOfWeek, startTime, frequency } = req.body;
 
       const result = await Database.query(`
-        INSERT INTO gathering_types (name, description, day_of_week, start_time, duration_minutes, frequency, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [name, description, dayOfWeek, startTime, durationMinutes, frequency, req.user.id]);
+        INSERT INTO gathering_types (name, description, day_of_week, start_time, frequency, created_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [name, description, dayOfWeek, startTime, frequency, req.user.id]);
 
       // Assign the admin user to this gathering
       await Database.query(`
@@ -342,7 +342,7 @@ router.post('/gathering',
 
       // Get all gatherings for this user to save progress
       const userGatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency
         FROM gathering_types gt
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE uga.user_id = ?
@@ -464,9 +464,9 @@ router.post('/upload-csv/:gatheringId',
           if (familyName && familyName.trim()) {
             if (!familyMap.has(familyName)) {
               const familyResult = await conn.query(`
-                INSERT INTO families (family_name, family_identifier, created_by)
-                VALUES (?, ?, ?)
-              `, [familyName, familyName, req.user.id]);
+                INSERT INTO families (family_name, created_by)
+                VALUES (?, ?)
+              `, [familyName, req.user.id]);
               familyMap.set(familyName, Number(familyResult.insertId));
             }
             familyId = familyMap.get(familyName);

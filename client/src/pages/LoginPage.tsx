@@ -86,16 +86,8 @@ const LoginPage: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       
-      // Redirect based on user role and onboarding status
-      if (response.data.user.role === 'admin') {
-        // Will be redirected by ProtectedRoute logic if onboarding needed
-        navigate('/app/dashboard');
-      } else if (response.data.user.role === 'attendance_taker') {
-        // Redirect attendance takers directly to attendance page
-        navigate('/app/attendance');
-      } else {
-        navigate('/app/dashboard');
-      }
+      // Redirect to attendance by default; onboarding logic handled elsewhere for admins
+      navigate('/app/attendance');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {

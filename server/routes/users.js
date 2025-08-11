@@ -20,14 +20,15 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
              COUNT(DISTINCT uga.gathering_type_id) as gathering_count
       FROM users u
       LEFT JOIN user_gathering_assignments uga ON u.id = uga.user_id
+      WHERE u.church_id = ?
     `;
     
-    let params = [];
+    let params = [req.user.church_id];
 
     // Coordinators can only see users they have access to (same gatherings)
     if (req.user.role === 'coordinator') {
       query += `
-        WHERE u.id IN (
+        AND u.id IN (
           SELECT DISTINCT uga2.user_id 
           FROM user_gathering_assignments uga2
           WHERE uga2.gathering_type_id IN (
@@ -72,9 +73,9 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
       const hasAccess = await Database.query(`
         SELECT 1 FROM user_gathering_assignments uga1
         JOIN user_gathering_assignments uga2 ON uga1.gathering_type_id = uga2.gathering_type_id
-        WHERE uga1.user_id = ? AND uga2.user_id = ?
+        WHERE uga1.user_id = ? AND uga2.user_id = ? AND uga1.church_id = ?
         LIMIT 1
-      `, [req.user.id, id]);
+      `, [req.user.id, id, req.user.church_id]);
 
       if (hasAccess.length === 0) {
         return res.status(403).json({ error: 'Access denied to this user' });
@@ -87,8 +88,8 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
              email_notifications, sms_notifications, notification_frequency, 
              default_gathering_id, created_at, updated_at
       FROM users 
-      WHERE id = ?
-    `, [id]);
+      WHERE id = ? AND church_id = ?
+    `, [id, req.user.church_id]);
 
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -146,8 +147,8 @@ router.post('/',
         return true;
       }),
     body('primaryContactMethod')
-      .isIn(['email', 'sms'])
-      .withMessage('Primary contact method must be email or sms'),
+      .isIn(['email']) // SMS temporarily disabled
+      .withMessage('Primary contact method must be email'),
     body('role')
       .isIn(['coordinator', 'attendance_taker'])
       .withMessage('Invalid role'),
@@ -183,9 +184,10 @@ router.post('/',
       if (primaryContactMethod === 'email' && !email) {
         return res.status(400).json({ error: 'Email is required when primary contact method is email' });
       }
-      if (primaryContactMethod === 'sms' && !mobileNumber) {
-        return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
-      }
+      // SMS functionality temporarily disabled
+      // if (primaryContactMethod === 'sms' && !mobileNumber) {
+      //   return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
+      // }
 
       // Normalize mobile number if provided
       let normalizedMobile = null;
@@ -204,12 +206,12 @@ router.post('/',
       const duplicateChecks = [];
       if (email) {
         duplicateChecks.push(
-          Database.query('SELECT id FROM users WHERE email = ?', [email])
+          Database.query('SELECT id FROM users WHERE email = ? AND church_id = ?', [email, req.user.church_id])
         );
       }
       if (normalizedMobile) {
         duplicateChecks.push(
-          Database.query('SELECT id FROM users WHERE mobile_number = ?', [normalizedMobile])
+          Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ?', [normalizedMobile, req.user.church_id])
         );
       }
 
@@ -219,9 +221,9 @@ router.post('/',
       }
 
       const result = await Database.query(`
-        INSERT INTO users (email, mobile_number, primary_contact_method, role, first_name, last_name, is_invited)
-        VALUES (?, ?, ?, ?, ?, ?, true)
-      `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName]);
+        INSERT INTO users (email, mobile_number, primary_contact_method, role, first_name, last_name, is_invited, church_id)
+        VALUES (?, ?, ?, ?, ?, ?, true, ?)
+      `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.church_id]);
 
       res.status(201).json({ 
         message: 'User created successfully',

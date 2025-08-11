@@ -59,16 +59,8 @@ const SignupPage: React.FC = () => {
       const response = await authAPI.verifyCode(contact, data.code);
       await login(response.data.token, response.data.user);
       
-      // Redirect based on user role and onboarding status
-      if (response.data.user.role === 'admin') {
-        // Will be redirected by ProtectedRoute logic if onboarding needed
-        navigate('/app/dashboard');
-      } else if (response.data.user.role === 'attendance_taker') {
-        // Redirect attendance takers directly to attendance page
-        navigate('/app/attendance');
-      } else {
-        navigate('/app/dashboard');
-      }
+      // Default landing is attendance; onboarding handled by protected routes
+      navigate('/app/attendance');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {

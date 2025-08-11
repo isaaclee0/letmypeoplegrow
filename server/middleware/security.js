@@ -1,5 +1,50 @@
 const validator = require('validator');
 const DOMPurify = require('isomorphic-dompurify');
+const rateLimit = require('express-rate-limit');
+
+/**
+ * Rate limiter for potential church ID guessing attempts
+ * This helps prevent brute force attacks on church IDs
+ */
+const churchIdGuessingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit to 10 attempts per window
+  message: { 
+    error: 'Too many invalid church access attempts. Please try again later.',
+    code: 'CHURCH_ACCESS_LIMITED'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Only count requests that result in church isolation errors
+  skipSuccessfulRequests: true,
+  skipFailedRequests: false,
+  // Custom key generator to track by IP
+  keyGenerator: (req) => {
+    return `church_guess_${req.ip}`;
+  }
+});
+
+/**
+ * Rate limiter for authentication attempts
+ * This helps prevent brute force attacks on login
+ */
+const authAttemptLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit to 5 failed attempts per window
+  message: { 
+    error: 'Too many failed authentication attempts. Please try again later.',
+    code: 'AUTH_ATTEMPTS_LIMITED'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Only count failed authentication attempts
+  skipSuccessfulRequests: true,
+  skipFailedRequests: false,
+  // Custom key generator to track by IP
+  keyGenerator: (req) => {
+    return `auth_fail_${req.ip}`;
+  }
+});
 
 // SQL injection patterns to detect and block
 const SQL_INJECTION_PATTERNS = [
@@ -224,8 +269,6 @@ const secureFileUpload = (allowedTypes = ['text/csv'], maxSize = 5 * 1024 * 1024
 
 // Rate limiting for security-sensitive endpoints
 const createSecurityRateLimit = (windowMs = 15 * 60 * 1000, max = 10) => {
-  const rateLimit = require('express-rate-limit');
-  
   return rateLimit({
     windowMs,
     max,
@@ -335,5 +378,7 @@ module.exports = {
   validatePhoneNumber,
   validateInput,
   sanitizeString,
-  sanitizeObject
+  sanitizeObject,
+  churchIdGuessingLimiter,
+  authAttemptLimiter
 }; 

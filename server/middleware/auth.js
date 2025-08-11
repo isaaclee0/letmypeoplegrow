@@ -20,7 +20,7 @@ const verifyToken = async (req, res, next) => {
     
     // Get user details from database
     const users = await Database.query(
-      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed FROM users WHERE id = ? AND is_active = true',
+      'SELECT id, email, role, first_name, last_name, is_active, first_login_completed, church_id FROM users WHERE id = ? AND is_active = true',
       [decoded.userId]
     );
 
@@ -28,7 +28,11 @@ const verifyToken = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid token or user not found.' });
     }
 
-    req.user = users[0];
+    // Use church_id from JWT token if available, otherwise from database
+    const user = users[0];
+    user.church_id = decoded.churchId || user.church_id;
+    
+    req.user = user;
     next();
   } catch (error) {
     console.error('Auth middleware error:', error);
@@ -142,18 +146,33 @@ const auditLog = (action) => {
                 AND action = ? 
                 AND created_at > ?
                 AND table_name = ?
+                AND church_id = ?
               ORDER BY created_at DESC 
               LIMIT 1
             `, [
               req.user.id,
               action,
               fiveMinutesAgo,
-              req.body?.table || 'attendance_sessions'
+              req.body?.table || 'attendance_sessions',
+              req.user.church_id
             ]);
             
             if (existingAction.length > 0) {
               // Update existing action instead of creating new one
-              const existingValues = existingAction[0].new_values ? JSON.parse(existingAction[0].new_values) : {};
+              let existingValues = {};
+              try {
+                if (existingAction[0].new_values) {
+                  // Handle both string and object cases
+                  if (typeof existingAction[0].new_values === 'string') {
+                    existingValues = JSON.parse(existingAction[0].new_values);
+                  } else {
+                    existingValues = existingAction[0].new_values;
+                  }
+                }
+              } catch (parseError) {
+                console.error('Error parsing existing new_values:', parseError);
+                existingValues = {};
+              }
               const newValues = req.body ? JSON.stringify(req.body) : null;
               
               // Merge the values and update the timestamp
@@ -163,7 +182,7 @@ const auditLog = (action) => {
                     created_at = NOW(),
                     table_name = ?,
                     record_id = ?
-                WHERE id = ?
+                WHERE id = ? AND church_id = ?
               `, [
                 JSON.stringify({
                   ...existingValues,
@@ -174,7 +193,8 @@ const auditLog = (action) => {
                 }),
                 req.body?.table || 'attendance_sessions',
                 req.body?.id || data?.id || null,
-                existingAction[0].id
+                existingAction[0].id,
+                req.user.church_id
               ]);
             } else {
               // Create new action
@@ -187,8 +207,8 @@ const auditLog = (action) => {
               };
               
               await Database.query(`
-                INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent, church_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
               `, [
                 req.user.id,
                 action,
@@ -196,7 +216,8 @@ const auditLog = (action) => {
                 req.body?.id || data?.id || null,
                 JSON.stringify(enhancedBody),
                 req.ip,
-                req.get('User-Agent')
+                req.get('User-Agent'),
+                req.user.church_id
               ]);
             }
           } catch (error) {

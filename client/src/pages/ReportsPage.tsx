@@ -7,7 +7,6 @@ import {
   ArrowTrendingUpIcon,
   CalendarIcon,
   ArrowDownTrayIcon,
-  ComputerDesktopIcon,
   XMarkIcon
 } from '@heroicons/react/24/outline';
 
@@ -20,8 +19,8 @@ const ReportsPage: React.FC = () => {
   const [metrics, setMetrics] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
-  const [showSpreadsheetInstructions, setShowSpreadsheetInstructions] = useState(false);
+  // DISABLED: External data access feature is currently disabled
+  // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
 
   // Get the current domain for integration examples
   const getCurrentDomain = () => {
@@ -73,15 +72,16 @@ const ReportsPage: React.FC = () => {
     }
   }, [user?.gatheringAssignments, selectedGathering]);
 
-  const loadDataAccessSettings = useCallback(async () => {
-    try {
-      const response = await settingsAPI.getDataAccess();
-      setDataAccessEnabled(response.data.dataAccessEnabled);
-    } catch (err) {
-      console.error('Failed to load data access settings:', err);
-      setDataAccessEnabled(false);
-    }
-  }, []);
+  // DISABLED: External data access feature is currently disabled
+  // const loadDataAccessSettings = useCallback(async () => {
+  //   try {
+  //     const response = await settingsAPI.getDataAccess();
+  //     // setDataAccessEnabled(response.data.dataAccessEnabled); // This line is commented out
+  //   } catch (err) {
+  //     console.error('Failed to load data access settings:', err);
+  //     // setDataAccessEnabled(false); // This line is commented out
+  //   }
+  // }, []);
 
   const loadMetrics = useCallback(async () => {
     if (!selectedGathering || !startDate || !endDate) return;
@@ -105,9 +105,9 @@ const ReportsPage: React.FC = () => {
   useEffect(() => {
     if (hasReportsAccess) {
       loadGatherings();
-      loadDataAccessSettings();
+      // loadDataAccessSettings(); // This line is commented out
     }
-  }, [hasReportsAccess, loadGatherings, loadDataAccessSettings]);
+  }, [hasReportsAccess, loadGatherings]); // Removed loadDataAccessSettings from dependency array
 
   useEffect(() => {
     if (hasReportsAccess && selectedGathering && startDate && endDate) {
@@ -191,13 +191,24 @@ const ReportsPage: React.FC = () => {
 
     try {
       setIsLoading(true);
+      setError('');
+      
       const params = {
         gatheringTypeId: selectedGathering.id,
         startDate,
         endDate
       };
       
+      console.log('Exporting data with params:', params);
+      
       const response = await reportsAPI.exportData(params);
+      
+      console.log('Export response received:', response);
+      
+      // Check if response has data
+      if (!response.data) {
+        throw new Error('No data received from server');
+      }
       
       // Create and download the file
       const blob = new Blob([response.data], { type: 'text/csv' });
@@ -210,9 +221,21 @@ const ReportsPage: React.FC = () => {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       
-      setError('');
-    } catch (err) {
-      setError('Failed to export data');
+      console.log('File download initiated successfully');
+      
+    } catch (err: any) {
+      console.error('Export error:', err);
+      console.error('Error response:', err.response);
+      
+      let errorMessage = 'Failed to export data';
+      
+      if (err.response?.data?.error) {
+        errorMessage = err.response.data.error;
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -245,6 +268,7 @@ const ReportsPage: React.FC = () => {
               </p>
             </div>
             <div className="flex space-x-3">
+              {/* Commented out Spreadsheet Access functionality for now
               {dataAccessEnabled && (
                 <button 
                   onClick={() => setShowSpreadsheetInstructions(true)}
@@ -254,6 +278,7 @@ const ReportsPage: React.FC = () => {
                   Spreadsheet Access
                 </button>
               )}
+              */}
               <button 
                 onClick={handleExportData}
                 className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
@@ -507,9 +532,35 @@ const ReportsPage: React.FC = () => {
             </h3>
             <div className="mt-6">
               {isLoading ? (
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                <div className="flex justify-center items-center h-32">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                </div>
               ) : (
-                <p className="text-sm text-gray-500">Total visitors in period: {metrics?.totalVisitors || 0} (placeholder)</p>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-gray-900">
+                        Total Visitors
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Unique visitors who attended during this period
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-semibold text-primary-600">
+                        {metrics?.totalVisitors || 0}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        visitors
+                      </div>
+                    </div>
+                  </div>
+                  {metrics?.totalVisitors === 0 && (
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-500">No visitors recorded for the selected period</p>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -548,152 +599,7 @@ const ReportsPage: React.FC = () => {
       </div>
 
 
-      {/* Spreadsheet Instructions Modal */}
-      {showSpreadsheetInstructions && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
-            <div className="mt-3">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Spreadsheet Integration Instructions</h3>
-                <button
-                  onClick={() => setShowSpreadsheetInstructions(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <div className="space-y-6">
-                {/* Google Sheets Instructions */}
-                <div className="border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                    <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/>
-                    </svg>
-                    Google Sheets
-                  </h4>
-                  <div className="space-y-3">
-                    <p className="text-sm text-gray-600">
-                      Use the IMPORTDATA function to automatically import your attendance data:
-                    </p>
-                    
-                    {/* Test Endpoints */}
-                    <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
-                      <p className="text-sm font-medium text-yellow-800 mb-2">Test First (Recommended):</p>
-                      <div className="space-y-2">
-                        <div>
-                          <code className="text-xs font-mono bg-white p-1 rounded">
-                            =IMPORTDATA("{getCurrentDomain()}/api/public-csv")
-                          </code>
-                        </div>
-                        <div>
-                          <code className="text-xs font-mono bg-white p-1 rounded">
-                            =IMPORTDATA("{getCurrentDomain()}/api/simple-test")
-                          </code>
-                        </div>
-                        <div>
-                          <code className="text-xs font-mono bg-white p-1 rounded">
-                            =IMPORTDATA("{getCurrentDomain()}/api/sheets-test")
-                          </code>
-                        </div>
-                        <div>
-                          <code className="text-xs font-mono bg-white p-1 rounded">
-                            =IMPORTDATA("{getCurrentDomain()}/api/importrange/test")
-                          </code>
-                        </div>
-                        <div>
-                          <code className="text-xs font-mono bg-white p-1 rounded">
-                            =IMPORTDATA("{getCurrentDomain()}/api/importrange/public-attendance")
-                          </code>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Production Endpoint */}
-                    <div className="bg-gray-50 p-3 rounded border">
-                      <p className="text-sm font-medium text-gray-700 mb-2">Production (with authentication):</p>
-                      <code className="text-sm font-mono">
-                        =IMPORTDATA("{getCurrentDomain()}/api/importrange/attendance?church_id={getChurchId()}&gatheringTypeId={getDefaultGatheringId()}&startDate={getCurrentYear()}-01-01&endDate={getCurrentYear()}-12-31")
-                      </code>
-                    </div>
-                    
-                    <div className="text-xs text-gray-500">
-                      <p><strong>Note:</strong> The domain, church ID, and gathering type are automatically set to your current location and church.</p>
-                      <p><strong>Data format:</strong> The data format matches the CSV export from the Reports page.</p>
-                      <p><strong>Gathering type:</strong> Currently set to "{gatherings.length > 0 ? gatherings[0].name : 'Default'}" (ID: {getDefaultGatheringId()}).</p>
-                      <p><strong>IMPORTDATA:</strong> This function automatically imports CSV data from the URL. No additional parameters needed.</p>
-                      <p><strong>Troubleshooting:</strong> If the production endpoint doesn't work, try the test endpoints first.</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Excel Instructions */}
-                <div className="border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                    <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1v5h5v10H6V3h7z"/>
-                    </svg>
-                    Microsoft Excel
-                  </h4>
-                  <div className="space-y-3">
-                    <p className="text-sm text-gray-600">
-                      Use Excel's Power Query to import data from the web:
-                    </p>
-                    <ol className="text-sm text-gray-600 list-decimal list-inside space-y-1">
-                      <li>Go to <strong>Data</strong> → <strong>Get Data</strong> → <strong>From Web</strong></li>
-                      <li>Enter the URL: <code className="bg-gray-100 px-1 rounded">{getCurrentDomain()}/api/importrange/attendance?church_id={getChurchId()}&gatheringTypeId={getDefaultGatheringId()}&startDate={getCurrentYear()}-01-01&endDate={getCurrentYear()}-12-31</code></li>
-                      <li>Click <strong>OK</strong> and follow the import wizard</li>
-                      <li>Set up automatic refresh if desired</li>
-                    </ol>
-                  </div>
-                </div>
-
-                {/* Numbers Instructions */}
-                <div className="border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
-                    <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-                    </svg>
-                    Apple Numbers
-                  </h4>
-                  <div className="space-y-3">
-                    <p className="text-sm text-gray-600">
-                      Use Numbers' web data import feature:
-                    </p>
-                    <ol className="text-sm text-gray-600 list-decimal list-inside space-y-1">
-                      <li>Go to <strong>Insert</strong> → <strong>Chart</strong> → <strong>Web Data</strong></li>
-                      <li>Enter the URL: <code className="bg-gray-100 px-1 rounded">{getCurrentDomain()}/api/importrange/attendance?church_id={getChurchId()}&gatheringTypeId={getDefaultGatheringId()}&startDate={getCurrentYear()}-01-01&endDate={getCurrentYear()}-12-31</code></li>
-                      <li>Choose <strong>CSV</strong> as the data format</li>
-                      <li>Click <strong>Import</strong> to add the data</li>
-                    </ol>
-                  </div>
-                </div>
-
-                {/* General Information */}
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-blue-900 mb-2">Important Information</h4>
-                  <ul className="text-sm text-blue-700 space-y-1">
-                    <li>• Data access must be enabled in Settings → Data Privacy</li>
-                    <li>• The domain and church ID are automatically detected</li>
-                    <li>• Data is updated in real-time when accessed</li>
-                    <li>• Date ranges can be customized in the URL parameters</li>
-                    <li>• For security, access is limited to your church's data only</li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={() => setShowSpreadsheetInstructions(false)}
-                  className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Commented out Spreadsheet Instructions Modal for now - CSV export is sufficient */}
     </div>
   );
 };

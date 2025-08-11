@@ -13,8 +13,8 @@ router.get('/recent', verifyToken, async (req, res) => {
       SELECT 
         al.id,
         al.action,
-        al.table_name,
-        al.record_id,
+        al.entity_type as table_name,
+        al.entity_id as record_id,
         al.new_values,
         al.created_at,
         u.first_name,
@@ -22,9 +22,10 @@ router.get('/recent', verifyToken, async (req, res) => {
         u.email
       FROM audit_log al
       LEFT JOIN users u ON al.user_id = u.id
+      WHERE al.church_id = ?
       ORDER BY al.created_at DESC
       LIMIT ?
-    `, [limit]);
+    `, [req.user.church_id, limit]);
 
     // Process activities to make them more readable
     const processedActivities = activities.map(activity => {
@@ -185,7 +186,24 @@ router.get('/recent', verifyToken, async (req, res) => {
     res.json(processedActivities);
   } catch (error) {
     console.error('Get recent activities error:', error);
-    res.status(500).json({ error: 'Failed to retrieve recent activities.' });
+    
+    // Provide more specific error messages
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      res.status(500).json({ 
+        error: 'Database schema error. Please contact support.',
+        details: 'Missing required database columns'
+      });
+    } else if (error.code === 'ER_NO_SUCH_TABLE') {
+      res.status(500).json({ 
+        error: 'Database table missing. Please contact support.',
+        details: 'Required database table not found'
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Failed to retrieve recent activities.',
+        details: error.message
+      });
+    }
   }
 });
 

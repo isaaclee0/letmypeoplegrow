@@ -1,10 +1,13 @@
 const express = require('express');
+const { body, validationResult } = require('express-validator');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
+const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
 router.use(verifyToken);
+router.use(ensureChurchIsolation);
 
 // Get gathering types
 router.get('/', async (req, res) => {
@@ -14,51 +17,39 @@ router.get('/', async (req, res) => {
     // Admin users can see all gatherings, other users only see their assigned gatherings
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.is_active, gt.created_at,
                COUNT(DISTINCT gl.individual_id) as member_count,
-               COUNT(DISTINCT CASE WHEN v.session_id IS NOT NULL AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) THEN v.id END) as recent_visitor_count
+               COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
-        LEFT JOIN visitors v ON as_table.id = v.session_id
-        WHERE gt.is_active = true
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at
+        LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+        LEFT JOIN individuals i ON ar.individual_id = i.id
+        WHERE gt.is_active = true AND gt.church_id = ?
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.is_active, gt.created_at
         ORDER BY gt.name
-      `);
+      `, [req.user.church_id]);
     } else {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.is_active, gt.created_at,
                COUNT(DISTINCT gl.individual_id) as member_count,
-               COUNT(DISTINCT CASE WHEN v.session_id IS NOT NULL AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) THEN v.id END) as recent_visitor_count
+               COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
-        LEFT JOIN visitors v ON as_table.id = v.session_id
+        LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+        LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-        WHERE gt.is_active = true AND uga.user_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.duration_minutes, gt.frequency, gt.is_active, gt.created_at
+        WHERE gt.is_active = true AND uga.user_id = ? AND gt.church_id = ?
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.is_active, gt.created_at
         ORDER BY gt.name
-      `, [req.user.id]);
+      `, [req.user.id, req.user.church_id]);
     }
     
-    // Convert BigInt values to regular numbers to avoid JSON serialization issues
-    // Also convert snake_case to camelCase for frontend compatibility
-    const processedGatherings = gatherings.map(gathering => ({
-      id: Number(gathering.id),
-      name: gathering.name,
-      description: gathering.description,
-      dayOfWeek: gathering.day_of_week,
-      startTime: gathering.start_time,
-      durationMinutes: Number(gathering.duration_minutes),
-      frequency: gathering.frequency,
-
-      isActive: Boolean(gathering.is_active),
-      memberCount: Number(gathering.member_count),
-      recentVisitorCount: Number(gathering.recent_visitor_count || 0),
-      createdAt: gathering.created_at
-    }));
+    // Use systematic conversion utility for field name conversion and BigInt handling
+    const responseData = processApiResponse({ gatherings });
     
-    res.json({ gatherings: processedGatherings });
+    res.json(responseData);
   } catch (error) {
     console.error('Get gatherings error:', error);
     res.status(500).json({ error: 'Failed to retrieve gatherings.' });
@@ -66,20 +57,47 @@ router.get('/', async (req, res) => {
 });
 
 // Create gathering type (Admin/Coordinator)
-router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_GATHERING_TYPE'), async (req, res) => {
-  try {
-    const { name, description, dayOfWeek, startTime, durationMinutes, frequency, setAsDefault } = req.body;
+router.post('/', 
+  requireRole(['admin', 'coordinator']), 
+  auditLog('CREATE_GATHERING_TYPE'),
+  [
+    body('name')
+      .trim()
+      .isLength({ min: 1, max: 255 })
+      .withMessage('Gathering name is required and must be less than 255 characters'),
+    body('description')
+      .optional()
+      .trim(),
+    body('dayOfWeek')
+      .isIn(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'])
+      .withMessage('Valid day of week is required'),
+    body('startTime')
+      .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
+      .withMessage('Valid start time is required (HH:MM format)'),
+
+    body('frequency')
+      .isIn(['weekly', 'biweekly', 'monthly'])
+      .withMessage('Valid frequency is required')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { name, description, dayOfWeek, startTime, frequency, setAsDefault } = req.body;
     
     const result = await Database.query(`
-      INSERT INTO gathering_types (name, description, day_of_week, start_time, duration_minutes, frequency, created_by)
+      INSERT INTO gathering_types (name, description, day_of_week, start_time, frequency, created_by, church_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [name, description, dayOfWeek, startTime, durationMinutes || 90, frequency || 'weekly', req.user.id]);
+    `, [name, description, dayOfWeek, startTime, frequency || 'weekly', req.user.id, req.user.church_id]);
 
     // Auto-assign creator to the gathering
     await Database.query(`
-      INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by)
-      VALUES (?, ?, ?)
-    `, [req.user.id, result.insertId, req.user.id]);
+      INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
+      VALUES (?, ?, ?, ?)
+    `, [req.user.id, result.insertId, req.user.id, req.user.church_id]);
 
     // Set as default gathering if requested
     if (setAsDefault) {
@@ -88,13 +106,16 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_GATHERI
       `, [result.insertId, req.user.id]);
     }
 
-    res.status(201).json({ 
+    const responseData = processApiResponse({ 
       message: 'Gathering type created', 
       id: result.insertId,
       setAsDefault: !!setAsDefault
     });
+    
+    res.status(201).json(responseData);
   } catch (error) {
     console.error('Create gathering error:', error);
+    console.error('Request body:', req.body);
     res.status(500).json({ error: 'Failed to create gathering type.' });
   }
 });
@@ -103,12 +124,12 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_GATHERI
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHERING_TYPE'), async (req, res) => {
   try {
     const gatheringId = parseInt(req.params.id);
-    const { name, description, dayOfWeek, startTime, durationMinutes, frequency } = req.body;
+    const { name, description, dayOfWeek, startTime, frequency } = req.body;
     
     // Verify user has access to this gathering
     const assignments = await Database.query(
-      'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ?',
-      [req.user.id, gatheringId]
+      'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ? AND church_id = ?',
+      [req.user.id, gatheringId, req.user.church_id]
     );
 
     if (assignments.length === 0) {
@@ -117,9 +138,9 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
     
     const result = await Database.query(`
       UPDATE gathering_types 
-      SET name = ?, description = ?, day_of_week = ?, start_time = ?, duration_minutes = ?, frequency = ?
-      WHERE id = ?
-    `, [name, description, dayOfWeek, startTime, durationMinutes || 90, frequency || 'weekly', gatheringId]);
+      SET name = ?, description = ?, day_of_week = ?, start_time = ?, frequency = ?
+      WHERE id = ? AND church_id = ?
+    `, [name, description, dayOfWeek, startTime, frequency || 'weekly', gatheringId, req.user.church_id]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Gathering not found' });
@@ -145,9 +166,9 @@ router.get('/:id/members', async (req, res) => {
       FROM gathering_lists gl
       JOIN individuals i ON gl.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
-      WHERE gl.gathering_type_id = ?
+      WHERE gl.gathering_type_id = ? AND gl.church_id = ?
       ORDER BY i.last_name, i.first_name
-    `, [id]);
+    `, [id, req.user.church_id]);
     
     // Use systematic conversion utility for field name conversion and BigInt handling
     const responseData = processApiResponse({ members });
@@ -165,8 +186,8 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_GATHERING_TYPE'),
     
     // Check if gathering exists and user has permission
     const gathering = await Database.query(
-      'SELECT id FROM gathering_types WHERE id = ? AND created_by = ?',
-      [id, req.user.id]
+      'SELECT id FROM gathering_types WHERE id = ? AND created_by = ? AND church_id = ?',
+      [id, req.user.id, req.user.church_id]
     );
     
     if (gathering.length === 0) {
@@ -174,13 +195,13 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_GATHERING_TYPE'),
     }
     
     // Delete gathering lists (member associations)
-    await Database.query('DELETE FROM gathering_lists WHERE gathering_type_id = ?', [id]);
+    await Database.query('DELETE FROM gathering_lists WHERE gathering_type_id = ? AND church_id = ?', [id, req.user.church_id]);
     
     // Delete user assignments
-    await Database.query('DELETE FROM user_gathering_assignments WHERE gathering_type_id = ?', [id]);
+    await Database.query('DELETE FROM user_gathering_assignments WHERE gathering_type_id = ? AND church_id = ?', [id, req.user.church_id]);
     
     // Delete the gathering type
-    await Database.query('DELETE FROM gathering_types WHERE id = ?', [id]);
+    await Database.query('DELETE FROM gathering_types WHERE id = ? AND church_id = ?', [id, req.user.church_id]);
     
     res.json({ message: 'Gathering deleted successfully.' });
   } catch (error) {

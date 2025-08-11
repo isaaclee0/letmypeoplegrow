@@ -14,10 +14,10 @@ router.get('/', async (req, res) => {
       SELECT id, title, message, notification_type, is_read, 
              reference_type, reference_id, created_at
       FROM notifications
-      WHERE user_id = ?
+      WHERE user_id = ? AND church_id = ?
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
-    `, [req.user.id, parseInt(limit), parseInt(offset)]);
+    `, [req.user.id, req.user.church_id, parseInt(limit), parseInt(offset)]);
 
     res.json({ notifications });
   } catch (error) {
@@ -31,8 +31,8 @@ router.put('/:id/read', async (req, res) => {
   try {
     await Database.query(`
       UPDATE notifications SET is_read = true 
-      WHERE id = ? AND user_id = ?
-    `, [req.params.id, req.user.id]);
+      WHERE id = ? AND user_id = ? AND church_id = ?
+    `, [req.params.id, req.user.id, req.user.church_id]);
 
     res.json({ message: 'Notification marked as read' });
   } catch (error) {

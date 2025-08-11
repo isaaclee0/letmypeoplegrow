@@ -15,31 +15,31 @@ router.get('/test', requireRole(['admin', 'coordinator']), async (req, res) => {
     console.log('Connection test result:', connectionTest);
     
     // Check if attendance_sessions table exists and has data
-    const sessionsCount = await Database.query('SELECT COUNT(*) as count FROM attendance_sessions');
+    const sessionsCount = await Database.query('SELECT COUNT(*) as count FROM attendance_sessions WHERE church_id = ?', [req.user.church_id]);
     console.log('Attendance sessions count:', sessionsCount[0]?.count);
     
     // Check if attendance_records table exists and has data
-    const recordsCount = await Database.query('SELECT COUNT(*) as count FROM attendance_records');
+    const recordsCount = await Database.query('SELECT COUNT(*) as count FROM attendance_records WHERE church_id = ?', [req.user.church_id]);
     console.log('Attendance records count:', recordsCount[0]?.count);
     
     // Check if gathering_types table exists and has data
-    const gatheringsCount = await Database.query('SELECT COUNT(*) as count FROM gathering_types');
+    const gatheringsCount = await Database.query('SELECT COUNT(*) as count FROM gathering_types WHERE church_id = ?', [req.user.church_id]);
     console.log('Gathering types count:', gatheringsCount[0]?.count);
     
     // Check if individuals table exists and has data
-    const individualsCount = await Database.query('SELECT COUNT(*) as count FROM individuals');
+    const individualsCount = await Database.query('SELECT COUNT(*) as count FROM individuals WHERE church_id = ?', [req.user.church_id]);
     console.log('Individuals count:', individualsCount[0]?.count);
     
     // Check if families table exists and has data
-    const familiesCount = await Database.query('SELECT COUNT(*) as count FROM families');
+    const familiesCount = await Database.query('SELECT COUNT(*) as count FROM families WHERE church_id = ?', [req.user.church_id]);
     console.log('Families count:', familiesCount[0]?.count);
     
     // Test a simple query with the actual date range from the error
     const testQuery = await Database.query(`
       SELECT COUNT(*) as count 
       FROM attendance_sessions 
-      WHERE session_date >= '2025-07-03' AND session_date <= '2025-07-31'
-    `);
+      WHERE session_date >= '2025-07-03' AND session_date <= '2025-07-31' AND church_id = ?
+    `, [req.user.church_id]);
     console.log('Test query with future dates result:', testQuery[0]?.count);
     
     res.json({
@@ -98,16 +98,20 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         SELECT 
           as_table.session_date,
           as_table.gathering_type_id,
-          COUNT(DISTINCT ar.individual_id) as present_count,
           COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as present_individuals,
-          COUNT(DISTINCT CASE WHEN ar.present = false THEN ar.individual_id END) as absent_individuals
+          COUNT(DISTINCT gl.individual_id) - COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as absent_individuals,
+          COUNT(DISTINCT gl.individual_id) as total_individuals
         FROM attendance_sessions as_table
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+        LEFT JOIN gathering_lists gl ON as_table.gathering_type_id = gl.gathering_type_id
+        LEFT JOIN individuals i ON gl.individual_id = i.id
         WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+        AND i.is_active = true
+        AND as_table.church_id = ?
         ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
         GROUP BY as_table.session_date, as_table.gathering_type_id
         ORDER BY as_table.session_date DESC
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);
+      `, gatheringTypeId ? [startDate, endDate, req.user.church_id, gatheringTypeId] : [startDate, endDate, req.user.church_id]);
     } catch (err) {
       console.error('Error querying attendance data:', err);
       throw new Error(`Failed to query attendance data: ${err.message}`);
@@ -134,10 +138,11 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         const totalIndividuals = await Database.query(`
           SELECT COUNT(DISTINCT i.id) as total
           FROM individuals i
-          JOIN families f ON i.family_id = f.id
+          JOIN gathering_lists gl ON i.id = gl.individual_id
           WHERE i.is_active = true
-          ${gatheringTypeId ? 'AND f.gathering_type_id = ?' : ''}
-        `, gatheringTypeId ? [gatheringTypeId] : []);
+          AND i.church_id = ?
+          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+        `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
         
         emptyMetrics.totalIndividuals = totalIndividuals[0]?.total || 0;
       } catch (err) {
@@ -192,10 +197,11 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       totalIndividuals = await Database.query(`
         SELECT COUNT(DISTINCT i.id) as total
         FROM individuals i
-        JOIN families f ON i.family_id = f.id
+        JOIN gathering_lists gl ON i.id = gl.individual_id
         WHERE i.is_active = true
-        ${gatheringTypeId ? 'AND f.gathering_type_id = ?' : ''}
-      `, gatheringTypeId ? [gatheringTypeId] : []);
+        AND i.church_id = ?
+        ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+              `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
     } catch (err) {
       console.error('Error querying total individuals:', err);
       // Don't throw error, just use default value
@@ -203,18 +209,22 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     console.log('Total individuals:', totalIndividuals[0]?.total || 0);
 
-    // Get total visitors for the period
+    // Get total visitors for the period (unified new system only)
     console.log('Querying total visitors...');
     let totalVisitors = [{ total: 0 }];
     try {
       totalVisitors = await Database.query(`
-        SELECT COUNT(DISTINCT ar.id) as total
+        SELECT COUNT(DISTINCT ar.individual_id) as total
         FROM attendance_records ar
         JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+        JOIN individuals i ON ar.individual_id = i.id
         WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-        AND ar.visitor_name IS NOT NULL AND ar.visitor_name != ''
+        AND i.people_type IN ('local_visitor', 'traveller_visitor')
+        AND ar.present = true
         ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
       `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);
+      
+      console.log(`Total visitors found: ${totalVisitors[0]?.total || 0}`);
     } catch (err) {
       console.error('Error querying total visitors:', err);
       // Don't throw error, just use default value
@@ -260,26 +270,22 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     
     // Validate date parameters
     if (!startDate || !endDate) {
+      console.log('Missing date parameters');
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
     
-    // Get detailed attendance data for export
+    console.log('Executing database query for export...');
+    
+    // Query that works with the actual database schema
     const exportData = await Database.query(`
       SELECT 
         as_table.session_date,
         gt.name as gathering_name,
-        i.first_name,
-        i.last_name,
-        f.family_name,
-        ar.present,
-        ar.visitor_name,
-        ar.visitor_type,
-        ar.notes,
-        CASE 
-          WHEN ar.individual_id IS NOT NULL THEN 'Regular Member'
-          WHEN ar.visitor_name IS NOT NULL AND ar.visitor_name != '' THEN 'Visitor'
-          ELSE 'Unknown'
-        END as attendee_type
+        COALESCE(i.first_name, '') as first_name,
+        COALESCE(i.last_name, '') as last_name,
+        COALESCE(f.family_name, '') as family_name,
+        COALESCE(ar.present, 0) as present,
+        'Regular Member' as attendee_type
       FROM attendance_sessions as_table
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
@@ -290,41 +296,58 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
       ORDER BY as_table.session_date DESC, f.family_name, i.last_name, i.first_name
     `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);
 
+    console.log(`Export query returned ${exportData.length} rows`);
+
     // Helper function to format date as DD-MM-YYYY
     const formatDate = (dateString) => {
       if (!dateString) return '';
-      const date = new Date(dateString);
-      const day = String(date.getDate()).padStart(2, '0');
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const year = date.getFullYear();
-      return `${day}-${month}-${year}`;
+      try {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return '';
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}-${month}-${year}`;
+      } catch (error) {
+        console.error('Date formatting error:', error);
+        return '';
+      }
     };
 
-    // Convert to CSV format
-    const csvHeaders = ['Date', 'Gathering', 'First Name', 'Last Name', 'Family', 'Present', 'Attendee Type', 'Visitor Name', 'Visitor Type', 'Notes'];
-    const csvRows = exportData.map(row => [
-      formatDate(row.session_date),
-      row.gathering_name,
-      row.first_name || '',
-      row.last_name || '',
-      row.family_name || '',
-      row.present ? 'Yes' : 'No',
-      row.attendee_type,
-      row.attendee_type === 'Visitor' ? (row.visitor_name || '') : '',
-      row.attendee_type === 'Visitor' ? (row.visitor_type || '') : '',
-      row.notes || ''
-    ]);
+    // Convert to CSV format with better error handling
+    const csvHeaders = ['Date', 'Gathering', 'First Name', 'Last Name', 'Family', 'Present', 'Attendee Type'];
+    const csvRows = exportData.map(row => {
+      try {
+        return [
+          formatDate(row.session_date),
+          row.gathering_name || '',
+          row.first_name || '',
+          row.last_name || '',
+          row.family_name || '',
+          row.present ? 'Yes' : 'No',
+          row.attendee_type || 'Regular Member'
+        ];
+      } catch (error) {
+        console.error('Error processing row:', error, row);
+        return ['', '', '', '', '', 'No', 'Error'];
+      }
+    });
 
     const csvContent = [csvHeaders, ...csvRows]
-      .map(row => row.map(field => `"${field}"`).join(','))
+      .map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
       .join('\n');
+
+    console.log(`Generated CSV with ${csvRows.length} data rows`);
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.csv"');
     res.send(csvContent);
     
+    console.log('Export completed successfully');
+    
   } catch (error) {
     console.error('Export data error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ error: 'Failed to export data.' });
   }
 });

@@ -37,7 +37,7 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3001
-      CLIENT_URL: http://church_attendance_client_dev:3003
+      CLIENT_URL: http://localhost:3000
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: church_attendance
@@ -60,7 +60,6 @@ services:
         condition: service_healthy
     networks:
       - app-network-dev
-      - npm_proxy
     command: npm run dev
 
   # React Frontend Client (Development)
@@ -71,32 +70,64 @@ services:
     container_name: church_attendance_client_dev
     restart: unless-stopped
     ports:
-      - "3003:3003"
+      - "3000:3000"
     volumes:
       - ./client:/app
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
-      - PORT=3003
+      - PORT=3000
       - FAST_REFRESH=false
       - WDS_SOCKET_HOST=localhost
       - WDS_SOCKET_PORT=0
       - WDS_SOCKET_PATH=
       - WDS_SOCKET_PROTOCOL=
-
     depends_on:
       - server
     networks:
       - app-network-dev
-      - npm_proxy
     command: npm start
+
+  # Nginx for API routing (Development)
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx.dev
+    container_name: church_attendance_nginx_dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx-dev.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - client
+      - server
+    networks:
+      - app-network-dev
+
+  # phpMyAdmin (Development)
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: church_attendance_phpmyadmin_dev
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: church_user
+      PMA_PASSWORD: church_password
+      UPLOAD_LIMIT: 256M
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network-dev
 
 volumes:
   db_data_dev:
 
 networks:
   app-network-dev:
-    driver: bridge
-  npm_proxy:
-    external: true 
+    driver: bridge 

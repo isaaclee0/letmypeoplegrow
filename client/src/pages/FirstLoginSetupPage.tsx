@@ -42,12 +42,8 @@ const FirstLoginSetupPage: React.FC = () => {
       };
       localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
       
-      // Redirect attendance takers directly to attendance page
-      if (user?.role === 'attendance_taker') {
-        navigate('/app/attendance');
-      } else {
-        navigate('/app/dashboard');
-      }
+      // Redirect to attendance
+      navigate('/app/attendance');
 
     } catch (err: any) {
       setError('Failed to save your preference');
@@ -57,12 +53,8 @@ const FirstLoginSetupPage: React.FC = () => {
   };
 
   const handleSkip = () => {
-    // Redirect attendance takers directly to attendance page
-    if (user?.role === 'attendance_taker') {
-      navigate('/app/attendance');
-    } else {
-      navigate('/app/dashboard');
-    }
+    // Redirect to attendance
+    navigate('/app/attendance');
   };
 
   if (!user) {

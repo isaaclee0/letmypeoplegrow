@@ -55,23 +55,24 @@ const loadRoutes = () => {
   const routeFiles = [
     'auth', 'users', 'gatherings', 'families', 'individuals', 
     'attendance', 'reports', 'notifications', 'onboarding', 
-    'invitations', 'csv-import', 'migrations', 'test', 
-    'notification_rules', 'importrange', 'settings', 'activities'
+    'invitations', 'csv-import', 'migrations', 'advancedMigrations', 'test', 
+    'notification_rules', 
+    // 'importrange', // Disabled - external data access feature
+    'settings', 'activities'
   ];
 
-  // Check external service availability
+  // Check external service availability - Twilio temporarily disabled
   const externalServices = {
-    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
-               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    twilio: false, // Temporarily disabled
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
   // Log service status
   console.log('🔧 External Services Status:');
-  console.log(`   📱 Twilio SMS: ${externalServices.twilio ? '✅ Available' : '❌ Not configured'}`);
+  console.log(`   📱 Twilio SMS: ❌ Temporarily disabled`);
   console.log(`   📧 Brevo Email: ${externalServices.brevo ? '✅ Available' : '❌ Not configured'}`);
   
-  if (!externalServices.twilio && !externalServices.brevo) {
+  if (!externalServices.brevo) {
     console.log('⚠️  WARNING: No external services configured. Authentication will be limited to development mode.');
   }
 
@@ -204,6 +205,37 @@ try {
   console.warn('Security middleware failed, continuing without it:', error.message);
 }
 
+// Church isolation middleware - ensure proper data isolation between churches
+try {
+  const { ensureChurchIsolation, addChurchContext } = require('./middleware/churchIsolation');
+  // Note: Church isolation middleware should be applied at the route level after authentication
+  // app.use('/api', ensureChurchIsolation); // Removed - causes issues with auth routes
+  app.use('/api', addChurchContext);
+  console.log('✅ Church isolation middleware loaded');
+} catch (error) {
+  console.warn('Church isolation middleware failed, continuing without it:', error.message);
+}
+
+// Global rate limiting - protect against general API abuse
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: process.env.NODE_ENV === 'development' ? 1000 : 100, // More lenient in development
+  message: { 
+    error: 'Too many requests from this IP, please try again later.',
+    retryAfter: '15 minutes'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Skip successful requests to avoid penalizing normal usage
+  skipSuccessfulRequests: true,
+  // Custom key generator to include user ID if available
+  keyGenerator: (req) => {
+    return req.user?.id ? `${req.ip}_${req.user.id}` : req.ip;
+  }
+});
+
+app.use('/api', globalLimiter);
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ 
@@ -235,12 +267,11 @@ app.get('/health/db', async (req, res) => {
 // Service status endpoint
 app.get('/health/services', (req, res) => {
   const externalServices = {
-    twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
-               process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+    twilio: false, // Temporarily disabled
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
-  const hasAnyService = externalServices.twilio || externalServices.brevo;
+  const hasAnyService = externalServices.brevo; // Only email service available
 
   res.status(200).json({
     status: hasAnyService ? 'partial' : 'limited',
@@ -248,14 +279,14 @@ app.get('/health/services', (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     features: {
       authentication: hasAnyService || process.env.NODE_ENV === 'development',
-      sms: externalServices.twilio,
+      sms: false, // Temporarily disabled
       email: externalServices.brevo,
       development: process.env.NODE_ENV === 'development'
     },
     notes: !hasAnyService ? [
       'No external services configured',
       'Authentication limited to development mode',
-      'Configure Twilio and/or Brevo API keys for full functionality'
+      'Configure Brevo API keys for email functionality'
     ] : []
   });
 });
@@ -293,9 +324,17 @@ app.get('/cors-test', (req, res) => {
 const routes = loadRoutes();
 
 // API routes with error handling
+// Convert route names like advancedMigrations -> advanced-migrations and notification_rules -> notification-rules
+const toKebabCase = (name) => name
+  .replace(/_/g, '-')
+  .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+  .toLowerCase();
+
 Object.entries(routes).forEach(([name, router]) => {
   try {
-    app.use(`/api/${name.replace('_', '-')}`, router);
+    const mountPath = `/api/${toKebabCase(name)}`;
+    app.use(mountPath, router);
+    console.log(`🔗 Mounted route '${name}' at '${mountPath}'`);
   } catch (error) {
     console.warn(`Failed to apply route ${name}:`, error.message);
   }

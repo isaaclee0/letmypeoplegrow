@@ -35,6 +35,9 @@ module.exports = {
         sans: ['Lato', 'ui-sans-serif', 'system-ui'],
         title: ['Montserrat', 'ui-sans-serif', 'system-ui'],
       },
+      padding: {
+        'safe': 'env(safe-area-inset-bottom)',
+      },
     },
   },
   plugins: [

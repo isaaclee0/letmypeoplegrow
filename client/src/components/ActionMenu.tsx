@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { CogIcon } from '@heroicons/react/24/outline';
+import { PencilIcon } from '@heroicons/react/24/outline';
 
 interface ActionMenuItem {
   label: string;
@@ -45,7 +45,7 @@ const ActionMenu: React.FC<ActionMenuProps> = ({ items, className = '' }) => {
         className="p-1 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 rounded"
         title="More actions"
       >
-        <CogIcon className="h-5 w-5" />
+        <PencilIcon className="h-5 w-5" />
       </button>
 
       {isOpen && (

@@ -99,7 +99,7 @@ const createTables = async () => {
         description TEXT,
         day_of_week ENUM('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'),
         start_time TIME,
-        duration_minutes INT DEFAULT 90,
+      
         frequency ENUM('weekly', 'biweekly', 'monthly') DEFAULT 'weekly',
         group_by_family BOOLEAN DEFAULT true,
         is_active BOOLEAN DEFAULT true,

@@ -14,7 +14,7 @@ import {
   UsersIcon,
   XMarkIcon,
   WrenchScrewdriverIcon,
-  Cog6ToothIcon,
+  PencilIcon,
   ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 
@@ -26,9 +26,8 @@ const Layout: React.FC = () => {
 
   const navigation = user?.role === 'attendance_taker' ? [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
-    { name: 'Settings', href: '/app/settings', icon: Cog6ToothIcon },
+    // { name: 'Settings', href: '/app/settings', icon: PencilIcon }, // Temporarily hidden
   ] : [
-    { name: 'Dashboard', href: '/app/dashboard', icon: HomeIcon },
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
     { name: 'People', href: '/app/people', icon: UsersIcon },
     { name: 'Gatherings', href: '/app/gatherings', icon: UserGroupIcon },
@@ -39,7 +38,7 @@ const Layout: React.FC = () => {
     ...(user?.role === 'admin' ? [
       { name: 'Migrations', href: '/app/migrations', icon: WrenchScrewdriverIcon }
     ] : []),
-    { name: 'Settings', href: '/app/settings', icon: Cog6ToothIcon },
+    // { name: 'Settings', href: '/app/settings', icon: PencilIcon }, // Temporarily hidden
   ];
 
   const handleLogout = async () => {
@@ -205,7 +204,7 @@ const Layout: React.FC = () => {
                 <div className="relative w-full text-gray-400 focus-within:text-gray-600">
                   <div className="absolute inset-y-0 left-0 flex items-center">
                     <h2 className="text-lg font-bold text-primary-700 ml-2 font-title">
-                      {navigation.find(item => item.href === location.pathname)?.name || 'Dashboard'}
+                      {navigation.find(item => item.href === location.pathname)?.name || 'Attendance'}
                     </h2>
                   </div>
                 </div>
