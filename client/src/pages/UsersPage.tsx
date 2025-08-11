@@ -604,7 +604,7 @@ const UsersPage: React.FC = () => {
       {/* Floating Add Button */}
       <button
         onClick={() => setShowInviteModal(true)}
-        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
+        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-lg bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
         aria-label="Invite User"
       >
         <PlusIcon className="h-7 w-7" />
