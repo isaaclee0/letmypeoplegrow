@@ -108,6 +108,13 @@ const AttendancePage: React.FC = () => {
     }
   };
 
+  // Lock edits for attendance takers if selected date is 14+ days in the past
+  const isAttendanceLocked = useMemo(() => {
+    if (user?.role !== 'attendance_taker' || !selectedDate) return false;
+    const status = getDateStatus(selectedDate);
+    return status.type === 'past' && status.daysDiff >= 14;
+  }, [user?.role, selectedDate]);
+
   const handleGroupByFamilyChange = useCallback((checked: boolean) => {
     setGroupByFamily(checked);
     // Save the setting for this gathering with improved localStorage handling
@@ -427,6 +434,7 @@ const AttendancePage: React.FC = () => {
 
   // Function to quickly add a recent visitor
   const quickAddRecentVisitor = async (recentVisitor: Visitor) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     if (!selectedGathering) return;
     
     try {
@@ -476,6 +484,7 @@ const AttendancePage: React.FC = () => {
   const pendingWritesRef = useRef<Map<number, Promise<void>>>(new Map());
 
   const toggleAttendance = async (individualId: number) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     const now = Date.now();
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
     // Compute new present using refs to avoid stale state reads
@@ -510,6 +519,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const toggleAllFamily = async (familyId: number) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     console.log('Toggling all family attendance for family:', familyId);
     // Count how many family members are currently present
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
@@ -641,6 +651,7 @@ const AttendancePage: React.FC = () => {
 
   // Handle add visitor
   const handleAddVisitor = async () => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     // Set default person type based on user role
     const defaultPersonType = user?.role === 'admin' || user?.role === 'coordinator' ? 'local_visitor' : 'local_visitor';
     setVisitorForm({
@@ -658,6 +669,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleEditVisitor = (visitor: Visitor) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     // Find ALL visitors in the same family group (including the clicked visitor)
     const familyMembers = visitor.visitorFamilyGroup 
       ? visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup)
@@ -686,6 +698,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleDeleteVisitor = (visitor: Visitor, deleteFamily: boolean = false) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     const confirmMessage = deleteFamily 
       ? `Are you sure you want to delete the entire visitor family? This cannot be undone.`
       : `Are you sure you want to delete ${visitor.name}? This cannot be undone.`;
@@ -699,6 +712,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const confirmDeleteVisitor = async () => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     if (!selectedGathering || !deleteConfirmation.visitor) return;
 
     try {
@@ -800,6 +814,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleSubmitVisitor = async () => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     if (!selectedGathering) return;
     
     try {
@@ -885,6 +900,7 @@ const AttendancePage: React.FC = () => {
   };
 
   const handleSubmitEditVisitor = async () => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     if (!selectedGathering || !editingVisitor) return;
     
     try {
@@ -1099,6 +1115,7 @@ const AttendancePage: React.FC = () => {
 
   // Add toggle function for visitors
   const toggleVisitorAttendance = (visitorId: number) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     setVisitorAttendance(prev => ({
       ...prev,
       [visitorId]: !prev[visitorId]
@@ -1107,6 +1124,7 @@ const AttendancePage: React.FC = () => {
 
   // Add toggle all family function for visitors
   const toggleAllVisitorFamily = (familyGroup: number | string) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
     const familyVisitorIds = familyVisitors.map(visitor => visitor.id).filter((id): id is number => id !== undefined);
     
@@ -1327,6 +1345,11 @@ const AttendancePage: React.FC = () => {
       {selectedGathering && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
+            {isAttendanceLocked && (
+              <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
+                Editing is locked for attendance takers for services older than 2 weeks.
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">
@@ -1646,7 +1669,8 @@ const AttendancePage: React.FC = () => {
                         </h4>
                         <button
                           onClick={() => toggleAllFamily(group.family_id)}
-                          className="text-sm text-primary-600 hover:text-primary-700"
+                          disabled={isAttendanceLocked}
+                          className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
                         >
                           {(() => {
                             const familyMembers = attendanceList.filter(person => person.familyId === group.family_id);
@@ -1682,7 +1706,7 @@ const AttendancePage: React.FC = () => {
                               checked={Boolean(isPresent)}
                               onChange={() => toggleAttendance(person.id)}
                               className="sr-only"
-                              disabled={isSaving}
+                              disabled={isSaving || isAttendanceLocked}
                             />
                             <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                               isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
@@ -1745,23 +1769,25 @@ const AttendancePage: React.FC = () => {
                           {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
                         </span>
                         <button
+                          disabled={isAttendanceLocked}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             handleEditVisitor(group.members[0]);
                           }}
-                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                          className={`p-1 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
                           title="Edit"
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
                         <button
+                          disabled={isAttendanceLocked}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             handleDeleteVisitor(group.members[0], group.members.length > 1);
                           }}
-                          className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                          className={`p-1 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600'} transition-colors`}
                           title="Delete"
                         >
                           <TrashIcon className="h-4 w-4" />
@@ -1770,7 +1796,8 @@ const AttendancePage: React.FC = () => {
                       {group.members.length > 1 && (
                         <button
                           onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup || group.members[0].id)}
-                          className="text-sm text-primary-600 hover:text-primary-700"
+                          disabled={isAttendanceLocked}
+                          className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
                         >
                           {(() => {
                             const familyVisitors = group.members;
@@ -1813,6 +1840,7 @@ const AttendancePage: React.FC = () => {
                             checked={Boolean(isPresent)}
                             onChange={() => person.id && toggleVisitorAttendance(person.id)}
                             className="sr-only"
+                            disabled={isAttendanceLocked}
                           />
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                             isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
@@ -1836,23 +1864,25 @@ const AttendancePage: React.FC = () => {
                                   {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
                                 </span>
                                 <button
+                                  disabled={isAttendanceLocked}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     handleEditVisitor(person);
                                   }}
-                                  className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                                  className={`p-0.5 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
                                   title="Edit visitor"
                                 >
                                   <PencilIcon className="h-3 w-3" />
                                 </button>
                                 <button
+                                  disabled={isAttendanceLocked}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
                                     handleDeleteVisitor(person, false);
                                   }}
-                                  className="p-0.5 text-gray-400 hover:text-red-600 transition-colors"
+                                  className={`p-0.5 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600'} transition-colors`}
                                   title="Delete visitor"
                                 >
                                   <TrashIcon className="h-3 w-3" />
@@ -1874,7 +1904,8 @@ const AttendancePage: React.FC = () => {
       {/* Floating Add Visitor Button */}
       <button
         onClick={handleAddVisitor}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50"
+        disabled={isAttendanceLocked}
+        className={`fixed bottom-6 right-6 w-14 h-14 ${isAttendanceLocked ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700'} text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50`}
       >
         <PlusIcon className="h-6 w-6" />
       </button>
