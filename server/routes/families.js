@@ -48,7 +48,7 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_FAMILY'
       VALUES (?, ?, ?)
     `, [familyName, req.user.id, req.user.church_id]);
 
-    res.status(201).json({ message: 'Family created', id: result.insertId });
+    res.status(201).json({ message: 'Family created', id: Number(result.insertId) });
   } catch (error) {
     console.error('Create family error:', error);
     res.status(500).json({ error: 'Failed to create family.' });
