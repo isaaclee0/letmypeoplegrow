@@ -111,7 +111,7 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
       FROM users u
       LEFT JOIN user_gathering_assignments uga 
         ON u.id = uga.user_id AND uga.church_id = u.church_id
-      WHERE u.church_id = ?
+      WHERE u.church_id = ? AND u.is_active = true
     `;
     
     let params = [req.user.church_id];
@@ -119,7 +119,7 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
     // Coordinators can only see users they have access to (same gatherings)
     if (req.user.role === 'coordinator') {
       query += `
-        AND u.id IN (
+        AND (u.id IN (
           SELECT DISTINCT uga2.user_id 
           FROM user_gathering_assignments uga2
           WHERE uga2.gathering_type_id IN (
@@ -127,7 +127,7 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
             FROM user_gathering_assignments 
             WHERE user_id = ?
           )
-        ) OR u.id = ?
+        ) OR u.id = ?)
       `;
       params.push(req.user.id, req.user.id);
     }
