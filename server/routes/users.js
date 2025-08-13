@@ -6,6 +6,96 @@ const { getChurchCountry, validatePhoneNumber, getInternationalFormat } = requir
 const { processApiResponse } = require('../utils/caseConverter');
 
 const router = express.Router();
+// Update current user's own profile (any authenticated user)
+router.put('/me', 
+  verifyToken,
+  [
+    body('firstName').optional().trim().isLength({ min: 1 }).withMessage('First name cannot be empty'),
+    body('lastName').optional().trim().isLength({ min: 1 }).withMessage('Last name cannot be empty'),
+    body('email')
+      .optional({ nullable: true })
+      .custom((value) => {
+        if (value === null || value === '') return true;
+        return /[^\s@]+@[^\s@]+\.[^\s@]+/.test(value);
+      }).withMessage('Please provide a valid email address'),
+    body('mobileNumber')
+      .optional({ nullable: true })
+      .custom(async (value) => {
+        if (!value) return true;
+        const countryCode = await getChurchCountry();
+        if (!validatePhoneNumber(value, countryCode)) {
+          throw new Error(`Please provide a valid phone number for ${countryCode}`);
+        }
+        return true;
+      }),
+    body('primaryContactMethod')
+      .optional()
+      .isIn(['email', 'sms'])
+      .withMessage('Invalid primary contact method'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userId = req.user.id;
+      let { firstName, lastName, email, mobileNumber, primaryContactMethod } = req.body;
+
+      // Normalize mobile number if provided
+      let normalizedMobile = undefined;
+      if (mobileNumber !== undefined) {
+        if (mobileNumber === null || mobileNumber === '') {
+          normalizedMobile = null;
+        } else {
+          const countryCode = await getChurchCountry();
+          normalizedMobile = getInternationalFormat(mobileNumber, countryCode);
+          if (!normalizedMobile) {
+            return res.status(400).json({ error: `Invalid mobile number format for ${await getChurchCountry()}` });
+          }
+        }
+      }
+
+      // Duplicate checks (exclude current user)
+      const duplicateChecks = [];
+      if (email !== undefined && email !== null && email !== '') {
+        duplicateChecks.push(Database.query('SELECT id FROM users WHERE email = ? AND church_id = ? AND id != ?', [email, req.user.church_id, userId]));
+      }
+      if (normalizedMobile !== undefined && normalizedMobile !== null) {
+        duplicateChecks.push(Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ? AND id != ?', [normalizedMobile, req.user.church_id, userId]));
+      }
+      const duplicateResults = await Promise.all(duplicateChecks);
+      if (duplicateResults.some(result => result.length > 0)) {
+        return res.status(409).json({ error: 'Email or mobile number already exists' });
+      }
+
+      // Build update
+      const updateFields = [];
+      const updateValues = [];
+      if (firstName !== undefined) { updateFields.push('first_name = ?'); updateValues.push(firstName); }
+      if (lastName !== undefined) { updateFields.push('last_name = ?'); updateValues.push(lastName); }
+      if (email !== undefined) { updateFields.push('email = ?'); updateValues.push(email === '' ? null : email); }
+      if (normalizedMobile !== undefined) { updateFields.push('mobile_number = ?'); updateValues.push(normalizedMobile); }
+      if (primaryContactMethod !== undefined) { updateFields.push('primary_contact_method = ?'); updateValues.push(primaryContactMethod); }
+      if (updateFields.length === 0) {
+        return res.status(400).json({ error: 'No fields to update' });
+      }
+      updateFields.push('updated_at = NOW()');
+      updateValues.push(userId);
+
+      await Database.query(`
+        UPDATE users SET ${updateFields.join(', ')}
+        WHERE id = ?
+      `, updateValues);
+
+      return res.json({ message: 'Profile updated successfully' });
+    } catch (error) {
+      console.error('Update profile (me) error:', error);
+      res.status(500).json({ error: 'Failed to update profile.' });
+    }
+  }
+);
 
 // All routes require authentication
 router.use(verifyToken);
@@ -16,10 +106,11 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
     let query = `
       SELECT u.id, u.email, u.mobile_number, u.primary_contact_method, u.role, 
              u.first_name, u.last_name, u.is_active, u.is_invited, u.first_login_completed,
-             u.email_notifications, u.sms_notifications, u.notification_frequency, u.created_at,
+             u.email_notifications, u.sms_notifications, u.notification_frequency, u.created_at, u.last_login_at,
              COUNT(DISTINCT uga.gathering_type_id) as gathering_count
       FROM users u
-      LEFT JOIN user_gathering_assignments uga ON u.id = uga.user_id
+      LEFT JOIN user_gathering_assignments uga 
+        ON u.id = uga.user_id AND uga.church_id = u.church_id
       WHERE u.church_id = ?
     `;
     
@@ -104,9 +195,9 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
       FROM user_gathering_assignments uga
       JOIN gathering_types gt ON uga.gathering_type_id = gt.id
       LEFT JOIN users u ON uga.assigned_by = u.id
-      WHERE uga.user_id = ? AND gt.is_active = true
+      WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
       ORDER BY gt.name
-    `, [id]);
+    `, [id, req.user.church_id, req.user.church_id]);
 
     // Use systematic conversion utility for consistent field naming
     const responseData = processApiResponse({
@@ -147,8 +238,9 @@ router.post('/',
         return true;
       }),
     body('primaryContactMethod')
-      .isIn(['email']) // SMS temporarily disabled
-      .withMessage('Primary contact method must be email'),
+      .optional()
+      .isIn(['email', 'sms'])
+      .withMessage('Primary contact method must be email or sms'),
     body('role')
       .isIn(['coordinator', 'attendance_taker'])
       .withMessage('Invalid role'),
@@ -180,14 +272,13 @@ router.post('/',
         return res.status(400).json({ error: 'Either email or mobile number must be provided' });
       }
 
-      // Validate that primary contact method matches available contact info
+      // If primary method provided, ensure corresponding contact exists
       if (primaryContactMethod === 'email' && !email) {
         return res.status(400).json({ error: 'Email is required when primary contact method is email' });
       }
-      // SMS functionality temporarily disabled
-      // if (primaryContactMethod === 'sms' && !mobileNumber) {
-      //   return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
-      // }
+      if (primaryContactMethod === 'sms' && !mobileNumber) {
+        return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
+      }
 
       // Normalize mobile number if provided
       let normalizedMobile = null;
@@ -260,6 +351,27 @@ router.put('/:id',
       .optional()
       .isIn(['admin', 'coordinator', 'attendance_taker'])
       .withMessage('Invalid role'),
+    body('email')
+      .optional({ nullable: true })
+      .custom((value) => {
+        if (value === null || value === '') return true; // allow clearing
+        return /[^\s@]+@[^\s@]+\.[^\s@]+/.test(value);
+      })
+      .withMessage('Please provide a valid email address'),
+    body('mobileNumber')
+      .optional({ nullable: true })
+      .custom(async (value) => {
+        if (!value) return true; // allow clearing
+        const countryCode = await getChurchCountry();
+        if (!validatePhoneNumber(value, countryCode)) {
+          throw new Error(`Please provide a valid phone number for ${countryCode}`);
+        }
+        return true;
+      }),
+    body('primaryContactMethod')
+      .optional()
+      .isIn(['email', 'sms'])
+      .withMessage('Invalid primary contact method'),
     body('firstName')
       .optional()
       .trim()
@@ -296,6 +408,7 @@ router.put('/:id',
 
       const { id } = req.params;
       const { role, firstName, lastName, isActive, emailNotifications, smsNotifications, notificationFrequency } = req.body;
+      let { email, mobileNumber, primaryContactMethod } = req.body;
 
       // Check if coordinator has access to this user
       if (req.user.role === 'coordinator' && parseInt(id) !== req.user.id) {
@@ -316,6 +429,33 @@ router.put('/:id',
         return res.status(403).json({ error: 'Coordinators cannot assign admin role' });
       }
 
+      // Normalize mobile number if provided
+      let normalizedMobile = undefined;
+      if (mobileNumber !== undefined) {
+        if (mobileNumber === null || mobileNumber === '') {
+          normalizedMobile = null;
+        } else {
+          const countryCode = await getChurchCountry();
+          normalizedMobile = getInternationalFormat(mobileNumber, countryCode);
+          if (!normalizedMobile) {
+            return res.status(400).json({ error: `Invalid mobile number format for ${await getChurchCountry()}` });
+          }
+        }
+      }
+
+      // Duplicate checks (exclude current user)
+      const duplicateChecks = [];
+      if (email !== undefined && email !== null && email !== '') {
+        duplicateChecks.push(Database.query('SELECT id FROM users WHERE email = ? AND church_id = ? AND id != ?', [email, req.user.church_id, id]));
+      }
+      if (normalizedMobile !== undefined && normalizedMobile !== null) {
+        duplicateChecks.push(Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ? AND id != ?', [normalizedMobile, req.user.church_id, id]));
+      }
+      const duplicateResults = await Promise.all(duplicateChecks);
+      if (duplicateResults.some(result => result.length > 0)) {
+        return res.status(409).json({ error: 'Email or mobile number already exists' });
+      }
+
       // Build update query dynamically
       const updateFields = [];
       const updateValues = [];
@@ -323,6 +463,19 @@ router.put('/:id',
       if (role !== undefined) {
         updateFields.push('role = ?');
         updateValues.push(role);
+      }
+      if (email !== undefined) {
+        // Treat empty string as NULL to clear the field
+        updateFields.push('email = ?');
+        updateValues.push(email === '' ? null : email);
+      }
+      if (normalizedMobile !== undefined) {
+        updateFields.push('mobile_number = ?');
+        updateValues.push(normalizedMobile);
+      }
+      if (primaryContactMethod !== undefined) {
+        updateFields.push('primary_contact_method = ?');
+        updateValues.push(primaryContactMethod);
       }
       if (firstName !== undefined) {
         updateFields.push('first_name = ?');
@@ -436,8 +589,8 @@ router.post('/:userId/gatherings',
 
       // Verify user exists
       const users = await Database.query(
-        'SELECT id, email, first_name, last_name FROM users WHERE id = ?',
-        [userId]
+        'SELECT id, email, first_name, last_name FROM users WHERE id = ? AND church_id = ?',
+        [userId, req.user.church_id]
       );
 
       if (users.length === 0) {
@@ -451,28 +604,36 @@ router.post('/:userId/gatherings',
         const hasAccess = await Database.query(`
           SELECT 1 FROM user_gathering_assignments uga1
           JOIN user_gathering_assignments uga2 ON uga1.gathering_type_id = uga2.gathering_type_id
-          WHERE uga1.user_id = ? AND uga2.user_id = ?
+          WHERE uga1.user_id = ? AND uga2.user_id = ? AND uga1.church_id = ? AND uga2.church_id = ?
           LIMIT 1
-        `, [req.user.id, userId]);
+        `, [req.user.id, userId, req.user.church_id, req.user.church_id]);
 
         if (hasAccess.length === 0) {
           return res.status(403).json({ error: 'Access denied to this user' });
         }
       }
 
-      // Get available gatherings for this user
+      // Get available gatherings the acting user can assign
       let availableGatherings;
       if (req.user.role === 'coordinator') {
-        availableGatherings = await Database.query(`
-          SELECT gt.id, gt.name 
-          FROM gathering_types gt
-          JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-          WHERE uga.user_id = ? AND gt.is_active = true
-        `, [req.user.id]);
+        if (parseInt(userId) === req.user.id) {
+          // Coordinators can associate themselves with any active gathering in their church
+          availableGatherings = await Database.query(`
+            SELECT id, name FROM gathering_types WHERE is_active = true AND church_id = ?
+          `, [req.user.church_id]);
+        } else {
+          // Coordinators can only manage users where they share gatherings (within the same church)
+          availableGatherings = await Database.query(`
+            SELECT gt.id, gt.name 
+            FROM gathering_types gt
+            JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
+            WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+          `, [req.user.id, req.user.church_id, req.user.church_id]);
+        }
       } else {
         availableGatherings = await Database.query(`
-          SELECT id, name FROM gathering_types WHERE is_active = true
-        `);
+          SELECT id, name FROM gathering_types WHERE is_active = true AND church_id = ?
+        `, [req.user.church_id]);
       }
 
       const availableGatheringIds = availableGatherings.map(g => g.id);
@@ -487,16 +648,16 @@ router.post('/:userId/gatherings',
 
       // Remove existing assignments for this user
       await Database.query(
-        'DELETE FROM user_gathering_assignments WHERE user_id = ?',
-        [userId]
+        'DELETE FROM user_gathering_assignments WHERE user_id = ? AND church_id = ?',
+        [userId, req.user.church_id]
       );
 
       // Add new assignments
       for (const gatheringId of gatheringIds) {
         await Database.query(`
-          INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by)
-          VALUES (?, ?, ?)
-        `, [userId, gatheringId, req.user.id]);
+          INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [userId, gatheringId, req.user.id, req.user.church_id]);
       }
 
       // Mark first login as completed if user now has assignments
@@ -522,13 +683,13 @@ router.get('/:userId/gatherings',
   requireRole(['admin', 'coordinator']),
   async (req, res) => {
     try {
-      const { userId } = req.params;
+    const { userId } = req.params;
 
       // Verify user exists
-      const users = await Database.query(
-        'SELECT id, email, first_name, last_name FROM users WHERE id = ?',
-        [userId]
-      );
+    const users = await Database.query(
+      'SELECT id, email, first_name, last_name FROM users WHERE id = ? AND church_id = ?',
+      [userId, req.user.church_id]
+    );
 
       if (users.length === 0) {
         return res.status(404).json({ error: 'User not found' });
@@ -539,9 +700,9 @@ router.get('/:userId/gatherings',
         const hasAccess = await Database.query(`
           SELECT 1 FROM user_gathering_assignments uga1
           JOIN user_gathering_assignments uga2 ON uga1.gathering_type_id = uga2.gathering_type_id
-          WHERE uga1.user_id = ? AND uga2.user_id = ?
+          WHERE uga1.user_id = ? AND uga2.user_id = ? AND uga1.church_id = ? AND uga2.church_id = ?
           LIMIT 1
-        `, [req.user.id, userId]);
+        `, [req.user.id, userId, req.user.church_id, req.user.church_id]);
 
         if (hasAccess.length === 0) {
           return res.status(403).json({ error: 'Access denied to this user' });
@@ -555,27 +716,37 @@ router.get('/:userId/gatherings',
         FROM user_gathering_assignments uga
         JOIN gathering_types gt ON uga.gathering_type_id = gt.id
         LEFT JOIN users u ON uga.assigned_by = u.id
-        WHERE uga.user_id = ? AND gt.is_active = true
+        WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
         ORDER BY gt.name
-      `, [userId]);
+      `, [userId, req.user.church_id, req.user.church_id]);
 
       // Get available gatherings for assignment
       let availableGatherings;
       if (req.user.role === 'coordinator') {
-        availableGatherings = await Database.query(`
-          SELECT gt.id, gt.name, gt.description
-          FROM gathering_types gt
-          JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-          WHERE uga.user_id = ? AND gt.is_active = true
-          ORDER BY gt.name
-        `, [req.user.id]);
+        if (parseInt(userId) === req.user.id) {
+          // Coordinators can assign themselves to any active gathering in their church
+          availableGatherings = await Database.query(`
+            SELECT id, name, description
+            FROM gathering_types 
+            WHERE is_active = true AND church_id = ?
+            ORDER BY name
+          `, [req.user.church_id]);
+        } else {
+          availableGatherings = await Database.query(`
+            SELECT gt.id, gt.name, gt.description
+            FROM gathering_types gt
+            JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
+            WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+            ORDER BY gt.name
+          `, [req.user.id, req.user.church_id, req.user.church_id]);
+        }
       } else {
         availableGatherings = await Database.query(`
           SELECT id, name, description
           FROM gathering_types 
-          WHERE is_active = true
+          WHERE is_active = true AND church_id = ?
           ORDER BY name
-        `);
+        `, [req.user.church_id]);
       }
 
       res.json({

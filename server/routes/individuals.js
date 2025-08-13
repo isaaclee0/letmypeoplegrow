@@ -111,12 +111,35 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
         }
       }
       
-      // Soft delete the duplicate individuals
+      // Permanently delete duplicate individuals (data preserved via merge)
+      // Remove gathering assignments first to satisfy FK constraints
       await conn.query(`
-        UPDATE individuals
-        SET is_active = false, updated_at = NOW()
-        WHERE id IN (?)
-      `, [deleteIds]);
+        DELETE FROM gathering_lists WHERE individual_id IN (?) AND church_id = ?
+      `, [deleteIds, req.user.church_id]);
+
+      // Delete attendance records for these individuals within the same church scope, if column exists
+      const hasArChurchId = await (async () => {
+        try {
+          const col = await conn.query("SHOW COLUMNS FROM attendance_records LIKE 'church_id'");
+          return col && col.length > 0;
+        } catch {
+          return false;
+        }
+      })();
+      if (hasArChurchId) {
+        await conn.query(`
+          DELETE FROM attendance_records WHERE individual_id IN (?) AND church_id = ?
+        `, [deleteIds, req.user.church_id]);
+      } else {
+        await conn.query(`
+          DELETE FROM attendance_records WHERE individual_id IN (?)
+        `, [deleteIds]);
+      }
+
+      // Finally delete individuals
+      await conn.query(`
+        DELETE FROM individuals WHERE id IN (?) AND church_id = ?
+      `, [deleteIds, req.user.church_id]);
     });
     
     res.json({ message: 'Deduplication successful', keptId: keepId, deletedIds: deleteIds });

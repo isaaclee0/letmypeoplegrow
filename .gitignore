@@ -130,7 +130,11 @@ coverage/
 # Build artifacts
 build/
 dist/
-
 # Package lock files (optional - some prefer to commit these)
 # package-lock.json
-# yarn.lock 
+
+# Local SQL dump (ignore sensitive DB exports)
+/church_attendance.sql
+
+# Local one-off SQL migration
+/migration.sql

@@ -1,7 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { AdvancedMigrationProvider } from './contexts/AdvancedMigrationContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -9,21 +8,19 @@ import ReportsPage from './pages/ReportsPage';
 import ManageGatheringsPage from './pages/ManageGatheringsPage';
 import PeoplePage from './pages/PeoplePage';
 import UsersPage from './pages/UsersPage';
-import AdvancedMigrationsPage from './pages/AdvancedMigrationsPage';
-import OnboardingPage from './pages/OnboardingPage';
-import AcceptInvitationPage from './pages/AcceptInvitationPage';
-import FirstLoginSetupPage from './pages/FirstLoginSetupPage';
-import NonAdminSetupPage from './pages/NonAdminSetupPage';
+// Retired: OnboardingPage
+// Retired: AcceptInvitationPage, FirstLoginSetupPage, NonAdminSetupPage
 import SettingsPage from './pages/SettingsPage';
 import NotificationRulesPage from './pages/NotificationRulesPage';
 import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
+import ProfilePage from './pages/ProfilePage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading, needsOnboarding, user } = useAuth();
+  const { isAuthenticated, isLoading, /* needsOnboarding, */ user } = useAuth();
 
   if (isLoading) {
     return <LoadingSpinner />;
@@ -33,24 +30,9 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Navigate to="/login" replace />;
   }
 
-  // Redirect admin users to onboarding if needed
-  if (user?.role === 'admin' && needsOnboarding && window.location.pathname !== '/onboarding') {
-    return <Navigate to="/onboarding" replace />;
-  }
+  // Onboarding retired: no redirect
 
-  // Redirect first-time users to appropriate setup
-  if (user?.isFirstLogin) {
-    if (user.role === 'admin' && needsOnboarding && window.location.pathname !== '/onboarding') {
-      return <Navigate to="/onboarding" replace />;
-    } else if (user.role !== 'admin' && window.location.pathname !== '/first-login-setup' && window.location.pathname !== '/non-admin-setup') {
-      // Check if user has gathering assignments
-      if (user.gatheringAssignments && user.gatheringAssignments.length > 0) {
-        return <Navigate to="/first-login-setup" replace />;
-      } else {
-        return <Navigate to="/non-admin-setup" replace />;
-      }
-    }
-  }
+  // First-login setup retired; users can go directly to app
 
   // No dashboard page; attendance takers and others can navigate within app
 
@@ -90,7 +72,6 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
-      <AdvancedMigrationProvider>
         <ToastContainer>
             <Router>
               <div className="min-h-screen bg-gray-50">
@@ -111,34 +92,8 @@ function App() {
                 </PublicRoute>
               }
             />
-            <Route
-              path="/onboarding"
-              element={
-                <ProtectedRoute>
-                  <OnboardingPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/first-login-setup"
-              element={
-                <ProtectedRoute>
-                  <FirstLoginSetupPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/non-admin-setup"
-              element={
-                <ProtectedRoute>
-                  <NonAdminSetupPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/accept-invitation/:token"
-              element={<AcceptInvitationPage />}
-            />
+            {/* Onboarding route retired */}
+            {/* Retired routes: first-login-setup, non-admin-setup, accept-invitation */}
             <Route
               path="/clear-token"
               element={<TokenClearPage />}
@@ -168,15 +123,9 @@ function App() {
                   </RoleProtectedRoute>
                 } 
               />
-              <Route 
-                path="migrations" 
-                element={
-                  <RoleProtectedRoute allowedRoles={['admin']}>
-                    <AdvancedMigrationsPage />
-                  </RoleProtectedRoute>
-                } 
-              />
+              {/* Advanced Migrations removed */}
               <Route path="settings" element={<SettingsPage />} />
+               <Route path="profile" element={<ProfilePage />} />
               <Route path="notification-rules" element={
                 <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
                   <NotificationRulesPage />
@@ -187,7 +136,6 @@ function App() {
         </div>
               </Router>
         </ToastContainer>
-      </AdvancedMigrationProvider>
     </AuthProvider>
   );
 }

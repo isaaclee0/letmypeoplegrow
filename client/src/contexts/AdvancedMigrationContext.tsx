@@ -1,6 +1,43 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { advancedMigrationsAPI, SchemaInfo, MigrationPlan, MigrationExecution, DatabaseSizeInfo, RowCounts, CreateStatements, HealthStatus } from '../services/advancedMigrationsAPI';
-import { useAuth } from './AuthContext';
+// Advanced migrations removed
+import React from 'react';
+
+export const AdvancedMigrationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return <>{children}</>;
+};
+
+export const useAdvancedMigration = () => {
+  return {
+    schema: null,
+    databaseSize: null,
+    rowCounts: null,
+    createStatements: null,
+    healthStatus: null,
+    currentPlan: null,
+    executionHistory: [],
+    selectedExecution: null,
+    isLoadingSchema: false,
+    isLoadingPlan: false,
+    isLoadingExecution: false,
+    isLoadingHistory: false,
+    schemaError: null,
+    planError: null,
+    executionError: null,
+    historyError: null,
+    fetchSchema: async () => {},
+    fetchDatabaseSize: async () => {},
+    fetchRowCounts: async () => {},
+    fetchCreateStatements: async () => {},
+    fetchHealth: async () => {},
+    generatePlan: async () => { return null as any; },
+    executePlan: async () => { return null as any; },
+    validatePlan: async () => { return null as any; },
+    dryRunPlan: async () => { return null as any; },
+    fetchExecutionHistory: async () => {},
+    fetchExecutionDetails: async () => {},
+    clearErrors: () => {},
+  } as any;
+};
+
 
 interface AdvancedMigrationContextType {
   // Schema Analysis

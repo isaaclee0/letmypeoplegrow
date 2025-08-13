@@ -7,6 +7,57 @@ const { processApiResponse } = require('../utils/caseConverter');
 const router = express.Router();
 router.use(verifyToken);
 
+// Church-wide visitors (all gatherings, all time) — define BEFORE param routes to avoid shadowing
+router.get('/visitors/all', async (req, res) => {
+  try {
+    const allVisitorFamilies = await Database.query(`
+      SELECT DISTINCT 
+        f.id as family_id,
+        f.family_name,
+        f.family_notes,
+        f.family_type,
+        COALESCE(f.last_attended, f.created_at) as last_activity
+      FROM families f
+      JOIN individuals i ON f.id = i.family_id
+      WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
+        AND i.people_type IN ('local_visitor', 'traveller_visitor')
+        AND i.is_active = true
+        AND f.church_id = ?
+      GROUP BY f.id
+      ORDER BY last_activity DESC, f.family_name
+    `, [req.user.church_id]);
+
+    const processedVisitors = [];
+    for (const family of allVisitorFamilies) {
+      const familyMembers = await Database.query(`
+        SELECT id, first_name, last_name, people_type
+        FROM individuals 
+        WHERE family_id = ? AND is_active = true AND church_id = ?
+        ORDER BY first_name
+      `, [family.family_id, req.user.church_id]);
+
+      for (const member of familyMembers) {
+        const isLocal = member.people_type === 'local_visitor';
+        processedVisitors.push({
+          id: member.id,
+          name: `${member.first_name} ${member.last_name}`,
+          visitorType: isLocal ? 'potential_regular' : 'temporary_other',
+          visitorFamilyGroup: family.family_id.toString(),
+          notes: family.family_notes,
+          lastAttended: family.last_activity,
+          familyId: family.family_id,
+          familyName: family.family_name
+        });
+      }
+    }
+
+    res.json({ visitors: processedVisitors });
+  } catch (error) {
+    console.error('Get all visitors error:', error);
+    res.status(500).json({ error: 'Failed to retrieve all visitors.' });
+  }
+});
+
 // Get attendance for a specific date and gathering
 router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) => {
   try {
@@ -31,7 +82,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
       
-      // Get visitor families for this session (new system)
+      // Get visitor families for this session limited to the active gathering (via gathering_lists)
       const visitorFamilies = await Database.query(`
         SELECT 
           i.id,
@@ -45,13 +96,14 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
           COALESCE(ar.present, false) as present
         FROM individuals i
         JOIN families f ON i.family_id = f.id
+        JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE f.family_type IN ('local_visitor', 'traveller_visitor') 
           AND i.is_active = true
           AND i.people_type IN ('local_visitor', 'traveller_visitor')
           AND i.church_id = ?
         ORDER BY f.family_name, i.first_name
-      `, [sessionId, req.user.church_id]);
+      `, [gatheringTypeId, sessionId, req.user.church_id]);
 
       // Group by family and format for frontend
       const familyGroups = {};
@@ -174,10 +226,9 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
         END as within_absence_limit
       FROM individuals i
       JOIN families f ON i.family_id = f.id
-      JOIN gathering_lists gl ON i.id = gl.individual_id
+      JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.gathering_type_id = ?
       WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
         AND i.is_active = true
-        AND gl.gathering_type_id = ?
         AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.church_id = ?
     `;
@@ -419,6 +470,59 @@ router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (r
   } catch (error) {
     console.error('Get recent visitors error:', error);
     res.status(500).json({ error: 'Failed to retrieve recent visitors.' });
+  }
+});
+
+// Church-wide visitors (all gatherings, all time)
+router.get('/visitors/all', async (req, res) => {
+  try {
+    // Fetch all visitor families for this church
+    const allVisitorFamilies = await Database.query(`
+      SELECT DISTINCT 
+        f.id as family_id,
+        f.family_name,
+        f.family_notes,
+        f.family_type,
+        COALESCE(f.last_attended, f.created_at) as last_activity
+      FROM families f
+      JOIN individuals i ON f.id = i.family_id
+      WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
+        AND i.people_type IN ('local_visitor', 'traveller_visitor')
+        AND i.is_active = true
+        AND f.church_id = ?
+      GROUP BY f.id
+      ORDER BY last_activity DESC, f.family_name
+    `, [req.user.church_id]);
+
+    // Convert family data to individual visitor format to match main API
+    const processedVisitors = [];
+    for (const family of allVisitorFamilies) {
+      const familyMembers = await Database.query(`
+        SELECT id, first_name, last_name, people_type
+        FROM individuals 
+        WHERE family_id = ? AND is_active = true AND church_id = ?
+        ORDER BY first_name
+      `, [family.family_id, req.user.church_id]);
+
+      for (const member of familyMembers) {
+        const isLocal = member.people_type === 'local_visitor';
+        processedVisitors.push({
+          id: member.id,
+          name: `${member.first_name} ${member.last_name}`,
+          visitorType: isLocal ? 'potential_regular' : 'temporary_other',
+          visitorFamilyGroup: family.family_id.toString(),
+          notes: family.family_notes,
+          lastAttended: family.last_activity,
+          familyId: family.family_id,
+          familyName: family.family_name
+        });
+      }
+    }
+
+    res.json({ visitors: processedVisitors });
+  } catch (error) {
+    console.error('Get all visitors error:', error);
+    res.status(500).json({ error: 'Failed to retrieve all visitors.' });
   }
 });
 

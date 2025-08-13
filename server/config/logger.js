@@ -167,7 +167,8 @@ try {
       // Console output (always include as fallback)
       new winston.transports.Console({
         format: consoleFormat,
-        level: process.env.CONSOLE_LOG_LEVEL || 'debug'
+        // Default console level to 'info' to avoid noisy HTTP logs; override via CONSOLE_LOG_LEVEL
+        level: process.env.CONSOLE_LOG_LEVEL || 'info'
       })
     ],
     
@@ -190,30 +191,44 @@ try {
 }
 
 // Add request logging middleware with error handling
+// Request logging controls (tunable via environment variables)
+const LOG_HTTP_START = process.env.LOG_HTTP_START === 'true'; // default off
+const HTTP_LOG_MIN_STATUS = parseInt(process.env.HTTP_LOG_MIN_STATUS || '400', 10); // log responses >= this status
+const HTTP_LOG_SLOW_MS = parseInt(process.env.HTTP_LOG_SLOW_MS || '1500', 10); // log 2xx if slower than this
+
 logger.createRequestLogger = () => {
   return (req, res, next) => {
     try {
       const start = Date.now();
       
-      // Log request
-      logger.http(`${req.method} ${req.url}`, {
-        ip: req.ip,
-        userAgent: req.get('User-Agent'),
-        userId: req.user?.id
-      });
+      // Optional: log request start (disabled by default)
+      if (LOG_HTTP_START) {
+        logger.http(`${req.method} ${req.url}`, {
+          ip: req.ip,
+          userAgent: req.get('User-Agent'),
+          userId: req.user?.id
+        });
+      }
       
       // Log response when finished
       res.on('finish', () => {
         try {
           const duration = Date.now() - start;
-          const level = res.statusCode >= 400 ? 'warn' : 'http';
-          
-          logger.log(level, `${req.method} ${req.url} ${res.statusCode} - ${duration}ms`, {
-            statusCode: res.statusCode,
-            duration,
-            ip: req.ip,
-            userId: req.user?.id
-          });
+          const shouldLogByStatus = res.statusCode >= HTTP_LOG_MIN_STATUS;
+          const shouldLogByLatency = res.statusCode < HTTP_LOG_MIN_STATUS && duration >= HTTP_LOG_SLOW_MS;
+
+          if (shouldLogByStatus || shouldLogByLatency) {
+            let level = 'info';
+            if (res.statusCode >= 500) level = 'error';
+            else if (res.statusCode >= 400) level = 'warn';
+            
+            logger.log(level, `${req.method} ${req.url} ${res.statusCode} - ${duration}ms`, {
+              statusCode: res.statusCode,
+              duration,
+              ip: req.ip,
+              userId: req.user?.id
+            });
+          }
         } catch (logError) {
           console.warn('Failed to log response:', logError.message);
         }

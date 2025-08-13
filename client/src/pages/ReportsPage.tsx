@@ -5,11 +5,10 @@ import {
   ChartBarIcon, 
   UsersIcon, 
   ArrowTrendingUpIcon,
-  CalendarIcon,
   ArrowDownTrayIcon
 } from '@heroicons/react/24/outline';
 import 'chart.js/auto';
-import { Line } from 'react-chartjs-2';
+import { Bar } from 'react-chartjs-2';
 
 const ReportsPage: React.FC = () => {
   const { user } = useAuth();
@@ -18,10 +17,8 @@ const ReportsPage: React.FC = () => {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [metrics, setMetrics] = useState<any>(null);
-  const [prevYearMetrics, setPrevYearMetrics] = useState<any>(null);
-  const [monthlyVisitors, setMonthlyVisitors] = useState<Array<{ month: string; avgVisitors: number }>>([]);
+  // Removed YoY and monthly visitors; charts now reflect selected period only
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingVisitors, setIsLoadingVisitors] = useState(false);
   const [error, setError] = useState('');
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; streak: number }>>([]);
@@ -186,27 +183,7 @@ const ReportsPage: React.FC = () => {
     }
   }, [selectedGathering?.id, metrics?.attendanceData]);
 
-  const loadPrevYearMetrics = useCallback(async () => {
-    if (!selectedGathering || !startDate || !endDate) return;
-    try {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const prevStart = new Date(start);
-      const prevEnd = new Date(end);
-      prevStart.setFullYear(prevStart.getFullYear() - 1);
-      prevEnd.setFullYear(prevEnd.getFullYear() - 1);
-      const params = {
-        gatheringTypeId: selectedGathering.id,
-        startDate: prevStart.toISOString().split('T')[0],
-        endDate: prevEnd.toISOString().split('T')[0]
-      };
-      const response = await reportsAPI.getDashboard(params);
-      setPrevYearMetrics(response.data.metrics);
-    } catch (err) {
-      // Non-fatal if prev year not available
-      setPrevYearMetrics(null);
-    }
-  }, [selectedGathering?.id, startDate, endDate]);
+  // Removed YoY metrics logic
 
   const getMonthKey = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -231,44 +208,20 @@ const ReportsPage: React.FC = () => {
     return months;
   };
 
-  const monthStartEnd = (yyyyMm: string) => {
-    const [y, m] = yyyyMm.split('-').map((v) => parseInt(v, 10));
-    const start = new Date(y, m - 1, 1);
-    const end = new Date(y, m, 0);
-    return {
-      start: start.toISOString().split('T')[0],
-      end: end.toISOString().split('T')[0]
-    };
+  // Utility: simple moving average for trend lines
+  const movingAverage = (values: number[], windowSize: number) => {
+    if (windowSize <= 1) return values;
+    const result: number[] = [];
+    for (let i = 0; i < values.length; i++) {
+      const start = Math.max(0, i - windowSize + 1);
+      const slice = values.slice(start, i + 1);
+      const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
+      result.push(Math.round(avg));
+    }
+    return result;
   };
 
-  const loadMonthlyVisitors = useCallback(async () => {
-    if (!selectedGathering || !startDate || !endDate) return;
-    setIsLoadingVisitors(true);
-    try {
-      const months = listMonthsInclusive(startDate, endDate);
-      const results: Array<{ month: string; avgVisitors: number }> = [];
-      for (const month of months) {
-        const { start, end } = monthStartEnd(month);
-        const params = {
-          gatheringTypeId: selectedGathering.id,
-          startDate: start,
-          endDate: end
-        };
-        const resp = await reportsAPI.getDashboard(params);
-        const m = resp.data.metrics;
-        // Average visitors per session for that month
-        const sessionCount = m.totalSessions || 0;
-        const avgVisitors = sessionCount > 0 ? Math.round((m.totalVisitors || 0) / sessionCount) : 0;
-        results.push({ month, avgVisitors });
-      }
-      setMonthlyVisitors(results);
-    } catch (e) {
-      // Non-fatal
-      setMonthlyVisitors([]);
-    } finally {
-      setIsLoadingVisitors(false);
-    }
-  }, [selectedGathering?.id, startDate, endDate]);
+  // Removed old monthly visitors loader
 
   // Load recent session details to derive absence streaks and recent visitors
   // duplicate removed
@@ -282,106 +235,97 @@ const ReportsPage: React.FC = () => {
 
   useEffect(() => {
     if (!hasReportsAccess || !selectedGathering || !startDate || !endDate) return;
-      loadMetrics();
-    loadPrevYearMetrics();
-    loadMonthlyVisitors();
-  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics, loadPrevYearMetrics, loadMonthlyVisitors]);
+    loadMetrics();
+  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics]);
 
   useEffect(() => {
     if (!hasReportsAccess || !selectedGathering || !metrics?.attendanceData?.length) return;
     loadAbsenceAndVisitorDetails();
   }, [hasReportsAccess, selectedGathering, metrics?.attendanceData, loadAbsenceAndVisitorDetails]);
 
-  const monthlyAttendanceAverages = useMemo(() => {
-    if (!metrics?.attendanceData) return [] as Array<{ month: string; avg: number }>;
-    const byMonth: Record<string, { presentSum: number; sessions: number }> = {};
-    metrics.attendanceData.forEach((s: any) => {
-      const key = getMonthKey(s.date);
-      if (!byMonth[key]) byMonth[key] = { presentSum: 0, sessions: 0 };
-      byMonth[key].presentSum += s.present || 0;
-      byMonth[key].sessions += 1;
-    });
-    return Object.keys(byMonth)
-      .sort()
-      .map((k) => ({ month: k, avg: Math.round(byMonth[k].presentSum / byMonth[k].sessions) }));
-  }, [metrics?.attendanceData]);
-
-  const monthlyAttendancePrevYear = useMemo(() => {
-    if (!prevYearMetrics?.attendanceData) return [] as Array<{ month: string; avg: number }>;
-    const byMonth: Record<string, { presentSum: number; sessions: number }> = {};
-    prevYearMetrics.attendanceData.forEach((s: any) => {
-      const key = getMonthKey(s.date);
-      if (!byMonth[key]) byMonth[key] = { presentSum: 0, sessions: 0 };
-      byMonth[key].presentSum += s.present || 0;
-      byMonth[key].sessions += 1;
-    });
-    return Object.keys(byMonth)
-      .sort()
-      .map((k) => ({ month: k, avg: Math.round(byMonth[k].presentSum / byMonth[k].sessions) }));
-  }, [prevYearMetrics?.attendanceData]);
+  // Attendance chart based on selected period sessions
+  const formatShortDate = (isoDate: string) => {
+    try {
+      const d = new Date(isoDate);
+      if (isNaN(d.getTime())) return isoDate;
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = d.toLocaleString(undefined, { month: 'short' });
+      const year = String(d.getFullYear()).slice(-2);
+      return `${day} ${month} ${year}`;
+    } catch {
+      return isoDate;
+    }
+  };
 
   const attendanceChartLabels = useMemo(() => {
-    if (!startDate || !endDate) return [] as string[];
-    return listMonthsInclusive(startDate, endDate);
-  }, [startDate, endDate]);
+    if (!metrics?.attendanceData) return [] as string[];
+    const dates = [...metrics.attendanceData.map((s: any) => s.date)].sort((a: string, b: string) => a.localeCompare(b));
+    return dates.map(formatShortDate);
+  }, [metrics?.attendanceData]);
 
   const attendanceChartData = useMemo(() => {
-    const currentMap: Record<string, number> = {};
-    monthlyAttendanceAverages.forEach((m) => (currentMap[m.month] = m.avg));
-    const prevMap: Record<string, number> = {};
-    monthlyAttendancePrevYear.forEach((m) => (prevMap[m.month] = m.avg));
-    // Map prev year values to the same month names of current labels minus one year
-    const prevSeriesAligned = attendanceChartLabels.map((label) => {
-      const [y, mm] = label.split('-');
-      const prevLabel = `${parseInt(y, 10) - 1}-${mm}`;
-      return prevMap[prevLabel] ?? 0;
+    if (!metrics?.attendanceData) return { labels: [], datasets: [] };
+    const byDate: Record<string, number> = {};
+    metrics.attendanceData.forEach((s: any) => {
+      byDate[formatShortDate(s.date)] = s.present || 0;
     });
+    const bars = attendanceChartLabels.map((d) => byDate[d] ?? 0);
+    const trend = movingAverage(bars, Math.min(3, Math.max(2, Math.floor(bars.length / 4) || 2)));
     return {
       labels: attendanceChartLabels,
       datasets: [
         {
-          label: 'Avg Attendance',
-          data: attendanceChartLabels.map((l) => currentMap[l] ?? 0),
-          borderColor: 'rgba(37, 99, 235, 1)',
-          backgroundColor: 'rgba(37, 99, 235, 0.15)',
-          tension: 0.3,
-          fill: true,
+          type: 'bar' as const,
+          label: 'Attendance',
+          data: bars,
+          backgroundColor: 'rgba(37, 99, 235, 0.6)'
         },
         {
-          label: 'Avg Attendance (Prev Year)',
-          data: prevSeriesAligned,
-          borderColor: 'rgba(156, 163, 175, 1)',
-          backgroundColor: 'rgba(156, 163, 175, 0.1)',
-          borderDash: [6, 6],
+          type: 'line' as const,
+          label: 'Trend',
+          data: trend,
+          borderColor: 'rgba(16, 185, 129, 1)',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
           tension: 0.3,
           fill: false,
+          pointRadius: 0,
+          borderWidth: 2,
         }
       ]
     };
-  }, [attendanceChartLabels, monthlyAttendanceAverages, monthlyAttendancePrevYear]);
+  }, [metrics?.attendanceData, attendanceChartLabels]);
 
-  const visitorsChartLabels = useMemo(() => {
-    if (!startDate || !endDate) return [] as string[];
-    return listMonthsInclusive(startDate, endDate);
-  }, [startDate, endDate]);
+  // Visitors stacked bars (local vs traveller) over selected period
+  const visitorsChartLabels = useMemo(() => attendanceChartLabels, [attendanceChartLabels]);
 
   const visitorsChartData = useMemo(() => {
-    const map: Record<string, number> = {};
-    monthlyVisitors.forEach((m) => (map[m.month] = m.avgVisitors));
+    if (!metrics?.attendanceData) return { labels: [], datasets: [] };
+    const local = metrics.attendanceData
+      .slice()
+      .sort((a: any, b: any) => a.date.localeCompare(b.date))
+      .map((s: any) => s.visitorsLocal || 0);
+    const traveller = metrics.attendanceData
+      .slice()
+      .sort((a: any, b: any) => a.date.localeCompare(b.date))
+      .map((s: any) => s.visitorsTraveller || 0);
     return {
       labels: visitorsChartLabels,
       datasets: [
         {
-          label: 'Avg Visitors per Session',
-          data: visitorsChartLabels.map((l) => map[l] ?? 0),
-          borderColor: 'rgba(16, 185, 129, 1)',
-          backgroundColor: 'rgba(16, 185, 129, 0.15)',
-          tension: 0.3,
-          fill: true,
-        }
+          type: 'bar' as const,
+          label: 'Local Visitors',
+          data: local,
+          backgroundColor: 'rgba(59, 130, 246, 0.7)'
+        },
+        {
+          type: 'bar' as const,
+          label: 'Traveller Visitors',
+          data: traveller,
+          backgroundColor: 'rgba(234, 88, 12, 0.7)'
+        },
       ]
     };
-  }, [visitorsChartLabels, monthlyVisitors]);
+  }, [metrics?.attendanceData, visitorsChartLabels]);
 
   const loadAttendanceDetails = useCallback(async () => {
     if (!selectedGathering || !metrics?.attendanceData) return;
@@ -755,25 +699,7 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white overflow-hidden shadow rounded-lg">
-          <div className="p-5">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <CalendarIcon className="h-6 w-6 text-gray-400" />
-              </div>
-              <div className="ml-5 w-0 flex-1">
-                <dl>
-                  <dt className="text-sm font-medium text-gray-500 truncate">
-                    Total Sessions
-                  </dt>
-                  <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : (metrics?.totalSessions || 0)}
-                  </dd>
-                </dl>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Removed Total Sessions tile */}
 
         <div className="bg-white overflow-hidden shadow rounded-lg">
           <div className="p-5">
@@ -784,10 +710,16 @@ const ReportsPage: React.FC = () => {
               <div className="ml-5 w-0 flex-1">
                 <dl>
                   <dt className="text-sm font-medium text-gray-500 truncate">
-                    Total Individuals
+                    Total Regular Attenders
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : (metrics?.totalIndividuals || 0)}
+                    {isLoading ? '...' : (metrics?.totalRegulars ?? metrics?.totalIndividuals ?? 0)}
+                  </dd>
+                  <dt className="mt-1 text-xs font-medium text-gray-500 truncate">
+                    Added in selected period
+                  </dt>
+                  <dd className="text-sm text-gray-700">
+                    {isLoading ? '...' : (metrics?.addedRegularsInPeriod || 0)}
                   </dd>
                 </dl>
               </div>
@@ -817,23 +749,23 @@ const ReportsPage: React.FC = () => {
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Attendance over time (monthly averages) with YoY */}
+        {/* Attendance over selected period (per session) with trend line */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Average Attendance per Month</h3>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Attendance Over Selected Period</h3>
             <div className="mt-6">
               {isLoading ? (
                 <div className="flex justify-center items-center h-64">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                 </div>
               ) : attendanceChartLabels.length > 0 ? (
-                <Line
+                <Bar
                   data={attendanceChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                      x: { grid: { display: false } },
+                      x: { stacked: false, grid: { display: false } },
                       y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
                     },
                     plugins: {
@@ -855,24 +787,20 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Visitors over time (monthly averages) */}
+        {/* Visitors over selected period (stacked local vs traveller) */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Average Visitors per Month</h3>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Visitors Over Selected Period</h3>
             <div className="mt-6">
-              {isLoadingVisitors ? (
-                <div className="flex justify-center items-center h-64">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-                </div>
-              ) : visitorsChartLabels.length > 0 ? (
-                <Line
+              {visitorsChartLabels.length > 0 ? (
+                <Bar
                   data={visitorsChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                      x: { grid: { display: false } },
-                      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+                      x: { stacked: true, grid: { display: false } },
+                      y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
                     },
                     plugins: {
                       legend: { position: 'top' as const },

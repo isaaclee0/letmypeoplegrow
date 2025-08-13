@@ -90,6 +90,18 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
     }
     
     console.log('Querying attendance data...');
+
+    // Normalize any date-like value to an ISO YYYY-MM-DD string so
+    // Map keys and comparisons use primitives instead of Date references
+    const normalizeDateKey = (value) => {
+      try {
+        const d = new Date(value);
+        if (isNaN(d.getTime())) return String(value);
+        return d.toISOString().split('T')[0];
+      } catch {
+        return String(value);
+      }
+    };
     
     // Get attendance sessions and records for the specified period
     let attendanceData = [];
@@ -119,8 +131,79 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     console.log('Attendance data query completed. Found', attendanceData.length, 'sessions');
 
+    // Prepare visitor breakdown per session first (used to decide which sessions to include in charts)
+    console.log('Querying visitor breakdown per session...');
+    let visitorsBySession = [];
+    try {
+      visitorsBySession = await Database.query(`
+        SELECT 
+          as_table.session_date,
+          SUM(CASE WHEN i.people_type = 'local_visitor' AND ar.present = true THEN 1 ELSE 0 END) as local_visitors_present,
+          SUM(CASE WHEN i.people_type = 'traveller_visitor' AND ar.present = true THEN 1 ELSE 0 END) as traveller_visitors_present
+        FROM attendance_sessions as_table
+        LEFT JOIN attendance_records ar ON ar.session_id = as_table.id
+        LEFT JOIN individuals i ON i.id = ar.individual_id
+        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+          AND as_table.church_id = ?
+        GROUP BY as_table.session_date
+        ORDER BY as_table.session_date DESC
+      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
+    } catch (err) {
+      console.error('Error querying visitors by session (attendance_records):', err);
+    }
+
+    // Also include counts from legacy visitors table where visitors were tracked separately
+    let legacyVisitorsBySession = [];
+    try {
+      legacyVisitorsBySession = await Database.query(`
+        SELECT 
+          as_table.session_date,
+          SUM(CASE WHEN v.visitor_type = 'potential_regular' THEN 1 ELSE 0 END) as local_visitors_present,
+          SUM(CASE WHEN v.visitor_type = 'temporary_other' THEN 1 ELSE 0 END) as traveller_visitors_present
+        FROM attendance_sessions as_table
+        LEFT JOIN visitors v ON v.session_id = as_table.id
+        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+          AND as_table.church_id = ?
+        GROUP BY as_table.session_date
+        ORDER BY as_table.session_date DESC
+      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
+    } catch (err) {
+      console.error('Error querying visitors by session (legacy visitors table):', err);
+    }
+
+    const visitorCountsByDate = new Map();
+    // Seed with attendance_records based counts
+    visitorsBySession.forEach((row) => {
+      const key = normalizeDateKey(row.session_date);
+      visitorCountsByDate.set(key, {
+        local: row.local_visitors_present || 0,
+        traveller: row.traveller_visitors_present || 0,
+      });
+    });
+    // Merge legacy visitors table counts
+    legacyVisitorsBySession.forEach((row) => {
+      const key = normalizeDateKey(row.session_date);
+      const existing = visitorCountsByDate.get(key) || { local: 0, traveller: 0 };
+      visitorCountsByDate.set(key, {
+        local: (existing.local || 0) + (row.local_visitors_present || 0),
+        traveller: (existing.traveller || 0) + (row.traveller_visitors_present || 0),
+      });
+    });
+
+    // For stats purposes ignore sessions with zero attendance (no one present)
+    // BUT include sessions that have visitor counts > 0 so the visitor chart is populated
+    const attendanceDataFiltered = attendanceData.filter((s) => {
+      const present = (s.present_individuals || 0) > 0;
+      const vc = visitorCountsByDate.get(normalizeDateKey(s.session_date)) || { local: 0, traveller: 0 };
+      const visitorsPresent = (vc.local + vc.traveller) > 0;
+      return present || visitorsPresent;
+    });
+    console.log('After filtering sessions (present>0 OR visitors>0):', attendanceDataFiltered.length);
+
     // If no data found, return empty metrics instead of error
-    if (attendanceData.length === 0) {
+    if (attendanceDataFiltered.length === 0) {
       console.log('No attendance data found for the specified date range');
       const emptyMetrics = {
         totalSessions: 0,
@@ -129,40 +212,60 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         averageAttendance: 0,
         growthRate: 0,
         totalIndividuals: 0,
+        totalRegulars: 0,
+        addedRegularsInPeriod: 0,
         totalVisitors: 0,
         attendanceData: []
       };
       
-      // Still try to get total individuals count
+      // Still try to get total regular individuals count
       try {
-        const totalIndividuals = await Database.query(`
+        const totalRegularIndividuals = await Database.query(`
           SELECT COUNT(DISTINCT i.id) as total
           FROM individuals i
           JOIN gathering_lists gl ON i.id = gl.individual_id
            WHERE i.is_active = true
-          AND i.church_id = ?
-          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+            AND i.people_type = 'regular'
+            AND i.church_id = ?
+            ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
         `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
-        
-        emptyMetrics.totalIndividuals = totalIndividuals[0]?.total || 0;
+        emptyMetrics.totalIndividuals = totalRegularIndividuals[0]?.total || 0;
+        emptyMetrics.totalRegulars = totalRegularIndividuals[0]?.total || 0;
       } catch (err) {
-        console.log('Could not get total individuals count:', err.message);
+        console.log('Could not get total regular individuals count:', err.message);
+      }
+
+      // Added regulars in selected period
+      try {
+        const addedRegularsInPeriod = await Database.query(`
+          SELECT COUNT(DISTINCT gl.individual_id) as total
+          FROM gathering_lists gl
+          JOIN individuals i ON i.id = gl.individual_id
+          WHERE gl.added_at >= ? AND gl.added_at <= ?
+            ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+            AND i.people_type = 'regular'
+            AND i.is_active = true
+            AND i.church_id = ?
+        `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
+        emptyMetrics.addedRegularsInPeriod = addedRegularsInPeriod[0]?.total || 0;
+      } catch (err) {
+        console.log('Could not get added regulars count:', err.message);
       }
       
       return res.json({ metrics: emptyMetrics });
     }
 
     // Calculate basic metrics
-    const totalSessions = attendanceData.length;
-    const totalPresent = attendanceData.reduce((sum, session) => sum + (session.present_individuals || 0), 0);
-    const totalAbsent = attendanceData.reduce((sum, session) => sum + (session.absent_individuals || 0), 0);
+    const totalSessions = attendanceDataFiltered.length;
+    const totalPresent = attendanceDataFiltered.reduce((sum, session) => sum + (session.present_individuals || 0), 0);
+    const totalAbsent = attendanceDataFiltered.reduce((sum, session) => sum + (session.absent_individuals || 0), 0);
     const averageAttendance = totalSessions > 0 ? Math.round(totalPresent / totalSessions) : 0;
     
     console.log('Calculated basic metrics:', { totalSessions, totalPresent, totalAbsent, averageAttendance });
     
     // Calculate growth rate with weekly aggregation
     const weeklyData = {};
-    attendanceData.forEach(session => {
+    attendanceDataFiltered.forEach(session => {
       // Use native JavaScript to get week number instead of moment.js
       const date = new Date(session.session_date);
       const weekStart = new Date(date);
@@ -190,26 +293,45 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     console.log('Calculated growth rate:', growthRate);
 
-    // Get total individuals for context
-    console.log('Querying total individuals...');
-    let totalIndividuals = [{ total: 0 }];
+    // Get total regular individuals for context
+    console.log('Querying total regular individuals...');
+    let totalRegularIndividuals = [{ total: 0 }];
     try {
-      totalIndividuals = await Database.query(`
+      totalRegularIndividuals = await Database.query(`
         SELECT COUNT(DISTINCT i.id) as total
         FROM individuals i
         JOIN gathering_lists gl ON i.id = gl.individual_id
         WHERE i.is_active = true
-        AND i.church_id = ?
-        ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
-              `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
+          AND i.people_type = 'regular'
+          AND i.church_id = ?
+          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+      `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
     } catch (err) {
-      console.error('Error querying total individuals:', err);
+      console.error('Error querying total regular individuals:', err);
       // Don't throw error, just use default value
     }
 
-    console.log('Total individuals:', totalIndividuals[0]?.total || 0);
+    console.log('Total regular individuals:', totalRegularIndividuals[0]?.total || 0);
 
-    // Get total visitors for the period (unified new system only)
+    // Count regular individuals added in the selected period
+    console.log('Querying regular individuals added in period...');
+    let addedRegularsInPeriod = [{ total: 0 }];
+    try {
+      addedRegularsInPeriod = await Database.query(`
+        SELECT COUNT(DISTINCT gl.individual_id) as total
+        FROM gathering_lists gl
+        JOIN individuals i ON i.id = gl.individual_id
+        WHERE gl.added_at >= ? AND gl.added_at <= ?
+          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
+          AND i.people_type = 'regular'
+          AND i.is_active = true
+          AND i.church_id = ?
+      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
+    } catch (err) {
+      console.error('Error querying added regulars in period:', err);
+    }
+
+    // Get total visitors for the period from both systems
     console.log('Querying total visitors...');
     let totalVisitors = [{ total: 0 }];
     try {
@@ -222,15 +344,35 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
          AND i.people_type IN ('local_visitor', 'traveller_visitor')
         AND ar.present = true
         ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);
+        AND as_table.church_id = ?
+      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
       
-      console.log(`Total visitors found: ${totalVisitors[0]?.total || 0}`);
+      console.log(`Total visitors (attendance_records) found: ${totalVisitors[0]?.total || 0}`);
     } catch (err) {
-      console.error('Error querying total visitors:', err);
+      console.error('Error querying total visitors (attendance_records):', err);
       // Don't throw error, just use default value
     }
 
-    console.log('Total visitors:', totalVisitors[0]?.total || 0);
+    // Legacy visitors table count
+    let totalVisitorsLegacy = [{ total: 0 }];
+    try {
+      totalVisitorsLegacy = await Database.query(`
+        SELECT COUNT(*) as total
+        FROM visitors v
+        JOIN attendance_sessions as_table ON v.session_id = as_table.id
+        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+          AND as_table.church_id = ?
+      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
+      console.log(`Total visitors (legacy visitors table) found: ${totalVisitorsLegacy[0]?.total || 0}`);
+    } catch (err) {
+      console.error('Error querying total visitors (legacy visitors table):', err);
+    }
+
+    const totalVisitorsCombined = (totalVisitors[0]?.total || 0) + (totalVisitorsLegacy[0]?.total || 0);
+    console.log('Total visitors combined:', totalVisitorsCombined);
+
+    // visitorsBySession and visitorCountsByDate already built above
 
     const metrics = {
       totalSessions,
@@ -238,14 +380,22 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       totalAbsent,
       averageAttendance,
       growthRate,
-      totalIndividuals: totalIndividuals[0]?.total || 0,
-      totalVisitors: totalVisitors[0]?.total || 0,
-      attendanceData: attendanceData.map(session => ({
-        date: session.session_date,
-        present: session.present_individuals || 0,
-        absent: session.absent_individuals || 0,
-        total: (session.present_individuals || 0) + (session.absent_individuals || 0)
-      }))
+      totalIndividuals: totalRegularIndividuals[0]?.total || 0, // kept for backward compat
+      totalRegulars: totalRegularIndividuals[0]?.total || 0,
+      addedRegularsInPeriod: addedRegularsInPeriod[0]?.total || 0,
+      totalVisitors: totalVisitorsCombined,
+      attendanceData: attendanceDataFiltered.map(session => {
+        const key = normalizeDateKey(session.session_date);
+        const vc = visitorCountsByDate.get(key) || { local: 0, traveller: 0 };
+        return {
+          date: key,
+          present: session.present_individuals || 0,
+          absent: session.absent_individuals || 0,
+          total: (session.present_individuals || 0) + (session.absent_individuals || 0),
+          visitorsLocal: vc.local,
+          visitorsTraveller: vc.traveller,
+        };
+      })
     };
 
     console.log('Final metrics calculated successfully');

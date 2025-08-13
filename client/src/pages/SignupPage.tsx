@@ -5,6 +5,7 @@ import { authAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 interface SignupFormData {
+  churchName: string;
   email: string;
   firstName: string;
   lastName: string;
@@ -50,6 +51,16 @@ const SignupPage: React.FC = () => {
       setIsLoading(false);
     }
   };
+
+  // When entering the code step, aggressively clear any autofilled value
+  useEffect(() => {
+    if (step === 'code') {
+      codeForm.reset({ code: '' });
+      // Double-clear in case the browser autofills after first paint
+      const t = setTimeout(() => codeForm.setValue('code', ''), 0);
+      return () => clearTimeout(t);
+    }
+  }, [step]);
 
   const handleCodeSubmit = async (data: { code: string }) => {
     setIsLoading(true);
@@ -119,6 +130,20 @@ const SignupPage: React.FC = () => {
 
         {step === 'signup' ? (
           <form className="mt-8 space-y-6" onSubmit={signupForm.handleSubmit(handleSignupSubmit)}>
+            <div>
+              <label htmlFor="churchName" className="block text-sm font-medium text-gray-700">
+                Church Name *
+              </label>
+              <input
+                {...signupForm.register('churchName', { required: 'Church name is required' })}
+                type="text"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                placeholder="Your Church Name"
+              />
+              {signupForm.formState.errors.churchName && (
+                <p className="mt-1 text-sm text-red-600">{signupForm.formState.errors.churchName.message as string}</p>
+              )}
+            </div>
             <div>
                               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                   Church Admin Email *
@@ -192,7 +217,7 @@ const SignupPage: React.FC = () => {
             </div>
           </form>
         ) : (
-          <form className="mt-8 space-y-6" onSubmit={codeForm.handleSubmit(handleCodeSubmit)}>
+          <form className="mt-8 space-y-6" onSubmit={codeForm.handleSubmit(handleCodeSubmit)} autoComplete="off">
             <div>
               <label htmlFor="code" className="sr-only">
                 Verification Code
@@ -208,7 +233,17 @@ const SignupPage: React.FC = () => {
                 type="text"
                 inputMode="numeric"
                 maxLength={6}
-                autoComplete="one-time-code"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="none"
+                autoFocus
+                onFocus={(e) => {
+                  // If the browser autofilled non-digits (like an email), clear it
+                  if (/[^\d]/.test(e.currentTarget.value)) {
+                    e.currentTarget.value = '';
+                    codeForm.setValue('code', '');
+                  }
+                }}
                 className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 text-center text-lg tracking-widest focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10"
                 placeholder="000000"
               />

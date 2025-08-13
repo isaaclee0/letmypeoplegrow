@@ -1,8 +1,13 @@
-// Twilio SMS functionality temporarily disabled
-// const twilio = require('twilio');
 const crypto = require('crypto');
 const { getInternationalFormat, maskPhoneNumber, validatePhoneNumber } = require('./phoneNumber');
 const Database = require('../config/database');
+// Node 18+ has global fetch
+
+const CRAZYTEL_API_URL = 'https://sms.crazytel.net.au/api/v1/sms/send';
+const getCrazytelConfig = () => ({
+  apiKey: process.env.CRAZYTEL_API_KEY,
+  fromNumber: process.env.CRAZYTEL_FROM_NUMBER,
+});
 
 // Configure Twilio with validation - TEMPORARILY DISABLED
 // const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -59,164 +64,148 @@ const generateOTC = () => {
   return crypto.randomInt(100000, 999999).toString();
 };
 
-// Send One-Time Code via SMS - TEMPORARILY DISABLED
+// Send One-Time Code via SMS using Crazytel
 const sendOTCSMS = async (phoneNumber, code) => {
-  console.log('📱 SMS functionality temporarily disabled. Code would be:', code);
-  return { success: false, error: 'SMS service temporarily disabled' };
-  
-  // if (!twilioClient || !fromNumber) {
-  //   console.error('❌ Twilio not configured. Cannot send SMS.');
-  //   return { success: false, error: 'SMS service not configured' };
-  // }
+  const { apiKey, fromNumber } = getCrazytelConfig();
+  if (!apiKey || !fromNumber) {
+    console.warn('⚠️ Crazytel not configured. Skipping SMS send.');
+    return { success: false, error: 'SMS service not configured' };
+  }
 
-  // try {
-  //   // Get church country for intelligent parsing
-  //   const countryCode = await getChurchCountry();
-  //   
-  //   // Parse phone number intelligently based on country
-  //   const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
-  //   if (!internationalNumber) {
-  //     console.error('❌ Invalid phone number format:', phoneNumber);
-  //     return { success: false, error: 'Invalid phone number format' };
-  //   }
+  try {
+    const countryCode = await getChurchCountry();
+    const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
+    if (!internationalNumber) {
+      console.error('❌ Invalid phone number format:', phoneNumber);
+      return { success: false, error: 'Invalid phone number format' };
+    }
 
-  //   const message = await twilioClient.messages.create({
-  //     body: `Your Let My People Grow login code is: ${code}. This code expires in ${process.env.OTC_EXPIRE_MINUTES || 10} minutes.`,
-  //     from: fromNumber,
-  //     to: internationalNumber
-  //   });
+    const messageBody = `Your Let My People Grow login code is: ${code}. Expires in ${process.env.OTC_EXPIRE_MINUTES || 10} minutes.`;
 
-  //   console.log('✅ OTC SMS sent successfully via Twilio:', message.sid);
-  //   return { success: true, messageId: message.sid };
-  //   
-  // } catch (error) {
-  //   console.error('❌ Error sending OTC SMS via Twilio:', error);
-  //   return { success: false, error: error.message };
-  // }
+    const response = await fetch(CRAZYTEL_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: internationalNumber,
+        from: fromNumber,
+        message: messageBody,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('❌ Error sending OTC SMS via Crazytel:', data);
+      return { success: false, error: data?.message || `HTTP ${response.status}` };
+    }
+
+    console.log('✅ OTC SMS sent successfully via Crazytel:', data);
+    return { success: true, data };
+  } catch (error) {
+    console.error('❌ Error sending OTC SMS via Crazytel:', error);
+    return { success: false, error: error.message };
+  }
 };
 
-// Send invitation via SMS - TEMPORARILY DISABLED
+// Send invitation via SMS using Crazytel
 const sendInvitationSMS = async (phoneNumber, firstName, lastName, role, invitationLink, invitedBy) => {
-  console.log('📱 SMS invitation functionality temporarily disabled');
-  return { success: false, error: 'SMS service temporarily disabled' };
-  
-  // console.log('📱 [SMS_DEBUG] Starting invitation SMS send', {
-  //   phoneNumber,
-  //   firstName,
-  //   lastName,
-  //   role,
-  //   invitationLink,
-  //   invitedBy: {
-  //     firstName: invitedBy.firstName,
-  //     lastName: invitedBy.lastName
-  //   }
-  // });
+  const { apiKey, fromNumber } = getCrazytelConfig();
+  if (!apiKey || !fromNumber) {
+    console.warn('⚠️ Crazytel not configured. Skipping SMS invitation send.');
+    return { success: false, error: 'SMS service not configured' };
+  }
 
-  // if (!twilioClient || !fromNumber) {
-  //   console.error('❌ [SMS_DEBUG] Twilio not configured. Cannot send SMS.');
-  //   return { success: false, error: 'SMS service not configured' };
-  // }
+  try {
+    const countryCode = await getChurchCountry();
+    const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
+    if (!internationalNumber) {
+      console.error('❌ Invalid phone number format:', phoneNumber);
+      return { success: false, error: 'Invalid phone number format' };
+    }
 
-  // try {
-  //   // Get church country for intelligent parsing
-  //   const countryCode = await getChurchCountry();
-  //   console.log('🌍 [SMS_DEBUG] Church country code:', countryCode);
-  //   
-  //   // Parse phone number intelligently based on country
-  //   const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
-  //   console.log('📱 [SMS_DEBUG] International number:', internationalNumber);
-  //   
-  //   if (!internationalNumber) {
-  //     console.error('❌ [SMS_DEBUG] Invalid phone number format:', phoneNumber);
-  //     return { success: false, error: 'Invalid phone number format' };
-  //   }
+    const roleDisplayName = role === 'attendance_taker' ? 'Attendance Taker' : role === 'coordinator' ? 'Coordinator' : role;
+    const inviterName = `${invitedBy.first_name || invitedBy.firstName || ''} ${invitedBy.last_name || invitedBy.lastName || ''}`.trim();
+    const messageBody = `Hi ${firstName}! ${inviterName} invited you to Let My People Grow as a ${roleDisplayName}. Accept: ${invitationLink} (7 days)`;
 
-  //   const roleDisplayName = role === 'attendance_taker' ? 'Attendance Taker' : 
-  //                          role === 'coordinator' ? 'Coordinator' : role;
+    const response = await fetch(CRAZYTEL_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: internationalNumber,
+        from: fromNumber,
+        message: messageBody,
+      }),
+    });
 
-  //   const messageBody = `Hi ${firstName}! ${invitedBy.firstName} ${invitedBy.lastName} has invited you to join Let My People Grow as a ${roleDisplayName}. Accept your invitation: ${invitationLink} (Expires in 7 days)`;
-  //   
-  //   console.log('📱 [SMS_DEBUG] SMS message prepared', {
-  //     body: messageBody,
-  //     from: fromNumber,
-  //     to: internationalNumber
-  //   });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('❌ Error sending invitation SMS via Crazytel:', data);
+      return { success: false, error: data?.message || `HTTP ${response.status}` };
+    }
 
-  //   const message = await twilioClient.messages.create({
-  //     body: messageBody,
-  //     from: fromNumber,
-  //     to: internationalNumber
-  //   });
-
-  //   console.log('✅ [SMS_DEBUG] Invitation SMS sent successfully via Twilio:', message.sid);
-  //   return { success: true, messageId: message.sid };
-  //   
-  // } catch (error) {
-  //   console.error('❌ [SMS_DEBUG] Error sending invitation SMS via Twilio:', error);
-  //   console.error('❌ [SMS_DEBUG] Error details:', {
-  //     message: error.message,
-  //     code: error.code,
-  //     status: error.status
-  //   });
-  //   return { success: false, error: error.message };
-  // }
+    console.log('✅ Invitation SMS sent successfully via Crazytel:', data);
+    return { success: true, data };
+  } catch (error) {
+    console.error('❌ Error sending invitation SMS via Crazytel:', error);
+    return { success: false, error: error.message };
+  }
 };
 
-// Send notification via SMS - TEMPORARILY DISABLED
+// Send notification via SMS using Crazytel
 const sendNotificationSMS = async (phoneNumber, subject, message) => {
-  console.log('📱 SMS notification functionality temporarily disabled');
-  return { success: false, error: 'SMS service temporarily disabled' };
-  
-  // if (!twilioClient || !fromNumber) {
-  //   console.error('❌ Twilio not configured. Cannot send SMS.');
-  //   return { success: false, error: 'SMS service not configured' };
-  // }
+  const { apiKey, fromNumber } = getCrazytelConfig();
+  if (!apiKey || !fromNumber) {
+    console.warn('⚠️ Crazytel not configured. Skipping SMS notification send.');
+    return { success: false, error: 'SMS service not configured' };
+  }
 
-  // try {
-  //   // Get church country for intelligent parsing
-  //   const countryCode = await getChurchCountry();
-  //   
-  //   // Parse phone number intelligently based on country
-  //   const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
-  //   if (!internationalNumber) {
-  //     console.error('❌ Invalid phone number format:', phoneNumber);
-  //     return { success: false, error: 'Invalid phone number format' };
-  //   }
+  try {
+    const countryCode = await getChurchCountry();
+    const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
+    if (!internationalNumber) {
+      console.error('❌ Invalid phone number format:', phoneNumber);
+      return { success: false, error: 'Invalid phone number format' };
+    }
 
-  //   const smsMessage = await twilioClient.messages.create({
-  //     body: `Let My People Grow - ${subject}: ${message}`,
-  //     from: fromNumber,
-  //     to: internationalNumber
-  //   });
+    const messageBody = `Let My People Grow - ${subject}: ${message}`;
 
-  //   console.log('✅ Notification SMS sent successfully via Twilio:', smsMessage.sid);
-  //   return { success: true, messageId: smsMessage.sid };
-  //   
-  // } catch (error) {
-  //   console.error('❌ Error sending notification SMS via Twilio:', error);
-  //   return { success: false, error: error.message };
-  // }
+    const response = await fetch(CRAZYTEL_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: internationalNumber,
+        from: fromNumber,
+        message: messageBody,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('❌ Error sending notification SMS via Crazytel:', data);
+      return { success: false, error: data?.message || `HTTP ${response.status}` };
+    }
+
+    console.log('✅ Notification SMS sent successfully via Crazytel:', data);
+    return { success: true, data };
+  } catch (error) {
+    console.error('❌ Error sending notification SMS via Crazytel:', error);
+    return { success: false, error: error.message };
+  }
 };
 
-// Test SMS configuration - TEMPORARILY DISABLED
+// Test SMS configuration for Crazytel
 const testSMSConfig = async () => {
-  console.log('📱 SMS configuration testing temporarily disabled');
-  return false;
-  
-  // if (!twilioClient || !fromNumber) {
-  //   console.error('❌ Twilio configuration incomplete');
-  //   return false;
-  // }
-
-  // try {
-  //   // Test by validating the phone number format
-  //   await twilioClient.lookups.v1.phoneNumbers(fromNumber).fetch();
-  //   console.log('✅ Twilio SMS configuration is valid');
-  //   return true;
-  // } catch (error) {
-  //   console.error('❌ Twilio SMS configuration error:', error.message);
-  //   return false;
-  // }
+  const { apiKey, fromNumber } = getCrazytelConfig();
+  if (!apiKey || !fromNumber) return false;
+  return true;
 };
 
 // Format phone number for display (country-aware)

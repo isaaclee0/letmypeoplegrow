@@ -14,13 +14,13 @@ const router = express.Router();
 
 // Root auth endpoint - provides basic auth status
 router.get('/', (req, res) => {
-  // Check external service availability - Twilio temporarily disabled
+  // External services availability (Crazytel for SMS, Brevo for Email)
   const externalServices = {
-    twilio: false, // Temporarily disabled
+    crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
-  const hasExternalServices = externalServices.brevo; // Only email service available
+  const hasExternalServices = externalServices.brevo || externalServices.crazytel;
 
   res.json({
     message: 'Authentication service is running',
@@ -38,7 +38,7 @@ router.get('/', (req, res) => {
       devUser: 'dev@church.local',
       devCode: '000000'
     } : null,
-    note: !hasExternalServices ? 'Configure Twilio and/or Brevo API keys to enable full authentication' : null
+    note: !hasExternalServices ? 'Configure Crazytel and/or Brevo API keys to enable full authentication' : null
   });
 });
 
@@ -251,13 +251,12 @@ router.post('/request-code',
 
       // Check if external services are available
       const externalServices = {
-        twilio: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER && 
-                   process.env.TWILIO_ACCOUNT_SID.trim() && process.env.TWILIO_AUTH_TOKEN.trim() && process.env.TWILIO_FROM_NUMBER.trim()),
+        crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
         brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
       };
 
       const hasRequiredService = (finalContactMethod === 'email' && externalServices.brevo) || 
-                                (finalContactMethod === 'sms' && externalServices.twilio);
+                                (finalContactMethod === 'sms' && externalServices.crazytel);
 
       if (!hasRequiredService) {
         // In development mode, we can still proceed without external services
@@ -283,11 +282,17 @@ router.post('/request-code',
               console.log(`📧 Development mode: Email code ${code} for ${finalContact} (Brevo not configured)`);
             }
           } else {
-            // SMS functionality temporarily disabled
-            console.log(`📱 SMS functionality temporarily disabled. Code would be: ${code} for ${finalContact}`);
+            if (externalServices.crazytel) {
+              await sendOTCSMS(finalContact, code);
+            } else {
+              console.log(`📱 Development mode: SMS code ${code} for ${finalContact} (Crazytel not configured)`);
+            }
           }
         } catch (error) {
           console.error(`Failed to send OTC via ${finalContactMethod}:`, error);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`🔧 Development fallback: OTC for ${finalContact} is ${code}`);
+          }
         }
       });
 
@@ -300,12 +305,17 @@ router.post('/request-code',
         maskedContact = maskPhoneNumber(finalContact, countryCode);
       }
 
-      res.json({ 
+      const responsePayload = { 
         message: `Verification code sent to your ${finalContactMethod === 'email' ? 'email address' : 'phone number'}.`,
         contact: maskedContact,
         contactType: finalContactMethod,
         expiresIn: parseInt(process.env.OTC_EXPIRE_MINUTES) || 10
-      });
+      };
+      if (process.env.NODE_ENV === 'development') {
+        // Return the code in development to simplify testing
+        responsePayload.devCode = code;
+      }
+      res.json(responsePayload);
 
     } catch (error) {
       console.error('Request code error:', error);
@@ -467,6 +477,13 @@ router.post('/verify-code',
       }
       
       res.cookie('authToken', token, cookieOptions);
+
+      // Update last login timestamp
+      try {
+        await Database.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+      } catch (e) {
+        console.warn('⚠️  Failed to update last_login_at:', e.message);
+      }
 
       // Get user's gathering assignments
       const assignments = await Database.query(`
@@ -709,7 +726,7 @@ router.post('/register',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, firstName, lastName, role } = req.body;
+      const { email, firstName, lastName, role, churchName } = req.body;
       
       // Default to admin role if not specified
       const userRole = role || 'admin';
@@ -724,9 +741,9 @@ router.post('/register',
         return res.status(409).json({ error: 'A user with this email address already exists.' });
       }
 
-      // Get or create church ID for new user
+      // Get or create church ID for new user (requires church name)
       const { getOrCreateChurchId } = require('../utils/churchIdGenerator');
-      const churchId = await getOrCreateChurchId('New Church'); // Default name for direct registration
+      const churchId = await getOrCreateChurchId(churchName || 'New Church');
       
       // Create new user
       const result = await Database.query(`

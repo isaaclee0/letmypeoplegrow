@@ -173,6 +173,10 @@ const AttendancePage: React.FC = () => {
   const [allVisitors, setAllVisitors] = useState<Visitor[]>([]);
   // Keep a raw pool of recent visitors (without 6-week filter) for search visibility
   const [allRecentVisitorsPool, setAllRecentVisitorsPool] = useState<Visitor[]>([]);
+  // Church-wide, all-time visitors (for minimized All Visitors section)
+  const [allChurchVisitors, setAllChurchVisitors] = useState<Visitor[]>([]);
+  const [isLoadingAllVisitors, setIsLoadingAllVisitors] = useState(false);
+  const [showAllVisitorsSection, setShowAllVisitorsSection] = useState(false);
   const POLL_INTERVAL_MS = 15000;
 
   // Keep refs in sync
@@ -379,6 +383,22 @@ const AttendancePage: React.FC = () => {
 
     loadRecentVisitors();
   }, [selectedGathering]);
+
+  // Load church-wide visitors once (or when user context changes significantly)
+  useEffect(() => {
+    const loadAllChurchVisitors = async () => {
+      try {
+        setIsLoadingAllVisitors(true);
+        const response = await attendanceAPI.getAllVisitors();
+        setAllChurchVisitors(response.data.visitors || []);
+      } catch (err) {
+        console.error('Failed to load all visitors:', err);
+      } finally {
+        setIsLoadingAllVisitors(false);
+      }
+    };
+    loadAllChurchVisitors();
+  }, []);
 
   // Combine current visitors with recent visitors from last 6 weeks
   useEffect(() => {
@@ -1059,7 +1079,10 @@ const AttendancePage: React.FC = () => {
           const lastName = parts.slice(1).join(' ') || 'Unknown';
           familyName = lastName !== 'Unknown' ? `${lastName.toUpperCase()}, ${firstName}` : (firstName !== 'Unknown' ? firstName : 'Unknown Visitor');
         }
-        grouped[groupKey] = { familyId: null, familyName, members: [], isFamily, groupKey };
+        const computedFamilyId = isFamily
+          ? (visitor.visitorFamilyGroup ? Number(visitor.visitorFamilyGroup) : (visitor.familyId ?? null))
+          : (visitor.familyId ?? null);
+        grouped[groupKey] = { familyId: computedFamilyId, familyName, members: [], isFamily, groupKey };
       }
       grouped[groupKey].members.push(visitor);
     });
@@ -1103,6 +1126,13 @@ const AttendancePage: React.FC = () => {
 
   const filteredGroupedVisitors = displayedGroupedVisitors;
 
+  // Group church-wide visitors (apply search when active to narrow the list)
+  const groupedAllChurchVisitors = useMemo(() => {
+    const search = searchTerm.trim().toLowerCase();
+    const source = search ? allChurchVisitors.filter(v => v.name.toLowerCase().includes(search)) : allChurchVisitors;
+    return groupVisitors(source);
+  }, [allChurchVisitors, searchTerm, groupVisitors]);
+
   // Sort members within each group
   filteredGroupedAttendees.forEach((group: any) => {
     group.members.sort((a: Individual, b: Individual) => {
@@ -1141,6 +1171,20 @@ const AttendancePage: React.FC = () => {
       });
       return updated;
     });
+  };
+
+  // Add entire visitor family from All Visitors section to the current service
+  const addVisitorFamilyFromAll = async (familyId?: number | null) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    if (!selectedGathering || !selectedDate || !familyId) return;
+    try {
+      const response = await attendanceAPI.addVisitorFamilyToService(selectedGathering.id, selectedDate, familyId);
+      showSuccess('Added visitor family to this service');
+      await loadAttendanceData();
+    } catch (err: any) {
+      console.error('Failed to add visitor family from All Visitors:', err);
+      setError(err.response?.data?.error || 'Failed to add visitor family');
+    }
   };
 
   // Helper function to count actual number of people in visitor records
@@ -1900,6 +1944,89 @@ const AttendancePage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* All Visitors (church-wide, minimized/collapsible) */}
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-medium text-gray-900">All Visitors (church-wide)</h3>
+            <button
+              type="button"
+              onClick={() => setShowAllVisitorsSection(v => !v)}
+              className="text-sm font-medium text-primary-600 hover:text-primary-700"
+            >
+              {showAllVisitorsSection ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {showAllVisitorsSection && (
+            <div className="mt-4">
+              {isLoadingAllVisitors ? (
+                <div className="text-center py-6 text-gray-500">Loading all visitors…</div>
+              ) : groupedAllChurchVisitors.length === 0 ? (
+                <div className="text-sm text-gray-500">No visitors found.</div>
+              ) : (
+                <div className="space-y-4">
+                  {groupedAllChurchVisitors.map((group: any) => (
+                    <div key={group.groupKey} className={groupByFamily && group.familyName ? 'border border-gray-200 rounded-lg p-4' : ''}>
+                      {groupByFamily && group.familyName && (
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center space-x-3">
+                            <h4 className="text-md font-medium text-gray-900">
+                              {(() => {
+                                const parts = group.familyName.split(', ');
+                                if (parts.length >= 2) { return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`; }
+                                return group.familyName;
+                              })()}
+                            </h4>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${group.members[0]?.visitorType === 'potential_regular' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                              {group.members[0]?.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                            </span>
+                          </div>
+                          {group.familyId && (
+                            <button
+                              type="button"
+                              disabled={isAttendanceLocked}
+                              onClick={() => addVisitorFamilyFromAll(group.familyId)}
+                              className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                            >
+                              Add family to this service
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                        {group.members.map((person: any, idx: number) => {
+                          const parts = person.name.trim().split(' ');
+                          const firstName = parts[0];
+                          const lastName = parts.slice(1).join(' ');
+                          const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
+                          return (
+                            <div key={person.id || `all_${idx}`} className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'}`}>
+                              <div className="text-sm font-medium text-gray-900">{cleanName}</div>
+                              {!groupByFamily && group.familyId && (
+                                <div className="mt-2">
+                                  <button
+                                    type="button"
+                                    disabled={isAttendanceLocked}
+                                    onClick={() => addVisitorFamilyFromAll(group.familyId)}
+                                    className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                                  >
+                                    Add family to this service
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Floating Add Visitor Button */}
       <button

@@ -77,7 +77,17 @@ router.post('/upload/:gatheringId',
           // Sanitize input data from CSV
           const firstName = sanitizeString(row['FIRST NAME'] || row['First Name'] || row['first_name']);
           const lastName = sanitizeString(row['LAST NAME'] || row['Last Name'] || row['last_name']);
-          const familyName = sanitizeString(row['FAMILY NAME'] || row['Family Name'] || row['family_name']);
+          let familyName = sanitizeString(row['FAMILY NAME'] || row['Family Name'] || row['family_name']);
+          if (familyName) {
+            const m = familyName.match(/^([A-Z\s]+),\s*(.*)$/);
+            if (m) {
+              const surname = m[1].trim().toUpperCase();
+              const rest = m[2].trim();
+              familyName = `${surname}, ${rest}`;
+            } else {
+              familyName = familyName.trim();
+            }
+          }
 
           if (!firstName || !lastName || firstName.trim() === '' || lastName.trim() === '') {
             skipped.push({ row: row, reason: 'Missing or invalid first or last name' });
@@ -233,7 +243,8 @@ router.post('/copy-paste/:gatheringId?',
       console.log('Received copy-paste data:', data);
       console.log('Gathering ID:', gatheringId);
       
-      // Parse tabular data (handle various formats)
+      // Parse tabular data (handle various formats). We need to respect quotes
+      // so that a family like "SMITH, John and Mary" remains a single field.
       const lines = data.trim().split('\n');
       const results = [];
       
@@ -245,25 +256,49 @@ router.post('/copy-paste/:gatheringId?',
         
         console.log(`Processing line ${i + 1}:`, line);
         
-        // Handle different delimiters (comma, tab, semicolon)
-        let columns;
-        if (line.includes('\t')) {
-          columns = line.split('\t');
-          console.log('Using tab delimiter');
-        } else if (line.includes(';')) {
-          columns = line.split(';');
-          console.log('Using semicolon delimiter');
-        } else {
-          columns = line.split(',');
-          console.log('Using comma delimiter');
-        }
+        // Helper: split a line by delimiter while respecting quotes
+        const splitRespectingQuotes = (text, delimiter) => {
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          for (let idx = 0; idx < text.length; idx++) {
+            const ch = text[idx];
+            if (ch === '"') {
+              // Toggle quotes unless escaped by double quote
+              if (inQuotes && text[idx + 1] === '"') {
+                current += '"';
+                idx++; // skip escaped quote
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (ch === delimiter && !inQuotes) {
+              cols.push(current);
+              current = '';
+            } else {
+              current += ch;
+            }
+          }
+          cols.push(current);
+          return cols;
+        };
+
+        // Detect delimiter (prefer tabs/semicolons if present); default comma
+        let delimiter = ',';
+        if (line.includes('\t')) delimiter = '\t';
+        else if (line.includes(';')) delimiter = ';';
+
+        const columns = splitRespectingQuotes(line, delimiter);
         
         console.log('Raw columns:', columns);
         
-        // Clean up columns (remove quotes, trim whitespace)
-        const cleanColumns = columns.map(col => 
-          col.replace(/^["']|["']$/g, '').trim()
-        );
+        // Clean up columns (remove wrapping quotes, trim whitespace)
+        const cleanColumns = columns.map(col => {
+          let v = col.trim();
+          if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith('\'') && v.endsWith('\''))) {
+            v = v.slice(1, -1);
+          }
+          return v.trim();
+        });
         
         console.log('Clean columns:', cleanColumns);
         
@@ -278,7 +313,8 @@ router.post('/copy-paste/:gatheringId?',
         if (cleanColumns.length >= 2) {
           const firstName = cleanColumns[0];
           const lastName = cleanColumns[1];
-          const familyName = cleanColumns[2] || '';
+          // Join any remaining columns as family name if a naive split occurred (safety)
+          const familyName = cleanColumns.slice(2).join(delimiter === '\t' ? '\t' : delimiter).trim();
           
           console.log('Parsed row:', { firstName, lastName, familyName });
           
@@ -313,7 +349,17 @@ router.post('/copy-paste/:gatheringId?',
           // Sanitize input data
           const firstName = sanitizeString(row['FIRST NAME']);
           const lastName = sanitizeString(row['LAST NAME']);
-          const familyName = sanitizeString(row['FAMILY NAME']);
+          let familyName = sanitizeString(row['FAMILY NAME']);
+          if (familyName) {
+            const m = familyName.match(/^([A-Z\s]+),\s*(.*)$/);
+            if (m) {
+              const surname = m[1].trim().toUpperCase();
+              const rest = m[2].trim();
+              familyName = `${surname}, ${rest}`;
+            } else {
+              familyName = familyName.trim();
+            }
+          }
 
           if (!firstName || !lastName || firstName.trim() === '' || lastName.trim() === '') {
             skipped.push({ row: row, reason: 'Missing or invalid first or last name' });

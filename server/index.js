@@ -61,15 +61,15 @@ const loadRoutes = () => {
     'settings', 'activities'
   ];
 
-  // Check external service availability - Twilio temporarily disabled
+  // Check external service availability (Crazytel for SMS, Brevo for Email)
   const externalServices = {
-    twilio: false, // Temporarily disabled
+    crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
   // Log service status
   console.log('🔧 External Services Status:');
-  console.log(`   📱 Twilio SMS: ❌ Temporarily disabled`);
+  console.log(`   📱 Crazytel SMS: ${externalServices.crazytel ? '✅ Available' : '❌ Not configured'}`);
   console.log(`   📧 Brevo Email: ${externalServices.brevo ? '✅ Available' : '❌ Not configured'}`);
   
   if (!externalServices.brevo) {
@@ -267,11 +267,11 @@ app.get('/health/db', async (req, res) => {
 // Service status endpoint
 app.get('/health/services', (req, res) => {
   const externalServices = {
-    twilio: false, // Temporarily disabled
+    crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
 
-  const hasAnyService = externalServices.brevo; // Only email service available
+  const hasAnyService = externalServices.brevo || externalServices.crazytel;
 
   res.status(200).json({
     status: hasAnyService ? 'partial' : 'limited',
@@ -279,14 +279,14 @@ app.get('/health/services', (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     features: {
       authentication: hasAnyService || process.env.NODE_ENV === 'development',
-      sms: false, // Temporarily disabled
+      sms: externalServices.crazytel,
       email: externalServices.brevo,
       development: process.env.NODE_ENV === 'development'
     },
     notes: !hasAnyService ? [
       'No external services configured',
       'Authentication limited to development mode',
-      'Configure Brevo API keys for email functionality'
+      'Configure Brevo (email) and/or Crazytel (SMS) API keys for full functionality'
     ] : []
   });
 });

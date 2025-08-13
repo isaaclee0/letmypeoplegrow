@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import UpdateNotificationBar from './UpdateNotificationBar';
 import { getFormattedVersion } from '../utils/version';
 import {
   Bars3Icon,
@@ -13,7 +12,6 @@ import {
   UserGroupIcon,
   UsersIcon,
   XMarkIcon,
-  WrenchScrewdriverIcon,
   PencilIcon,
   ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline';
@@ -35,9 +33,7 @@ const Layout: React.FC = () => {
       { name: 'Users', href: '/app/users', icon: UserCircleIcon }
     ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
-    ...(user?.role === 'admin' ? [
-      { name: 'Migrations', href: '/app/migrations', icon: WrenchScrewdriverIcon }
-    ] : []),
+    // Migrations removed
     // { name: 'Settings', href: '/app/settings', icon: PencilIcon }, // Temporarily hidden
   ];
 
@@ -48,13 +44,12 @@ const Layout: React.FC = () => {
 
   const handleMyProfile = () => {
     setSidebarOpen(false);
-    navigate('/app/users?profile=me');
+    navigate('/app/profile');
   };
 
   return (
     <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
-      {/* Update notification bar */}
-      <UpdateNotificationBar />
+      {/* Update notification bar removed with migrations */}
       
       <div className="flex overflow-hidden h-full">
         {/* Mobile sidebar */}
@@ -163,6 +158,23 @@ const Layout: React.FC = () => {
                   </Link>
                 ))}
               </nav>
+              {/* Profile Actions - Desktop */}
+              <div className="px-2 space-y-1 mt-2 hidden md:block">
+                <button
+                  onClick={handleMyProfile}
+                  className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
+                >
+                  <UserCircleIcon className="mr-3 h-6 w-6" />
+                  My Profile
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
+                >
+                  <ArrowRightOnRectangleIcon className="mr-3 h-6 w-6" />
+                  Logout
+                </button>
+              </div>
               {/* Logo at bottom */}
               <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
                 <img
@@ -224,22 +236,7 @@ const Layout: React.FC = () => {
                 </button>
               )}
 
-              {/* Profile dropdown - Desktop only */}
-              <div className="ml-3 relative hidden md:block">
-                <div className="flex items-center">
-                  <UserCircleIcon className="h-8 w-8 text-primary-400" />
-                  <div className="ml-2">
-                    <p className="text-sm font-medium text-primary-700">{user?.firstName} {user?.lastName}</p>
-                    <p className="text-xs text-primary-500 capitalize">{user?.role?.replace('_', ' ')}</p>
-                  </div>
-                  <button
-                    onClick={handleLogout}
-                    className="ml-4 text-sm text-primary-600 hover:text-secondary-600 focus:outline-none transition-colors duration-200 font-medium"
-                  >
-                    Logout
-                  </button>
-                </div>
-              </div>
+              {/* Profile dropdown removed on desktop (moved to sidebar) */}
             </div>
           </div>
         </div>

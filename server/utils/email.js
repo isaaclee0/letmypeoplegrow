@@ -53,7 +53,7 @@ const sendEmail = async (to, subject, htmlContent, textContent = null, options =
   }
 };
 
-const sendInvitationEmail = async (email, firstName, lastName, role, invitationLink, invitedBy) => {
+const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, invitedBy) => {
   console.log('📧 [EMAIL_DEBUG] Starting invitation email send', {
     email,
     firstName,
@@ -103,13 +103,13 @@ const sendInvitationEmail = async (email, firstName, lastName, role, invitationL
           <p>This system helps churches track attendance, manage members, and grow their communities together.</p>
           
           <div style="text-align: center;">
-            <a href="${invitationLink}" class="button">
-              Accept Invitation
+            <a href="${loginLink}" class="button">
+              Go to Login
             </a>
           </div>
           
           <div class="security-note">
-            <p><strong>Important:</strong> This invitation link will expire in 7 days for security reasons.</p>
+            <p><strong>How to sign in:</strong> Use your email or mobile number on the Login page. We’ll send you a one-time code to complete sign in.</p>
           </div>
           
           <p>If you have any questions, please contact ${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName}.</p>
@@ -139,9 +139,9 @@ ${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedB
 
 This system helps us track attendance, manage members, and grow our community together.
 
-Accept your invitation here: ${invitationLink}
+Go to the Login page to sign in: ${loginLink}
 
-Important: This invitation link will expire in 7 days for security reasons.
+How to sign in: Use your email or mobile number and we’ll send you a one-time code.
 
 If you have any questions, please contact ${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName}.
 

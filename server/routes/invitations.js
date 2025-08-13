@@ -36,8 +36,9 @@ router.post('/send',
         return true;
       }),
     body('primaryContactMethod')
-      .isIn(['email']) // SMS temporarily disabled
-      .withMessage('Primary contact method must be email'),
+      .optional()
+      .isIn(['email', 'sms'])
+      .withMessage('Primary contact method must be email or sms'),
     body('role')
       .isIn(['coordinator', 'attendance_taker'])
       .withMessage('Valid role is required'),
@@ -86,16 +87,15 @@ router.post('/send',
         return res.status(400).json({ error: 'Either email or mobile number must be provided' });
       }
 
-      // Validate that primary contact method matches available contact info
+      // If primary method provided, ensure corresponding contact exists
       if (primaryContactMethod === 'email' && !email) {
         console.log('❌ [INVITATION_DEBUG] Email required but not provided');
         return res.status(400).json({ error: 'Email is required when primary contact method is email' });
       }
-      // SMS functionality temporarily disabled
-      // if (primaryContactMethod === 'sms' && !mobileNumber) {
-      //   console.log('❌ [INVITATION_DEBUG] Mobile number required but not provided');
-      //   return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
-      // }
+      if (primaryContactMethod === 'sms' && !mobileNumber) {
+        console.log('❌ [INVITATION_DEBUG] Mobile number required but not provided');
+        return res.status(400).json({ error: 'Mobile number is required when primary contact method is SMS' });
+      }
 
       // Check if user is coordinator and trying to create admin
       if (req.user.role === 'coordinator' && role === 'admin') {
@@ -206,21 +206,78 @@ router.post('/send',
         
         console.log('✅ [INVITATION_DEBUG] Invitation record created with ID:', invitationResult.insertId);
 
-        // Send invitation via appropriate method
+        // Use general login link so invitees can log in with OTC
         const protocol = req.headers['x-forwarded-proto'] || req.protocol;
         const host = req.headers['x-forwarded-host'] || req.get('host');
-        const invitationLink = `${protocol}://${host}/accept-invitation/${invitationToken}`;
+        const loginLink = `${protocol}://${host}/login`;
         
-        console.log('🔗 [INVITATION_DEBUG] Generated invitation link:', invitationLink);
-        console.log('📤 [INVITATION_DEBUG] Sending invitation via:', primaryContactMethod);
+        console.log('🔗 [INVITATION_DEBUG] Generated login link:', loginLink);
+        console.log('📤 [INVITATION_DEBUG] Sending invitation notifications');
         
-        if (primaryContactMethod === 'email') {
-          console.log('📧 [INVITATION_DEBUG] Sending email invitation');
-          const emailResult = await sendInvitationEmail(email, firstName, lastName, role, invitationLink, req.user);
-          console.log('📧 [INVITATION_DEBUG] Email invitation result:', emailResult);
-        } else {
-          // SMS functionality temporarily disabled
-          console.log('📱 SMS invitation functionality temporarily disabled');
+        // Send email if provided
+        if (email) {
+          const emailEnabled = !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim());
+          if (!emailEnabled) {
+            console.log('⚠️  [INVITATION_DEBUG] Email service not configured (BREVO_API_KEY missing). Skipping email send but keeping invitation.');
+          } else {
+            try {
+              console.log('📧 [INVITATION_DEBUG] Sending email invitation');
+              const emailResult = await sendInvitationEmail(email, firstName, lastName, role, loginLink, req.user);
+              console.log('📧 [INVITATION_DEBUG] Email invitation result:', emailResult);
+            } catch (emailError) {
+              console.warn('⚠️  [INVITATION_DEBUG] Email send failed, but invitation record was created. Proceeding without failing the request.', {
+                message: emailError.message
+              });
+            }
+          }
+        }
+
+        // Send SMS if provided
+        if (normalizedMobile) {
+          try {
+            console.log('📱 [INVITATION_DEBUG] Sending SMS invitation via Crazytel');
+            const smsResult = await sendInvitationSMS(normalizedMobile, firstName, lastName, role, loginLink, req.user);
+            console.log('📱 [INVITATION_DEBUG] SMS invitation result:', smsResult);
+          } catch (smsError) {
+            console.warn('⚠️  [INVITATION_DEBUG] SMS send failed, but invitation record was created. Proceeding without failing the request.', {
+              message: smsError.message
+            });
+          }
+        }
+
+        // Create the user account immediately so they can request an OTC
+        console.log('👤 [INVITATION_DEBUG] Creating invited user account for OTC login');
+        const createUserResult = await conn.query(`
+          INSERT INTO users (email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, is_invited, first_login_completed, church_id)
+          VALUES (?, ?, ?, ?, ?, ?, true, true, false, ?)
+        `, [
+          email || null,
+          normalizedMobile || null,
+          primaryContactMethod || (email ? 'email' : 'sms'),
+          role,
+          firstName,
+          lastName,
+          req.user.church_id
+        ]);
+        const newUserId = createUserResult.insertId;
+        console.log('✅ [INVITATION_DEBUG] User created with ID:', newUserId);
+
+        // Assign gatherings now if provided
+        if (gatheringIds.length > 0) {
+          console.log('🏛️ [INVITATION_DEBUG] Assigning gatherings to invited user now:', gatheringIds);
+          for (const gid of gatheringIds) {
+            await conn.query(
+              'INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id) VALUES (?, ?, ?, ?)',
+              [newUserId, gid, req.user.id, req.user.church_id]
+            );
+          }
+          if (gatheringIds.length === 1) {
+            await conn.query(
+              'UPDATE users SET default_gathering_id = ? WHERE id = ?'
+              , [gatheringIds[0], newUserId]
+            );
+          }
+          console.log('✅ [INVITATION_DEBUG] Gatherings assigned');
         }
 
         // If gathering IDs are provided, store them for later assignment
@@ -238,8 +295,9 @@ router.post('/send',
 
       console.log('✅ [INVITATION_DEBUG] Invitation process completed successfully');
       res.json({ 
-        message: 'Invitation sent successfully',
-        email: email
+        message: 'Invitation sent successfully. The user can log in using their email or mobile with a one-time code at the login page.',
+        email: email || null,
+        mobileNumber: mobileNumber || null
       });
 
     } catch (error) {
@@ -254,7 +312,7 @@ router.post('/send',
 router.get('/pending', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     let query = `
-      SELECT ui.id, ui.email, ui.role, ui.first_name, ui.last_name, 
+      SELECT ui.id, ui.email, ui.mobile_number, ui.role, ui.first_name, ui.last_name, 
              ui.expires_at, ui.created_at,
              u.first_name as invited_by_first_name, u.last_name as invited_by_last_name
       FROM user_invitations ui
@@ -273,7 +331,22 @@ router.get('/pending', requireRole(['admin', 'coordinator']), async (req, res) =
     query += ' ORDER BY ui.created_at DESC';
 
     const invitations = await Database.query(query, params);
-    res.json({ invitations });
+
+    // Map to camelCase and include both contact methods
+    const mapped = invitations.map((inv) => ({
+      id: Number(inv.id),
+      email: inv.email,
+      mobileNumber: inv.mobile_number,
+      role: inv.role,
+      firstName: inv.first_name,
+      lastName: inv.last_name,
+      expiresAt: inv.expires_at,
+      createdAt: inv.created_at,
+      invitedByFirstName: inv.invited_by_first_name,
+      invitedByLastName: inv.invited_by_last_name,
+    }));
+
+    res.json({ invitations: mapped });
 
   } catch (error) {
     console.error('Get pending invitations error:', error);
@@ -374,132 +447,20 @@ router.delete('/:id',
   }
 );
 
-// Accept invitation (public endpoint)
+// Accept invitation retired
 router.get('/accept/:token', async (req, res) => {
-  try {
-    const { token } = req.params;
-
-    // Validate invitation token
-    const invitations = await Database.query(`
-      SELECT * FROM user_invitations 
-      WHERE invitation_token = ? AND accepted = false AND expires_at > NOW()
-    `, [token]);
-
-    if (invitations.length === 0) {
-      return res.status(404).json({ error: 'Invalid or expired invitation' });
-    }
-
-    const invitation = invitations[0];
-
-    // Check if user already exists (in case they were created after invitation)
-    const existingUser = await Database.query(
-      'SELECT id FROM users WHERE email = ?',
-      [invitation.email]
-    );
-
-    if (existingUser.length > 0) {
-      return res.status(409).json({ error: 'User account already exists' });
-    }
-
-    // Return invitation details for frontend to handle
-    res.json({
-      invitation: {
-        email: invitation.email,
-        firstName: invitation.first_name,
-        lastName: invitation.last_name,
-        role: invitation.role,
-        token: invitation.invitation_token
-      }
-    });
-
-  } catch (error) {
-    console.error('Accept invitation error:', error);
-    res.status(500).json({ error: 'Failed to process invitation' });
-  }
+  return res.status(410).json({
+    error: 'This invitation flow is retired. Please log in using your email or mobile number to receive a one-time code.',
+    login: '/login'
+  });
 });
 
-// Complete invitation (create user account)
-router.post('/complete/:token',
-  [
-    body('gatheringAssignments')
-      .optional()
-      .isArray()
-      .withMessage('Gathering assignments must be an array')
-  ],
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const { token } = req.params;
-      const { gatheringAssignments = [] } = req.body;
-
-      // Validate invitation token
-      const invitations = await Database.query(`
-        SELECT * FROM user_invitations 
-        WHERE invitation_token = ? AND accepted = false AND expires_at > NOW()
-      `, [token]);
-
-      if (invitations.length === 0) {
-        return res.status(404).json({ error: 'Invalid or expired invitation' });
-      }
-
-      const invitation = invitations[0];
-
-      await Database.transaction(async (conn) => {
-        // Create user account
-        const userResult = await conn.query(`
-          INSERT INTO users (email, role, first_name, last_name, is_active, is_invited, first_login_completed, church_id)
-          VALUES (?, ?, ?, ?, true, true, false, ?)
-        `, [
-          invitation.email,
-          invitation.role,
-          invitation.first_name,
-          invitation.last_name,
-          invitation.church_id
-        ]);
-
-        const userId = userResult.insertId;
-
-        // Assign gatherings
-        if (gatheringAssignments.length > 0) {
-          const assignmentValues = gatheringAssignments.map(gatheringId => [
-            userId, gatheringId, invitation.invited_by, invitation.church_id
-          ]);
-          
-          await conn.batch(
-            'INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id) VALUES (?, ?, ?, ?)',
-            assignmentValues
-          );
-
-          // Set first gathering as default if only one assigned
-          if (gatheringAssignments.length === 1) {
-            await conn.query(
-              'UPDATE users SET default_gathering_id = ? WHERE id = ?',
-              [gatheringAssignments[0], userId]
-            );
-          }
-        }
-
-        // Mark invitation as accepted
-        await conn.query(
-          'UPDATE user_invitations SET accepted = true WHERE id = ?',
-          [invitation.id]
-        );
-      });
-
-      res.json({ 
-        message: 'Account created successfully',
-        email: invitation.email
-      });
-
-    } catch (error) {
-      console.error('Complete invitation error:', error);
-      res.status(500).json({ error: 'Failed to complete invitation' });
-    }
-  }
-);
+// Complete invitation retired
+router.post('/complete/:token', async (req, res) => {
+  return res.status(410).json({
+    error: 'This invitation flow is retired. Please log in using your email or mobile number to receive a one-time code.',
+    login: '/login'
+  });
+});
 
 module.exports = router; 

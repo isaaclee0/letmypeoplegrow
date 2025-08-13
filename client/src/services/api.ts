@@ -282,6 +282,10 @@ export const attendanceAPI = {
     
   getRecentVisitors: (gatheringTypeId: number) => 
     api.get(`/attendance/${gatheringTypeId}/visitors/recent`),
+
+  // Church-wide visitors (all gatherings, all time)
+  getAllVisitors: () => 
+    api.get('/attendance/visitors/all'),
     
   addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
@@ -334,6 +338,14 @@ export const usersAPI = {
     
   assignGatherings: (userId: number, gatheringIds: number[]) => 
     api.post(`/users/${userId}/gatherings`, { gatheringIds }),
+  
+  updateMe: (data: {
+    firstName?: string;
+    lastName?: string;
+    email?: string | null;
+    mobileNumber?: string | null;
+    primaryContactMethod?: 'email' | 'sms';
+  }) => api.put('/users/me', data),
 };
 
 // Advanced Migrations API is now in advancedMigrationsAPI.ts

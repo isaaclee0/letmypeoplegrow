@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "init-db": "node scripts/initDatabase.js"
+    "init-db": "node scripts/initDatabase.js",
+    "schema:baseline": "node scripts/recordBaselineSchema.js",
+    "schema:plan": "node scripts/generatePlanFromBaseline.js"
   },
   "dependencies": {
     "@getbrevo/brevo": "^2.5.0",

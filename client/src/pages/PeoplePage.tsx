@@ -1813,13 +1813,39 @@ const PeoplePage: React.FC = () => {
                                 <span className="text-sm text-gray-500">
                                   {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
                                 </span>
+                                <input
+                                  type="checkbox"
+                                  checked={group.members.every((person: Person) => selectedPeople.includes(person.id))}
+                                  onChange={() => {
+                                    const allSelected = group.members.every((person: Person) => selectedPeople.includes(person.id));
+                                    if (allSelected) {
+                                      setSelectedPeople(prev => prev.filter(id => !group.members.map((p: Person) => p.id).includes(id)));
+                                    } else {
+                                      setSelectedPeople(prev => [...prev, ...group.members.map((p: Person) => p.id)]);
+                                    }
+                                  }}
+                                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                />
                               </div>
                             </div>
                           )}
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                             {group.members.map((person: Person) => (
-                              <div key={person.id} className="flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300">
+                              <div
+                                key={person.id}
+                                className={`flex items-center justify-between p-3 rounded-md border-2 ${
+                                  selectedPeople.includes(person.id)
+                                    ? 'border-primary-500 bg-primary-50'
+                                    : 'border-gray-200 hover:border-gray-300'
+                                }`}
+                              >
                                 <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedPeople.includes(person.id)}
+                                    onChange={() => togglePersonSelection(person.id)}
+                                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                  />
                                   <div className="flex-1 min-w-0">
                                     <div className="text-sm font-medium text-gray-900 truncate">
                                       {person.firstName} {person.lastName}
@@ -1827,14 +1853,33 @@ const PeoplePage: React.FC = () => {
                                     <div className="text-xs text-gray-500">
                                       {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
                                     </div>
+                                    {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                      <div className="flex items-center space-x-1 mt-1">
+                                        {person.gatheringAssignments.map(gathering => (
+                                          <div
+                                            key={gathering.id}
+                                            className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                            title={gathering.name}
+                                          ></div>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 <ActionMenu
-                                  items={[{
-                                    label: 'Edit',
-                                    icon: <PencilIcon className="h-4 w-4" />,
-                                    onClick: () => handleEditPerson(person)
-                                  }]}
+                                  items={[
+                                    {
+                                      label: 'Edit',
+                                      icon: <PencilIcon className="h-4 w-4" />,
+                                      onClick: () => handleEditPerson(person)
+                                    },
+                                    {
+                                      label: 'Archive',
+                                      icon: <TrashIcon className="h-4 w-4" />,
+                                      onClick: () => archivePerson(person.id),
+                                      className: 'text-red-600 hover:bg-red-50'
+                                    }
+                                  ]}
                                 />
                               </div>
                             ))}
@@ -1846,6 +1891,49 @@ const PeoplePage: React.FC = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archived People Section */}
+      {archivedPeople && archivedPeople.length > 0 && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg leading-6 font-medium text-gray-900">Archived People ({archivedPeople.length})</h3>
+              <button
+                type="button"
+                onClick={() => setShowArchivedPeople(v => !v)}
+                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+              >
+                {showArchivedPeople ? 'Hide' : `Show (${archivedPeople.length})`}
+              </button>
+            </div>
+            {showArchivedPeople && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                {archivedPeople.map((person: Person) => (
+                  <div key={`arch-${person.id}`} className="flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">
+                        {person.firstName} {person.lastName}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
+                      </div>
+                    </div>
+                    <ActionMenu
+                      items={[
+                        {
+                          label: 'Restore',
+                          icon: <ArrowPathIcon className="h-4 w-4" />,
+                          onClick: () => restorePerson(person.id)
+                        }
+                      ]}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2146,7 +2234,7 @@ const PeoplePage: React.FC = () => {
                   )}
 
                   <div className="text-sm text-gray-500">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <p>Expected CSV format:</p>
                       <a
                         href="/api/csv-import/template"
@@ -2155,9 +2243,9 @@ const PeoplePage: React.FC = () => {
                         Download template
                       </a>
                     </div>
-                    <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200">FIRST NAME,LAST NAME,FAMILY NAME
+                    <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200 whitespace-pre-wrap break-words overflow-x-auto">{`FIRST NAME,LAST NAME,FAMILY NAME
 John,Smith,"Smith, John and Sarah"
-Sarah,Smith,"Smith, John and Sarah"</pre>
+Sarah,Smith,"Smith, John and Sarah"`}</pre>
                   </div>
                   
                   <div className="flex justify-end space-x-3 pt-4">
@@ -2198,7 +2286,7 @@ Sarah,Smith,"Smith, John and Sarah"</pre>
 
                  <div className="text-sm text-gray-500">
                    <p>Expected format (tab or comma separated):</p>
-                   <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200">FIRST NAME  LAST NAME  FAMILY NAME
+                   <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200 whitespace-pre-wrap break-words overflow-x-auto">FIRST NAME  LAST NAME  FAMILY NAME
 John        Smith      Smith, John and Sarah
 Sarah       Smith      Smith, John and Sarah</pre>
                    <p className="mt-2 text-xs">Copy rows from Excel/Google Sheets with columns: FIRST NAME, LAST NAME, FAMILY NAME.</p>
@@ -2639,17 +2727,21 @@ Sarah       Smith      Smith, John and Sarah</pre>
            </button>
            {people.length === 0 && (
              <>
-               <div className="hidden sm:block fixed bottom-24 right-28 z-[9998] flex items-center space-x-3">
+                <div className="hidden sm:block fixed bottom-24 right-28 z-[9998] flex items-center space-x-3">
                  <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
                    <p className="text-base font-semibold">Add your first people</p>
                    <p className="text-xs text-primary-700 mt-1">Click the plus button</p>
                  </div>
-                 <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 animate-bounce">
-                   <path d="M5 5 C90 5, 100 60, 110 110" stroke="currentColor" strokeWidth="4" fill="none" />
-                   <path d="M96 88 L110 110 L85 106" stroke="currentColor" strokeWidth="4" fill="none" />
-                 </svg>
+                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 opacity-70">
+                    <defs>
+                      <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="0" refY="2" orient="auto">
+                        <polygon points="0 0, 4 2, 0 4" fill="currentColor" />
+                      </marker>
+                    </defs>
+                    <path d="M10 10 C 70 10, 95 60, 105 105" stroke="currentColor" strokeWidth="4" fill="none" markerEnd="url(#arrowhead)" />
+                  </svg>
                </div>
-               <span className="pointer-events-none fixed bottom-6 right-6 z-[9998] inline-flex h-20 w-20 rounded-full bg-primary-400 opacity-30 animate-ping"></span>
+                <span className="pointer-events-none fixed bottom-6 right-6 z-[9998] inline-flex h-16 w-16 rounded-full bg-primary-400/40"></span>
              </>
            )}
          </>

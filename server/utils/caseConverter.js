@@ -31,6 +31,11 @@ function convertKeysToCamelCase(obj) {
     return obj;
   }
 
+  // Preserve Date objects as-is
+  if (obj instanceof Date) {
+    return obj;
+  }
+
   if (Array.isArray(obj)) {
     return obj.map(item => convertKeysToCamelCase(item));
   }
@@ -54,6 +59,11 @@ function convertKeysToCamelCase(obj) {
  */
 function convertKeysToSnakeCase(obj) {
   if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  // Preserve Date objects as-is
+  if (obj instanceof Date) {
     return obj;
   }
 
@@ -95,6 +105,11 @@ function camelCaseResponse(req, res, next) {
  */
 function convertBigIntToNumber(obj) {
   if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  // Preserve Date objects as-is
+  if (obj instanceof Date) {
     return obj;
   }
 

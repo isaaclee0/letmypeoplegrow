@@ -317,9 +317,13 @@ const ManageGatheringsPage: React.FC = () => {
                   <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
                     <p className="text-base font-semibold">Click the plus to add a gathering</p>
                   </div>
-                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 animate-bounce">
-                    <path d="M5 5 C90 5, 100 60, 110 110" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path d="M96 88 L110 110 L85 106" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 opacity-70">
+                    <defs>
+                      <marker id="arrowhead-g" markerWidth="8" markerHeight="8" refX="0" refY="2" orient="auto">
+                        <polygon points="0 0, 4 2, 0 4" fill="currentColor" />
+                      </marker>
+                    </defs>
+                    <path d="M10 10 C 70 10, 95 60, 105 105" stroke="currentColor" strokeWidth="4" fill="none" markerEnd="url(#arrowhead-g)" />
                   </svg>
                 </div>
               </div>
@@ -698,7 +702,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Floating Add Gathering Button */}
       {gatherings.length === 0 && (
-        <span className="pointer-events-none fixed bottom-6 right-6 z-40 inline-flex h-20 w-20 rounded-full bg-primary-400 opacity-30 animate-ping"></span>
+        <span className="pointer-events-none fixed bottom-6 right-6 z-40 inline-flex h-16 w-16 rounded-full bg-primary-400/40"></span>
       )}
       <button
         onClick={openAddModal}

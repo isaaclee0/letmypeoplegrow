@@ -90,6 +90,18 @@ async function initializeDatabase() {
       console.log('✅ All required tables exist');
     }
 
+    // Ensure optional columns exist
+    try {
+      const userColumns = await Database.query("SHOW COLUMNS FROM users LIKE 'last_login_at'");
+      if (userColumns.length === 0) {
+        console.log('🛠️  Adding users.last_login_at column');
+        await Database.query('ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL AFTER updated_at');
+        console.log('✅ users.last_login_at added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure users.last_login_at column:', e.message);
+    }
+
     console.log('🎉 Database initialization check completed!');
     
   } catch (error) {

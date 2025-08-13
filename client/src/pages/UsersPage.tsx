@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { usersAPI, invitationsAPI, gatheringsAPI } from '../services/api';
-import ActionMenu from '../components/ActionMenu';
+import { usersAPI, gatheringsAPI } from '../services/api';
 import { useSearchParams } from 'react-router-dom';
 import {
   UserIcon,
@@ -29,6 +28,7 @@ interface User {
   firstLoginCompleted: boolean;
   gatheringCount: number;
   createdAt: string;
+  lastLoginAt?: string | null;
 }
 
 interface Invitation {
@@ -93,8 +93,7 @@ const UsersPage: React.FC = () => {
     role: 'attendance_taker' as 'admin' | 'coordinator' | 'attendance_taker'
   });
 
-  // Confirmation modal states
-  const [showCancelModal, setShowCancelModal] = useState(false);
+  // Confirmation modal states (deactivate only)
   const [showDeactivateModal, setShowDeactivateModal] = useState(false);
   const [cancelConfirmation, setCancelConfirmation] = useState<{
     invitationId: number | null;
@@ -124,14 +123,12 @@ const UsersPage: React.FC = () => {
       setIsLoading(true);
       setError('');
       
-      const [usersResponse, invitationsResponse, gatheringsResponse] = await Promise.all([
+      const [usersResponse, gatheringsResponse] = await Promise.all([
         usersAPI.getAll(),
-        invitationsAPI.getPending(),
         gatheringsAPI.getAll()
       ]);
 
       setUsers(usersResponse.data.users || []);
-      setInvitations(invitationsResponse.data.invitations || []);
       setGatherings(gatheringsResponse.data.gatherings || []);
       
     } catch (err: any) {
@@ -158,25 +155,22 @@ const UsersPage: React.FC = () => {
         return;
       }
 
-      if (inviteForm.primaryContactMethod === 'email' && !inviteForm.email) {
-        const errorMsg = 'Email is required when primary contact method is email';
-        setError(errorMsg);
-        return;
-      }
-
-      if (inviteForm.primaryContactMethod === 'sms' && !inviteForm.mobileNumber) {
-        const errorMsg = 'Mobile number is required when primary contact method is SMS';
-        setError(errorMsg);
-        return;
-      }
-
+      // Require at least one contact method
       if (!inviteForm.email && !inviteForm.mobileNumber) {
-        const errorMsg = 'Either email or mobile number must be provided';
+        const errorMsg = 'Provide at least an email or a mobile number';
         setError(errorMsg);
         return;
       }
 
-      await invitationsAPI.send(inviteForm);
+      // Choose primary contact method if both provided
+      const primaryContactMethod = inviteForm.email ? 'email' : 'sms';
+
+      await fetch('/api/invitations/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ...inviteForm, primaryContactMethod })
+      });
       
       setSuccess('Invitation sent successfully');
       setShowInviteModal(false);
@@ -190,12 +184,11 @@ const UsersPage: React.FC = () => {
         gatheringIds: []
       });
       
-      // Reload invitations
-      const invitationsResponse = await invitationsAPI.getPending();
-      setInvitations(invitationsResponse.data.invitations || []);
+      // No pending invitations reload
       
     } catch (err: any) {
-      const errorMessage = err.response?.data?.error || 'Failed to send invitation';
+      const serverErrors = err.response?.data?.errors;
+      const errorMessage = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors.length ? serverErrors[0]?.msg : 'Failed to send invitation');
       setError(errorMessage);
       console.error('Failed to send invitation:', {
         error: errorMessage,
@@ -207,40 +200,7 @@ const UsersPage: React.FC = () => {
     }
   };
 
-  const handleResendInvitation = async (invitationId: number) => {
-    try {
-      await invitationsAPI.resend(invitationId);
-      
-      setSuccess('Invitation resent successfully');
-      loadData();
-    } catch (err: any) {
-      const errorMessage = err.response?.data?.error || 'Failed to resend invitation';
-      setError(errorMessage);
-      console.error('Failed to resend invitation:', {
-        invitationId,
-        error: errorMessage,
-        response: err.response?.data,
-        status: err.response?.status
-      });
-    }
-  };
-
-  const showCancelConfirmation = (invitationId: number) => {
-    setCancelConfirmation({ invitationId });
-    setShowCancelModal(true);
-  };
-
-  const handleCancelInvitation = async () => {
-    if (!cancelConfirmation.invitationId) return;
-
-    try {
-      await invitationsAPI.cancel(cancelConfirmation.invitationId);
-      setSuccess('Invitation cancelled successfully');
-      loadData();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to cancel invitation');
-    }
-  };
+  // Pending invitation actions removed
 
   const handleViewUserDetails = async (user: User) => {
     try {
@@ -347,8 +307,9 @@ const UsersPage: React.FC = () => {
       const updateData = {
         firstName: editForm.firstName,
         lastName: editForm.lastName,
-        email: editForm.primaryContactMethod === 'email' ? editForm.email : undefined,
-        mobileNumber: editForm.primaryContactMethod === 'sms' ? editForm.mobileNumber : undefined,
+        // send both fields; empty string will clear on server
+        email: editForm.email,
+        mobileNumber: editForm.mobileNumber,
         primaryContactMethod: editForm.primaryContactMethod,
         role: editForm.role
       };
@@ -401,6 +362,13 @@ const UsersPage: React.FC = () => {
       return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Pending Setup</span>;
     }
     return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>;
+  };
+
+  const formatDateTime = (value?: string | null): string => {
+    if (!value) return '—';
+    const dt = new Date(value);
+    if (isNaN(dt.getTime())) return '—';
+    return dt.toLocaleString();
   };
 
   if (isLoading) {
@@ -535,6 +503,9 @@ const UsersPage: React.FC = () => {
                     Gatherings
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Last Logged In
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -552,17 +523,16 @@ const UsersPage: React.FC = () => {
                             {user.firstName} {user.lastName}
                           </div>
                           <div className="text-sm text-gray-500">
-                            {user.primaryContactMethod === 'email' ? (
-                              <div className="flex items-center">
-                                <EnvelopeIcon className="h-4 w-4 mr-1" />
-                                {user.email}
-                              </div>
-                            ) : (
-                              <div className="flex items-center">
-                                <PhoneIcon className="h-4 w-4 mr-1" />
-                                {user.mobileNumber}
-                              </div>
-                            )}
+                          <div className="flex items-center space-x-4">
+                            <div className="flex items-center">
+                              <EnvelopeIcon className="h-4 w-4 mr-1" />
+                              {user.email || '—'}
+                            </div>
+                            <div className="flex items-center">
+                              <PhoneIcon className="h-4 w-4 mr-1" />
+                              {user.mobileNumber || '—'}
+                            </div>
+                          </div>
                           </div>
                         </div>
                       </div>
@@ -574,6 +544,9 @@ const UsersPage: React.FC = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {formatDateTime(user.lastLoginAt as any)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center space-x-2">
@@ -610,132 +583,7 @@ const UsersPage: React.FC = () => {
         <PlusIcon className="h-7 w-7" />
       </button>
 
-      {/* Pending Invitations Section */}
-      {invitations.length > 0 && (
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-              Pending Invitations ({invitations.length})
-            </h3>
-            
-            {/* Mobile Card Layout for Invitations */}
-            <div className="block md:hidden space-y-4">
-              {invitations.map((invitation) => (
-                <div key={invitation.id} className="bg-gray-50 rounded-lg p-4 border">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <h4 className="text-base font-medium text-gray-900">
-                        {invitation.firstName} {invitation.lastName}
-                      </h4>
-                      <div className="text-sm text-gray-600">
-                        {invitation.email || invitation.mobileNumber}
-                      </div>
-                    </div>
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(invitation.role)}`}>
-                      {invitation.role.replace('_', ' ')}
-                    </span>
-                  </div>
-                  
-                  <div className="text-sm text-gray-600 mb-3">
-                    <div>Invited by: {invitation.invitedByFirstName} {invitation.invitedByLastName}</div>
-                    <div>Expires: {new Date(invitation.expiresAt).toLocaleDateString()}</div>
-                  </div>
-                  
-                  <div className="flex space-x-3">
-                    <ActionMenu
-                      items={[
-                        {
-                          label: 'Resend Invitation',
-                          icon: <PaperAirplaneIcon className="h-4 w-4" />,
-                          onClick: () => handleResendInvitation(invitation.id),
-                        },
-                        {
-                          label: 'Cancel Invitation',
-                          icon: <XMarkIcon className="h-4 w-4" />,
-                          onClick: () => showCancelConfirmation(invitation.id),
-                          className: 'text-red-600 hover:bg-red-50'
-                        },
-                      ]}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Desktop Table Layout for Invitations */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Invitee
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Contact
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Role
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Invited By
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Expires
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {invitations.map((invitation) => (
-                    <tr key={invitation.id}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          {invitation.firstName} {invitation.lastName}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {invitation.email || invitation.mobileNumber}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(invitation.role)}`}>
-                          {invitation.role.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {invitation.invitedByFirstName} {invitation.invitedByLastName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {new Date(invitation.expiresAt).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <ActionMenu
-                          items={[
-                            {
-                              label: 'Resend Invitation',
-                              icon: <PaperAirplaneIcon className="h-4 w-4" />,
-                              onClick: () => handleResendInvitation(invitation.id),
-                            },
-                            {
-                              label: 'Cancel Invitation',
-                              icon: <XMarkIcon className="h-4 w-4" />,
-                              onClick: () => showCancelConfirmation(invitation.id),
-                              className: 'text-red-600 hover:bg-red-50'
-                            },
-                          ]}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Pending Invitations Section removed */}
 
       {/* Invite User Modal */}
       {showInviteModal && (
@@ -767,38 +615,23 @@ const UsersPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Primary Contact Method</label>
-                  <select
-                    value={inviteForm.primaryContactMethod}
-                    onChange={(e) => setInviteForm({ ...inviteForm, primaryContactMethod: e.target.value as 'email' | 'sms' })}
+                  <label className="block text-sm font-medium text-gray-700">Email (optional)</label>
+                  <input
+                    type="email"
+                    value={inviteForm.email}
+                    onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                  >
-                    <option value="email">Email</option>
-                    <option value="sms">SMS</option>
-                  </select>
+                  />
                 </div>
-
-                {inviteForm.primaryContactMethod === 'email' ? (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Email</label>
-                    <input
-                      type="email"
-                      value={inviteForm.email}
-                      onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Mobile Number</label>
-                    <input
-                      type="tel"
-                      value={inviteForm.mobileNumber}
-                      onChange={(e) => setInviteForm({ ...inviteForm, mobileNumber: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Mobile Number (optional)</label>
+                  <input
+                    type="tel"
+                    value={inviteForm.mobileNumber}
+                    onChange={(e) => setInviteForm({ ...inviteForm, mobileNumber: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  />
+                </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Role</label>
@@ -1051,27 +884,24 @@ const UsersPage: React.FC = () => {
                   </select>
                 </div>
 
-                {editForm.primaryContactMethod === 'email' ? (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Email</label>
-                    <input
-                      type="email"
-                      value={editForm.email}
-                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Mobile Number</label>
-                    <input
-                      type="tel"
-                      value={editForm.mobileNumber}
-                      onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Email (optional)</label>
+                  <input
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Mobile Number (optional)</label>
+                  <input
+                    type="tel"
+                    value={editForm.mobileNumber}
+                    onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  />
+                </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Role</label>
@@ -1132,55 +962,7 @@ const UsersPage: React.FC = () => {
         </div>
       )}
 
-      {/* Cancel Invitation Confirmation Modal */}
-      {showCancelModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
-            <div className="mt-3">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Confirm Cancellation
-                </h3>
-                <button
-                  onClick={() => setShowCancelModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
-                <XMarkIcon className="h-6 w-6 text-red-600" />
-              </div>
-              
-              <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
-                  Are you sure you want to cancel this invitation? This action cannot be undone.
-                </p>
-              </div>
-              
-              <div className="flex space-x-3">
-                <button
-                  onClick={() => setShowCancelModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-                >
-                  Keep Invitation
-                </button>
-                <button
-                  onClick={async () => {
-                    await handleCancelInvitation();
-                    setShowCancelModal(false);
-                    setCancelConfirmation({ invitationId: null });
-                  }}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
-                >
-                  Cancel Invitation
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Cancel Invitation Confirmation Modal removed */}
 
       {/* Deactivate User Confirmation Modal */}
       {showDeactivateModal && (
