@@ -86,8 +86,10 @@ const LoginPage: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       
-      // Redirect to attendance by default; onboarding logic handled elsewhere for admins
-      navigate('/app/attendance');
+      // Check if user has any gathering assignments and redirect accordingly
+      const hasGatherings = response.data.user.gatheringAssignments && response.data.user.gatheringAssignments.length > 0;
+      const defaultRoute = hasGatherings ? '/app/attendance' : '/app/gatherings';
+      navigate(defaultRoute);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {

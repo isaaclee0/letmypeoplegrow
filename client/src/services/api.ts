@@ -450,6 +450,8 @@ export const individualsAPI = {
     api.delete(`/individuals/${id}`),
   restore: (id: number) =>
     api.post(`/individuals/${id}/restore`),
+  permanentDelete: (id: number) =>
+    api.delete(`/individuals/${id}/permanent`),
     
   assignToGathering: (individualId: number, gatheringId: number) => 
     api.post(`/individuals/${individualId}/gatherings/${gatheringId}`),

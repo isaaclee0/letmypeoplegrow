@@ -37,6 +37,7 @@ interface CreateGatheringData {
 }
 
 const ManageGatheringsPage: React.FC = () => {
+
   const { user } = useAuth();
   const navigate = useNavigate();
   const [gatherings, setGatherings] = useState<Gathering[]>([]);
@@ -313,7 +314,7 @@ const ManageGatheringsPage: React.FC = () => {
               </p>
               {/* Prominent guidance to add button */}
               <div className="hidden sm:block">
-                <div className="absolute bottom-2 right-28 z-40 flex items-center space-x-3">
+                <div className="fixed bottom-16 right-28 z-40 flex items-center space-x-3">
                   <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
                     <p className="text-base font-semibold">Click the plus to add a gathering</p>
                   </div>
@@ -701,9 +702,6 @@ const ManageGatheringsPage: React.FC = () => {
       )}
 
       {/* Floating Add Gathering Button */}
-      {gatherings.length === 0 && (
-        <span className="pointer-events-none fixed bottom-6 right-6 z-40 inline-flex h-16 w-16 rounded-full bg-primary-400/40"></span>
-      )}
       <button
         onClick={openAddModal}
         className="fixed bottom-6 right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50"

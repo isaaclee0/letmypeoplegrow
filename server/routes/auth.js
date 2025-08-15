@@ -12,6 +12,10 @@ const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Environment flags
+const isDev = process.env.NODE_ENV === 'development';
+const devBypassEnabled = process.env.AUTH_DEV_BYPASS === 'true';
+
 // Root auth endpoint - provides basic auth status
 router.get('/', (req, res) => {
   // External services availability (Crazytel for SMS, Brevo for Email)
@@ -22,7 +26,7 @@ router.get('/', (req, res) => {
 
   const hasExternalServices = externalServices.brevo || externalServices.crazytel;
 
-  res.json({
+  const payload = {
     message: 'Authentication service is running',
     status: hasExternalServices ? 'full' : 'limited',
     externalServices: externalServices,
@@ -33,13 +37,25 @@ router.get('/', (req, res) => {
       'logout': 'POST - Logout user'
     },
     environment: process.env.NODE_ENV || 'development',
-    development: process.env.NODE_ENV === 'development' ? {
-      note: 'In development mode, use "dev@church.local" with code "000000" to login',
-      devUser: 'dev@church.local',
-      devCode: '000000'
-    } : null,
+    development: null,
     note: !hasExternalServices ? 'Configure Crazytel and/or Brevo API keys to enable full authentication' : null
-  });
+  };
+
+  if (isDev) {
+    if (devBypassEnabled) {
+      payload.development = {
+        note: 'Development bypass is ENABLED: use dev@church.local with code 000000',
+        devUser: 'dev@church.local',
+        devCode: '000000'
+      };
+    } else {
+      payload.development = {
+        note: 'Development bypass is DISABLED. Full OTC flow required.'
+      };
+    }
+  }
+
+  res.json(payload);
 });
 
 // Rate limiting for auth endpoints - enabled in all environments
@@ -133,8 +149,8 @@ router.post('/request-code',
       );
 
       if (users.length === 0) {
-        // Development mode: Auto-create dev user if requesting code for dev@church.local
-        if (process.env.NODE_ENV === 'development' && contact === 'dev@church.local') {
+        // Development mode: Auto-create dev user if requesting code for dev@church.local (when enabled)
+        if (isDev && devBypassEnabled && contact === 'dev@church.local') {
           console.log('🔧 Development mode: Auto-creating dev user for dev@church.local');
           
           try {
@@ -207,8 +223,9 @@ router.post('/request-code',
       let finalContactMethod = contactType;
       let finalContact = normalizedContact;
       
-      // If user has both email and mobile, use their preference
-      if (user.email && user.mobile_number && user.primary_contact_method !== contactType) {
+      // Do NOT override when the user initiated an SMS login (phone number provided)
+      // Only consider overriding when the user initiated an email login
+      if (contactType === 'email' && user.email && user.mobile_number && user.primary_contact_method !== contactType) {
         if (user.primary_contact_method === 'email') {
           finalContactMethod = 'email';
           finalContact = user.email;
@@ -245,9 +262,9 @@ router.post('/request-code',
 
       // Store OTC in database
       await Database.query(`
-        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at)
-        VALUES (?, ?, ?, ?)
-      `, [finalContact, finalContactMethod, code, expiresAt]);
+        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id)
+        VALUES (?, ?, ?, ?, ?)
+      `, [finalContact, finalContactMethod, code, expiresAt, user.church_id]);
 
       // Check if external services are available
       const externalServices = {
@@ -311,7 +328,7 @@ router.post('/request-code',
         contactType: finalContactMethod,
         expiresIn: parseInt(process.env.OTC_EXPIRE_MINUTES) || 10
       };
-      if (process.env.NODE_ENV === 'development') {
+      if (isDev && devBypassEnabled) {
         // Return the code in development to simplify testing
         responsePayload.devCode = code;
       }
@@ -382,9 +399,9 @@ router.post('/verify-code',
 
       const user = users[0];
 
-      // Development bypass: Accept "000000" for dev@church.local in development mode
+      // Development bypass: Accept "000000" for dev@church.local in development mode (only when enabled)
       let validOtcRecord = null;
-      if (process.env.NODE_ENV === 'development' && 
+      if (isDev && devBypassEnabled &&
           user.email === 'dev@church.local' && 
           code === '000000') {
         console.log('🔓 Development bypass: Accepting "000000" for dev@church.local');
@@ -759,9 +776,9 @@ router.post('/register',
 
       // Store OTC in database
       await Database.query(`
-        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at)
-        VALUES (?, 'email', ?, ?)
-      `, [email, code, expiresAt]);
+        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id)
+        VALUES (?, 'email', ?, ?, ?)
+      `, [email, code, expiresAt, churchId]);
 
       // Send welcome email with OTC
       setImmediate(async () => {

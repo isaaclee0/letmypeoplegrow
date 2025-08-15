@@ -103,10 +103,10 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
           // Add assignments to the kept individual (if not already assigned)
           for (const assignment of assignments) {
             await conn.query(`
-              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-              VALUES (?, ?, ?)
+              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+              VALUES (?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE added_by = VALUES(added_by)
-            `, [assignment.gathering_type_id, keepId, req.user.id]);
+            `, [assignment.gathering_type_id, keepId, req.user.id, req.user.church_id]);
           }
         }
       }
@@ -314,6 +314,63 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_IN
   } catch (error) {
     console.error('Delete individual error:', error);
     res.status(500).json({ error: 'Failed to delete individual.' });
+  }
+});
+
+// Permanently delete individual (Admin only)
+router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELETE_INDIVIDUAL'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await Database.transaction(async (conn) => {
+      // Remove gathering assignments first to satisfy FK constraints
+      await conn.query(
+        `DELETE FROM gathering_lists WHERE individual_id = ? AND church_id = ?`,
+        [id, req.user.church_id]
+      );
+
+      // Delete attendance records for this individual (church-scoped when available)
+      const hasArChurchId = await (async () => {
+        try {
+          const col = await conn.query("SHOW COLUMNS FROM attendance_records LIKE 'church_id'");
+          return col && col.length > 0;
+        } catch {
+          return false;
+        }
+      })();
+      if (hasArChurchId) {
+        await conn.query(
+          `DELETE FROM attendance_records WHERE individual_id = ? AND church_id = ?`,
+          [id, req.user.church_id]
+        );
+      } else {
+        await conn.query(
+          `DELETE FROM attendance_records WHERE individual_id = ?`,
+          [id]
+        );
+      }
+
+      // Finally delete the individual record
+      const result = await conn.query(
+        `DELETE FROM individuals WHERE id = ? AND church_id = ?`,
+        [id, req.user.church_id]
+      );
+
+      if (result.affectedRows === 0) {
+        throw Object.assign(new Error('Individual not found'), { statusCode: 404 });
+      }
+    });
+
+    res.json({ 
+      message: 'Individual permanently deleted',
+      id: Number(id)
+    });
+  } catch (error) {
+    if (error && error.statusCode === 404) {
+      return res.status(404).json({ error: 'Individual not found' });
+    }
+    console.error('Permanent delete individual error:', error);
+    res.status(500).json({ error: 'Failed to permanently delete individual.' });
   }
 });
 

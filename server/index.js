@@ -122,6 +122,9 @@ const loadRoutes = () => {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust proxy (client nginx sets X-Forwarded-For)
+app.set('trust proxy', 1);
+
 // Validate required environment variables
 const validateEnvironment = () => {
   const required = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];

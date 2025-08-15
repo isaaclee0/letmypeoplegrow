@@ -79,6 +79,9 @@ router.post('/upload/:gatheringId',
           const lastName = sanitizeString(row['LAST NAME'] || row['Last Name'] || row['last_name']);
           let familyName = sanitizeString(row['FAMILY NAME'] || row['Family Name'] || row['family_name']);
           if (familyName) {
+            // Strip any remaining quotes from family name
+            familyName = familyName.replace(/^["']+|["']+$/g, '').trim();
+            
             const m = familyName.match(/^([A-Z\s]+),\s*(.*)$/);
             if (m) {
               const surname = m[1].trim().toUpperCase();
@@ -173,7 +176,7 @@ router.post('/upload/:gatheringId',
           // Add to gathering list
           await conn.query(`
             INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
-            VALUES (?, ?, ?)
+            VALUES (?, ?, ?, ?)
           `, [gatheringId, individualResult.insertId, req.user.id, req.user.church_id]);
 
           individuals.push({
@@ -314,7 +317,12 @@ router.post('/copy-paste/:gatheringId?',
           const firstName = cleanColumns[0];
           const lastName = cleanColumns[1];
           // Join any remaining columns as family name if a naive split occurred (safety)
-          const familyName = cleanColumns.slice(2).join(delimiter === '\t' ? '\t' : delimiter).trim();
+          let familyName = cleanColumns.slice(2).join(delimiter === '\t' ? '\t' : delimiter).trim();
+          
+          // Ensure any remaining quotes in family name are stripped
+          if (familyName) {
+            familyName = familyName.replace(/^["']+|["']+$/g, '').trim();
+          }
           
           console.log('Parsed row:', { firstName, lastName, familyName });
           
@@ -351,6 +359,9 @@ router.post('/copy-paste/:gatheringId?',
           const lastName = sanitizeString(row['LAST NAME']);
           let familyName = sanitizeString(row['FAMILY NAME']);
           if (familyName) {
+            // Strip any remaining quotes from family name
+            familyName = familyName.replace(/^["']+|["']+$/g, '').trim();
+            
             const m = familyName.match(/^([A-Z\s]+),\s*(.*)$/);
             if (m) {
               const surname = m[1].trim().toUpperCase();

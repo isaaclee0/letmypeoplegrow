@@ -17,10 +17,17 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+      },
+    },
   },
   define: {
     'process.env': {},
   },
+  // Ensure service worker is copied to build output
+  publicDir: 'public',
 });
 
 

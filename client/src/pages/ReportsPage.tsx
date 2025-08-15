@@ -21,7 +21,8 @@ const ReportsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-  const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; streak: number }>>([]);
+  const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }>>([]);
+  const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number }>>([]);
   const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number }>>([]);
   const [showAllAbsences, setShowAllAbsences] = useState(false);
   const [showAllVisitors, setShowAllVisitors] = useState(false);
@@ -64,14 +65,35 @@ const ReportsPage: React.FC = () => {
   const loadGatherings = useCallback(async () => {
     try {
       const response = await gatheringsAPI.getAll();
-      const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
+      const userGatherings: GatheringType[] = response.data.gatherings.filter((g: GatheringType) => 
         user?.gatheringAssignments?.some((assignment: any) => assignment.id === g.id)
       );
-      setGatherings(userGatherings);
+      // Apply saved order preference
+      let ordered = userGatherings;
+      try {
+        const saved = localStorage.getItem(`user_${user?.id}_gathering_order`);
+        if (saved) {
+          const orderIds: number[] = JSON.parse(saved);
+          const idToItem = new Map<number, GatheringType>(userGatherings.map((i: GatheringType) => [i.id, i] as const));
+          const temp: GatheringType[] = [];
+          orderIds.forEach((id: number) => { const it = idToItem.get(id); if (it) temp.push(it); });
+          userGatherings.forEach((i: GatheringType) => { if (!orderIds.includes(i.id)) temp.push(i); });
+          ordered = temp;
+        }
+      } catch {}
+      setGatherings(ordered);
       
       // Default to first gathering if available
-      if (userGatherings.length > 0 && !selectedGathering) {
-        setSelectedGathering(userGatherings[0]);
+      if (ordered.length > 0 && !selectedGathering) {
+        // Prefer explicitly saved default id
+        const savedDefaultId = user?.id ? localStorage.getItem(`user_${user.id}_default_gathering_id`) : null;
+        if (savedDefaultId) {
+          const idNum = parseInt(savedDefaultId, 10);
+          const found = ordered.find((g: GatheringType) => g.id === idNum) || null;
+          setSelectedGathering(found || ordered[0]);
+        } else {
+          setSelectedGathering(ordered[0]);
+        }
       }
     } catch (err) {
       setError('Failed to load gatherings');
@@ -123,7 +145,7 @@ const ReportsPage: React.FC = () => {
         limitedDates.map((d: string) => attendanceAPI.get(selectedGathering.id, d))
       );
 
-      type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
+      type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; statuses: boolean[] };
       const regularMap = new Map<number, RegularEntry>();
       const visitorCounts = new Map<string, { name: string; count: number }>();
       const now = new Date();
@@ -137,7 +159,7 @@ const ReportsPage: React.FC = () => {
         const list = data.attendanceList || [];
         list.forEach((ind: any) => {
           if (typeof ind.id !== 'number') return;
-          const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, statuses: [] as boolean[] };
+           const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, familyId: (ind as any).familyId ?? null, familyName: (ind as any).familyName ?? null, statuses: [] as boolean[] };
           existing.statuses.push(!!ind.present);
           regularMap.set(ind.id, existing);
         });
@@ -155,7 +177,7 @@ const ReportsPage: React.FC = () => {
         }
       });
 
-      const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; streak: number }> = [];
+      const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }> = [];
       Array.from(regularMap.entries()).forEach(([id, entry]) => {
         let streak = 0;
         for (const present of entry.statuses) {
@@ -163,11 +185,69 @@ const ReportsPage: React.FC = () => {
           streak += 1;
         }
         if (streak >= 2) {
-          absenceArr.push({ individualId: id, firstName: entry.firstName, lastName: entry.lastName, streak });
+          absenceArr.push({ individualId: id, firstName: entry.firstName, lastName: entry.lastName, familyId: entry.familyId ?? null, familyName: entry.familyName ?? null, streak });
         }
       });
       absenceArr.sort((a, b) => (b.streak - a.streak) || a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
       setAbsenceList(absenceArr);
+
+      // Group absences by family ONLY if every member of the family is absent (streak >= 2)
+      const grouped: Array<{ key: string; name: string; streak: number }> = [];
+      const absentById = new Map<number, number>();
+      absenceArr.forEach(a => absentById.set(a.individualId, a.streak));
+
+      // Build family membership from regularMap (covers all assigned members)
+      const familyMembers = new Map<number, { familyName: string | null; memberIds: number[] }>();
+      for (const [id, entry] of regularMap.entries()) {
+        const famId = (entry.familyId ?? null) as number | null;
+        const famName = (entry.familyName ?? null) as string | null;
+        if (famId) {
+          const current = familyMembers.get(famId) || { familyName: famName, memberIds: [] };
+          if (!current.memberIds.includes(id)) current.memberIds.push(id);
+          // Preserve first seen family name
+          if (!current.familyName && famName) current.familyName = famName;
+          familyMembers.set(famId, current);
+        }
+      }
+
+      // Helper to format family label from stored familyName ("SURNAME, A & B" -> "Surname family")
+      const formatFamilyLabel = (famName?: string | null) => {
+        if (!famName || !famName.trim()) return 'Family';
+        const parts = famName.split(',');
+        const surnameRaw = (parts[0] || famName).trim();
+        const proper = surnameRaw.charAt(0).toUpperCase() + surnameRaw.slice(1).toLowerCase();
+        return `${proper} family`;
+      };
+
+      // Determine families where all members are absent (streak >= 2)
+      const groupedMemberIds = new Set<number>();
+      for (const [famId, meta] of familyMembers.entries()) {
+        if (meta.memberIds.length <= 1) continue; // only group true families
+        let allAbsent = true;
+        let minStreak = Number.MAX_SAFE_INTEGER;
+        for (const memberId of meta.memberIds) {
+          const st = absentById.get(memberId) || 0;
+          if (st < 2) { // fewer than threshold => not all absent
+            allAbsent = false;
+            break;
+          }
+          if (st < minStreak) minStreak = st;
+        }
+        if (allAbsent && minStreak !== Number.MAX_SAFE_INTEGER) {
+          meta.memberIds.forEach(id => groupedMemberIds.add(id));
+          grouped.push({ key: `fam:${famId}`, name: formatFamilyLabel(meta.familyName), streak: minStreak });
+        }
+      }
+
+      // Add remaining individuals who are absent but not part of a fully-absent family
+      absenceArr.forEach(a => {
+        if (!groupedMemberIds.has(a.individualId)) {
+          grouped.push({ key: `ind:${a.individualId}`, name: `${a.firstName} ${a.lastName}`, streak: a.streak });
+        }
+      });
+
+      grouped.sort((a, b) => (b.streak - a.streak) || a.name.localeCompare(b.name));
+      setGroupedAbsences(grouped);
 
       const visitorsArr = Array.from(visitorCounts.entries())
         .map(([key, val]) => ({ key, name: val.name, count: val.count }))
@@ -830,34 +910,34 @@ const ReportsPage: React.FC = () => {
             <h3 className="text-lg leading-6 font-medium text-gray-900">Regulars With Recent Absences</h3>
             <p className="mt-1 text-sm text-gray-500">Based on consecutive absences in the latest sessions for this gathering.</p>
             <div className="mt-4">
-              {isLoadingDetails ? (
+               {isLoadingDetails ? (
                 <div className="flex justify-center items-center h-40">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                 </div>
-              ) : absenceList.length === 0 ? (
+               ) : groupedAbsences.length === 0 ? (
                 <div className="text-sm text-gray-500">No concerning absences right now.</div>
               ) : (
                 <>
                 <ul className="divide-y divide-gray-200">
-                  {(showAllAbsences ? absenceList : absenceList.slice(0, 5)).map((p) => {
+                  {(showAllAbsences ? groupedAbsences : groupedAbsences.slice(0, 5)).map((g) => {
                     const base = 'px-3 py-2 flex items-center justify-between';
-                    const color = p.streak >= 3 ? 'bg-orange-200' : 'bg-orange-100';
+                    const color = g.streak >= 3 ? 'bg-orange-200' : 'bg-orange-100';
                     return (
-                      <li key={p.individualId} className={`${base} ${color} rounded`}> 
-                        <span className="font-medium text-gray-900">{p.firstName} {p.lastName}</span>
-                        <span className="text-sm text-gray-700">Missed {p.streak} {p.streak === 1 ? 'service' : 'services'} in a row</span>
+                      <li key={g.key} className={`${base} ${color} rounded`}>
+                        <span className="font-medium text-gray-900">{g.name}</span>
+                        <span className="text-sm text-gray-700">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
                       </li>
                     );
                   })}
                 </ul>
-                {absenceList.length > 5 && (
+                 {groupedAbsences.length > 5 && (
                   <div className="mt-3 text-right">
                     <button
                       type="button"
                       onClick={() => setShowAllAbsences((v) => !v)}
                       className="text-sm font-medium text-primary-600 hover:text-primary-700"
                     >
-                      {showAllAbsences ? 'Show less' : `Show all (${absenceList.length})`}
+                       {showAllAbsences ? 'Show less' : `Show all (${groupedAbsences.length})`}
                     </button>
                   </div>
                 )}

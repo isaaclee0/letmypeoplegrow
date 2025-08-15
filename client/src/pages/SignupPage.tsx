@@ -70,8 +70,10 @@ const SignupPage: React.FC = () => {
       const response = await authAPI.verifyCode(contact, data.code);
       await login(response.data.token, response.data.user);
       
-      // Default landing is attendance; onboarding handled by protected routes
-      navigate('/app/attendance');
+      // Check if user has any gathering assignments and redirect accordingly
+      const hasGatherings = response.data.user.gatheringAssignments && response.data.user.gatheringAssignments.length > 0;
+      const defaultRoute = hasGatherings ? '/app/attendance' : '/app/gatherings';
+      navigate(defaultRoute);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {

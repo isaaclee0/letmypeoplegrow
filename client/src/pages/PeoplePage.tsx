@@ -39,6 +39,7 @@ interface Family {
 
 const PeoplePage: React.FC = () => {
 
+
   const { showSuccess } = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -72,6 +73,7 @@ const PeoplePage: React.FC = () => {
     keepFamilyId: null as number | null,
     mergeFamilyIds: [] as number[]
   });
+  const [dedupeKeepId, setDedupeKeepId] = useState<number | null>(null);
   
   // Combined family/person modal state
   const [familyMembers, setFamilyMembers] = useState<Array<{firstName: string, lastName: string}>>([{firstName: '', lastName: ''}]);
@@ -140,6 +142,11 @@ const PeoplePage: React.FC = () => {
     gatheringId: number | null;
     peopleCount: number;
   }>({ gatheringId: null, peopleCount: 0 });
+  const [showPermanentDeleteModal, setShowPermanentDeleteModal] = useState(false);
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<{
+    personId: number | null;
+    personName: string;
+  }>({ personId: null, personName: '' });
 
   // UI state for visitor sections
   const [showArchivedVisitors, setShowArchivedVisitors] = useState(false);
@@ -251,14 +258,56 @@ const PeoplePage: React.FC = () => {
 
   const handleCSVUpload = async () => {
     try {
-      // TODO: Implement CSV parsing and upload
-      console.log('CSV data:', csvData);
+      setIsLoading(true);
+      setError('');
+      
+      // Convert CSV data string to a File object
+      const csvBlob = new Blob([csvData], { type: 'text/csv' });
+      const csvFile = new File([csvBlob], 'upload.csv', { type: 'text/csv' });
+      
+      console.log('Uploading CSV file:', csvFile);
+      console.log('Selected gathering ID:', selectedGatheringId);
+      
+      // Use the gathering ID if selected, otherwise upload without assignment
+      const response = selectedGatheringId 
+        ? await csvImportAPI.upload(selectedGatheringId, csvFile)
+        : await csvImportAPI.copyPaste(csvData);
+      
       setShowAddModal(false);
       setCsvData('');
+      setSelectedGatheringId(null);
+      
+      // Show success message
+      const successMessage = response.data.message || `Import completed! Imported: ${response.data.imported} people, Families: ${response.data.families}, Duplicates: ${response.data.duplicates}, Skipped: ${response.data.skipped}`;
+      showSuccess(successMessage);
+      
+      // Log detailed information for debugging
+      if (response.data.details) {
+        console.log('Import details:', response.data.details);
+        if (response.data.details.duplicates && response.data.details.duplicates.length > 0) {
+          console.log('Duplicates found:', response.data.details.duplicates);
+        }
+        if (response.data.details.imported && response.data.details.imported.length > 0) {
+          console.log('Successfully imported:', response.data.details.imported);
+        }
+      }
+      
       // Reload people after upload
       await loadPeople();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to upload CSV');
+      console.error('CSV upload error:', err);
+      console.error('Error response:', err.response?.data);
+      
+      let errorMessage = 'Failed to upload CSV';
+      if (err.response?.data?.error) {
+        errorMessage = err.response.data.error;
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -365,6 +414,26 @@ const PeoplePage: React.FC = () => {
       showSuccess('Person restored');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to restore person');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const confirmPermanentDelete = (personId: number, personName: string) => {
+    setPermanentDeleteTarget({ personId, personName });
+    setShowPermanentDeleteModal(true);
+  };
+
+  const handlePermanentDelete = async () => {
+    if (!permanentDeleteTarget.personId) return;
+    try {
+      setIsLoading(true);
+      setError('');
+      await individualsAPI.permanentDelete(permanentDeleteTarget.personId);
+      await loadArchivedPeople();
+      showSuccess('Person permanently deleted');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to permanently delete person');
     } finally {
       setIsLoading(false);
     }
@@ -963,9 +1032,9 @@ const PeoplePage: React.FC = () => {
         return;
       }
       
-      // For now, keep the first selected individual and delete the rest
-      const keepId = selectedPeople[0];
-      const deleteIds = selectedPeople.slice(1);
+      // Use the selected master record
+      const keepId = dedupeKeepId ?? selectedPeople[0];
+      const deleteIds = selectedPeople.filter(id => id !== keepId);
       
       const response = await individualsAPI.deduplicate({
         keepId,
@@ -976,6 +1045,7 @@ const PeoplePage: React.FC = () => {
       showSuccess(`Successfully deduplicated ${deleteIds.length} individuals`);
       setShowMergeModal(false);
       setSelectedPeople([]);
+      setDedupeKeepId(null);
       await loadPeople();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to deduplicate individuals');
@@ -998,6 +1068,9 @@ const PeoplePage: React.FC = () => {
       keepFamilyId: null,
       mergeFamilyIds: []
     });
+    if (mode === 'deduplicate') {
+      setDedupeKeepId(selectedPeople[0]);
+    }
     setShowMergeModal(true);
   };
 
@@ -1927,6 +2000,12 @@ const PeoplePage: React.FC = () => {
                           label: 'Restore',
                           icon: <ArrowPathIcon className="h-4 w-4" />,
                           onClick: () => restorePerson(person.id)
+                        },
+                        {
+                          label: 'Delete Permanently',
+                          icon: <TrashIcon className="h-4 w-4" />,
+                          onClick: () => confirmPermanentDelete(person.id, `${person.firstName} ${person.lastName}`),
+                          className: 'text-red-600 hover:bg-red-50'
                         }
                       ]}
                     />
@@ -2247,6 +2326,24 @@ const PeoplePage: React.FC = () => {
 John,Smith,"Smith, John and Sarah"
 Sarah,Smith,"Smith, John and Sarah"`}</pre>
                   </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Assign to Service (Optional)
+                    </label>
+                    <select
+                      value={selectedGatheringId || ''}
+                      onChange={(e) => setSelectedGatheringId(e.target.value ? parseInt(e.target.value) : null)}
+                      className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    >
+                      <option value="">Don't assign to any service</option>
+                      {gatheringTypes.map(gathering => (
+                        <option key={gathering.id} value={gathering.id}>
+                          {gathering.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
@@ -2501,6 +2598,53 @@ Sarah       Smith      Smith, John and Sarah</pre>
         </div>
       )}
 
+      {showPermanentDeleteModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">Permanently Delete</h3>
+                <button
+                  onClick={() => setShowPermanentDeleteModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  This will permanently delete <strong>{permanentDeleteTarget.personName}</strong> and related attendance records. This action cannot be undone.
+                </p>
+              </div>
+
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowPermanentDeleteModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    await handlePermanentDelete();
+                    setShowPermanentDeleteModal(false);
+                    setPermanentDeleteTarget({ personId: null, personName: '' });
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Delete Permanently
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
 
 
              {/* removed: Manage Gatherings Modal */}
@@ -2727,10 +2871,9 @@ Sarah       Smith      Smith, John and Sarah</pre>
            </button>
            {people.length === 0 && (
              <>
-                <div className="hidden sm:block fixed bottom-24 right-28 z-[9998] flex items-center space-x-3">
+                <div className="fixed bottom-16 right-28 z-40 flex items-center space-x-3">
                  <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
                    <p className="text-base font-semibold">Add your first people</p>
-                   <p className="text-xs text-primary-700 mt-1">Click the plus button</p>
                  </div>
                   <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 opacity-70">
                     <defs>
@@ -2741,7 +2884,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
                     <path d="M10 10 C 70 10, 95 60, 105 105" stroke="currentColor" strokeWidth="4" fill="none" markerEnd="url(#arrowhead)" />
                   </svg>
                </div>
-                <span className="pointer-events-none fixed bottom-6 right-6 z-[9998] inline-flex h-16 w-16 rounded-full bg-primary-400/40"></span>
+
              </>
            )}
          </>
@@ -2879,18 +3022,34 @@ Sarah       Smith      Smith, John and Sarah</pre>
                        </div>
                      </div>
                    </>
-                 ) : (
+                  ) : (
                    <>
                      <div>
                        <p className="text-sm text-gray-600 mb-4">
-                         Deduplicate {selectedPeople.length} selected individuals. The first selected individual will be kept, and the rest will be removed. This is useful when the same person has been added multiple times.
+                          Deduplicate {selectedPeople.length} selected individuals. Choose which record to keep as the master. The rest will be removed. Use this only for true duplicates, not different people.
                        </p>
                        
                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">Master record to keep</label>
+                            <select
+                              value={dedupeKeepId || ''}
+                              onChange={(e) => setDedupeKeepId(e.target.value ? parseInt(e.target.value) : null)}
+                              className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            >
+                              <option value="">Select record to keep</option>
+                              {people.filter(p => selectedPeople.includes(p.id)).map(p => (
+                                <option key={p.id} value={p.id}>
+                                  {p.firstName} {p.lastName}{p.familyName ? ` — Family: ${p.familyName}` : ''} (ID: {p.id})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
                          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
                            <div className="flex">
                              <div className="text-sm text-yellow-700">
-                               <strong>Warning:</strong> This will permanently delete {selectedPeople.length - 1} individual(s). The first selected individual will be kept.
+                                <strong>Warning:</strong> This will permanently delete {selectedPeople.length - 1} individual(s). Ensure you selected the correct master record above.
                              </div>
                            </div>
                          </div>

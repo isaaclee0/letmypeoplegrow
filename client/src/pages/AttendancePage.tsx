@@ -13,9 +13,9 @@ import {
   StarIcon,
   XMarkIcon,
   PencilIcon,
-  TrashIcon,
   EllipsisHorizontalIcon
 } from '@heroicons/react/24/outline';
+import { Bars3Icon } from '@heroicons/react/24/outline';
 
 interface PersonForm {
   firstName: string;
@@ -160,12 +160,7 @@ const AttendancePage: React.FC = () => {
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<{
-    visitor: Visitor | null;
-    deleteFamily: boolean;
-    message: string;
-  }>({ visitor: null, deleteFamily: false, message: '' });
+
 
   // Add state for recent visitors
   const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
@@ -288,18 +283,40 @@ const AttendancePage: React.FC = () => {
         );
         setGatherings(userGatherings);
         
-        // Set last viewed gathering or first available gathering
+        // Set default gathering honoring saved order and default preference
         if (userGatherings.length > 0) {
           const lastViewed = getLastViewed();
-          let gatheringToSelect = null;
-          
+          let gatheringToSelect: GatheringType | null = null;
+
+          // Try last viewed first
           if (lastViewed) {
-            // Try to find the last viewed gathering
-            gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId);
+            gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId) || null;
           }
-          
-          // Fall back to first available gathering
-          setSelectedGathering(gatheringToSelect || userGatherings[0]);
+
+          // Apply saved order
+          let ordered = userGatherings;
+          try {
+            const saved = localStorage.getItem(`user_${user?.id}_gathering_order`);
+            if (saved) {
+              const orderIds: number[] = JSON.parse(saved);
+              const idToItem = new Map<number, GatheringType>(userGatherings.map((i: GatheringType) => [i.id, i] as const));
+              const temp: GatheringType[] = [];
+              orderIds.forEach((id: number) => { const it = idToItem.get(id); if (it) temp.push(it); });
+              userGatherings.forEach((i: GatheringType) => { if (!orderIds.includes(i.id)) temp.push(i); });
+              ordered = temp;
+            }
+          } catch {}
+
+          // Saved default id overrides if available
+          if (!gatheringToSelect && user?.id) {
+            const savedDefaultId = localStorage.getItem(`user_${user.id}_default_gathering_id`);
+            if (savedDefaultId) {
+              const idNum = parseInt(savedDefaultId, 10);
+              gatheringToSelect = ordered.find((g: GatheringType) => g.id === idNum) || userGatherings.find((g: GatheringType) => g.id === idNum) || null;
+            }
+          }
+
+          setSelectedGathering(gatheringToSelect || ordered[0] || userGatherings[0]);
         }
       } catch (err) {
         setError('Failed to load gatherings');
@@ -335,11 +352,11 @@ const AttendancePage: React.FC = () => {
       setAttendanceList(response.data.attendanceList || []);
       setVisitors(response.data.visitors || []);
       
-      // Initialize visitor attendance state (all visitors start as present)
+      // Initialize visitor attendance state from server 'present' flags
       const initialVisitorAttendance: { [key: number]: boolean } = {};
-      (response.data.visitors || []).forEach((visitor: Visitor) => {
+      (response.data.visitors || []).forEach((visitor: any) => {
         if (visitor.id) {
-          initialVisitorAttendance[visitor.id] = true;
+          initialVisitorAttendance[visitor.id] = Boolean(visitor.present);
         }
       });
       setVisitorAttendance(initialVisitorAttendance);
@@ -435,12 +452,12 @@ const AttendancePage: React.FC = () => {
 
         setAllVisitors(combinedVisitors);
         
-        // Initialize visitor attendance state
+        // Initialize visitor attendance state from server 'present' flags
+        const presentVisitorIds = new Set((currentVisitors || []).filter((cv: any) => cv.present).map((cv: any) => cv.id));
         const initialVisitorAttendance: { [key: number]: boolean } = {};
         combinedVisitors.forEach((visitor: Visitor) => {
           if (visitor.id) {
-            // Current visitors are checked by default, recent visitors are unchecked
-            initialVisitorAttendance[visitor.id] = currentVisitors.some((cv: Visitor) => cv.id === visitor.id);
+            initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
           }
         });
         setVisitorAttendance(initialVisitorAttendance);
@@ -717,49 +734,7 @@ const AttendancePage: React.FC = () => {
     setShowEditVisitorModal(true);
   };
 
-  const handleDeleteVisitor = (visitor: Visitor, deleteFamily: boolean = false) => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    const confirmMessage = deleteFamily 
-      ? `Are you sure you want to delete the entire visitor family? This cannot be undone.`
-      : `Are you sure you want to delete ${visitor.name}? This cannot be undone.`;
 
-    setDeleteConfirmation({
-      visitor,
-      deleteFamily,
-      message: confirmMessage
-    });
-    setShowDeleteModal(true);
-  };
-
-  const confirmDeleteVisitor = async () => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    if (!selectedGathering || !deleteConfirmation.visitor) return;
-
-    try {
-      const response = await attendanceAPI.deleteVisitor(
-        selectedGathering.id, 
-        selectedDate, 
-        deleteConfirmation.visitor.id!, 
-        deleteConfirmation.deleteFamily
-      );
-
-      showSuccess(response.data.message);
-      
-      // Reload attendance data to refresh the visitor list
-      await loadAttendanceData();
-    } catch (err: any) {
-      console.error('Failed to delete visitor:', err);
-      setError(err.response?.data?.error || 'Failed to delete visitor');
-    } finally {
-      setShowDeleteModal(false);
-      setDeleteConfirmation({ visitor: null, deleteFamily: false, message: '' });
-    }
-  };
-
-  const cancelDeleteVisitor = () => {
-    setShowDeleteModal(false);
-    setDeleteConfirmation({ visitor: null, deleteFamily: false, message: '' });
-  };
 
   // Add functions to manage persons array
   const addPerson = () => {
@@ -1027,57 +1002,20 @@ const AttendancePage: React.FC = () => {
 
     visitorsInput.forEach((visitor, index) => {
       const visitorId = visitor.id || `temp_${index}`;
-      const groupKey = visitor.visitorFamilyGroup ? `family_${visitor.visitorFamilyGroup}` : `individual_${visitorId}`;
+      const groupKey = visitor.visitorFamilyGroup || visitor.familyId ? `family_${visitor.visitorFamilyGroup || visitor.familyId}` : `individual_${visitorId}`;
       if (!grouped[groupKey]) {
         const isFamily = !!visitor.visitorFamilyGroup;
-        let familyName = null as string | null;
+        // Prefer server-provided familyName to avoid heuristic mismatches
+        let familyName: string | null = null;
         if (isFamily) {
-          const familyMembers = visitorsInput.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup);
-          const sortedMembers = familyMembers.sort((a, b) => (a.id || 0) - (b.id || 0));
-          const firstTwoMembers = sortedMembers.slice(0, 2);
-          const firstNames = firstTwoMembers.map(member => {
-            const parts = member.name.trim().split(' ');
-            const firstName = parts[0];
-            return (firstName && firstName !== 'Unknown' && !firstName.match(/^Child$/i)) ? firstName : null;
-          }).filter(name => name !== null) as string[];
-          const surnames = firstTwoMembers.map(member => {
-            const parts = member.name.trim().split(' ');
-            const lastName = parts.slice(1).join(' ');
-            return (lastName && lastName !== 'Unknown') ? lastName : null;
-          }).filter(name => name !== null) as string[];
-          if (surnames.length === 0 && firstNames.length > 0) {
-            familyName = firstNames.length === 1 ? firstNames[0] : `${firstNames[0]} and ${firstNames[1]}`;
-          } else {
-            const uniqueSurnames = Array.from(new Set(surnames));
-            if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
-              const surname = uniqueSurnames[0].toUpperCase();
-              familyName = firstNames.length === 1 ? `${surname}, ${firstNames[0]}` : `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
-            } else if (firstNames.length > 0 && surnames.length > 0) {
-              const nameWithSurname = firstTwoMembers.map(member => {
-                const parts = member.name.trim().split(' ');
-                const firstName = parts[0];
-                const lastName = parts.slice(1).join(' ');
-                if (firstName && firstName !== 'Unknown' && lastName && lastName !== 'Unknown') {
-                  return `${lastName.toUpperCase()}, ${firstName}`;
-                } else if (firstName && firstName !== 'Unknown') {
-                  return firstName;
-                }
-                return null;
-              }).filter(name => name !== null) as string[];
-              familyName = nameWithSurname.length === 1
-                ? nameWithSurname[0]
-                : nameWithSurname.length === 2
-                  ? `${nameWithSurname[0]} and ${nameWithSurname[1]}`
-                  : 'Visitor Family';
-            } else {
-              familyName = 'Visitor Family';
-            }
-          }
-        } else {
+          familyName = visitor.familyName || null;
+        }
+        if (!familyName) {
+          // Fallbacks only when no server family name is available
           const parts = visitor.name.trim().split(' ');
           const firstName = parts[0] || 'Unknown';
-          const lastName = parts.slice(1).join(' ') || 'Unknown';
-          familyName = lastName !== 'Unknown' ? `${lastName.toUpperCase()}, ${firstName}` : (firstName !== 'Unknown' ? firstName : 'Unknown Visitor');
+          const lastName = parts.slice(1).join(' ');
+          familyName = lastName && lastName !== 'Unknown' ? `${lastName.toUpperCase()}, ${firstName}` : (firstName && firstName !== 'Unknown' ? firstName : 'Visitor Family');
         }
         const computedFamilyId = isFamily
           ? (visitor.visitorFamilyGroup ? Number(visitor.visitorFamilyGroup) : (visitor.familyId ?? null))
@@ -1144,16 +1082,37 @@ const AttendancePage: React.FC = () => {
   });
 
   // Add toggle function for visitors
-  const toggleVisitorAttendance = (visitorId: number) => {
+  const toggleVisitorAttendance = async (visitorId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    // Optimistic toggle
     setVisitorAttendance(prev => ({
       ...prev,
       [visitorId]: !prev[visitorId]
     }));
+
+    if (!selectedGathering || !selectedDate) return;
+
+    try {
+      const newPresent = !visitorAttendance[visitorId];
+      await attendanceAPI.record(selectedGathering.id, selectedDate, {
+        attendanceRecords: [{ individualId: visitorId, present: newPresent }],
+        visitors: []
+      });
+      // Also update attendanceList present
+      setAttendanceList(prev => prev.map(p => p.id === visitorId ? { ...p, present: newPresent } : p));
+    } catch (err) {
+      console.error('Failed to save visitor attendance change:', err);
+      setError('Failed to save change');
+      // Revert on error
+      setVisitorAttendance(prev => ({
+        ...prev,
+        [visitorId]: !prev[visitorId]
+      }));
+    }
   };
 
   // Add toggle all family function for visitors
-  const toggleAllVisitorFamily = (familyGroup: number | string) => {
+  const toggleAllVisitorFamily = async (familyGroup: number | string) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
     const familyVisitorIds = familyVisitors.map(visitor => visitor.id).filter((id): id is number => id !== undefined);
@@ -1164,6 +1123,7 @@ const AttendancePage: React.FC = () => {
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
     
+    // Optimistic update
     setVisitorAttendance(prev => {
       const updated = { ...prev };
       familyVisitorIds.forEach(id => {
@@ -1171,6 +1131,28 @@ const AttendancePage: React.FC = () => {
       });
       return updated;
     });
+
+    if (!selectedGathering || !selectedDate) return;
+
+    try {
+      await attendanceAPI.record(selectedGathering.id, selectedDate, {
+        attendanceRecords: familyVisitorIds.map(id => ({ individualId: id, present: shouldCheckAll })),
+        visitors: []
+      });
+      // Reflect in attendanceList
+      setAttendanceList(prev => prev.map(p => familyVisitorIds.includes(p.id) ? { ...p, present: shouldCheckAll } : p));
+    } catch (err) {
+      console.error('Failed to save visitor family attendance change:', err);
+      setError('Failed to save family changes');
+      // Revert on error
+      setVisitorAttendance(prev => {
+        const updated = { ...prev };
+        familyVisitorIds.forEach(id => {
+          updated[id] = !shouldCheckAll;
+        });
+        return updated;
+      });
+    }
   };
 
   // Add entire visitor family from All Visitors section to the current service
@@ -1306,6 +1288,9 @@ const AttendancePage: React.FC = () => {
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [orderedGatherings, setOrderedGatherings] = useState<GatheringType[]>([]);
   const draggingGatheringId = useRef<number | null>(null);
+  const [showReorderModal, setShowReorderModal] = useState(false);
+  const [reorderList, setReorderList] = useState<GatheringType[]>([]);
+  const dragIndexRef = useRef<number | null>(null);
 
   const loadSavedOrder = useCallback((items: GatheringType[]) => {
     if (!user?.id) return items;
@@ -1338,19 +1323,40 @@ const AttendancePage: React.FC = () => {
   }, [user?.id]);
 
   const onDragStart = (id: number) => { draggingGatheringId.current = id; };
-  const onDragOver = (e: React.DragEvent<HTMLButtonElement>) => { e.preventDefault(); };
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const onDrop = (targetId: number) => {
-    const sourceId = draggingGatheringId.current;
+    // No-op for tab strip; reordering handled in modal now
     draggingGatheringId.current = null;
-    if (sourceId == null || sourceId === targetId) return;
-    const current = [...orderedGatherings];
-    const fromIndex = current.findIndex(g => g.id === sourceId);
-    const toIndex = current.findIndex(g => g.id === targetId);
-    if (fromIndex === -1 || toIndex === -1) return;
-    const [moved] = current.splice(fromIndex, 1);
-    current.splice(toIndex, 0, moved);
-    setOrderedGatherings(current);
-    saveOrder(current);
+  };
+
+  // Reorder modal helpers
+  const openReorderModal = () => {
+    const items = (orderedGatherings.length ? orderedGatherings : gatherings).slice();
+    setReorderList(items);
+    setShowReorderModal(true);
+  };
+  const closeReorderModal = () => setShowReorderModal(false);
+  const onReorderDragStart = (index: number) => { dragIndexRef.current = index; };
+  const onReorderDragOver = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); };
+  const onReorderDrop = (index: number) => {
+    const fromIndex = dragIndexRef.current;
+    dragIndexRef.current = null;
+    if (fromIndex == null || fromIndex === index) return;
+    setReorderList(prev => {
+      const next = prev.slice();
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(index, 0, moved);
+      return next;
+    });
+  };
+  const saveReorder = () => {
+    setOrderedGatherings(reorderList);
+    saveOrder(reorderList);
+    // Persist default gathering as first item for cross-page defaults
+    if (user?.id && reorderList.length > 0) {
+      localStorage.setItem(`user_${user.id}_default_gathering_id`, String(reorderList[0].id));
+    }
+    setShowReorderModal(false);
   };
 
   return (
@@ -1433,23 +1439,11 @@ const AttendancePage: React.FC = () => {
             {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
             <div className="md:hidden">
               <div className="flex items-center space-x-2">
-                {/* Reorder toggle */}
-                <button
-                  type="button"
-                  onClick={() => setIsReorderMode(v => !v)}
-                  className={`py-1 px-2 text-xs rounded border ${isReorderMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
-                  title="Reorder gatherings"
-                >
-                  <PencilIcon className="h-4 w-4" />
-                </button>
                 {/* First 2 tabs */}
                 {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering) => (
                   <button
                     key={gathering.id}
-                    draggable={isReorderMode}
-                    onDragStart={() => onDragStart(gathering.id)}
-                    onDragOver={onDragOver}
-                    onDrop={() => onDrop(gathering.id)}
+                    draggable={false}
                     onClick={() => setSelectedGathering(gathering)}
                     className={`flex-1 whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                       selectedGathering?.id === gathering.id
@@ -1481,10 +1475,7 @@ const AttendancePage: React.FC = () => {
                           {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering) => (
                             <button
                               key={gathering.id}
-                              draggable={isReorderMode}
-                              onDragStart={() => onDragStart(gathering.id)}
-                              onDragOver={onDragOver}
-                              onDrop={() => onDrop(gathering.id)}
+                              draggable={false}
                               onClick={() => {
                                 setSelectedGathering(gathering);
                                 setShowGatheringDropdown(false);
@@ -1498,6 +1489,14 @@ const AttendancePage: React.FC = () => {
                               {gathering.name}
                             </button>
                           ))}
+                          <div className="my-1 border-t border-gray-200" />
+                          <button
+                            onClick={() => { setShowGatheringDropdown(false); openReorderModal(); }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
+                          >
+                            <PencilIcon className="h-4 w-4 text-gray-500" />
+                            <span>Edit order</span>
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1506,35 +1505,36 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
             
-            {/* Desktop: Show all tabs with reorder */}
-            <nav className="hidden md:flex -mb-px space-x-2 items-center" aria-label="Tabs">
-              <button
-                type="button"
-                onClick={() => setIsReorderMode(v => !v)}
-                className={`py-1 px-2 text-xs rounded border ${isReorderMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
-                title="Reorder gatherings"
-              >
-                <PencilIcon className="h-4 w-4" />
-              </button>
-              {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
+            {/* Desktop: Show all tabs; edit button on the right */}
+            <nav className="hidden md:flex -mb-px items-center w-full space-x-2" aria-label="Tabs">
+              <div className="flex items-center space-x-2 overflow-x-auto">
+                {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
+                  <button
+                    key={gathering.id}
+                    draggable={false}
+                    onClick={() => setSelectedGathering(gathering)}
+                    className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
+                      selectedGathering?.id === gathering.id
+                        ? 'bg-primary-500 text-white'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span>{gathering.name}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="ml-auto">
                 <button
-                  key={gathering.id}
-                  draggable={isReorderMode}
-                  onDragStart={() => onDragStart(gathering.id)}
-                  onDragOver={onDragOver}
-                  onDrop={() => onDrop(gathering.id)}
-                  onClick={() => setSelectedGathering(gathering)}
-                  className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
-                    selectedGathering?.id === gathering.id
-                      ? 'bg-primary-500 text-white'
-                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                  }`}
+                  type="button"
+                  onClick={openReorderModal}
+                  className="py-1 px-2 text-xs rounded border text-gray-500 hover:bg-gray-100"
+                  title="Edit order"
                 >
-                  <div className="flex items-center space-x-2">
-                    <span>{gathering.name}</span>
-                  </div>
+                  <PencilIcon className="h-4 w-4" />
                 </button>
-              ))}
+              </div>
             </nav>
           </div>
           
@@ -1824,18 +1824,7 @@ const AttendancePage: React.FC = () => {
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
-                        <button
-                          disabled={isAttendanceLocked}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleDeleteVisitor(group.members[0], group.members.length > 1);
-                          }}
-                          className={`p-1 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600'} transition-colors`}
-                          title="Delete"
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
+
                       </div>
                       {group.members.length > 1 && (
                         <button
@@ -1919,18 +1908,7 @@ const AttendancePage: React.FC = () => {
                                 >
                                   <PencilIcon className="h-3 w-3" />
                                 </button>
-                                <button
-                                  disabled={isAttendanceLocked}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    handleDeleteVisitor(person, false);
-                                  }}
-                                  className={`p-0.5 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-red-600'} transition-colors`}
-                                  title="Delete visitor"
-                                >
-                                  <TrashIcon className="h-3 w-3" />
-                                </button>
+
                               </div>
                             )}
                           </div>
@@ -2438,57 +2416,61 @@ const AttendancePage: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
+      {/* Reorder Modal */}
+      {showReorderModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
           <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-1/2 lg:w-1/3 max-w-md p-5 border shadow-lg rounded-md bg-white">
+            <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Confirm Deletion
-                </h3>
-                <button
-                  onClick={cancelDeleteVisitor}
-                  className="text-gray-400 hover:text-gray-600"
-                >
+                <h3 className="text-lg font-medium text-gray-900">Edit gathering order</h3>
+                <button onClick={closeReorderModal} className="text-gray-400 hover:text-gray-600">
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
-              
-              <div className="mb-6">
-                <div className="flex items-center mb-4">
-                  <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100">
-                    <TrashIcon className="h-6 w-6 text-red-600" />
+              <p className="text-sm text-gray-500 mb-4">Drag to reorder. The top gathering becomes your default across the app, including reports.</p>
+              <div className="space-y-2">
+                {reorderList.map((g, index) => (
+                  <div
+                    key={g.id}
+                    draggable
+                    onDragStart={() => onReorderDragStart(index)}
+                    onDragOver={onReorderDragOver}
+                    onDrop={() => onReorderDrop(index)}
+                    className="flex items-center justify-between px-3 py-2 border rounded-md bg-white hover:bg-gray-50 cursor-move"
+                    title="Drag to move"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <span className="text-sm text-gray-500 w-6 text-center">{index + 1}</span>
+                      <span className="text-sm font-medium text-gray-900">{g.name}</span>
+                    </div>
+                    {index === 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700">Default</span>
+                    )}
                   </div>
-                </div>
-                <div className="text-center">
-                  <p className="text-sm text-gray-500">
-                    {deleteConfirmation.message}
-                  </p>
-                </div>
+                ))}
               </div>
-              
-              <div className="flex justify-end space-x-3">
+              <div className="flex justify-end space-x-3 pt-4">
                 <button
                   type="button"
-                  onClick={cancelDeleteVisitor}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  onClick={closeReorderModal}
+                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={confirmDeleteVisitor}
-                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  onClick={saveReorder}
+                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
                 >
-                  Delete
+                  Save order
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+
     </div>
   );
 };

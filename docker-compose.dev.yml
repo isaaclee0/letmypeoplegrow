@@ -36,6 +36,7 @@ services:
       - ./server/.env
     environment:
       NODE_ENV: development
+      AUTH_DEV_BYPASS: 'false'
       PORT: 3001
       CLIENT_URL: http://localhost:3000
       DB_HOST: db
@@ -49,11 +50,11 @@ services:
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au
       # Logging controls (quieter dev defaults)
-      LOG_LEVEL: info
-      CONSOLE_LOG_LEVEL: info
-      HTTP_LOG_MIN_STATUS: 400
-      HTTP_LOG_SLOW_MS: 1500
-      LOG_HTTP_START: 'false'
+      LOG_LEVEL: debug
+      CONSOLE_LOG_LEVEL: debug
+      HTTP_LOG_MIN_STATUS: 200
+      HTTP_LOG_SLOW_MS: 500
+      LOG_HTTP_START: 'true'
       # External services should be configured in server/.env file
       # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
       # BREVO_API_KEY

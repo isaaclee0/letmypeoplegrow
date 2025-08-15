@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-client",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.5",
@@ -39,12 +39,13 @@
   },
   "scripts": {
     "start": "vite",
-    "build": "vite build",
+    "build": "node scripts/generate-sw.js && vite build",
     "preview": "vite preview --port 4173",
     "start:cra": "react-scripts start",
     "build:cra": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "generate-sw": "node scripts/generate-sw.js"
   },
   "eslintConfig": {
     "extends": [

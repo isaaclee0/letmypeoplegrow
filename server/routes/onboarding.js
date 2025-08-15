@@ -464,9 +464,9 @@ router.post('/upload-csv/:gatheringId',
           if (familyName && familyName.trim()) {
             if (!familyMap.has(familyName)) {
               const familyResult = await conn.query(`
-                INSERT INTO families (family_name, created_by)
-                VALUES (?, ?)
-              `, [familyName, req.user.id]);
+                INSERT INTO families (family_name, created_by, church_id)
+                VALUES (?, ?, ?)
+              `, [familyName, req.user.id, req.user.church_id]);
               familyMap.set(familyName, Number(familyResult.insertId));
             }
             familyId = familyMap.get(familyName);
@@ -474,15 +474,15 @@ router.post('/upload-csv/:gatheringId',
 
           // Create individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by)
-            VALUES (?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id]);
+            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
 
           // Add to gathering list
           await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-            VALUES (?, ?, ?)
-          `, [gatheringId, Number(individualResult.insertId), req.user.id]);
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [gatheringId, Number(individualResult.insertId), req.user.id, req.user.church_id]);
 
           individuals.push({
             id: Number(individualResult.insertId),
@@ -624,9 +624,9 @@ router.post('/import-paste/:gatheringId',
           if (familyName && familyName.trim()) {
             if (!familyMap.has(familyName)) {
               const familyResult = await conn.query(`
-                INSERT INTO families (family_name, family_identifier, created_by)
-                VALUES (?, ?, ?)
-              `, [familyName, familyName, req.user.id]);
+                INSERT INTO families (family_name, family_identifier, created_by, church_id)
+                VALUES (?, ?, ?, ?)
+              `, [familyName, familyName, req.user.id, req.user.church_id]);
               familyMap.set(familyName, Number(familyResult.insertId));
             }
             familyId = familyMap.get(familyName);
@@ -634,15 +634,15 @@ router.post('/import-paste/:gatheringId',
 
           // Create individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by)
-            VALUES (?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id]);
+            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
 
           // Add to gathering list
           await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by)
-            VALUES (?, ?, ?)
-          `, [gatheringId, Number(individualResult.insertId), req.user.id]);
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [gatheringId, Number(individualResult.insertId), req.user.id, req.user.church_id]);
 
           individuals.push({
             id: Number(individualResult.insertId),
