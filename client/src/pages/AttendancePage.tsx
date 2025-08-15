@@ -13,7 +13,8 @@ import {
   StarIcon,
   XMarkIcon,
   PencilIcon,
-  EllipsisHorizontalIcon
+  EllipsisHorizontalIcon,
+  ChevronUpIcon
 } from '@heroicons/react/24/outline';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 
@@ -1349,6 +1350,18 @@ const AttendancePage: React.FC = () => {
       return next;
     });
   };
+  
+  // Mobile reorder helper - move item up one position
+  const moveItemUp = (index: number) => {
+    if (index <= 0) return; // Can't move first item up
+    setReorderList(prev => {
+      const next = prev.slice();
+      const [moved] = next.splice(index, 1);
+      next.splice(index - 1, 0, moved);
+      return next;
+    });
+  };
+  
   const saveReorder = () => {
     setOrderedGatherings(reorderList);
     saveOrder(reorderList);
@@ -1437,24 +1450,52 @@ const AttendancePage: React.FC = () => {
         <div className="px-4 py-5 sm:p-6">
           <div className="border-b border-gray-200 mb-6">
             {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
-            <div className="md:hidden">
+            <div className="block md:hidden">
+              {/* Debug info - remove this later */}
+              <div className="text-xs text-gray-500 mb-2">
+                Mobile view - Gatherings: {gatherings.length}, Ordered: {orderedGatherings.length}
+              </div>
               <div className="flex items-center space-x-2">
                 {/* First 2 tabs */}
-                {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering) => (
-                  <button
-                    key={gathering.id}
-                    draggable={false}
-                    onClick={() => setSelectedGathering(gathering)}
-                    className={`flex-1 whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
-                      selectedGathering?.id === gathering.id
-                        ? 'bg-primary-500 text-white'
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    <div className="flex items-center justify-center">
-                      <span className="truncate">{gathering.name}</span>
-                    </div>
-                  </button>
+                {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering, index) => (
+                  <div key={gathering.id} className="flex-1 relative">
+                    <button
+                      draggable={false}
+                      onClick={() => setSelectedGathering(gathering)}
+                      className={`w-full whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
+                        selectedGathering?.id === gathering.id
+                          ? 'bg-primary-500 text-white'
+                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-center">
+                        <span className="truncate">{gathering.name}</span>
+                      </div>
+                    </button>
+                    {/* Up arrow for second tab to move it to first position */}
+                    {index === 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const currentOrder = orderedGatherings.length ? orderedGatherings : gatherings;
+                          const newOrder = [...currentOrder];
+                          const [moved] = newOrder.splice(1, 1);
+                          newOrder.unshift(moved);
+                          setOrderedGatherings(newOrder);
+                          saveOrder(newOrder);
+                          if (user?.id) {
+                            localStorage.setItem(`user_${user.id}_default_gathering_id`, String(newOrder[0].id));
+                          }
+                        }}
+                        className="absolute -top-2 -right-2 p-1.5 bg-white border-2 border-gray-300 rounded-full shadow-lg hover:bg-gray-50 z-10"
+                        title="Move to first position"
+                      >
+                        <ChevronUpIcon className="h-4 w-4 text-gray-700" />
+                      </button>
+                    )}
+                  </div>
                 ))}
                 
 
@@ -1472,23 +1513,47 @@ const AttendancePage: React.FC = () => {
                     {showGatheringDropdown && (
                       <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
                         <div className="py-1">
-                          {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering) => (
-                            <button
-                              key={gathering.id}
-                              draggable={false}
-                              onClick={() => {
-                                setSelectedGathering(gathering);
-                                setShowGatheringDropdown(false);
-                              }}
-                              className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-100 ${
-                                selectedGathering?.id === gathering.id
-                                  ? 'bg-primary-50 text-primary-700 font-medium'
-                                  : 'text-gray-700'
-                              }`}
-                            >
-                              {gathering.name}
-                            </button>
-                          ))}
+                          {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering, index) => {
+                            const actualIndex = index + 2; // Account for the first 2 tabs
+                            return (
+                              <div key={gathering.id} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-gray-100">
+                                <button
+                                  draggable={false}
+                                  onClick={() => {
+                                    setSelectedGathering(gathering);
+                                    setShowGatheringDropdown(false);
+                                  }}
+                                  className={`text-left flex-1 ${
+                                    selectedGathering?.id === gathering.id
+                                      ? 'bg-primary-50 text-primary-700 font-medium'
+                                      : 'text-gray-700'
+                                  }`}
+                                >
+                                  {gathering.name}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    const currentOrder = orderedGatherings.length ? orderedGatherings : gatherings;
+                                    const newOrder = [...currentOrder];
+                                    const [moved] = newOrder.splice(actualIndex, 1);
+                                    newOrder.splice(actualIndex - 1, 0, moved);
+                                    setOrderedGatherings(newOrder);
+                                    saveOrder(newOrder);
+                                    if (user?.id && actualIndex - 1 === 0) {
+                                      localStorage.setItem(`user_${user.id}_default_gathering_id`, String(newOrder[0].id));
+                                    }
+                                  }}
+                                  className="p-1.5 text-gray-600 hover:text-gray-800 transition-colors ml-2 bg-gray-100 hover:bg-gray-200 rounded"
+                                  title="Move up"
+                                >
+                                  <ChevronUpIcon className="h-4 w-4" />
+                                </button>
+                              </div>
+                            );
+                          })}
                           <div className="my-1 border-t border-gray-200" />
                           <button
                             onClick={() => { setShowGatheringDropdown(false); openReorderModal(); }}
@@ -2443,9 +2508,21 @@ const AttendancePage: React.FC = () => {
                       <span className="text-sm text-gray-500 w-6 text-center">{index + 1}</span>
                       <span className="text-sm font-medium text-gray-900">{g.name}</span>
                     </div>
-                    {index === 0 && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700">Default</span>
-                    )}
+                    <div className="flex items-center space-x-2">
+                      {index === 0 && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700">Default</span>
+                      )}
+                      {index > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => moveItemUp(index)}
+                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                          title="Move up"
+                        >
+                          <ChevronUpIcon className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

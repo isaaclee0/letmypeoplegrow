@@ -118,9 +118,9 @@ const PeoplePage: React.FC = () => {
     newFamilyName: string;
     lastName: string;
     peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
-    useAssignments: boolean;
     assignments: { [key: number]: boolean };
-  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', lastName: '', peopleType: '', useAssignments: false, assignments: {} });
+    originalAssignments: { [key: number]: Set<number> };
+  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', lastName: '', peopleType: '', assignments: {}, originalAssignments: {} });
 
   const [showFamilyEditorModal, setShowFamilyEditorModal] = useState(false);
   const [familyEditor, setFamilyEditor] = useState<{
@@ -1241,50 +1241,65 @@ const PeoplePage: React.FC = () => {
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
+              
+              {/* Summary of what will be changed */}
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+                <div className="text-sm text-blue-800">
+                  <strong>Summary:</strong> Only fields with values will be updated. Leave fields blank to keep current values.
+                </div>
+              </div>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Family (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700">Family</label>
                   <input list="family-options" value={massEdit.familyInput} onChange={(e) => {
                     const value = e.target.value;
                     const match = families.find(f => f.familyName.toLowerCase() === value.toLowerCase());
                     setMassEdit(d => ({ ...d, familyInput: value, selectedFamilyId: match ? match.id : null, newFamilyName: match ? '' : value }));
-                  }} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" placeholder="Search or type to create new" />
-                  <div className="text-xs text-gray-500 mt-1">Leave blank to keep existing families</div>
+                  }} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" placeholder="Search or type to create new family" />
+                  <div className="text-xs text-gray-500 mt-1">Leave blank to keep existing families. Enter family name to move all selected to that family.</div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Last Name (optional)</label>
-                  <input type="text" value={massEdit.lastName} onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" placeholder="Set last name for all selected" />
+                  <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                  <input type="text" value={massEdit.lastName} onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" placeholder="Leave blank to keep current last names" />
+                  <div className="text-xs text-gray-500 mt-1">Enter a last name to set it for all selected people</div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">People Type (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700">People Type</label>
                   <select value={massEdit.peopleType} onChange={(e) => setMassEdit(d => ({ ...d, peopleType: e.target.value as any }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500">
                     <option value="">Do not change</option>
                     <option value="regular">Regular</option>
                     <option value="local_visitor">Local Visitor</option>
                     <option value="traveller_visitor">Traveller Visitor</option>
                   </select>
+                  <div className="text-xs text-gray-500 mt-1">Select a type to change all selected people to that type</div>
                 </div>
 
                 {gatheringTypes.length > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="block text-sm font-medium text-gray-700">Gathering Assignments</label>
-                      <label className="flex items-center space-x-2 text-xs text-gray-600">
-                        <input type="checkbox" checked={massEdit.useAssignments} onChange={(e) => setMassEdit(d => ({ ...d, useAssignments: e.target.checked }))} className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-                        <span>Set exactly for all selected</span>
-                      </label>
+                      <div className="text-xs text-gray-500">
+                        Checked = Add to all selected, Unchecked = Remove from all selected
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       {gatheringTypes.map(g => (
-                        <label key={g.id} className={`flex items-center space-x-2 text-sm ${!massEdit.useAssignments ? 'opacity-50' : ''}`}>
-                          <input type="checkbox" disabled={!massEdit.useAssignments} checked={!!massEdit.assignments[g.id]} onChange={() => setMassEdit(d => ({ ...d, assignments: { ...d.assignments, [g.id]: !d.assignments[g.id] } }))} className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                        <label key={g.id} className="flex items-center space-x-2 text-sm">
+                          <input 
+                            type="checkbox" 
+                            checked={!!massEdit.assignments[g.id]} 
+                            onChange={() => setMassEdit(d => ({ ...d, assignments: { ...d.assignments, [g.id]: !d.assignments[g.id] } }))} 
+                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" 
+                          />
                           <span>{g.name}</span>
                         </label>
                       ))}
                     </div>
-                    <div className="text-xs text-gray-500">When enabled, saving will make all selected people have exactly these gathering assignments.</div>
+                    <div className="text-xs text-gray-500">
+                      Changes will be applied to all selected people. Checked gatherings will be added, unchecked will be removed.
+                    </div>
                   </div>
                 )}
 
@@ -1314,24 +1329,30 @@ const PeoplePage: React.FC = () => {
                         if (!p) continue;
 
                         const payload: any = {
-                          firstName: p.firstName,
-                          lastName: massEdit.lastName ? massEdit.lastName.trim() : p.lastName,
+                          firstName: p.firstName, // Always include firstName as it's required
                         };
-                        if (familyIdToUse !== undefined) payload.familyId = familyIdToUse;
-                        if (massEdit.peopleType) payload.peopleType = massEdit.peopleType;
+                        
+                        // Only update fields that are actually changed
+                        if (massEdit.lastName.trim()) {
+                          payload.lastName = massEdit.lastName.trim();
+                        }
+                        if (familyIdToUse !== undefined) {
+                          payload.familyId = familyIdToUse;
+                        }
+                        if (massEdit.peopleType) {
+                          payload.peopleType = massEdit.peopleType;
+                        }
 
                         await individualsAPI.update(personId, payload);
 
-                        if (massEdit.useAssignments) {
-                          const originalSet = new Set<number>((p.gatheringAssignments || []).map(g => g.id));
-                          for (const g of gatheringTypes) {
-                            const want = !!massEdit.assignments[g.id];
-                            const had = originalSet.has(g.id);
-                            if (want && !had) {
-                              await individualsAPI.assignToGathering(personId, g.id);
-                            } else if (!want && had) {
-                              await individualsAPI.unassignFromGathering(personId, g.id);
-                            }
+                        // Handle gathering assignments - only apply changes
+                        for (const g of gatheringTypes) {
+                          const want = !!massEdit.assignments[g.id];
+                          const had = massEdit.originalAssignments[personId]?.has(g.id) || false;
+                          if (want && !had) {
+                            await individualsAPI.assignToGathering(personId, g.id);
+                          } else if (!want && had) {
+                            await individualsAPI.unassignFromGathering(personId, g.id);
                           }
                         }
                       }
@@ -2835,9 +2856,45 @@ Sarah       Smith      Smith, John and Sarah</pre>
              </div>
              <button
                 onClick={() => {
+                  // Initialize mass edit with current values from selected people
+                  const selectedPeopleData = people.filter(p => selectedPeople.includes(p.id));
+                  
+                  // Initialize assignments based on current gathering assignments
                   const assignments: { [key: number]: boolean } = {};
-                  gatheringTypes.forEach(g => { assignments[g.id] = false; });
-                  setMassEdit({ familyInput: '', selectedFamilyId: null, newFamilyName: '', lastName: '', peopleType: '', useAssignments: false, assignments });
+                  const originalAssignments: { [key: number]: Set<number> } = {};
+                  
+                  // Check if all selected people have the same gathering assignments
+                  const allGatheringIds = new Set<number>();
+                  selectedPeopleData.forEach(person => {
+                    person.gatheringAssignments?.forEach(gathering => {
+                      allGatheringIds.add(gathering.id);
+                    });
+                  });
+                  
+                  // Initialize assignments based on common gatherings
+                  gatheringTypes.forEach(g => {
+                    const hasGathering = selectedPeopleData.every(person => 
+                      person.gatheringAssignments?.some(ga => ga.id === g.id)
+                    );
+                    assignments[g.id] = hasGathering;
+                  });
+                  
+                  // Store original assignments for each person
+                  selectedPeopleData.forEach(person => {
+                    originalAssignments[person.id] = new Set(
+                      person.gatheringAssignments?.map(g => g.id) || []
+                    );
+                  });
+                  
+                  setMassEdit({ 
+                    familyInput: '', 
+                    selectedFamilyId: null, 
+                    newFamilyName: '', 
+                    lastName: '', 
+                    peopleType: '', 
+                    assignments,
+                    originalAssignments
+                  });
                   setShowMassEditModal(true);
                 }}
                className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"

@@ -26,9 +26,7 @@ sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" server/pack
 echo "Updating build-and-push.sh..."
 sed -i '' "s/VERSION=\${1:-v[^}]*}/VERSION=\${1:-v$NEW_VERSION}/" build-and-push.sh
 
-# Update docker-compose.prod.yml default image versions
-echo "Updating docker-compose.prod.yml..."
-sed -i '' "s/:v[0-9]\+\.[0-9]\+\.[0-9]\+/:v$NEW_VERSION/g" docker-compose.prod.yml
+# Note: docker-compose.prod.yml now uses :latest tags, so no version update needed
 
 # Update client version utility fallback
 echo "Updating client/src/utils/version.ts..."
@@ -98,11 +96,11 @@ else
     echo "  ❌ build-and-push.sh - version not updated"
 fi
 
-# Check docker-compose.prod.yml
-if grep -q ":v$NEW_VERSION" docker-compose.prod.yml; then
-    echo "  ✅ docker-compose.prod.yml"
+# Check docker-compose.prod.yml (now uses :latest)
+if grep -q "\${IMAGE_TAG:-latest}" docker-compose.prod.yml; then
+    echo "  ✅ docker-compose.prod.yml (uses :latest)"
 else
-    echo "  ❌ docker-compose.prod.yml - version not updated"
+    echo "  ❌ docker-compose.prod.yml - not using :latest"
 fi
 
 # Check version utility
@@ -119,8 +117,8 @@ echo "Files updated:"
 echo "  - client/package.json"
 echo "  - server/package.json"
 echo "  - build-and-push.sh"
-echo "  - docker-compose.prod.yml"
 echo "  - client/src/utils/version.ts"
+echo "  - docker-compose.prod.yml (uses :latest tags)"
 echo "  - .env.example"
 echo "  - README.md"
 echo "  - DEPLOYMENT.md"

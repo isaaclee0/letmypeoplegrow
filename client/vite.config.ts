@@ -7,6 +7,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     strictPort: true,
+    hmr: false, // Disable HMR for Docker development to avoid WebSocket issues
     proxy: {
       '/api': {
         // When accessing Vite directly on :3000 (not via nginx), forward API to the server container

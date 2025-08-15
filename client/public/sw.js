@@ -1,7 +1,8 @@
 // Service Worker for Let My People Grow PWA
+// Generated on 2025-08-15T05:41:29.060Z
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1';
+const CACHE_NAME = 'let-my-people-grow-v1755236489060';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -15,8 +16,12 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
+        console.log('Opened cache:', CACHE_NAME);
+        return cache.addAll(urlsToCache).catch((error) => {
+          console.warn('Failed to cache some resources:', error);
+          // Continue with installation even if some resources fail to cache
+          return Promise.resolve();
+        });
       })
   );
 });
@@ -48,9 +53,16 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME)
             .then((cache) => {
               cache.put(event.request, responseToCache);
+            })
+            .catch((error) => {
+              console.warn('Failed to cache response:', error);
             });
 
           return response;
+        }).catch((error) => {
+          console.warn('Fetch failed:', error);
+          // Return a fallback response or let the browser handle it
+          return new Response('Network error', { status: 503 });
         });
       })
   );
@@ -62,7 +74,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
+          if (!cacheName.startsWith('let-my-people-grow-v')) {
             console.log('Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
