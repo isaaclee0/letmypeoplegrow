@@ -125,13 +125,13 @@ router.post('/send',
       console.log('🔍 [INVITATION_DEBUG] Checking for existing users');
       const existingUserChecks = [];
       if (email) {
-        console.log('📧 [INVITATION_DEBUG] Checking for existing user with email:', email);
+        console.log('📧 [INVITATION_DEBUG] Checking for existing user with email:', email ? email.substring(0, 3) + '***' : 'null');
         existingUserChecks.push(
           Database.query('SELECT id FROM users WHERE email = ? AND church_id = ?', [email, req.user.church_id])
         );
       }
       if (normalizedMobile) {
-        console.log('📱 [INVITATION_DEBUG] Checking for existing user with mobile:', normalizedMobile);
+        console.log('📱 [INVITATION_DEBUG] Checking for existing user with mobile:', normalizedMobile ? normalizedMobile.substring(0, 4) + '***' : 'null');
         existingUserChecks.push(
           Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ?', [normalizedMobile, req.user.church_id])
         );
@@ -149,7 +149,7 @@ router.post('/send',
       console.log('🔍 [INVITATION_DEBUG] Checking for pending invitations');
       const existingInvitationChecks = [];
       if (email) {
-        console.log('📧 [INVITATION_DEBUG] Checking for pending invitation with email:', email);
+        console.log('📧 [INVITATION_DEBUG] Checking for pending invitation with email:', email ? email.substring(0, 3) + '***' : 'null');
         existingInvitationChecks.push(
           Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = false AND expires_at > NOW() AND church_id = ?', [email, req.user.church_id])
         );

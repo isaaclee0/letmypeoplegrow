@@ -348,7 +348,7 @@ app.get('/api/sheets-test', (req, res) => {
   console.log('📊 Google Sheets test endpoint called');
   console.log('📊 User-Agent:', req.get('User-Agent'));
   console.log('📊 Accept:', req.get('Accept'));
-  console.log('📊 All headers:', req.headers);
+  // Removed sensitive header logging for security
   
   const testData = [
     ['Date', 'Name', 'Status'],
@@ -373,7 +373,7 @@ app.get('/api/sheets-test', (req, res) => {
 // Ultra-simple Google Sheets test endpoint
 app.get('/api/simple-test', (req, res) => {
   console.log('🔧 Simple test endpoint called by:', req.get('User-Agent'));
-  console.log('🔧 All headers:', JSON.stringify(req.headers, null, 2));
+  // Removed sensitive header logging for security
   
   // Minimal CSV content
   const csvContent = 'Date,Name,Status\n2025-01-01,John Doe,Present\n2025-01-01,Jane Smith,Present';
@@ -390,7 +390,7 @@ app.get('/api/simple-test', (req, res) => {
 // Public Google Sheets test endpoint (completely bypasses all middleware)
 app.get('/api/public-csv', (req, res) => {
   console.log('🌐 Public CSV endpoint called by:', req.get('User-Agent'));
-  console.log('🌐 All headers:', JSON.stringify(req.headers, null, 2));
+  // Removed sensitive header logging for security
   
   // Very simple CSV - no quotes, no extra characters
   const csvContent = 'A,B,C\n1,2,3\n4,5,6';

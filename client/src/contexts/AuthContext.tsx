@@ -146,8 +146,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  
-
   const refreshOnboardingStatus = async () => {
     if (user?.role === 'admin') {
       try {
@@ -158,8 +156,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
     }
   };
-
-
 
   const value: AuthContextType = {
     user,

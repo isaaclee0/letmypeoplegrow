@@ -1472,29 +1472,7 @@ const AttendancePage: React.FC = () => {
                         <span className="truncate">{gathering.name}</span>
                       </div>
                     </button>
-                    {/* Up arrow for second tab to move it to first position */}
-                    {index === 1 && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const currentOrder = orderedGatherings.length ? orderedGatherings : gatherings;
-                          const newOrder = [...currentOrder];
-                          const [moved] = newOrder.splice(1, 1);
-                          newOrder.unshift(moved);
-                          setOrderedGatherings(newOrder);
-                          saveOrder(newOrder);
-                          if (user?.id) {
-                            localStorage.setItem(`user_${user.id}_default_gathering_id`, String(newOrder[0].id));
-                          }
-                        }}
-                        className="absolute -top-2 -right-2 p-1.5 bg-white border-2 border-gray-300 rounded-full shadow-lg hover:bg-gray-50 z-10"
-                        title="Move to first position"
-                      >
-                        <ChevronUpIcon className="h-4 w-4 text-gray-700" />
-                      </button>
-                    )}
+
                   </div>
                 ))}
                 
@@ -1531,26 +1509,7 @@ const AttendancePage: React.FC = () => {
                                 >
                                   {gathering.name}
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    const currentOrder = orderedGatherings.length ? orderedGatherings : gatherings;
-                                    const newOrder = [...currentOrder];
-                                    const [moved] = newOrder.splice(actualIndex, 1);
-                                    newOrder.splice(actualIndex - 1, 0, moved);
-                                    setOrderedGatherings(newOrder);
-                                    saveOrder(newOrder);
-                                    if (user?.id && actualIndex - 1 === 0) {
-                                      localStorage.setItem(`user_${user.id}_default_gathering_id`, String(newOrder[0].id));
-                                    }
-                                  }}
-                                  className="p-1.5 text-gray-600 hover:text-gray-800 transition-colors ml-2 bg-gray-100 hover:bg-gray-200 rounded"
-                                  title="Move up"
-                                >
-                                  <ChevronUpIcon className="h-4 w-4" />
-                                </button>
+
                               </div>
                             );
                           })}

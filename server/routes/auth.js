@@ -296,7 +296,7 @@ router.post('/request-code',
             if (externalServices.brevo) {
               await sendOTCEmail(finalContact, code);
             } else {
-              console.log(`📧 Development mode: Email code ${code} for ${finalContact} (Brevo not configured)`);
+              console.log(`📧 Development mode: Email code sent for ${finalContact ? finalContact.substring(0, 3) + '***' : 'unknown'} (Brevo not configured)`);
             }
           } else {
             if (externalServices.crazytel) {
@@ -618,11 +618,11 @@ const refreshLimiter = rateLimit({
 router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, res) => {
   try {
     const user = req.user;
-    console.log(`🔄 Token refresh requested for user: ${user.email} (ID: ${user.id})`);
+    console.log(`🔄 Token refresh requested for user: ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'} (ID: ${user.id})`);
     
     // Validate user is still active
     if (!user.is_active) {
-      console.log(`❌ Token refresh denied - user ${user.email} is inactive`);
+      console.log(`❌ Token refresh denied - user ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'} is inactive`);
       return res.status(401).json({ 
         error: 'User account is inactive.',
         code: 'USER_INACTIVE'
@@ -656,7 +656,7 @@ router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, re
     }
     
     res.cookie('authToken', token, cookieOptions);
-    console.log(`✅ Token refreshed successfully for user: ${user.email}`);
+    console.log(`✅ Token refreshed successfully for user: ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'}`);
     res.json({ 
       message: 'Token refreshed successfully',
       user: {

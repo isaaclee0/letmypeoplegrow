@@ -1322,28 +1322,38 @@ const PeoplePage: React.FC = () => {
                           familyIdToUse = created.data.id;
                         }
                       }
+                      // If famInput is empty, familyIdToUse remains undefined, 
+                      // which means we won't include familyId in the payload, preserving existing families
 
                       const peopleMap = new Map(people.map(p => [p.id, p]));
                       for (const personId of selectedPeople) {
                         const p = peopleMap.get(personId);
                         if (!p) continue;
 
-                        const payload: any = {
-                          firstName: p.firstName, // Always include firstName as it's required
-                        };
+                        // Check if we need to update individual data (family, lastName, peopleType)
+                        const hasIndividualChanges = massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType;
                         
-                        // Only update fields that are actually changed
-                        if (massEdit.lastName.trim()) {
-                          payload.lastName = massEdit.lastName.trim();
-                        }
-                        if (familyIdToUse !== undefined) {
-                          payload.familyId = familyIdToUse;
-                        }
-                        if (massEdit.peopleType) {
-                          payload.peopleType = massEdit.peopleType;
-                        }
+                        if (hasIndividualChanges) {
+                          const payload: any = {
+                            firstName: p.firstName, // Always include firstName as it's required
+                            lastName: p.lastName, // Always include lastName as it's required
+                          };
+                          
+                          // Only update fields that are actually changed
+                          if (massEdit.lastName.trim()) {
+                            payload.lastName = massEdit.lastName.trim();
+                          }
+                          if (familyIdToUse !== undefined) {
+                            payload.familyId = familyIdToUse;
+                          }
+                          // Note: If familyIdToUse is undefined and no family input provided, 
+                          // we don't include familyId in payload, preserving existing family association
+                          if (massEdit.peopleType) {
+                            payload.peopleType = massEdit.peopleType;
+                          }
 
-                        await individualsAPI.update(personId, payload);
+                          await individualsAPI.update(personId, payload);
+                        }
 
                         // Handle gathering assignments - only apply changes
                         for (const g of gatheringTypes) {

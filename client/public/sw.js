@@ -1,8 +1,8 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-08-15T05:41:29.060Z
+// Generated on 2025-08-15T21:28:37.447Z
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1755236489060';
+const CACHE_NAME = 'let-my-people-grow-v1755293317447';
 const urlsToCache = [
   '/',
   '/manifest.json',
