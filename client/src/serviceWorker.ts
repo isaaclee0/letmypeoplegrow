@@ -39,8 +39,12 @@ export function register(config?: Config) {
 
 function registerValidSW(swUrl: string, config?: Config) {
   navigator.serviceWorker
-    .register(swUrl)
+    .register(swUrl, { updateViaCache: 'none' })
     .then((registration) => {
+      // Check for updates immediately
+      registration.update();
+      
+      // Set up update detection
       registration.onupdatefound = () => {
         const installingWorker = registration.installing;
         if (installingWorker == null) {
@@ -75,6 +79,11 @@ function registerValidSW(swUrl: string, config?: Config) {
           }
         };
       };
+      
+      // Check for updates periodically (especially for iOS)
+      setInterval(() => {
+        registration.update();
+      }, 60000); // Check every minute
     })
     .catch((error) => {
       console.error('Error during service worker registration:', error);

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
 import {
   Bars3Icon,
@@ -14,11 +15,13 @@ import {
   XMarkIcon,
   PencilIcon,
   ArrowRightOnRectangleIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
+  const { performUpdate } = usePWAUpdate();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -223,6 +226,15 @@ const Layout: React.FC = () => {
               </div>
             </div>
             <div className="ml-4 flex items-center md:ml-6">
+
+              {/* Manual Update Button - visible to all users */}
+              <button 
+                onClick={performUpdate}
+                className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200"
+                title="Check for updates"
+              >
+                <ArrowPathIcon className="h-6 w-6" />
+              </button>
 
               {/* Notifications - only show for non-attendance takers */}
               {user?.role !== 'attendance_taker' && (

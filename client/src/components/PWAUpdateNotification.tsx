@@ -30,41 +30,35 @@ const PWAUpdateNotification: React.FC<PWAUpdateNotificationProps> = ({
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-sm w-full bg-white rounded-lg shadow-lg border border-gray-200 p-4">
-      <div className="flex items-start">
-        <div className="flex-shrink-0">
-          <InformationCircleIcon className="h-6 w-6 text-blue-500" />
-        </div>
-        <div className="ml-3 flex-1">
-          <h3 className="text-sm font-medium text-gray-900">
-            Update Available
-          </h3>
-          <p className="mt-1 text-sm text-gray-500">
-            A new version of Let My People Grow is available. Refresh to get the latest features and improvements.
-          </p>
-          <div className="mt-3 flex space-x-2">
+    <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white shadow-lg">
+      <div className="max-w-7xl mx-auto px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <InformationCircleIcon className="h-5 w-5 mr-2" />
+            <div>
+              <h3 className="text-sm font-medium">
+                App Update Available
+              </h3>
+              <p className="text-xs opacity-90">
+                A new version is ready. Refresh to get the latest features and improvements.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-3">
             <button
               onClick={handleUpdate}
-              className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-blue-600 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-white"
             >
               <ArrowPathIcon className="h-4 w-4 mr-1" />
-              Refresh Now
+              Update Now
             </button>
             <button
               onClick={handleDismiss}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              className="inline-flex text-white hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-white"
             >
-              Later
+              <XMarkIcon className="h-5 w-5" />
             </button>
           </div>
-        </div>
-        <div className="ml-4 flex-shrink-0 flex">
-          <button
-            onClick={handleDismiss}
-            className="inline-flex text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
-          >
-            <XMarkIcon className="h-4 w-4" />
-          </button>
         </div>
       </div>
     </div>

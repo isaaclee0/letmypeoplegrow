@@ -5,7 +5,7 @@
 # If no version is provided, uses the default version
 
 # Default version (change this when releasing new versions)
-VERSION=${1:-v0.9.5}
+VERSION=${1:-v0.9.6}
 
 # Configuration
 REGISTRY="staugustine1"
@@ -48,6 +48,7 @@ echo "✅ Server image built and pushed: $SERVER_IMAGE:$VERSION"
 
 # Build and push client image
 echo "Building client image..."
+echo "  - This will regenerate the service worker with cache busting"
 docker buildx build \
     --builder $BUILDER \
     --platform linux/amd64 \
@@ -59,6 +60,7 @@ docker buildx build \
     --push
 
 echo "✅ Client image built and pushed: $CLIENT_IMAGE:$VERSION"
+echo "✅ Service worker updated with new cache version"
 
 echo ""
 echo "🎉 All images built and pushed successfully!"

@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { settingsAPI } from '../services/api';
+import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import {
   PencilIcon,
   InformationCircleIcon,
   ShieldCheckIcon,
   ShieldExclamationIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
+  const { performUpdate } = usePWAUpdate();
   const [activeTab, setActiveTab] = useState<'general' | 'system' | 'privacy'>('general');
   // Commented out data access functionality for now
   // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
@@ -180,6 +183,34 @@ const SettingsPage: React.FC = () => {
                       </div>
                     ))}
                   </dl>
+                </div>
+              </div>
+
+              {/* Manual Update Section */}
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">App Updates</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Force check for app updates (useful for iOS devices).
+                </p>
+                
+                <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-blue-900">Manual Update Check</h4>
+                      <p className="mt-1 text-sm text-blue-700">
+                        If you're not seeing automatic updates, you can manually check for and apply updates here.
+                      </p>
+                    </div>
+                    <div className="ml-4">
+                      <button
+                        onClick={performUpdate}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                      >
+                        <ArrowPathIcon className="h-4 w-4 mr-2" />
+                        Check for Updates
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
