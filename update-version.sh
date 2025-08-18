@@ -30,7 +30,11 @@ sed -i '' "s/VERSION=\${1:-v[^}]*}/VERSION=\${1:-v$NEW_VERSION}/" build-and-push
 
 # Update client version utility fallback
 echo "Updating client/src/utils/version.ts..."
-sed -i '' "s/return 'v[0-9]\+\.[0-9]\+\.[0-9]\+';/return '$NEW_VERSION';/" client/src/utils/version.ts
+sed -i '' "s/const fallbackVersion = '[0-9]\+\.[0-9]\+\.[0-9]\+';/const fallbackVersion = '$NEW_VERSION';/" client/src/utils/version.ts
+
+# Regenerate service worker with new version
+echo "Regenerating service worker..."
+cd client && node scripts/generate-sw.js && cd ..
 
 # Update .env.example
 echo "Updating .env.example..."
@@ -104,10 +108,17 @@ else
 fi
 
 # Check version utility
-if grep -q "return '$NEW_VERSION';" client/src/utils/version.ts; then
+if grep -q "const fallbackVersion = '$NEW_VERSION';" client/src/utils/version.ts; then
     echo "  ✅ client/src/utils/version.ts"
 else
     echo "  ❌ client/src/utils/version.ts - version not updated"
+fi
+
+# Check service worker
+if grep -q "const APP_VERSION = '$NEW_VERSION';" client/public/sw.js; then
+    echo "  ✅ client/public/sw.js"
+else
+    echo "  ❌ client/public/sw.js - version not updated"
 fi
 
 echo ""
@@ -118,6 +129,7 @@ echo "  - client/package.json"
 echo "  - server/package.json"
 echo "  - build-and-push.sh"
 echo "  - client/src/utils/version.ts"
+echo "  - client/public/sw.js"
 echo "  - docker-compose.prod.yml (uses :latest tags)"
 echo "  - .env.example"
 echo "  - README.md"
