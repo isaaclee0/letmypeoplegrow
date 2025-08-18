@@ -10,6 +10,7 @@ interface AuthContextType {
   logout: () => void;
   updateUser: (userData: Partial<User>) => void;
   refreshOnboardingStatus: () => Promise<void>;
+  refreshUserData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -46,12 +47,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setIsLoading(true); // Set loading early to prevent flicker
       
       try {
-        // Validate localStorage data first
+        // Validate localStorage data first and check for completeness
         const storedUser = localStorage.getItem('user');
         if (storedUser) {
           try {
-            JSON.parse(storedUser); // Validate JSON
-            console.log('✅ Valid localStorage user data found');
+            const parsedUser = JSON.parse(storedUser); // Validate JSON
+            
+            // Check if stored data has all required fields (mobile number fields were added recently)
+            const hasRequiredFields = parsedUser.hasOwnProperty('mobileNumber') && parsedUser.hasOwnProperty('primaryContactMethod');
+            
+            if (hasRequiredFields) {
+              console.log('✅ Complete localStorage user data found');
+            } else {
+              console.log('⚠️ Incomplete localStorage user data (missing mobile fields), clearing cache');
+              localStorage.removeItem('user');
+            }
           } catch (e) {
             console.warn('⚠️ Invalid localStorage user data, clearing');
             localStorage.removeItem('user');
@@ -157,6 +167,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const refreshUserData = async () => {
+    try {
+      console.log('🔄 Manually refreshing user data...');
+      localStorage.removeItem('user'); // Clear cached data
+      const response = await authAPI.getCurrentUser();
+      const freshUser = response.data.user;
+      setUser(freshUser);
+      localStorage.setItem('user', JSON.stringify(freshUser));
+      console.log('✅ User data refreshed successfully');
+    } catch (error) {
+      console.error('❌ Failed to refresh user data:', error);
+    }
+  };
+
   const value: AuthContextType = {
     user,
     isLoading,
@@ -166,6 +190,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     logout,
     updateUser,
     refreshOnboardingStatus,
+    refreshUserData,
   };
 
   return (

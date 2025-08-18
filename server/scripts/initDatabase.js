@@ -173,11 +173,13 @@ const createTables = async () => {
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        church_id VARCHAR(36) NOT NULL,
         FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
         FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
-        UNIQUE KEY unique_session (gathering_type_id, session_date),
+        UNIQUE KEY unique_session_with_church (gathering_type_id, session_date, church_id),
         INDEX idx_gathering_date (gathering_type_id, session_date),
-        INDEX idx_date (session_date)
+        INDEX idx_date (session_date),
+        INDEX idx_church_id (church_id)
       ) ENGINE=InnoDB
     `);
 
@@ -188,12 +190,15 @@ const createTables = async () => {
         session_id INT NOT NULL,
         individual_id INT NOT NULL,
         present BOOLEAN NOT NULL DEFAULT false,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        church_id VARCHAR(36) NOT NULL,
         FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
         FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
         UNIQUE KEY unique_session_individual (session_id, individual_id),
         INDEX idx_session (session_id),
         INDEX idx_individual (individual_id),
-        INDEX idx_present (present)
+        INDEX idx_present (present),
+        INDEX idx_church_id (church_id)
       ) ENGINE=InnoDB
     `);
 

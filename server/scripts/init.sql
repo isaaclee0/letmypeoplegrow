@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS migrations (
 -- Create users table
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
+  church_id VARCHAR(36) NOT NULL,
   email VARCHAR(255),
   mobile_number VARCHAR(20),
   primary_contact_method ENUM('email', 'sms') DEFAULT 'email',
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
   notification_frequency ENUM('instant', 'daily', 'weekly') DEFAULT 'instant',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  last_login_at DATETIME NULL,
   UNIQUE KEY unique_email (email),
   UNIQUE KEY unique_mobile (mobile_number),
   INDEX idx_email (email),
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS users (
   INDEX idx_role (role),
   INDEX idx_active (is_active),
   INDEX idx_default_gathering (default_gathering_id),
+  INDEX idx_church_id (church_id),
   CONSTRAINT check_contact_info CHECK (
     (email IS NOT NULL AND email != '') OR 
     (mobile_number IS NOT NULL AND mobile_number != '')
@@ -83,7 +86,6 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   description TEXT,
   day_of_week ENUM('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'),
   start_time TIME,
-
   frequency ENUM('weekly', 'biweekly', 'monthly') DEFAULT 'weekly',
   group_by_family BOOLEAN DEFAULT true,
   is_active BOOLEAN DEFAULT true,
@@ -103,12 +105,14 @@ CREATE TABLE IF NOT EXISTS user_gathering_assignments (
   gathering_type_id INT NOT NULL,
   assigned_by INT,
   assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
   FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL,
   UNIQUE KEY unique_user_gathering (user_id, gathering_type_id),
   INDEX idx_user (user_id),
-  INDEX idx_gathering (gathering_type_id)
+  INDEX idx_gathering (gathering_type_id),
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create families table
@@ -132,18 +136,18 @@ CREATE TABLE IF NOT EXISTS individuals (
   family_id INT,
   date_of_birth DATE,
   is_regular_attendee BOOLEAN DEFAULT true,
-  is_active BOOLEAN DEFAULT true,
   is_visitor BOOLEAN DEFAULT false,
   notes TEXT,
+  is_active BOOLEAN DEFAULT true,
   created_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  INDEX idx_name (first_name, last_name),
+  INDEX idx_name (last_name, first_name),
   INDEX idx_family (family_id),
-  INDEX idx_regular (is_regular_attendee),
   INDEX idx_active (is_active),
+  INDEX idx_regular (is_regular_attendee),
   INDEX idx_is_visitor (is_visitor)
 ) ENGINE=InnoDB;
 
@@ -168,55 +172,33 @@ CREATE TABLE IF NOT EXISTS attendance_sessions (
   gathering_type_id INT NOT NULL,
   session_date DATE NOT NULL,
   created_by INT NOT NULL,
+  notes TEXT DEFAULT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
   FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE KEY unique_session (gathering_type_id, session_date),
+  UNIQUE KEY unique_session_with_church (gathering_type_id, session_date, church_id),
   INDEX idx_gathering_date (gathering_type_id, session_date),
-  INDEX idx_date (session_date)
+  INDEX idx_date (session_date),
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create attendance records table
 CREATE TABLE IF NOT EXISTS attendance_records (
   id INT AUTO_INCREMENT PRIMARY KEY,
   session_id INT NOT NULL,
-  individual_id INT,
-  visitor_name VARCHAR(255),
-  visitor_type ENUM('potential_regular', 'temporary_other') DEFAULT 'temporary_other',
-  visitor_family_group VARCHAR(255),
-  notes TEXT,
-  present BOOLEAN DEFAULT true,
+  individual_id INT NOT NULL,
+  present BOOLEAN DEFAULT false,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
   FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_session_individual (session_id, individual_id),
   INDEX idx_session (session_id),
   INDEX idx_individual (individual_id),
   INDEX idx_present (present),
-  UNIQUE KEY unique_session_individual (session_id, individual_id),
-  CONSTRAINT check_attendee CHECK (
-    (individual_id IS NOT NULL) OR 
-    (visitor_name IS NOT NULL AND visitor_name != '')
-  )
-) ENGINE=InnoDB;
-
--- Create visitors table
-CREATE TABLE IF NOT EXISTS visitors (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  session_id INT,
-  name VARCHAR(255) NOT NULL,
-  visitor_type ENUM('potential_regular', 'temporary_other') DEFAULT 'temporary_other',
-  visitor_family_group VARCHAR(255),
-  notes TEXT,
-  last_attended DATE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
-  INDEX idx_name (name),
-  INDEX idx_type (visitor_type),
-  INDEX idx_session (session_id),
-  INDEX idx_last_attended (last_attended)
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create user invitations table
@@ -224,22 +206,24 @@ CREATE TABLE IF NOT EXISTS user_invitations (
   id INT AUTO_INCREMENT PRIMARY KEY,
   email VARCHAR(255),
   mobile_number VARCHAR(20),
-  primary_contact_method ENUM('email', 'sms') NOT NULL,
-  role ENUM('coordinator', 'attendance_taker') NOT NULL,
-  first_name VARCHAR(100) NOT NULL,
-  last_name VARCHAR(100) NOT NULL,
-  invitation_token VARCHAR(255) UNIQUE NOT NULL,
-  expires_at TIMESTAMP NOT NULL,
+  primary_contact_method ENUM('email', 'sms') DEFAULT 'email',
+  role ENUM('admin', 'coordinator', 'attendance_taker') NOT NULL,
+  first_name VARCHAR(100),
+  last_name VARCHAR(100),
+  invited_by INT NOT NULL,
+  invitation_token VARCHAR(255) NOT NULL,
+  gathering_assignments JSON,
+  expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   accepted BOOLEAN DEFAULT false,
-  accepted_at TIMESTAMP NULL,
-  invited_by INT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
   FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE KEY unique_token (invitation_token),
   INDEX idx_token (invitation_token),
   INDEX idx_email (email),
   INDEX idx_mobile (mobile_number),
   INDEX idx_expires (expires_at),
-  INDEX idx_accepted (accepted)
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create notification rules table
@@ -281,19 +265,24 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS audit_log (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT,
-  action VARCHAR(100) NOT NULL,
+  action VARCHAR(255) NOT NULL,
   entity_type VARCHAR(50),
   entity_id INT,
+  table_name VARCHAR(100),
+  record_id INT,
   old_values JSON,
   new_values JSON,
   ip_address VARCHAR(45),
   user_agent TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_user (user_id),
   INDEX idx_action (action),
   INDEX idx_entity (entity_type, entity_id),
-  INDEX idx_created (created_at)
+  INDEX idx_table_record (table_name, record_id),
+  INDEX idx_created (created_at),
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create onboarding progress table
@@ -318,11 +307,11 @@ CREATE TABLE IF NOT EXISTS onboarding_progress (
 -- ========================================
 
 -- Create development users with different roles
-INSERT IGNORE INTO users (id, email, role, first_name, last_name, is_active, first_login_completed) VALUES
-(1, 'admin@church.local', 'admin', 'Development', 'Admin', true, true),
-(2, 'dev@church.local', 'admin', 'Development', 'User', true, true),
-(3, 'coord@church.local', 'coordinator', 'Development', 'Coordinator', true, true),
-(4, 'at@church.local', 'attendance_taker', 'Development', 'Attendance Taker', true, true);
+INSERT IGNORE INTO users (id, church_id, email, role, first_name, last_name, is_active, first_login_completed) VALUES
+(1, 'dev_church_001', 'admin@church.local', 'admin', 'Development', 'Admin', true, true),
+(2, 'dev_church_001', 'dev@church.local', 'admin', 'Development', 'User', true, true),
+(3, 'dev_church_001', 'coord@church.local', 'coordinator', 'Development', 'Coordinator', true, true),
+(4, 'dev_church_001', 'at@church.local', 'attendance_taker', 'Development', 'Attendance Taker', true, true);
 
 -- Create church settings
 INSERT IGNORE INTO church_settings (id, church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed) VALUES
@@ -334,11 +323,11 @@ INSERT IGNORE INTO gathering_types (id, name, description, day_of_week, start_ti
   (2, 'Youth Group', 'Youth ministry meeting on Friday evenings', 'Friday', '19:00:00', 'weekly', false, true, 1);
 
 -- Assign all users to all gathering types
-INSERT IGNORE INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by) VALUES
-(1, 1, 1), (1, 2, 1),  -- Admin
-(2, 1, 1), (2, 2, 1),  -- Dev user
-(3, 1, 1), (3, 2, 1),  -- Coordinator
-(4, 1, 1), (4, 2, 1);  -- Attendance Taker
+INSERT IGNORE INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id) VALUES
+(1, 1, 1, 'dev_church_001'), (1, 2, 1, 'dev_church_001'),  -- Admin
+(2, 1, 1, 'dev_church_001'), (2, 2, 1, 'dev_church_001'),  -- Dev user
+(3, 1, 1, 'dev_church_001'), (3, 2, 1, 'dev_church_001'),  -- Coordinator
+(4, 1, 1, 'dev_church_001'), (4, 2, 1, 'dev_church_001');  -- Attendance Taker
 
 -- Create development families
 INSERT IGNORE INTO families (id, family_name, family_identifier, created_by) VALUES
