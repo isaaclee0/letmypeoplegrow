@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
@@ -20,10 +20,26 @@ import {
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const { user, logout } = useAuth();
-  const { performUpdate } = usePWAUpdate();
+  const { updateAvailable, performUpdate } = usePWAUpdate();
   const location = useLocation();
   const navigate = useNavigate();
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  // Close notifications when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+
+    if (showNotifications) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showNotifications]);
 
   const navigation = user?.role === 'attendance_taker' ? [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
@@ -227,26 +243,76 @@ const Layout: React.FC = () => {
             </div>
             <div className="ml-4 flex items-center md:ml-6">
 
-              {/* Manual Update Button - visible to all users */}
-              <button 
-                onClick={performUpdate}
-                className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200"
-                title="Check for updates"
-              >
-                <ArrowPathIcon className="h-6 w-6" />
-              </button>
-
-              {/* Notifications - only show for non-attendance takers */}
-              {user?.role !== 'attendance_taker' && (
-                <button className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200">
+              {/* Notifications - show for all users, includes app updates */}
+              <div className="relative" ref={notificationsRef}>
+                <button 
+                  onClick={() => setShowNotifications(!showNotifications)}
+                  className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200"
+                  title="Notifications"
+                >
                   <BellIcon className="h-6 w-6" />
-                  {user?.unreadNotifications && user.unreadNotifications > 0 && (
-                    <span className="absolute -mt-2 -mr-1 px-2 py-1 text-xs leading-none text-white bg-secondary-500 rounded-full">
-                      {user.unreadNotifications}
-                    </span>
+                  {/* Show notification badge if there are updates or user notifications */}
+                  {(updateAvailable || (user?.unreadNotifications && user.unreadNotifications > 0)) && (
+                    <span className="absolute -top-1 -right-1 h-3 w-3 bg-red-500 rounded-full animate-pulse"></span>
                   )}
                 </button>
-              )}
+
+                {/* Notifications Dropdown */}
+                {showNotifications && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                    <div className="p-4">
+                      <h3 className="text-lg font-medium text-gray-900 mb-3">Notifications</h3>
+                      
+                      {/* App Update Notification */}
+                      {updateAvailable && (
+                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                          <div className="flex items-start">
+                            <ArrowPathIcon className="h-5 w-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0" />
+                            <div className="flex-1">
+                              <h4 className="text-sm font-medium text-blue-900">App Update Available</h4>
+                              <p className="text-sm text-blue-700 mt-1">
+                                A new version of the app is ready. Click to update now.
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setShowNotifications(false);
+                                  performUpdate();
+                                }}
+                                className="mt-2 inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                              >
+                                <ArrowPathIcon className="h-3 w-3 mr-1" />
+                                Update Now
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Regular Notifications - only show for non-attendance takers */}
+                      {user?.role !== 'attendance_taker' && (
+                        <div>
+                          {user?.unreadNotifications && user.unreadNotifications > 0 ? (
+                            <div className="text-sm text-gray-600">
+                              You have {user.unreadNotifications} unread notification{user.unreadNotifications !== 1 ? 's' : ''}.
+                            </div>
+                          ) : (
+                            <div className="text-sm text-gray-500">
+                              No new notifications.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Show message for attendance takers when no updates */}
+                      {user?.role === 'attendance_taker' && !updateAvailable && (
+                        <div className="text-sm text-gray-500">
+                          No notifications.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Profile dropdown removed on desktop (moved to sidebar) */}
             </div>

@@ -4,7 +4,6 @@ import { register } from '../serviceWorker';
 interface PWAUpdateContextType {
   updateAvailable: boolean;
   showUpdateNotification: boolean;
-  dismissUpdate: () => void;
   performUpdate: () => void;
 }
 
@@ -38,16 +37,15 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
         if (registration.waiting) {
           setWaitingWorker(registration.waiting);
         }
+        
+        // Don't automatically update - let user choose via notification
+        console.log('PWA update available - showing notification');
       },
       onSuccess: (registration) => {
         console.log('PWA content is cached for offline use.');
       },
     });
   }, []);
-
-  const dismissUpdate = () => {
-    setShowUpdateNotification(false);
-  };
 
   const performUpdate = () => {
     if (waitingWorker) {
@@ -65,7 +63,6 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
   const value: PWAUpdateContextType = {
     updateAvailable,
     showUpdateNotification,
-    dismissUpdate,
     performUpdate,
   };
 

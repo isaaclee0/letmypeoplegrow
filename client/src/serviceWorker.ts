@@ -38,19 +38,32 @@ export function register(config?: Config) {
 }
 
 function registerValidSW(swUrl: string, config?: Config) {
+  // iOS Safari specific options
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const swOptions = isIOS ? { 
+    updateViaCache: 'none',
+    scope: '/'
+  } : { 
+    updateViaCache: 'none' 
+  };
+
   navigator.serviceWorker
-    .register(swUrl, { updateViaCache: 'none' })
+    .register(swUrl, swOptions)
     .then((registration) => {
+      console.log('Service Worker registered successfully');
+      
       // Check for updates immediately
       registration.update();
       
       // Set up update detection
       registration.onupdatefound = () => {
+        console.log('Service Worker update found');
         const installingWorker = registration.installing;
         if (installingWorker == null) {
           return;
         }
         installingWorker.onstatechange = () => {
+          console.log('Service Worker state changed:', installingWorker.state);
           if (installingWorker.state === 'installed') {
             if (navigator.serviceWorker.controller) {
               // At this point, the updated precached content has been fetched,
@@ -80,10 +93,22 @@ function registerValidSW(swUrl: string, config?: Config) {
         };
       };
       
-      // Check for updates periodically (especially for iOS)
+      // More aggressive update checking for iOS
+      const updateInterval = isIOS ? 30000 : 60000; // 30 seconds for iOS, 1 minute for others
       setInterval(() => {
+        console.log('Checking for service worker updates...');
         registration.update();
-      }, 60000); // Check every minute
+      }, updateInterval);
+      
+      // Force update check on page visibility change (iOS specific)
+      if (isIOS) {
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            console.log('Page became visible, checking for updates...');
+            registration.update();
+          }
+        });
+      }
     })
     .catch((error) => {
       console.error('Error during service worker registration:', error);
