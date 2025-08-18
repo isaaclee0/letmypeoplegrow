@@ -1,14 +1,15 @@
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
+const Database = require('./config/database');
 
 // Test configuration
-const BASE_URL = 'http://localhost:3001/api';
-const TEST_EMAIL = 'admin@example.com';
-const TEST_PASSWORD = 'password123';
+const BASE_URL = 'http://server:3001/api';
+const TEST_EMAIL = 'isaac@redeemercc.org.au';
 
 // Test data
 const testVisitorFamily = {
   familyName: 'Smith Family',
-  visitorType: 'local',
+  peopleType: 'local_visitor',
   notes: 'Test visitor family',
   people: [
     {
@@ -32,24 +33,41 @@ async function testVisitorFamilyAPI() {
   try {
     console.log('🧪 Testing Visitor Family API...\n');
 
-    // Step 1: Login to get authentication token
-    console.log('1. Logging in...');
-    const loginResponse = await axios.post(`${BASE_URL}/auth/login`, {
-      email: TEST_EMAIL,
-      password: TEST_PASSWORD
-    });
+    // Step 1: Get user from database and generate JWT token
+    console.log('1. Getting user and generating token...');
+    const users = await Database.query(
+      'SELECT id, email, role, church_id FROM users WHERE email = ? AND is_active = true',
+      [TEST_EMAIL]
+    );
 
-    const token = loginResponse.data.token;
+    if (users.length === 0) {
+      throw new Error('User not found');
+    }
+
+    const user = users[0];
+    const token = jwt.sign(
+      { 
+        userId: user.id, 
+        email: user.email, 
+        role: user.role,
+        churchId: user.church_id
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
     const authHeaders = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     };
 
-    console.log('✅ Login successful\n');
+    console.log('✅ Token generated successfully\n');
 
     // Step 2: Get gatherings to find a valid gathering ID
     console.log('2. Getting gatherings...');
-    const gatheringsResponse = await axios.get(`${BASE_URL}/gatherings`, { headers: authHeaders });
+    const gatheringsResponse = await axios.get(`${BASE_URL}/gatherings`, { 
+      headers: authHeaders
+    });
     const gatherings = gatheringsResponse.data.gatherings;
     
     if (gatherings.length === 0) {
@@ -66,7 +84,9 @@ async function testVisitorFamilyAPI() {
     const createFamilyResponse = await axios.post(
       `${BASE_URL}/families/visitor`, 
       testVisitorFamily, 
-      { headers: authHeaders }
+      { 
+        headers: authHeaders
+      }
     );
 
     const familyId = createFamilyResponse.data.familyId;
@@ -78,7 +98,9 @@ async function testVisitorFamilyAPI() {
     const addToServiceResponse = await axios.post(
       `${BASE_URL}/attendance/${gatheringId}/${testDate}/visitor-family/${familyId}`,
       {},
-      { headers: authHeaders }
+      { 
+        headers: authHeaders
+      }
     );
 
     console.log(`✅ Added visitor family to service`);
@@ -88,7 +110,9 @@ async function testVisitorFamilyAPI() {
     console.log('5. Verifying attendance data...');
     const attendanceResponse = await axios.get(
       `${BASE_URL}/attendance/${gatheringId}/${testDate}`,
-      { headers: authHeaders }
+      { 
+        headers: authHeaders
+      }
     );
 
     const attendanceList = attendanceResponse.data.attendanceList;
@@ -103,7 +127,9 @@ async function testVisitorFamilyAPI() {
 
     // Step 6: Verify family data
     console.log('\n6. Verifying family data...');
-    const familiesResponse = await axios.get(`${BASE_URL}/families`, { headers: authHeaders });
+    const familiesResponse = await axios.get(`${BASE_URL}/families`, { 
+      headers: authHeaders
+    });
     const visitorFamily = familiesResponse.data.families.find(f => f.id === familyId);
 
     if (visitorFamily) {
