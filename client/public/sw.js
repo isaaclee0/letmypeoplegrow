@@ -1,8 +1,10 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-08-15T21:28:37.447Z
+// Generated on 2025-08-16T05:14:37.893Z
+// App Version: 0.9.7
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1755293317447';
+const CACHE_NAME = 'let-my-people-grow-v0.9.7-1755321277893';
+const APP_VERSION = '0.9.7';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -13,6 +15,7 @@ const urlsToCache = [
 
 // Install event - cache resources
 self.addEventListener('install', (event) => {
+  console.log('Service Worker installing...', CACHE_NAME, 'Version:', APP_VERSION);
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -22,6 +25,10 @@ self.addEventListener('install', (event) => {
           // Continue with installation even if some resources fail to cache
           return Promise.resolve();
         });
+      })
+      .then(() => {
+        // Force activation for iOS Safari
+        return self.skipWaiting();
       })
   );
 });
@@ -68,25 +75,56 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Activate event - clean up old caches
+// Activate event - clean up old caches and take control immediately
 self.addEventListener('activate', (event) => {
+  console.log('Service Worker activating...', CACHE_NAME, 'Version:', APP_VERSION);
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (!cacheName.startsWith('let-my-people-grow-v')) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    Promise.all([
+      // Clean up old caches
+      caches.keys().then((cacheNames) => {
+        return Promise.all(
+          cacheNames.map((cacheName) => {
+            // Delete all caches except the current one
+            if (cacheName !== CACHE_NAME) {
+              console.log('Deleting old cache:', cacheName);
+              return caches.delete(cacheName);
+            }
+          })
+        );
+      }),
+      // Take control immediately for iOS Safari
+      self.clients.claim()
+    ])
   );
 });
 
 // Listen for messages from the main thread
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.log('Received SKIP_WAITING message');
     self.skipWaiting();
+  }
+});
+
+// Additional iOS Safari optimizations
+self.addEventListener('beforeinstallprompt', (event) => {
+  console.log('Before install prompt');
+});
+
+// Force update check on every page load for iOS
+self.addEventListener('fetch', (event) => {
+  // Check for updates on navigation requests
+  if (event.request.mode === 'navigate') {
+    event.waitUntil(
+      fetch(event.request).then((response) => {
+        // If we get a new response, it might indicate an update
+        if (response && response.status === 200) {
+          // Check if we need to update
+          self.registration.update();
+        }
+      }).catch(() => {
+        // Ignore fetch errors for update checks
+      })
+    );
   }
 });

@@ -20,6 +20,7 @@ import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
 
+
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isLoading, /* needsOnboarding, */ user } = useAuth();
@@ -85,14 +86,13 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 // PWA Update Notification Component
 const PWAUpdateWrapper: React.FC = () => {
-  const { showUpdateNotification, dismissUpdate, performUpdate } = usePWAUpdate();
+  const { showUpdateNotification, performUpdate } = usePWAUpdate();
   
   return (
     <>
       {showUpdateNotification && (
         <PWAUpdateNotification
           onUpdate={performUpdate}
-          onDismiss={dismissUpdate}
         />
       )}
     </>

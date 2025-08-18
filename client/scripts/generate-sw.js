@@ -6,13 +6,25 @@ const path = require('path');
 // Generate a service worker with cache busting
 const generateServiceWorker = () => {
   const timestamp = Date.now();
-  const cacheName = `let-my-people-grow-v${timestamp}`;
+  
+  // Get the current version from package.json
+  let currentVersion = '0.9.6'; // fallback
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+    currentVersion = packageJson.version;
+  } catch (error) {
+    console.warn('Could not read package.json for version, using fallback');
+  }
+  
+  const cacheName = `let-my-people-grow-v${currentVersion}-${timestamp}`;
   
   const swContent = `// Service Worker for Let My People Grow PWA
 // Generated on ${new Date().toISOString()}
+// App Version: ${currentVersion}
 // This handles caching and update notifications
 
 const CACHE_NAME = '${cacheName}';
+const APP_VERSION = '${currentVersion}';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -23,7 +35,7 @@ const urlsToCache = [
 
 // Install event - cache resources
 self.addEventListener('install', (event) => {
-  console.log('Service Worker installing...', CACHE_NAME);
+  console.log('Service Worker installing...', CACHE_NAME, 'Version:', APP_VERSION);
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -85,14 +97,15 @@ self.addEventListener('fetch', (event) => {
 
 // Activate event - clean up old caches and take control immediately
 self.addEventListener('activate', (event) => {
-  console.log('Service Worker activating...', CACHE_NAME);
+  console.log('Service Worker activating...', CACHE_NAME, 'Version:', APP_VERSION);
   event.waitUntil(
     Promise.all([
       // Clean up old caches
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cacheName) => {
-            if (!cacheName.startsWith('let-my-people-grow-v')) {
+            // Delete all caches except the current one
+            if (cacheName !== CACHE_NAME) {
               console.log('Deleting old cache:', cacheName);
               return caches.delete(cacheName);
             }
