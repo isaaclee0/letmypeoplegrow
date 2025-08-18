@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI } from '../services/api';
+import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
+import { generateFamilyName } from '../utils/familyNameUtils';
+import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import {
   UserGroupIcon,
   MagnifyingGlassIcon,
@@ -152,6 +154,14 @@ const PeoplePage: React.FC = () => {
   const [showArchivedVisitors, setShowArchivedVisitors] = useState(false);
   const [showArchivedPeople, setShowArchivedPeople] = useState(false);
 
+  // Visitor configuration state
+  const [visitorConfig, setVisitorConfig] = useState({
+    localVisitorServiceLimit: 6,
+    travellerVisitorServiceLimit: 2
+  });
+  const [showVisitorConfig, setShowVisitorConfig] = useState(false);
+  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
+
   // Color palette for gatherings
   const gatheringColors = [
     'bg-blue-500',
@@ -176,6 +186,7 @@ const PeoplePage: React.FC = () => {
     loadFamilies();
     loadGatheringTypes();
     loadArchivedPeople();
+    loadVisitorConfig();
   }, []);
 
   const loadPeople = async () => {
@@ -447,7 +458,31 @@ const PeoplePage: React.FC = () => {
     setSelectedPeople([]);
   };
 
+  // Load visitor configuration
+  const loadVisitorConfig = async () => {
+    try {
+      const response = await visitorConfigAPI.getConfig();
+      setVisitorConfig(response.data);
+    } catch (err) {
+      console.error('Failed to load visitor config:', err);
+      setError('Failed to load visitor configuration');
+    }
+  };
 
+  // Save visitor configuration
+  const saveVisitorConfig = async () => {
+    setIsLoadingConfig(true);
+    try {
+      await visitorConfigAPI.updateConfig(visitorConfig);
+      showSuccess('Visitor configuration updated');
+      setShowVisitorConfig(false);
+    } catch (err) {
+      console.error('Failed to save visitor config:', err);
+      setError('Failed to save visitor configuration');
+    } finally {
+      setIsLoadingConfig(false);
+    }
+  };
 
   // Group people by family
   const groupedPeople = people.reduce((groups, person) => {
@@ -646,14 +681,14 @@ const PeoplePage: React.FC = () => {
     }
     const updatedMembers = [...familyMembers, newMember];
     setFamilyMembers(updatedMembers);
-    generateFamilyName(updatedMembers);
+    updateFamilyNameFromMembers(updatedMembers);
   };
 
   const removeFamilyMember = (index: number) => {
     if (familyMembers.length > 1) {
       const updatedMembers = familyMembers.filter((_, i) => i !== index);
       setFamilyMembers(updatedMembers);
-      generateFamilyName(updatedMembers);
+      updateFamilyNameFromMembers(updatedMembers);
     }
   };
 
@@ -663,7 +698,7 @@ const PeoplePage: React.FC = () => {
     setFamilyMembers(updatedMembers);
     
     // Auto-generate family name
-    generateFamilyName(updatedMembers);
+    updateFamilyNameFromMembers(updatedMembers);
     
     // Apply same surname to all members if checkbox is checked
     if (field === 'lastName' && useSameSurname && index === 0) {
@@ -673,7 +708,7 @@ const PeoplePage: React.FC = () => {
         }
       });
       setFamilyMembers(updatedMembers);
-      generateFamilyName(updatedMembers);
+      updateFamilyNameFromMembers(updatedMembers);
     }
   };
 
@@ -711,39 +746,10 @@ const PeoplePage: React.FC = () => {
     }
   }, [familyMembers]);
 
-  const generateFamilyName = useCallback((members: Array<{firstName: string, lastName: string}>) => {
-    const validMembers = members.filter(member => member.firstName.trim() && member.lastName.trim());
-    
-    if (validMembers.length === 0) {
-      setFamilyName('');
-      return;
-    }
-    
-    if (validMembers.length === 1) {
-      setFamilyName(`${validMembers[0].lastName}, ${validMembers[0].firstName}`);
-      return;
-    }
-    
-    // Multiple members: "SURNAME, Person1 and Person2" - enhanced for i18n
-    const surname = validMembers[0].lastName;
-    const firstNames = validMembers.map(member => member.firstName);
-    
-    // Use Intl.ListFormat for better internationalization support
-    try {
-      const listFormatter = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
-      const formattedNames = listFormatter.format(firstNames);
-      setFamilyName(`${surname}, ${formattedNames}`);
-    } catch (error) {
-      // Fallback to manual formatting if Intl.ListFormat is not supported
-      const lastName = firstNames[firstNames.length - 1];
-      const otherNames = firstNames.slice(0, -1);
-      
-      if (otherNames.length === 0) {
-        setFamilyName(`${surname}, ${lastName}`);
-      } else {
-        setFamilyName(`${surname}, ${otherNames.join(', ')} and ${lastName}`);
-      }
-    }
+  // Use shared utility to generate family name and update local state
+  const updateFamilyNameFromMembers = useCallback((members: Array<{firstName: string, lastName: string}>) => {
+    const generated = generateFamilyName(members);
+    setFamilyName(generated);
   }, []);
 
   const handleCombinedFamilyPerson = async () => {
@@ -953,9 +959,9 @@ const PeoplePage: React.FC = () => {
         }
       });
       setFamilyMembers(updatedMembers);
-      generateFamilyName(updatedMembers);
+      updateFamilyNameFromMembers(updatedMembers);
     }
-  }, [familyMembers, generateFamilyName]);
+  }, [familyMembers, updateFamilyNameFromMembers]);
 
   // removed: handleUpdatePeopleFamilies
 
@@ -1745,12 +1751,86 @@ const PeoplePage: React.FC = () => {
               <h3 className="text-lg leading-6 font-medium text-gray-900">
                 Visitors ({people.filter(p => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor').length})
               </h3>
+              <button
+                onClick={() => setShowVisitorConfig(!showVisitorConfig)}
+                className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+              >
+                {showVisitorConfig ? 'Hide Settings' : 'Configure Filtering'}
+              </button>
             </div>
+
+            {/* Visitor Configuration Section */}
+            {showVisitorConfig && (
+              <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                <h4 className="text-md font-medium text-gray-900 mb-3">Visitor Filtering Configuration</h4>
+                <p className="text-sm text-gray-600 mb-4">
+                  Configure how long visitors appear in recent visitor lists for attendance taking.
+                </p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Local Visitors (services to keep)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="52"
+                      value={visitorConfig.localVisitorServiceLimit}
+                      onChange={(e) => setVisitorConfig(prev => ({
+                        ...prev,
+                        localVisitorServiceLimit: parseInt(e.target.value) || 1
+                      }))}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Local visitors appear in recent lists for this many services after their last attendance.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Traveller Visitors (services to keep)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="52"
+                      value={visitorConfig.travellerVisitorServiceLimit}
+                      onChange={(e) => setVisitorConfig(prev => ({
+                        ...prev,
+                        travellerVisitorServiceLimit: parseInt(e.target.value) || 1
+                      }))}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Traveller visitors appear in recent lists for this many services after their last attendance.
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex justify-end mt-4 space-x-3">
+                  <button
+                    onClick={() => setShowVisitorConfig(false)}
+                    className="px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveVisitorConfig}
+                    disabled={isLoadingConfig}
+                    className="px-3 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {isLoadingConfig ? 'Saving...' : 'Save Configuration'}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="space-y-4">
-              {/* Recent Visitors (last 6 weeks) */}
+              {/* Recent Visitors (configurable service-based filtering) */}
               {recentVisitorGroups.length > 0 && (
                 <>
-                  <h4 className="text-md font-medium text-gray-800">Recent (last 6 weeks)</h4>
+                  <h4 className="text-md font-medium text-gray-800">Recent (based on configured service limits)</h4>
                   {recentVisitorGroups
                 .map((group: any) => (
                   <div key={`visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
@@ -1887,7 +1967,7 @@ const PeoplePage: React.FC = () => {
               {olderVisitorGroups.length > 0 && (
                 <div className="mt-6">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-md font-medium text-gray-800">Infrequent (not seen in 6+ weeks)</h4>
+                    <h4 className="text-md font-medium text-gray-800">Infrequent</h4>
                     <button
                       type="button"
                       onClick={() => setShowArchivedVisitors(v => !v)}

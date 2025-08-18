@@ -7,8 +7,115 @@ const { processApiResponse } = require('../utils/caseConverter');
 const router = express.Router();
 router.use(verifyToken);
 
+// Middleware to disable caching for attendance endpoints
+const disableCache = (req, res, next) => {
+  res.set({
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+  res.removeHeader('ETag');
+  next();
+};
+
+// Helper function to get the last N service dates for a gathering type
+const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount) => {
+  try {
+    const serviceDates = await Database.query(`
+      SELECT DISTINCT session_date 
+      FROM attendance_sessions 
+      WHERE gathering_type_id = ? AND church_id = ?
+      ORDER BY session_date DESC 
+      LIMIT ?
+    `, [gatheringTypeId, churchId, serviceCount]);
+    
+    return serviceDates.map(row => row.session_date);
+  } catch (error) {
+    console.error('Error getting service dates:', error);
+    return [];
+  }
+};
+
+// Helper function to get visitor configuration for a church
+const getVisitorConfig = async (churchId) => {
+  try {
+    const config = await Database.query(
+      'SELECT local_visitor_service_limit, traveller_visitor_service_limit FROM visitor_config WHERE church_id = ?',
+      [churchId]
+    );
+    
+    if (config.length === 0) {
+      // Return defaults if no config exists
+      return {
+        localVisitorServiceLimit: 6,
+        travellerVisitorServiceLimit: 2
+      };
+    }
+    
+    return {
+      localVisitorServiceLimit: config[0].local_visitor_service_limit,
+      travellerVisitorServiceLimit: config[0].traveller_visitor_service_limit
+    };
+  } catch (error) {
+    console.error('Error getting visitor config:', error);
+    return {
+      localVisitorServiceLimit: 6,
+      travellerVisitorServiceLimit: 2
+    };
+  }
+};
+
+// Church-wide people (all gatherings, all time) — define BEFORE param routes to avoid shadowing  
+router.get('/people/all', disableCache, async (req, res) => {
+  try {
+    const allFamilies = await Database.query(`
+      SELECT DISTINCT 
+        f.id as family_id,
+        f.family_name,
+        f.family_notes,
+        f.family_type,
+        COALESCE(f.last_attended, f.created_at) as last_activity
+      FROM families f
+      JOIN individuals i ON f.id = i.family_id
+      WHERE i.is_active = true
+        AND f.church_id = ?
+      GROUP BY f.id
+      ORDER BY last_activity DESC, f.family_name
+    `, [req.user.church_id]);
+
+    const processedPeople = [];
+    for (const family of allFamilies) {
+      const familyMembers = await Database.query(`
+        SELECT id, first_name, last_name, people_type
+        FROM individuals 
+        WHERE family_id = ? AND is_active = true AND church_id = ?
+        ORDER BY first_name
+      `, [family.family_id, req.user.church_id]);
+
+      for (const member of familyMembers) {
+        const isVisitor = ['local_visitor', 'traveller_visitor'].includes(member.people_type);
+        processedPeople.push({
+          id: member.id,
+          name: `${member.first_name} ${member.last_name}`,
+          visitorType: isVisitor ? (member.people_type === 'local_visitor' ? 'potential_regular' : 'temporary_other') : 'regular',
+          visitorFamilyGroup: family.family_id.toString(),
+          notes: family.family_notes,
+          lastAttended: family.last_activity,
+          familyId: family.family_id,
+          familyName: family.family_name
+        });
+      }
+    }
+
+    res.json({ visitors: processedPeople }); // Keep 'visitors' key for compatibility
+  } catch (error) {
+    console.error('Get all people error:', error);
+    res.status(500).json({ error: 'Failed to retrieve all people.' });
+  }
+});
+
 // Church-wide visitors (all gatherings, all time) — define BEFORE param routes to avoid shadowing
-router.get('/visitors/all', async (req, res) => {
+router.get('/visitors/all', disableCache, async (req, res) => {
   try {
     const allVisitorFamilies = await Database.query(`
       SELECT DISTINCT 
@@ -59,7 +166,7 @@ router.get('/visitors/all', async (req, res) => {
 });
 
 // Get attendance for a specific date and gathering
-router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) => {
+router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { search } = req.query; // Add search parameter
@@ -228,9 +335,16 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
 
     const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
 
-    // Get potential visitor attendees based on absence duration
+    // Get potential visitor attendees based on service-based filtering
 
-    // Build the visitor query using only the new individuals/families system
+    // Get visitor configuration for this church
+    const visitorConfig = await getVisitorConfig(req.user.church_id);
+    
+    // Get the last N service dates for filtering
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
+    
+    // Build the visitor query using service-based filtering
     let visitorQuery = `
       SELECT DISTINCT 
         CONCAT(i.first_name, ' ', i.last_name) as name,
@@ -240,13 +354,8 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
         i.last_attendance_date as last_attended,
         f.family_name,
         f.id as family_id,
-        CASE 
-          WHEN i.people_type = 'local_visitor' THEN 
-            (i.last_attendance_date IS NULL OR i.last_attendance_date >= ?)
-          WHEN i.people_type = 'traveller_visitor' THEN 
-            (i.last_attendance_date IS NULL OR i.last_attendance_date >= ?)
-          ELSE true
-        END as within_absence_limit
+        i.id,
+        i.people_type
       FROM individuals i
       JOIN families f ON i.family_id = f.id
       JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.gathering_type_id = ?
@@ -256,31 +365,35 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
         AND i.church_id = ?
     `;
 
-    let visitorParams = [sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0], gatheringTypeId, req.user.church_id];
+    let visitorParams = [gatheringTypeId, req.user.church_id];
 
     // Add search filter if provided
     if (search && search.trim()) {
       visitorQuery += ` AND (CONCAT(i.first_name, ' ', i.last_name) LIKE ? OR f.family_name LIKE ?)`;
       const searchTerm = `%${search.trim()}%`;
       visitorParams.push(searchTerm, searchTerm);
-    } else {
-      // Only apply absence filtering when not searching (6 weeks for both types)
-      visitorQuery += ` AND (
-        i.last_attendance_date IS NULL OR i.last_attendance_date >= ?
-      )`;
-      visitorParams.push(sixWeeksAgo.toISOString().split('T')[0]);
-    }
-
-    // If attendance_records has church_id, prefer scoped existence when referencing recent activity via join
-    const hasArChurchId = await columnExists('attendance_records', 'church_id');
-    if (hasArChurchId) {
-      // ensure subqueries that check attendance include ar.church_id = req.user.church_id
-      // (already applied in earlier recent visitors query)
     }
 
     visitorQuery += ` ORDER BY i.last_attendance_date DESC, f.family_name`;
 
-    const potentialVisitors = await Database.query(visitorQuery, visitorParams);
+    const allPotentialVisitors = await Database.query(visitorQuery, visitorParams);
+
+    // Filter visitors based on service-based logic (not when searching)
+    const potentialVisitors = search && search.trim() ? 
+      allPotentialVisitors : 
+      allPotentialVisitors.filter(visitor => {
+        if (!visitor.last_attended) return true; // Include visitors who have never attended
+        
+        const relevantServiceDates = visitor.people_type === 'local_visitor' ? 
+          localServiceDates : travellerServiceDates;
+        
+        // Check if visitor's last attendance was within the relevant service dates
+        const lastAttendedStr = visitor.last_attended.toISOString().split('T')[0];
+        return relevantServiceDates.some(serviceDate => {
+          const serviceDateStr = serviceDate.toISOString().split('T')[0];
+          return serviceDateStr >= lastAttendedStr;
+        });
+      });
 
     // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion
     const responseData = processApiResponse({
@@ -305,7 +418,7 @@ router.get('/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) =
 });
 
 // Record attendance
-router.post('/:gatheringTypeId/:date', requireGatheringAccess, auditLog('RECORD_ATTENDANCE'), async (req, res) => {
+router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('RECORD_ATTENDANCE'), async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
     const { attendanceRecords, visitors } = req.body;
@@ -421,16 +534,19 @@ router.post('/:gatheringTypeId/:date', requireGatheringAccess, auditLog('RECORD_
 });
 
 // Get recent visitors (for suggestions)
-router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (req, res) => {
+router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAccess, async (req, res) => {
   try {
     const { gatheringTypeId } = req.params;
     
-    const twoMonthsAgo = new Date();
-    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    // Get visitor configuration for this church
+    const visitorConfig = await getVisitorConfig(req.user.church_id);
     
-    // Get all visitor families created in the last 2 months OR who have attended this gathering
-    // This includes families that have been created but may not have attended yet
-    const recentVisitorFamilies = await Database.query(`
+    // Get the last N service dates for filtering
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
+    
+    // Get all visitor families who have attended this gathering OR were created recently
+    const allVisitorFamilies = await Database.query(`
       SELECT DISTINCT 
         f.id as family_id,
         f.family_name,
@@ -445,20 +561,36 @@ router.get('/:gatheringTypeId/visitors/recent', requireGatheringAccess, async (r
         AND i.people_type IN ('local_visitor', 'traveller_visitor')
         AND i.is_active = true
         AND f.church_id = ?
-        AND (
-          -- Either attended this gathering recently
-          (f.last_attended >= ? AND EXISTS (
-            SELECT 1 FROM attendance_records ar2 
-            JOIN attendance_sessions s2 ON ar2.session_id = s2.id 
-            WHERE ar2.individual_id = i.id AND s2.gathering_type_id = ? AND ar2.church_id = ?
-          ))
-          OR
-          -- Or created recently (within 2 months)
-          f.created_at >= ?
+        AND EXISTS (
+          SELECT 1 FROM attendance_records ar2 
+          JOIN attendance_sessions s2 ON ar2.session_id = s2.id 
+          WHERE ar2.individual_id = i.id AND s2.gathering_type_id = ? AND ar2.church_id = ?
         )
       GROUP BY f.id
       ORDER BY last_activity DESC, f.family_name
-    `, [req.user.church_id, twoMonthsAgo.toISOString().split('T')[0], gatheringTypeId, req.user.church_id, twoMonthsAgo.toISOString().split('T')[0]]);
+    `, [req.user.church_id, gatheringTypeId, req.user.church_id]);
+    
+    // Filter families based on service dates
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    
+    const recentVisitorFamilies = allVisitorFamilies.filter(family => {
+      // Always include families created in the last 2 months
+      if (family.last_activity >= twoMonthsAgo) return true;
+      
+      // For older families, check if they attended within the relevant service dates
+      const familyTypes = family.people_types.split(',');
+      const isLocal = familyTypes.includes('local_visitor');
+      const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
+      
+      if (!family.last_activity) return false;
+      
+      const lastActivityStr = family.last_activity.toISOString().split('T')[0];
+      return relevantServiceDates.some(serviceDate => {
+        const serviceDateStr = serviceDate.toISOString().split('T')[0];
+        return serviceDateStr >= lastActivityStr;
+      });
+    });
 
     // Convert family data to individual visitor format to match main API
     const processedVisitors = [];

@@ -589,6 +589,8 @@ router.get('/me', verifyToken, async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
+        mobileNumber: user.mobile_number,
+        primaryContactMethod: user.primary_contact_method || 'email',
         role: user.role,
         firstName: user.first_name,
         lastName: user.last_name,

@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition } from 'react';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
-import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, GatheringType, Individual, Visitor } from '../services/api';
+import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, visitorConfigAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
+import { generateFamilyName } from '../utils/familyNameUtils';
+import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -14,7 +16,8 @@ import {
   XMarkIcon,
   PencilIcon,
   EllipsisHorizontalIcon,
-  ChevronUpIcon
+  ChevronUpIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 
@@ -64,13 +67,41 @@ const AttendancePage: React.FC = () => {
     localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
   };
 
-  // Keep present map in sync with loaded attendance list
+  // Simple state sync: whenever attendanceList changes, update presentById from server data
+  // BUT preserve any recent user modifications (within last 30 seconds)
   useEffect(() => {
-    const map: Record<number, boolean> = {};
-    attendanceList.forEach((p) => { map[p.id] = Boolean(p.present); });
-    setPresentById(map);
-    presentByIdRef.current = map;
-  }, [attendanceList]);
+    console.log('📋 Syncing presentById with attendanceList', {
+      attendanceCount: attendanceList.length,
+      gathering: selectedGathering?.id,
+      date: selectedDate
+    });
+    
+    const now = Date.now();
+    const newPresentById: Record<number, boolean> = {};
+    
+    attendanceList.forEach((person) => {
+      const userModifiedTime = lastUserModificationRef.current[person.id];
+      const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
+      
+      if (timeSinceUserModification <= 30000) {
+        // Preserve user's recent changes (within 30 seconds)
+        const userValue = presentByIdRef.current[person.id];
+        if (userValue !== undefined) {
+          newPresentById[person.id] = userValue;
+          console.log(`👤 Preserving user change for ${person.firstName} ${person.lastName}: ${userValue}`);
+        } else {
+          newPresentById[person.id] = Boolean(person.present);
+        }
+      } else {
+        // Use server data for people not recently modified
+        newPresentById[person.id] = Boolean(person.present);
+      }
+    });
+    
+    console.log('📊 Setting presentById:', newPresentById);
+    setPresentById(newPresentById);
+    presentByIdRef.current = newPresentById;
+  }, [attendanceList, selectedGathering?.id, selectedDate]);
 
   useEffect(() => {
     presentByIdRef.current = presentById;
@@ -169,11 +200,11 @@ const AttendancePage: React.FC = () => {
   const [allVisitors, setAllVisitors] = useState<Visitor[]>([]);
   // Keep a raw pool of recent visitors (without 6-week filter) for search visibility
   const [allRecentVisitorsPool, setAllRecentVisitorsPool] = useState<Visitor[]>([]);
-  // Church-wide, all-time visitors (for minimized All Visitors section)
+  // Church-wide, all-time people including visitors and regular members (for "Add People From Church" section)
   const [allChurchVisitors, setAllChurchVisitors] = useState<Visitor[]>([]);
   const [isLoadingAllVisitors, setIsLoadingAllVisitors] = useState(false);
   const [showAllVisitorsSection, setShowAllVisitorsSection] = useState(false);
-  const POLL_INTERVAL_MS = 15000;
+  const POLL_INTERVAL_MS = 10000; // Reduced to 10 seconds for faster updates while still avoiding race conditions
 
   // Keep refs in sync
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
@@ -347,26 +378,77 @@ const AttendancePage: React.FC = () => {
   const loadAttendanceData = useCallback(async () => {
     if (!selectedGathering) return;
 
+    console.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
     setIsLoading(true);
     try {
       const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
+      console.log(`📊 Received attendance data:`, {
+        attendeeCount: response.data.attendanceList?.length || 0,
+        visitorCount: response.data.visitors?.length || 0,
+        gatheringId: selectedGathering.id,
+        date: selectedDate
+      });
+      
       setAttendanceList(response.data.attendanceList || []);
       setVisitors(response.data.visitors || []);
       
-      // Initialize visitor attendance state from server 'present' flags
-      const initialVisitorAttendance: { [key: number]: boolean } = {};
+      // Update visitor attendance state, preserving recent user changes (within 30 seconds)
+      const now = Date.now();
+      const newVisitorAttendance: { [key: number]: boolean } = {};
       (response.data.visitors || []).forEach((visitor: any) => {
         if (visitor.id) {
-          initialVisitorAttendance[visitor.id] = Boolean(visitor.present);
+          const userModifiedTime = lastUserModificationRef.current[visitor.id];
+          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
+          
+          if (timeSinceUserModification <= 30000) {
+            // Preserve user's recent changes
+            const userValue = visitorAttendance[visitor.id];
+            if (userValue !== undefined) {
+              newVisitorAttendance[visitor.id] = userValue;
+              console.log(`👤 Preserving visitor change for ${visitor.name}: ${userValue}`);
+            } else {
+              newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+            }
+          } else {
+            // Use server data
+            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+          }
         }
       });
-      setVisitorAttendance(initialVisitorAttendance);
+      console.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
+      setVisitorAttendance(newVisitorAttendance);
     } catch (err) {
+      console.error(`❌ Failed to load attendance data for gathering ${selectedGathering.id} on ${selectedDate}:`, err);
       setError('Failed to load attendance data');
     } finally {
       setIsLoading(false);
     }
   }, [selectedGathering, selectedDate]);
+
+  // Manual refresh function
+  const forceRefresh = useCallback(async () => {
+    if (selectedGathering && selectedDate) {
+      console.log('🔄 Force refreshing attendance data');
+      
+      // Clear user modification timestamps so server data takes precedence
+      lastUserModificationRef.current = {};
+      
+      // Load fresh data from server - the useEffect will automatically update presentById
+      await loadAttendanceData();
+    }
+  }, [selectedGathering, selectedDate, loadAttendanceData]);
+
+  // Handle gathering changes with fresh data loading
+  const handleGatheringChange = useCallback((gathering: GatheringType) => {
+    console.log(`🏛️ Switching to gathering: ${gathering.name} (ID: ${gathering.id})`);
+    
+    // Clear user modification timestamps when switching gatherings
+    // This ensures we get fresh server data instead of preserving stale local changes
+    lastUserModificationRef.current = {};
+    
+    // Set the new gathering - this will trigger loadAttendanceData via useEffect
+    setSelectedGathering(gathering);
+  }, []);
 
   // Load attendance data when date or gathering changes
   useEffect(() => {
@@ -383,6 +465,32 @@ const AttendancePage: React.FC = () => {
       // Save as last viewed
       saveLastViewed(selectedGathering.id, selectedDate);
     }
+  }, [selectedGathering, selectedDate, loadAttendanceData]);
+
+  // Reload data when PWA becomes visible (user opens app or switches back to it)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && selectedGathering && selectedDate) {
+        console.log('📱 App became visible - refreshing attendance data');
+        
+        // Clear user modification timestamps so we get fresh server data
+        lastUserModificationRef.current = {};
+        
+        // Load fresh data from server
+        loadAttendanceData();
+      }
+    };
+
+    // Listen for visibility changes (app focus/unfocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Also listen for window focus (additional safety net)
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
   }, [selectedGathering, selectedDate, loadAttendanceData]);
 
   // Load recent visitors when gathering changes
@@ -402,23 +510,23 @@ const AttendancePage: React.FC = () => {
     loadRecentVisitors();
   }, [selectedGathering]);
 
-  // Load church-wide visitors once (or when user context changes significantly)
+  // Load church-wide people once (or when user context changes significantly)
   useEffect(() => {
-    const loadAllChurchVisitors = async () => {
+    const loadAllChurchPeople = async () => {
       try {
         setIsLoadingAllVisitors(true);
-        const response = await attendanceAPI.getAllVisitors();
-        setAllChurchVisitors(response.data.visitors || []);
+        const response = await attendanceAPI.getAllPeople();
+        setAllChurchVisitors(response.data.visitors || []); // Keep using same state var for compatibility
       } catch (err) {
-        console.error('Failed to load all visitors:', err);
+        console.error('Failed to load all church people:', err);
       } finally {
         setIsLoadingAllVisitors(false);
       }
     };
-    loadAllChurchVisitors();
+    loadAllChurchPeople();
   }, []);
 
-  // Combine current visitors with recent visitors from last 6 weeks
+  // Combine current visitors with gathering-specific recent visitors from last 6 weeks
   useEffect(() => {
     if (!selectedGathering) return;
 
@@ -428,27 +536,23 @@ const AttendancePage: React.FC = () => {
         const currentResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
         const currentVisitors = currentResponse.data.visitors || [];
 
-        // Use already loaded recent visitors pool if available; otherwise fetch once
-        let allRecentVisitors = allRecentVisitorsPool;
-        if (!allRecentVisitors || allRecentVisitors.length === 0) {
+        // Use already loaded gathering-specific recent visitors pool if available; otherwise fetch once
+        let gatheringRecentVisitors = allRecentVisitorsPool;
+        if (!gatheringRecentVisitors || gatheringRecentVisitors.length === 0) {
           const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-          allRecentVisitors = recentResponse.data.visitors || [];
-          setAllRecentVisitorsPool(allRecentVisitors);
+          gatheringRecentVisitors = recentResponse.data.visitors || [];
+          setAllRecentVisitorsPool(gatheringRecentVisitors);
         }
 
-        // Filter recent visitors to only include those from last 6 weeks
-        const sixWeeksAgo = startOfDay(addDays(new Date(), -42));
-        const recentVisitorsLast6Weeks = (allRecentVisitors || []).filter((visitor: Visitor) => {
-          if (!visitor.lastAttended) return false;
-          const lastAttendedDate = startOfDay(parseISO(visitor.lastAttended));
-          return lastAttendedDate >= sixWeeksAgo;
-        });
+        // Server now handles service-based filtering, so we use all visitors it returns
+        // The filtering is done on the server side using the configured service limits
+        const filteredGatheringRecentVisitors = gatheringRecentVisitors || [];
 
-        // Combine current visitors with recent visitors, avoiding duplicates
+        // Combine current visitors with gathering-specific recent visitors, avoiding duplicates
         const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
         const combinedVisitors = [
           ...currentVisitors,
-          ...recentVisitorsLast6Weeks.filter((v: Visitor) => !currentVisitorIds.has(v.id))
+          ...filteredGatheringRecentVisitors.filter((v: Visitor) => !currentVisitorIds.has(v.id))
         ];
 
         setAllVisitors(combinedVisitors);
@@ -493,7 +597,7 @@ const AttendancePage: React.FC = () => {
 
       // Add as visitor using the new system
       // First create the visitor family
-      const familyName = generateFamilyName(people);
+      const familyName = generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
       const familyResponse = await familiesAPI.createVisitorFamily({
         familyName,
         peopleType: recentVisitor.visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor',
@@ -523,27 +627,46 @@ const AttendancePage: React.FC = () => {
 
   const toggleAttendance = async (individualId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    
+    const person = attendanceListRef.current.find(p => p.id === individualId);
+    console.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
+    
     const now = Date.now();
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
     // Compute new present using refs to avoid stale state reads
     const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
     const newPresent = !currentPresent;
 
+    console.log(`📊 Attendance change: ${currentPresent} → ${newPresent} for gathering ${selectedGathering?.id} on ${selectedDate}`);
+
     setSavingById(prev => ({ ...prev, [individualId]: true }));
     setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
 
-    if (!selectedGathering || !selectedDate) return;
+    if (!selectedGathering || !selectedDate) {
+      console.error('❌ Missing gathering or date context');
+      return;
+    }
 
     // Serialize per-individual writes to avoid race conditions and 500s under rapid toggling
     const run = async () => {
       try {
+        console.log(`💾 Saving attendance record:`, {
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          individualId,
+          present: newPresent,
+          personName: `${person?.firstName} ${person?.lastName}`
+        });
+        
         await attendanceAPI.record(selectedGathering.id, selectedDate, {
           attendanceRecords: [{ individualId, present: newPresent }],
           visitors: []
         });
+        
+        console.log(`✅ Successfully saved attendance for ${person?.firstName} ${person?.lastName}`);
         setSavingById(prev => ({ ...prev, [individualId]: false }));
       } catch (err) {
-        console.error('Failed to save attendance change:', err);
+        console.error(`❌ Failed to save attendance change for ${person?.firstName} ${person?.lastName}:`, err);
         setError('Failed to save change');
         setSavingById(prev => ({ ...prev, [individualId]: false }));
         setPresentById(prev => ({ ...prev, [individualId]: currentPresent }));
@@ -558,20 +681,69 @@ const AttendancePage: React.FC = () => {
 
   const toggleAllFamily = async (familyId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    console.log('=== TOGGLE ALL FAMILY DEBUG ===');
     console.log('Toggling all family attendance for family:', familyId);
-    // Count how many family members are currently present
+    console.log('Total attendance list length:', attendanceList.length);
+    
+    // Debug: Show all families in the attendance list
+    const allFamilies = attendanceList.reduce((acc, person) => {
+      if (person.familyId) {
+        if (!acc[person.familyId]) {
+          acc[person.familyId] = [];
+        }
+        acc[person.familyId].push(person);
+      }
+      return acc;
+    }, {} as Record<number, Individual[]>);
+    
+    console.log('All families in attendance list:', Object.keys(allFamilies).map(familyId => ({
+      familyId: parseInt(familyId),
+      memberCount: allFamilies[parseInt(familyId)].length,
+      members: allFamilies[parseInt(familyId)].map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, present: p.present }))
+    })));
+    
+    // Set family operation flag to prevent polling interference
+    setIsFamilyOperationInProgress(true);
+    isFamilyOperationInProgressRef.current = true;
+    
+    // Get family members from attendance list
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
-    const presentCount = familyMembers.filter(person => person.present).length;
+    const familyMemberIds = familyMembers.map(person => person.id);
+    
+    console.log('Family members found:', familyMembers.length);
+    console.log('Family member IDs:', familyMemberIds);
+    console.log('Family members details:', familyMembers.map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
+    
+    // Count how many family members are currently present using current state
+    // Use presentById state first, fallback to attendanceList.present if not in presentById
+    const presentCount = familyMemberIds.filter(id => {
+      const presentInState = presentById[id];
+      if (presentInState !== undefined) {
+        console.log(`Person ${id}: present in state = ${presentInState}`);
+        return presentInState;
+      }
+      // Fallback to attendanceList if not in presentById
+      const person = familyMembers.find(p => p.id === id);
+      const fallbackPresent = person ? Boolean(person.present) : false;
+      console.log(`Person ${id}: fallback present = ${fallbackPresent} (from attendanceList)`);
+      return fallbackPresent;
+    }).length;
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
     console.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
+    console.log('Current presentById state:', presentById);
+    console.log('=== END TOGGLE ALL FAMILY DEBUG ===');
     
-    if (!selectedGathering || !selectedDate) return;
+    if (!selectedGathering || !selectedDate) {
+      // Clear family operation flag
+      setIsFamilyOperationInProgress(false);
+      isFamilyOperationInProgressRef.current = false;
+      return;
+    }
 
     // Track user modifications for all family members
     const now = Date.now();
-    const familyMemberIds = familyMembers.map(person => person.id);
     setLastUserModification(prev => {
       const updated = { ...prev };
       familyMemberIds.forEach(id => {
@@ -580,14 +752,20 @@ const AttendancePage: React.FC = () => {
       return updated;
     });
 
-    // Update local state first
-    setAttendanceList(prev => {
-      const updated = prev.map(person => 
-        person.familyId === familyId 
-          ? { ...person, present: shouldCheckAll, isSaving: true }
-          : person
-      );
-      console.log('Updated attendance list after family toggle:', updated);
+    // Update local state using presentById (consistent with individual toggles)
+    setSavingById(prev => {
+      const updated = { ...prev };
+      familyMemberIds.forEach(id => {
+        updated[id] = true;
+      });
+      return updated;
+    });
+    
+    setPresentById(prev => {
+      const updated = { ...prev };
+      familyMemberIds.forEach(id => {
+        updated[id] = shouldCheckAll;
+      });
       return updated;
     });
 
@@ -598,32 +776,52 @@ const AttendancePage: React.FC = () => {
         present: shouldCheckAll
       }));
 
+      console.log('Sending attendance records to API:', familyAttendanceRecords);
+
       await attendanceAPI.record(selectedGathering.id, selectedDate, {
         attendanceRecords: familyAttendanceRecords,
         visitors: []
       });
 
       // Clear saving state
-      setAttendanceList(prev => 
-        prev.map(person => 
-          person.familyId === familyId 
-            ? { ...person, isSaving: false }
-            : person
-        )
-      );
+      setSavingById(prev => {
+        const updated = { ...prev };
+        familyMemberIds.forEach(id => {
+          updated[id] = false;
+        });
+        return updated;
+      });
     } catch (err) {
       console.error('Failed to save family attendance change:', err);
       setError('Failed to save family changes');
-      // Revert on error
-      setAttendanceList(prev => 
-        prev.map(person => 
-          person.familyId === familyId 
-            ? { ...person, isSaving: false, present: !shouldCheckAll } // Revert to previous state
-            : person
-        )
-      );
+      // Revert on error - restore previous state
+      setSavingById(prev => {
+        const updated = { ...prev };
+        familyMemberIds.forEach(id => {
+          updated[id] = false;
+        });
+        return updated;
+      });
+      setPresentById(prev => {
+        const updated = { ...prev };
+        familyMemberIds.forEach(id => {
+          updated[id] = !shouldCheckAll; // Revert to previous state
+        });
+        return updated;
+      });
+    } finally {
+      // Clear family operation flag after a short delay to allow state to settle
+      setTimeout(() => {
+        setIsFamilyOperationInProgress(false);
+        isFamilyOperationInProgressRef.current = false;
+        console.log('Family operation completed, polling resumed');
+      }, 2000); // 2 second delay
     }
   };
+
+  // Add state to track if we're in the middle of a family operation
+  const [isFamilyOperationInProgress, setIsFamilyOperationInProgress] = useState(false);
+  const isFamilyOperationInProgressRef = useRef(false);
 
   // Update polling effect (avoid re-creating interval on each render; use refs for deps)
   useEffect(() => {
@@ -634,27 +832,31 @@ const AttendancePage: React.FC = () => {
     }
 
     pollingIntervalRef.current = setInterval(async () => {
+      // Skip polling if a family operation is in progress
+      if (isFamilyOperationInProgressRef.current) {
+        console.log('Polling skipped - family operation in progress');
+        return;
+      }
+
       try {
+        console.log(`🔄 [POLLING] Fetching attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
         const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
         const newAttendanceList = response.data.attendanceList || [];
         const newVisitors = response.data.visitors || [];
 
-        setAttendanceList(prev => {
-          const currentPeopleMap = new Map(prev.map(p => [p.id, p]));
-          const updatedList = newAttendanceList.map((newPerson: Individual) => {
-            const currentPerson = currentPeopleMap.get(newPerson.id);
-            if (!currentPerson) return { ...newPerson, isSaving: false };
-            const userModifiedTime = lastUserModificationRef.current[newPerson.id];
-            const timeSinceUserModification = userModifiedTime ? Date.now() - userModifiedTime : Infinity;
-            if (currentPerson.isSaving) return currentPerson;
-            if (timeSinceUserModification <= 15000) {
-              return { ...newPerson, present: currentPerson.present, isSaving: false };
-            }
-            return { ...newPerson, isSaving: false };
-          });
-          return updatedList;
-        });
+        console.log('=== POLLING DEBUG ===');
+        console.log('Received new attendance list:', newAttendanceList.length, 'items');
+        console.log('Current attendance list:', attendanceList.length, 'items');
+        console.log('New attendance list details:', newAttendanceList.map((p: Individual) => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
+        console.log('Current presentById state:', presentById);
 
+        // Simple polling: just update attendanceList with fresh server data
+        // The useEffect will handle syncing with presentById while preserving user changes
+        console.log('🔄 [POLLING] Updating attendanceList with server data');
+        setAttendanceList(newAttendanceList);
+
+        // Simple visitor update: just set the server data
+        // Visitor attendance state will be handled by loadAttendanceData
         setVisitors(newVisitors);
       } catch (err) {
         console.error('Polling error:', err);
@@ -666,7 +868,7 @@ const AttendancePage: React.FC = () => {
     };
   }, [selectedGathering, selectedDate]);
 
-  // Clean up old modification timestamps (older than 30 seconds)
+  // Clean up old modification timestamps (older than 60 seconds)
   useEffect(() => {
     const cleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -674,13 +876,13 @@ const AttendancePage: React.FC = () => {
         const cleaned = { ...prev };
         Object.keys(cleaned).forEach(key => {
           const id = parseInt(key);
-          if (now - cleaned[id] > 30000) { // 30 seconds
+          if (now - cleaned[id] > 60000) { // 60 seconds - increased from 30
             delete cleaned[id];
           }
         });
         return cleaned;
       });
-    }, 30000); // Clean up every 30 seconds
+    }, 60000); // Clean up every 60 seconds - increased from 30
 
     return () => clearInterval(cleanupInterval);
   }, []);
@@ -845,7 +1047,7 @@ const AttendancePage: React.FC = () => {
       } else {
         // NEW APPROACH: Create visitor family in People system and add to service
         // Generate family name from the people
-        const familyName = generateFamilyName(people);
+        const familyName = generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
         
         // Create visitor family in People system
         const familyResponse = await familiesAPI.createVisitorFamily({
@@ -1065,12 +1267,24 @@ const AttendancePage: React.FC = () => {
 
   const filteredGroupedVisitors = displayedGroupedVisitors;
 
-  // Group church-wide visitors (apply search when active to narrow the list)
+  // Group church-wide people who are NOT currently visible in this gathering
   const groupedAllChurchVisitors = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
-    const source = search ? allChurchVisitors.filter(v => v.name.toLowerCase().includes(search)) : allChurchVisitors;
-    return groupVisitors(source);
-  }, [allChurchVisitors, searchTerm, groupVisitors]);
+    
+    // Get IDs of people already visible in current gathering (attendees + current visitors)
+    const currentlyVisibleIds = new Set([
+      ...attendanceList.map(person => person.id),
+      ...allVisitors.map(visitor => visitor.id)
+    ]);
+    
+    // Filter to show only church people NOT currently visible in this gathering
+    const availableChurchPeople = allChurchVisitors.filter(person => 
+      !currentlyVisibleIds.has(person.id) && 
+      (search === '' || person.name.toLowerCase().includes(search))
+    );
+    
+    return groupVisitors(availableChurchPeople);
+  }, [allChurchVisitors, attendanceList, allVisitors, searchTerm, groupVisitors]);
 
   // Sort members within each group
   filteredGroupedAttendees.forEach((group: any) => {
@@ -1085,6 +1299,11 @@ const AttendancePage: React.FC = () => {
   // Add toggle function for visitors
   const toggleVisitorAttendance = async (visitorId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    
+    // Track user modification
+    const now = Date.now();
+    setLastUserModification(prev => ({ ...prev, [visitorId]: now }));
+    
     // Optimistic toggle
     setVisitorAttendance(prev => ({
       ...prev,
@@ -1115,6 +1334,11 @@ const AttendancePage: React.FC = () => {
   // Add toggle all family function for visitors
   const toggleAllVisitorFamily = async (familyGroup: number | string) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    
+    // Set family operation flag to prevent polling interference
+    setIsFamilyOperationInProgress(true);
+    isFamilyOperationInProgressRef.current = true;
+    
     const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
     const familyVisitorIds = familyVisitors.map(visitor => visitor.id).filter((id): id is number => id !== undefined);
     
@@ -1123,6 +1347,16 @@ const AttendancePage: React.FC = () => {
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
+    
+    // Track user modifications for all family members
+    const now = Date.now();
+    setLastUserModification(prev => {
+      const updated = { ...prev };
+      familyVisitorIds.forEach(id => {
+        updated[id] = now;
+      });
+      return updated;
+    });
     
     // Optimistic update
     setVisitorAttendance(prev => {
@@ -1133,7 +1367,12 @@ const AttendancePage: React.FC = () => {
       return updated;
     });
 
-    if (!selectedGathering || !selectedDate) return;
+    if (!selectedGathering || !selectedDate) {
+      // Clear family operation flag
+      setIsFamilyOperationInProgress(false);
+      isFamilyOperationInProgressRef.current = false;
+      return;
+    }
 
     try {
       await attendanceAPI.record(selectedGathering.id, selectedDate, {
@@ -1153,6 +1392,13 @@ const AttendancePage: React.FC = () => {
         });
         return updated;
       });
+    } finally {
+      // Clear family operation flag after a short delay to allow state to settle
+      setTimeout(() => {
+        setIsFamilyOperationInProgress(false);
+        isFamilyOperationInProgressRef.current = false;
+        console.log('Visitor family operation completed, polling resumed');
+      }, 2000); // 2 second delay
     }
   };
 
@@ -1205,73 +1451,20 @@ const AttendancePage: React.FC = () => {
   };
 
   // Helper function to generate family name from people array
-  const generateFamilyName = (people: Array<{
+  // Helper function to convert AttendancePage person format to utility format
+  const convertToUtilityFormat = (people: Array<{
     firstName: string;
     lastName: string;
     firstUnknown: boolean;
     lastUnknown: boolean;
     isChild: boolean;
-  }>): string => {
-    if (people.length === 0) return 'Visitor Family';
-    
-    // Use first two people to generate family name
-    const firstTwoPeople = people.slice(0, 2);
-    
-    const firstNames = firstTwoPeople.map(person => {
-      return (person.firstName && person.firstName !== 'Unknown') ? person.firstName : null;
-    }).filter((name): name is string => name !== null);
-    
-    const surnames = firstTwoPeople.map(person => {
-      return (!person.lastUnknown && person.lastName && person.lastName !== 'Unknown') ? person.lastName : null;
-    }).filter((name): name is string => name !== null);
-    
-    // Handle unknown surnames - use first two first names
-    if (surnames.length === 0 && firstNames.length > 0) {
-      if (firstNames.length === 1) {
-        return firstNames[0];
-      } else {
-        return `${firstNames[0]} and ${firstNames[1]}`;
-      }
-    } else if (surnames.length > 0) {
-      // Follow the pattern: SURNAME, firstname and firstname OR SURNAME1, firstname1 and SURNAME2, firstname2
-      const uniqueSurnames = Array.from(new Set(surnames));
-      
-      if (uniqueSurnames.length === 1 && uniqueSurnames[0]) {
-        // All have the same surname - use pattern: SURNAME, firstname and firstname
-        const surname = uniqueSurnames[0].toUpperCase();
-        if (firstNames.length === 1) {
-          return `${surname}, ${firstNames[0]}`;
-        } else {
-          return `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
-        }
-      } else if (firstNames.length > 0 && surnames.length > 0) {
-        // Different surnames - use pattern: SURNAME1, firstname1 and SURNAME2, firstname2
-        const nameWithSurname = firstTwoPeople.map(person => {
-          const firstName = person.firstName && person.firstName !== 'Unknown' ? person.firstName : null;
-          const lastName = !person.lastUnknown && person.lastName && person.lastName !== 'Unknown' ? person.lastName : null;
-          
-          if (firstName && lastName) {
-            return `${lastName.toUpperCase()}, ${firstName}`;
-          } else if (firstName) {
-            return firstName;
-          } else {
-            return null;
-          }
-        }).filter((name): name is string => name !== null);
-        
-        if (nameWithSurname.length === 1) {
-          return nameWithSurname[0];
-        } else if (nameWithSurname.length === 2) {
-          return `${nameWithSurname[0]} and ${nameWithSurname[1]}`;
-        } else {
-          return 'Visitor Family';
-        }
-      } else {
-        return 'Visitor Family';
-      }
-    } else {
-      return 'Visitor Family';
-    }
+  }>) => {
+    return people.map(person => ({
+      firstName: person.firstName && person.firstName !== 'Unknown' ? person.firstName : '',
+      lastName: !person.lastUnknown && person.lastName && person.lastName !== 'Unknown' ? person.lastName : '',
+      firstUnknown: person.firstUnknown,
+      lastUnknown: person.lastUnknown
+    }));
   };
 
   // Helper function to get the appropriate edit button text
@@ -1373,7 +1566,7 @@ const AttendancePage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20">
       {/* Header */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -1461,7 +1654,7 @@ const AttendancePage: React.FC = () => {
                   <div key={gathering.id} className="flex-1 relative">
                     <button
                       draggable={false}
-                      onClick={() => setSelectedGathering(gathering)}
+                      onClick={() => handleGatheringChange(gathering)}
                       className={`w-full whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                         selectedGathering?.id === gathering.id
                           ? 'bg-primary-500 text-white'
@@ -1498,7 +1691,7 @@ const AttendancePage: React.FC = () => {
                                 <button
                                   draggable={false}
                                   onClick={() => {
-                                    setSelectedGathering(gathering);
+                                    handleGatheringChange(gathering);
                                     setShowGatheringDropdown(false);
                                   }}
                                   className={`text-left flex-1 ${
@@ -1536,7 +1729,7 @@ const AttendancePage: React.FC = () => {
                   <button
                     key={gathering.id}
                     draggable={false}
-                    onClick={() => setSelectedGathering(gathering)}
+                    onClick={() => handleGatheringChange(gathering)}
                     className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                       selectedGathering?.id === gathering.id
                         ? 'bg-primary-500 text-white'
@@ -1704,6 +1897,15 @@ const AttendancePage: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">
                 Attendance List - {selectedGathering.name}
               </h3>
+              <button
+                onClick={forceRefresh}
+                disabled={isLoading}
+                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                title="Refresh from server (reload latest attendance data)"
+              >
+                <ArrowPathIcon className={`h-4 w-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
+                Reload
+              </button>
             </div>
 
             {isLoading ? (
@@ -1947,11 +2149,11 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* All Visitors (church-wide, minimized/collapsible) */}
+      {/* Add People From Church (people not currently visible in this gathering) */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-medium text-gray-900">All Visitors (church-wide)</h3>
+            <h3 className="text-lg font-medium text-gray-900">Add People From Church</h3>
             <button
               type="button"
               onClick={() => setShowAllVisitorsSection(v => !v)}
@@ -1963,9 +2165,9 @@ const AttendancePage: React.FC = () => {
           {showAllVisitorsSection && (
             <div className="mt-4">
               {isLoadingAllVisitors ? (
-                <div className="text-center py-6 text-gray-500">Loading all visitors…</div>
+                <div className="text-center py-6 text-gray-500">Loading church people…</div>
               ) : groupedAllChurchVisitors.length === 0 ? (
-                <div className="text-sm text-gray-500">No visitors found.</div>
+                <div className="text-sm text-gray-500">No additional people available to add.</div>
               ) : (
                 <div className="space-y-4">
                   {groupedAllChurchVisitors.map((group: any) => (

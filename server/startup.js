@@ -7,12 +7,14 @@ async function runMigrations() {
     
     // Get all migration files
     const migrationFiles = [
-      { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
-      { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
-      { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
-      { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
-      { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' }
-    ];
+  { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
+  { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
+  { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
+  { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
+  { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' },
+  { version: '006', name: 'fix_attendance_sessions_unique_constraint', description: 'Fix attendance sessions unique constraint to include church_id' },
+  { version: '007', name: 'add_visitor_config', description: 'Add visitor filtering configuration table' }
+];
 
     // Check which migrations have been run
     const executedMigrations = await Database.query('SELECT version FROM migrations WHERE status = "success"');

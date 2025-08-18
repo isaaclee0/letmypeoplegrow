@@ -286,6 +286,10 @@ export const attendanceAPI = {
   // Church-wide visitors (all gatherings, all time)
   getAllVisitors: () => 
     api.get('/attendance/visitors/all'),
+
+  // Church-wide people (all gatherings, all time - including regular members)
+  getAllPeople: () => 
+    api.get('/attendance/people/all'),
     
   addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
@@ -582,6 +586,13 @@ export const settingsAPI = {
   // DISABLED: External data access feature is currently disabled
   // getDataAccess: () => api.get('/settings/data-access'),
   // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
+};
+
+// Visitor Configuration API
+export const visitorConfigAPI = {
+  getConfig: () => api.get('/visitor-config'),
+  updateConfig: (config: { localVisitorServiceLimit: number; travellerVisitorServiceLimit: number }) => 
+    api.put('/visitor-config', config)
 };
 
 export default api; 
