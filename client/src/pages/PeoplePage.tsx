@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
@@ -24,6 +25,7 @@ interface Person {
   familyName?: string;
   // Optional last attendance metadata if provided by API
   lastAttendanceDate?: string;
+  createdAt?: string;
   gatheringAssignments?: Array<{
     id: number;
     name: string;
@@ -594,7 +596,7 @@ const PeoplePage: React.FC = () => {
     });
   });
 
-  // Build visitor groups filtered by selected gathering
+  // Build visitor groups filtered by selected gathering and search term
   const filteredVisitorGroups = useMemo(() => {
     const groupsArray: any[] = Object.values(groupedVisitors);
     // Apply gathering filter if selected
@@ -609,6 +611,27 @@ const PeoplePage: React.FC = () => {
         );
         if (group.members.length === 0) return false;
       }
+      
+      // Apply search filter to visitors
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase();
+        const hasMatchingMember = group.members.some((member: Person) => {
+          const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
+          const familyName = member.familyName?.toLowerCase() || '';
+          return fullName.includes(searchLower) || familyName.includes(searchLower);
+        });
+        if (!hasMatchingMember) return false;
+        
+        // Filter members within the group to only show those matching the search
+        group.members = group.members.filter((member: Person) => {
+          const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
+          const familyName = member.familyName?.toLowerCase() || '';
+          return fullName.includes(searchLower) || familyName.includes(searchLower);
+        });
+        
+        if (group.members.length === 0) return false;
+      }
+      
       return true;
     });
     // Sort members in each group
@@ -620,7 +643,7 @@ const PeoplePage: React.FC = () => {
       });
     });
     return result;
-  }, [groupedVisitors, selectedGathering]);
+  }, [groupedVisitors, selectedGathering, searchTerm]);
 
   // Split visitors into recent (<= 6 weeks) and older (> 6 weeks)
   const SIX_WEEKS_DAYS = 42;
@@ -647,6 +670,15 @@ const PeoplePage: React.FC = () => {
       const d = parseISO((m as any).lastAttendanceDate as any);
       if (d && (!latest || d > latest)) latest = d;
     });
+    
+    // If no attendance date found, check creation dates to avoid showing newly created visitors as "infrequent"
+    if (!latest) {
+      group.members.forEach((m: Person) => {
+        const createdDate = parseISO(m.createdAt);
+        if (createdDate && (!latest || createdDate > latest)) latest = createdDate;
+      });
+    }
+    
     return daysSince(latest);
   };
 
@@ -1127,7 +1159,7 @@ const PeoplePage: React.FC = () => {
       
 
       {/* Person Editor Modal */}
-      {showPersonEditor && (
+      {showPersonEditor ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-1/2 lg:w-1/3 max-w-xl p-5 border shadow-lg rounded-md bg-white">
@@ -1233,11 +1265,12 @@ const PeoplePage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Mass Edit Modal */}
-      {showMassEditModal && (
+      {showMassEditModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-3xl p-5 border shadow-lg rounded-md bg-white">
@@ -1388,11 +1421,12 @@ const PeoplePage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Family Editor Modal */}
-      {showFamilyEditorModal && (
+      {showFamilyEditorModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -1521,8 +1555,9 @@ const PeoplePage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-md p-4">
           <div className="flex">
@@ -2129,7 +2164,7 @@ const PeoplePage: React.FC = () => {
       )}
 
       {/* Comprehensive Add Modal */}
-      {showAddModal && (
+      {showAddModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -2538,11 +2573,12 @@ Sarah       Smith      Smith, John and Sarah</pre>
               )}
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Person Details Modal */}
-      {showPersonDetails && selectedPerson && (
+      {showPersonDetails && selectedPerson ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -2606,11 +2642,12 @@ Sarah       Smith      Smith, John and Sarah</pre>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Delete Person Confirmation Modal */}
-      {showDeleteModal && (
+      {showDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -2656,11 +2693,12 @@ Sarah       Smith      Smith, John and Sarah</pre>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Remove People Confirmation Modal */}
-      {showRemoveModal && (
+      {showRemoveModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -2706,10 +2744,11 @@ Sarah       Smith      Smith, John and Sarah</pre>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
-      {showPermanentDeleteModal && (
+      {showPermanentDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -2753,8 +2792,9 @@ Sarah       Smith      Smith, John and Sarah</pre>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
 
 
@@ -3038,7 +3078,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
        )}
 
        {/* Merge Modal */}
-       {showMergeModal && (
+       {showMergeModal ? createPortal(
          <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
            <div className="flex items-center justify-center min-h-screen p-4">
              <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -3238,8 +3278,9 @@ Sarah       Smith      Smith, John and Sarah</pre>
                </div>
              </div>
            </div>
-         </div>
-       )}
+         </div>,
+         document.body
+       ) : null}
     </div>
   );
 };

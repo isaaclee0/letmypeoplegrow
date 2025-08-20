@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { gatheringsAPI } from '../services/api';
@@ -389,7 +390,7 @@ const ManageGatheringsPage: React.FC = () => {
 
 
       {/* Edit Gathering Modal */}
-      {showEditForm && editingGathering && (
+      {showEditForm && editingGathering ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -514,11 +515,12 @@ const ManageGatheringsPage: React.FC = () => {
               </form>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Add Gathering Modal (simplified) */}
-      {showAddGatheringWizard && (
+      {showAddGatheringWizard ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -646,13 +648,14 @@ const ManageGatheringsPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
 
 
       {/* Delete Gathering Confirmation Modal */}
-      {showDeleteModal && (
+      {showDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -698,8 +701,9 @@ const ManageGatheringsPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Floating Add Gathering Button */}
       <button

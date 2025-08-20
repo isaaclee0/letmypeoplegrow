@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
 import PersonForm, { PersonFormData } from '../shared/PersonForm';
 import FamilyNameInput from '../shared/FamilyNameInput';
@@ -142,7 +143,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -386,7 +387,8 @@ Sarah       Smith      Smith, John and Sarah`}
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

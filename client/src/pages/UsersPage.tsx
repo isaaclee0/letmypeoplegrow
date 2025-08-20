@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usersAPI, gatheringsAPI } from '../services/api';
 import { useSearchParams } from 'react-router-dom';
@@ -586,7 +587,7 @@ const UsersPage: React.FC = () => {
       {/* Pending Invitations Section removed */}
 
       {/* Invite User Modal */}
-      {showInviteModal && (
+      {showInviteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -694,11 +695,12 @@ const UsersPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* User Details Modal */}
-      {showUserDetails && selectedUser && (
+      {showUserDetails && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -757,11 +759,12 @@ const UsersPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Assign Gatherings Modal */}
-      {showAssignGatherings && selectedUser && (
+      {showAssignGatherings && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -819,11 +822,12 @@ const UsersPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Edit User Modal */}
-      {showEditUserModal && selectedUser && (
+      {showEditUserModal && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -959,13 +963,14 @@ const UsersPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
 
       {/* Cancel Invitation Confirmation Modal removed */}
 
       {/* Deactivate User Confirmation Modal */}
-      {showDeactivateModal && (
+      {showDeactivateModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -1011,8 +1016,9 @@ const UsersPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      ) : null}
     </div>
   );
 };

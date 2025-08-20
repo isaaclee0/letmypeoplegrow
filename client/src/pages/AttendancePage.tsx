@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, visitorConfigAPI, GatheringType, Individual, Visitor } from '../services/api';
@@ -1644,10 +1645,6 @@ const AttendancePage: React.FC = () => {
           <div className="border-b border-gray-200 mb-6">
             {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
             <div className="block md:hidden">
-              {/* Debug info - remove this later */}
-              <div className="text-xs text-gray-500 mb-2">
-                Mobile view - Gatherings: {gatherings.length}, Ordered: {orderedGatherings.length}
-              </div>
               <div className="flex items-center space-x-2">
                 {/* First 2 tabs */}
                 {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering, index) => (
@@ -2242,7 +2239,7 @@ const AttendancePage: React.FC = () => {
       </button>
 
             {/* Add Visitor Modal */}
-      {showAddVisitorModal && (
+      {showAddVisitorModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -2447,11 +2444,12 @@ const AttendancePage: React.FC = () => {
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Edit Visitor Modal */}
-      {showEditVisitorModal && (
+      {showEditVisitorModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
@@ -2640,10 +2638,11 @@ const AttendancePage: React.FC = () => {
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {/* Reorder Modal */}
-      {showReorderModal && (
+      {showReorderModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
@@ -2705,7 +2704,8 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
 
