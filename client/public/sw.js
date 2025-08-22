@@ -1,9 +1,9 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-08-18T20:57:20.871Z
+// Generated on 2025-08-22T00:05:00.000Z (WebSocket fixes + cache refresh)
 // App Version: 0.9.9
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v0.9.9-1755550640870';
+const CACHE_NAME = 'let-my-people-grow-v0.9.9-websocket-fixes-' + Date.now();
 const APP_VERSION = '0.9.9';
 const urlsToCache = [
   '/',
@@ -40,6 +40,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // For JavaScript and CSS files, always check network first for updates
+  const url = event.request.url;
+  const isStaticAsset = url.includes('.js') || url.includes('.css') || url.includes('/static/');
+  
+  if (isStaticAsset) {
+    // Network-first strategy for static assets to ensure updates
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          // Fallback to cache if network fails
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+
+  // Cache-first strategy for other resources
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
@@ -101,8 +127,18 @@ self.addEventListener('activate', (event) => {
 // Listen for messages from the main thread
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
-    console.log('Received SKIP_WAITING message');
-    self.skipWaiting();
+    console.log('Received SKIP_WAITING message - clearing all caches and forcing update');
+    // Clear all caches before skipping waiting
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          console.log('Force deleting cache:', cacheName);
+          return caches.delete(cacheName);
+        })
+      );
+    }).then(() => {
+      self.skipWaiting();
+    });
   }
 });
 

@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const http = require('http');
 require('dotenv').config();
 
 // Import Winston logger with error handling
@@ -120,7 +121,24 @@ const loadRoutes = () => {
 };
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
+
+// Import WebSocket service
+let webSocketService;
+try {
+  webSocketService = require('./services/websocket');
+} catch (error) {
+  console.warn('Failed to load WebSocket service:', error.message);
+  // Create fallback service
+  webSocketService = {
+    initialize: () => console.log('WebSocket service disabled'),
+    broadcastAttendanceUpdate: () => {},
+    broadcastVisitorUpdate: () => {},
+    getStats: () => ({ disabled: true }),
+    shutdown: () => {}
+  };
+}
 
 // Trust proxy (client nginx sets X-Forwarded-For)
 app.set('trust proxy', 1);
@@ -284,6 +302,7 @@ app.get('/health/services', (req, res) => {
       authentication: hasAnyService || process.env.NODE_ENV === 'development',
       sms: externalServices.crazytel,
       email: externalServices.brevo,
+      websockets: !webSocketService.getStats().disabled,
       development: process.env.NODE_ENV === 'development'
     },
     notes: !hasAnyService ? [
@@ -291,6 +310,16 @@ app.get('/health/services', (req, res) => {
       'Authentication limited to development mode',
       'Configure Brevo (email) and/or Crazytel (SMS) API keys for full functionality'
     ] : []
+  });
+});
+
+// WebSocket status endpoint
+app.get('/health/websocket', (req, res) => {
+  const stats = webSocketService.getStats();
+  res.status(200).json({
+    status: stats.disabled ? 'disabled' : 'OK',
+    ...stats,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -516,11 +545,25 @@ async function startServer() {
       }
     }
     
+    // Initialize WebSocket service
+    try {
+      webSocketService.initialize(server);
+      
+      // Initialize WebSocket broadcast utility
+      const websocketBroadcast = require('./utils/websocketBroadcast');
+      websocketBroadcast.initialize(webSocketService);
+      
+      console.log('✅ WebSocket service initialized');
+    } catch (error) {
+      console.warn('⚠️  WebSocket service initialization failed:', error.message);
+    }
+    
     // Start the server
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`🎉 Server running on port ${PORT}`);
       console.log(`🌐 Health check: http://localhost:${PORT}/health`);
       console.log(`🗄️  Database health: http://localhost:${PORT}/health/db`);
+      console.log(`🔌 WebSocket: ${webSocketService.getStats().disabled ? 'Disabled' : 'Enabled'}`);
       console.log('✅ Server startup completed successfully');
     });
   } catch (error) {
@@ -533,11 +576,13 @@ async function startServer() {
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 Received SIGTERM, shutting down gracefully...');
+  webSocketService.shutdown();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('🛑 Received SIGINT, shutting down gracefully...');
+  webSocketService.shutdown();
   process.exit(0);
 });
 

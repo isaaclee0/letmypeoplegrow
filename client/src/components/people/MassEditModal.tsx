@@ -15,10 +15,12 @@ interface MassEditData {
   familyInput: string;
   selectedFamilyId: number | null;
   newFamilyName: string;
+  firstName: string;
   lastName: string;
   peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
   assignments: { [key: number]: boolean };
   originalAssignments: { [key: number]: Set<number> };
+  applyToWholeFamily: boolean;
 }
 
 interface MassEditModalProps {
@@ -53,7 +55,9 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-3xl p-5 border shadow-lg rounded-md bg-white">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Edit {selectedCount} Selected</h3>
+            <h3 className="text-lg font-medium text-gray-900">
+              {selectedCount === 1 ? 'Edit Person' : `Edit ${selectedCount} Selected`}
+            </h3>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
               <XMarkIcon className="h-6 w-6" />
             </button>
@@ -73,6 +77,47 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
           )}
 
           <div className="space-y-4">
+            {/* Show firstName field only when editing single person */}
+            {selectedCount === 1 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">First Name</label>
+                  <input 
+                    type="text" 
+                    value={massEdit.firstName} 
+                    onChange={(e) => setMassEdit(d => ({ ...d, firstName: e.target.value }))} 
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                    placeholder="Enter first name" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                  <input 
+                    type="text" 
+                    value={massEdit.lastName} 
+                    onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} 
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                    placeholder="Leave blank to keep current last name" 
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Show bulk last name field for multiple people */}
+            {selectedCount > 1 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                <input 
+                  type="text" 
+                  value={massEdit.lastName} 
+                  onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} 
+                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                  placeholder="Leave blank to keep current last names" 
+                />
+                <div className="text-xs text-gray-500 mt-1">Enter a last name to set it for all selected people</div>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-gray-700">Family</label>
               <input 
@@ -94,18 +139,20 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
               <div className="text-xs text-gray-500 mt-1">
                 Leave blank to keep existing families. Enter family name to move all selected to that family.
               </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Last Name</label>
-              <input 
-                type="text" 
-                value={massEdit.lastName} 
-                onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} 
-                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
-                placeholder="Leave blank to keep current last names" 
-              />
-              <div className="text-xs text-gray-500 mt-1">Enter a last name to set it for all selected people</div>
+              
+              {/* Apply to whole family checkbox */}
+              <label className="flex items-center space-x-2 text-sm mt-2">
+                <input 
+                  type="checkbox" 
+                  checked={massEdit.applyToWholeFamily} 
+                  onChange={(e) => setMassEdit(d => ({ ...d, applyToWholeFamily: e.target.checked }))} 
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" 
+                />
+                <span>Apply changes to entire families (not just selected members)</span>
+              </label>
+              <div className="text-xs text-gray-500 mt-1">
+                When checked, changes will affect all family members, even those not selected
+              </div>
             </div>
 
             <div>

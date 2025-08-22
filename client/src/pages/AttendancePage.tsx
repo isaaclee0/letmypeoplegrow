@@ -7,6 +7,8 @@ import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
+import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -52,6 +54,7 @@ const AttendancePage: React.FC = () => {
   const [isPending, startTransition] = useTransition();
   // Refs to avoid stale closures and reduce heavy deps in effects
   const attendanceListRef = useRef<Individual[]>([]);
+  const visitorsRef = useRef<Visitor[]>([]);
   const lastUserModificationRef = useRef<{ [key: number]: number }>({});
   // Maps to minimize re-render scope for attendance toggles
   const [presentById, setPresentById] = useState<Record<number, boolean>>({});
@@ -193,6 +196,11 @@ const AttendancePage: React.FC = () => {
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
+  
+  // WebSocket integration
+  const { isConnected: isWebSocketConnected } = useWebSocket();
+  const [useWebSocketForUpdates, setUseWebSocketForUpdates] = useState(true); // Forced to true for debugging
+  // lastWebSocketUpdate removed - no longer needed for UI display
 
 
   // Add state for recent visitors
@@ -209,6 +217,7 @@ const AttendancePage: React.FC = () => {
 
   // Keep refs in sync
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
+  useEffect(() => { visitorsRef.current = visitors; }, [visitors]);
   useEffect(() => { lastUserModificationRef.current = lastUserModification; }, [lastUserModification]);
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
@@ -381,6 +390,11 @@ const AttendancePage: React.FC = () => {
 
     console.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
     setIsLoading(true);
+    
+    // Store current data in case we need to preserve it on error
+    const currentAttendanceList = attendanceListRef.current;
+    const currentVisitors = visitorsRef.current;
+    
     try {
       const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
       console.log(`📊 Received attendance data:`, {
@@ -392,6 +406,22 @@ const AttendancePage: React.FC = () => {
       
       setAttendanceList(response.data.attendanceList || []);
       setVisitors(response.data.visitors || []);
+      
+      // Cache the attendance data for offline use
+      const cacheData = {
+        gatheringId: selectedGathering.id,
+        date: selectedDate,
+        attendanceList: response.data.attendanceList || [],
+        visitors: response.data.visitors || [],
+        timestamp: Date.now()
+      };
+      localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+      console.log('💾 Cached attendance data for offline use:', {
+        gatheringId: selectedGathering.id,
+        date: selectedDate,
+        attendees: response.data.attendanceList?.length || 0,
+        visitors: response.data.visitors?.length || 0
+      });
       
       // Update visitor attendance state, preserving recent user changes (within 30 seconds)
       const now = Date.now();
@@ -420,24 +450,20 @@ const AttendancePage: React.FC = () => {
       setVisitorAttendance(newVisitorAttendance);
     } catch (err) {
       console.error(`❌ Failed to load attendance data for gathering ${selectedGathering.id} on ${selectedDate}:`, err);
-      setError('Failed to load attendance data');
+      setError('Failed to load attendance data - using cached data');
+      
+      // Preserve existing data instead of clearing it on connection failure
+      if (currentAttendanceList.length > 0 || currentVisitors.length > 0) {
+        console.log('📱 Preserving existing attendance data due to connection failure');
+        setAttendanceList(currentAttendanceList);
+        setVisitors(currentVisitors);
+      }
     } finally {
       setIsLoading(false);
     }
   }, [selectedGathering, selectedDate]);
 
-  // Manual refresh function
-  const forceRefresh = useCallback(async () => {
-    if (selectedGathering && selectedDate) {
-      console.log('🔄 Force refreshing attendance data');
-      
-      // Clear user modification timestamps so server data takes precedence
-      lastUserModificationRef.current = {};
-      
-      // Load fresh data from server - the useEffect will automatically update presentById
-      await loadAttendanceData();
-    }
-  }, [selectedGathering, selectedDate, loadAttendanceData]);
+  // Manual refresh function removed - automatic syncing handles refreshes now
 
   // Handle gathering changes with fresh data loading
   const handleGatheringChange = useCallback((gathering: GatheringType) => {
@@ -454,7 +480,33 @@ const AttendancePage: React.FC = () => {
   // Load attendance data when date or gathering changes
   useEffect(() => {
     if (selectedGathering && selectedDate) {
+      // First try to load cached data immediately
+      const cachedData = localStorage.getItem('attendance_cached_data');
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
+            console.log('📱 Loading cached data immediately for offline fallback');
+            setAttendanceList(parsed.attendanceList || []);
+            setVisitors(parsed.visitors || []);
+            
+            // Also restore visitor attendance state
+            const newVisitorAttendance: { [key: number]: boolean } = {};
+            (parsed.visitors || []).forEach((visitor: any) => {
+              if (visitor.id) {
+                newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+              }
+            });
+            setVisitorAttendance(newVisitorAttendance);
+          }
+        } catch (err) {
+          console.error('Failed to parse cached attendance data:', err);
+        }
+      }
+      
+      // Then attempt to load fresh data from server
       loadAttendanceData();
+      
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
       if (lastSetting !== null) {
@@ -472,13 +524,18 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden && selectedGathering && selectedDate) {
-        console.log('📱 App became visible - refreshing attendance data');
+        console.log('📱 App became visible - checking for fresh data');
         
-        // Clear user modification timestamps so we get fresh server data
-        lastUserModificationRef.current = {};
-        
-        // Load fresh data from server
-        loadAttendanceData();
+        // Only attempt to load fresh data if we're online
+        if (isWebSocketConnected) {
+          console.log('📱 Online - refreshing attendance data from server');
+          // Clear user modification timestamps so we get fresh server data
+          lastUserModificationRef.current = {};
+          // Load fresh data from server
+          loadAttendanceData();
+        } else {
+          console.log('📱 Offline - keeping cached data');
+        }
       }
     };
 
@@ -492,7 +549,7 @@ const AttendancePage: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
-  }, [selectedGathering, selectedDate, loadAttendanceData]);
+  }, [selectedGathering, selectedDate, loadAttendanceData, isWebSocketConnected]);
 
   // Load recent visitors when gathering changes
   useEffect(() => {
@@ -645,10 +702,25 @@ const AttendancePage: React.FC = () => {
 
     if (!selectedGathering || !selectedDate) {
       console.error('❌ Missing gathering or date context');
+      setSavingById(prev => ({ ...prev, [individualId]: false }));
       return;
     }
 
-    // Serialize per-individual writes to avoid race conditions and 500s under rapid toggling
+    // Check if we're online or offline
+    if (!isWebSocketConnected) {
+      // Offline mode - save to local storage
+      console.log('📱 Offline mode - saving to local storage');
+      saveToOfflineStorage({
+        individualId,
+        present: newPresent,
+        gatheringId: selectedGathering.id,
+        date: selectedDate
+      });
+      setSavingById(prev => ({ ...prev, [individualId]: false }));
+      return;
+    }
+
+    // Online mode - save via API
     const run = async () => {
       try {
         console.log(`💾 Saving attendance record:`, {
@@ -703,9 +775,7 @@ const AttendancePage: React.FC = () => {
       members: allFamilies[parseInt(familyId)].map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, present: p.present }))
     })));
     
-    // Set family operation flag to prevent polling interference
-    setIsFamilyOperationInProgress(true);
-    isFamilyOperationInProgressRef.current = true;
+    // Family operation flags removed - no longer needed without polling
     
     // Get family members from attendance list
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
@@ -737,9 +807,7 @@ const AttendancePage: React.FC = () => {
     console.log('=== END TOGGLE ALL FAMILY DEBUG ===');
     
     if (!selectedGathering || !selectedDate) {
-      // Clear family operation flag
-      setIsFamilyOperationInProgress(false);
-      isFamilyOperationInProgressRef.current = false;
+      // Family operation flag clearing removed - no longer needed
       return;
     }
 
@@ -812,60 +880,104 @@ const AttendancePage: React.FC = () => {
       });
     } finally {
       // Clear family operation flag after a short delay to allow state to settle
-      setTimeout(() => {
-        setIsFamilyOperationInProgress(false);
-        isFamilyOperationInProgressRef.current = false;
-        console.log('Family operation completed, polling resumed');
-      }, 2000); // 2 second delay
+      // Family operation completion tracking removed - no longer needed without polling
     }
   };
 
-  // Add state to track if we're in the middle of a family operation
-  const [isFamilyOperationInProgress, setIsFamilyOperationInProgress] = useState(false);
-  const isFamilyOperationInProgressRef = useRef(false);
+  // Family operation tracking removed - no longer needed without polling
 
-  // Update polling effect (avoid re-creating interval on each render; use refs for deps)
+  // WebSocket attendance updates
+  const attendanceWebSocket = useAttendanceWebSocket({
+    gatheringId: selectedGathering?.id || null,
+    date: selectedDate,
+    enabled: useWebSocketForUpdates && isWebSocketConnected,
+    onAttendanceChange: useCallback((records: Array<{ individualId: number; present: boolean }>) => {
+      console.log('🔌 [WEBSOCKET] Received attendance update:', records);
+      // setLastWebSocketUpdate removed - no longer tracking for UI
+      
+      // Update presentById based on WebSocket updates, but preserve recent user changes
+      const now = Date.now();
+      setPresentById(prev => {
+        const updated = { ...prev };
+        records.forEach((record: { individualId: number; present: boolean }) => {
+          const userModifiedTime = lastUserModificationRef.current[record.individualId];
+          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
+          
+          // Only update if user hasn't made recent changes (within 5 seconds)
+          if (timeSinceUserModification > 5000) {
+            updated[record.individualId] = record.present;
+          }
+        });
+        return updated;
+      });
+    }, []),
+    onVisitorChange: useCallback((visitors: Visitor[]) => {
+      console.log('🔌 [WEBSOCKET] Received visitor update:', visitors);
+      // setLastWebSocketUpdate removed - no longer tracking for UI
+      // For now, we'll trigger a full refresh since visitor updates are complex
+      // In the future, we could handle incremental updates
+      // Use a ref to avoid dependency on loadAttendanceData function
+      if (selectedGathering && selectedDate) {
+        // Directly call the attendance API to avoid function dependency
+        (async () => {
+          try {
+            const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
+            setAttendanceList(response.data.attendanceList || []);
+            setVisitors(response.data.visitors || []);
+            
+            // Update visitor attendance state
+            const newVisitorAttendance: { [key: number]: boolean } = {};
+            (response.data.visitors || []).forEach((visitor: any) => {
+              if (visitor.id) {
+                newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+              }
+            });
+            setVisitorAttendance(newVisitorAttendance);
+          } catch (err) {
+            console.error('Failed to refresh attendance data after visitor update:', err);
+          }
+        })();
+      }
+    }, [selectedGathering, selectedDate]),
+    onFullRefresh: useCallback((attendanceList: Individual[], visitors: Visitor[]) => {
+      console.log('🔌 [WEBSOCKET] Received full refresh');
+      // setLastWebSocketUpdate removed - no longer tracking for UI
+      setAttendanceList(attendanceList);
+      setVisitors(visitors);
+      
+      // Update visitor attendance state
+      const newVisitorAttendance: { [key: number]: boolean } = {};
+      visitors.forEach((visitor: any) => {
+        if (visitor.id) {
+          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+        }
+      });
+      setVisitorAttendance(newVisitorAttendance);
+    }, []),
+    onError: useCallback((error: string) => {
+      console.error('🔌 [WEBSOCKET] Error:', error);
+      setError(`WebSocket error: ${error}`);
+      // DEBUGGING: Don't fall back to polling, stay in WebSocket mode
+      console.log('🔌 [WEBSOCKET] Error occurred but staying in WebSocket mode for debugging');
+    }, [])
+  });
+
+  // POLLING DISABLED: Focusing on WebSocket-only implementation for debugging
   useEffect(() => {
-    if (!selectedGathering || !selectedDate) return;
-
+    // Always clear any existing polling interval since we're debugging WebSocket only
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
 
-    pollingIntervalRef.current = setInterval(async () => {
-      // Skip polling if a family operation is in progress
-      if (isFamilyOperationInProgressRef.current) {
-        console.log('Polling skipped - family operation in progress');
-        return;
-      }
-
-      try {
-        console.log(`🔄 [POLLING] Fetching attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
-        const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
-        const newAttendanceList = response.data.attendanceList || [];
-        const newVisitors = response.data.visitors || [];
-
-        console.log('=== POLLING DEBUG ===');
-        console.log('Received new attendance list:', newAttendanceList.length, 'items');
-        console.log('Current attendance list:', attendanceList.length, 'items');
-        console.log('New attendance list details:', newAttendanceList.map((p: Individual) => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
-        console.log('Current presentById state:', presentById);
-
-        // Simple polling: just update attendanceList with fresh server data
-        // The useEffect will handle syncing with presentById while preserving user changes
-        console.log('🔄 [POLLING] Updating attendanceList with server data');
-        setAttendanceList(newAttendanceList);
-
-        // Simple visitor update: just set the server data
-        // Visitor attendance state will be handled by loadAttendanceData
-        setVisitors(newVisitors);
-      } catch (err) {
-        console.error('Polling error:', err);
-      }
-    }, POLL_INTERVAL_MS);
-
+    console.log('🔌 [POLLING] DISABLED - Using WebSocket only for debugging');
+    
+    // Cleanup function
     return () => {
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
     };
   }, [selectedGathering, selectedDate]);
 
@@ -1305,16 +1417,32 @@ const AttendancePage: React.FC = () => {
     const now = Date.now();
     setLastUserModification(prev => ({ ...prev, [visitorId]: now }));
     
+    // Get the new present value before the toggle
+    const newPresent = !visitorAttendance[visitorId];
+    
     // Optimistic toggle
     setVisitorAttendance(prev => ({
       ...prev,
-      [visitorId]: !prev[visitorId]
+      [visitorId]: newPresent
     }));
 
     if (!selectedGathering || !selectedDate) return;
 
+    // Check if we're online or offline (same logic as regular attendance)
+    if (!isWebSocketConnected) {
+      // Offline mode - save to local storage
+      console.log('📱 Offline mode - saving visitor change to local storage');
+      saveToOfflineStorage({
+        individualId: visitorId,
+        present: newPresent,
+        gatheringId: selectedGathering.id,
+        date: selectedDate
+      });
+      return;
+    }
+
+    // Online mode - save via API
     try {
-      const newPresent = !visitorAttendance[visitorId];
       await attendanceAPI.record(selectedGathering.id, selectedDate, {
         attendanceRecords: [{ individualId: visitorId, present: newPresent }],
         visitors: []
@@ -1327,7 +1455,7 @@ const AttendancePage: React.FC = () => {
       // Revert on error
       setVisitorAttendance(prev => ({
         ...prev,
-        [visitorId]: !prev[visitorId]
+        [visitorId]: !newPresent
       }));
     }
   };
@@ -1336,9 +1464,7 @@ const AttendancePage: React.FC = () => {
   const toggleAllVisitorFamily = async (familyGroup: number | string) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     
-    // Set family operation flag to prevent polling interference
-    setIsFamilyOperationInProgress(true);
-    isFamilyOperationInProgressRef.current = true;
+    // Family operation flags removed - no longer needed without polling
     
     const familyVisitors = allVisitors.filter(visitor => visitor.visitorFamilyGroup === familyGroup);
     const familyVisitorIds = familyVisitors.map(visitor => visitor.id).filter((id): id is number => id !== undefined);
@@ -1369,12 +1495,25 @@ const AttendancePage: React.FC = () => {
     });
 
     if (!selectedGathering || !selectedDate) {
-      // Clear family operation flag
-      setIsFamilyOperationInProgress(false);
-      isFamilyOperationInProgressRef.current = false;
       return;
     }
 
+    // Check if we're online or offline
+    if (!isWebSocketConnected) {
+      // Offline mode - save each family member change to local storage
+      console.log('📱 Offline mode - saving visitor family changes to local storage');
+      familyVisitorIds.forEach(visitorId => {
+        saveToOfflineStorage({
+          individualId: visitorId,
+          present: shouldCheckAll,
+          gatheringId: selectedGathering.id,
+          date: selectedDate
+        });
+      });
+      return;
+    }
+
+    // Online mode - save via API
     try {
       await attendanceAPI.record(selectedGathering.id, selectedDate, {
         attendanceRecords: familyVisitorIds.map(id => ({ individualId: id, present: shouldCheckAll })),
@@ -1393,13 +1532,6 @@ const AttendancePage: React.FC = () => {
         });
         return updated;
       });
-    } finally {
-      // Clear family operation flag after a short delay to allow state to settle
-      setTimeout(() => {
-        setIsFamilyOperationInProgress(false);
-        isFamilyOperationInProgressRef.current = false;
-        console.log('Visitor family operation completed, polling resumed');
-      }, 2000); // 2 second delay
     }
   };
 
@@ -1485,7 +1617,193 @@ const AttendancePage: React.FC = () => {
   const draggingGatheringId = useRef<number | null>(null);
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [reorderList, setReorderList] = useState<GatheringType[]>([]);
+
+  // Offline storage for pending attendance changes
+  const [pendingChanges, setPendingChanges] = useState<Array<{
+    individualId: number;
+    present: boolean;
+    timestamp: number;
+    gatheringId: number;
+    date: string;
+  }>>([]);
+  
+  const [isSyncing, setIsSyncing] = useState(false);
   const dragIndexRef = useRef<number | null>(null);
+
+  // Offline storage functions
+  const saveToOfflineStorage = useCallback((change: {
+    individualId: number;
+    present: boolean;
+    gatheringId: number;
+    date: string;
+  }) => {
+    const offlineChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+    const newChange = {
+      ...change,
+      timestamp: Date.now()
+    };
+    
+    // Remove any existing change for this individual in this gathering/date
+    const filteredChanges = offlineChanges.filter((c: any) => 
+      !(c.individualId === change.individualId && 
+        c.gatheringId === change.gatheringId && 
+        c.date === change.date)
+    );
+    
+    const updatedChanges = [...filteredChanges, newChange];
+    localStorage.setItem('attendance_offline_changes', JSON.stringify(updatedChanges));
+    setPendingChanges(updatedChanges);
+    
+    console.log('💾 Saved to offline storage:', newChange);
+  }, []);
+
+  const syncOfflineChanges = useCallback(async () => {
+    if (!isWebSocketConnected || pendingChanges.length === 0) return;
+    
+    setIsSyncing(true);
+    console.log('🔄 Syncing offline changes:', pendingChanges.length, 'changes');
+    
+    try {
+      // Group changes by gathering and date
+      const changesByGathering: { [key: string]: Array<{ individualId: number; present: boolean }> } = {};
+      
+      pendingChanges.forEach(change => {
+        const key = `${change.gatheringId}|${change.date}`;
+        if (!changesByGathering[key]) {
+          changesByGathering[key] = [];
+        }
+        changesByGathering[key].push({
+          individualId: change.individualId,
+          present: change.present
+        });
+      });
+
+      // Sync each group of changes
+      for (const [key, changes] of Object.entries(changesByGathering)) {
+        const [gatheringId, date] = key.split('|');
+        
+        console.log(`🔄 Syncing ${changes.length} changes for gathering ${gatheringId} on ${date}:`, changes);
+        
+        try {
+          await attendanceAPI.record(parseInt(gatheringId), date, {
+            attendanceRecords: changes,
+            visitors: []
+          });
+          
+          console.log(`✅ Successfully synced ${changes.length} changes for gathering ${gatheringId} on ${date}`);
+        } catch (apiError) {
+          console.error(`❌ Failed to sync changes for gathering ${gatheringId} on ${date}:`, apiError);
+          throw apiError; // Re-throw to trigger the outer catch block
+        }
+      }
+
+      // Clear offline storage only if all syncs succeeded
+      localStorage.removeItem('attendance_offline_changes');
+      setPendingChanges([]);
+      setError(''); // Clear any lingering error messages
+      console.log('✅ All offline changes synced successfully');
+      
+    } catch (error) {
+      console.error('❌ Failed to sync offline changes:', error);
+      
+      // If changes are old (more than 1 hour), clear them instead of retrying
+      const now = Date.now();
+      const oldChanges = pendingChanges.filter(change => {
+        const ageInMinutes = (now - change.timestamp) / (1000 * 60);
+        return ageInMinutes > 60; // Changes older than 1 hour
+      });
+      
+      if (oldChanges.length > 0) {
+        console.log('🧹 Clearing old failed changes:', oldChanges.length);
+        localStorage.removeItem('attendance_offline_changes');
+        setPendingChanges([]);
+        setError(''); // Clear error since we're giving up on old changes
+      } else {
+        setError('Failed to sync offline changes. They will be retried when connection is restored.');
+        // Don't clear pending changes on error - they'll be retried
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [isWebSocketConnected, pendingChanges]);
+
+  // Load offline changes and cached attendance data on component mount
+  useEffect(() => {
+    // Clear any lingering error messages on component mount
+    setError('');
+    
+    const offlineChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+    
+    // Clear any old offline changes that might have invalid date formats or are too old
+    const now = Date.now();
+    const validChanges = offlineChanges.filter((change: any) => {
+      // Check if the date format is valid (should be YYYY-MM-DD)
+      if (!change.date || !/^\d{4}-\d{2}-\d{2}$/.test(change.date)) {
+        console.log('🧹 Clearing invalid date format:', change.date);
+        return false;
+      }
+      
+      // Check age (keep changes less than 24 hours old)
+      const ageInHours = (now - change.timestamp) / (1000 * 60 * 60);
+      if (ageInHours >= 24) {
+        console.log('🧹 Clearing old change:', change);
+        return false;
+      }
+      
+      return true;
+    });
+    
+    if (validChanges.length !== offlineChanges.length) {
+      console.log('🧹 Cleared stale offline changes:', offlineChanges.length - validChanges.length);
+      localStorage.setItem('attendance_offline_changes', JSON.stringify(validChanges));
+    }
+    
+    setPendingChanges(validChanges);
+    console.log('📱 Loaded offline changes:', validChanges.length);
+    
+    // Load cached attendance data if available
+    const cachedData = localStorage.getItem('attendance_cached_data');
+    if (cachedData && selectedGathering?.id && selectedDate) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        console.log('📱 Checking cached data:', {
+          cached: { gatheringId: parsed.gatheringId, date: parsed.date },
+          current: { gatheringId: selectedGathering.id, date: selectedDate },
+          match: parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate
+        });
+        
+        if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
+          console.log('📱 Loading cached attendance data:', {
+            attendees: parsed.attendanceList?.length || 0,
+            visitors: parsed.visitors?.length || 0
+          });
+          setAttendanceList(parsed.attendanceList || []);
+          setVisitors(parsed.visitors || []);
+        }
+      } catch (err) {
+        console.error('Failed to parse cached attendance data:', err);
+      }
+    }
+  }, [selectedGathering?.id, selectedDate]);
+
+  // Clear error on component unmount to prevent stale state
+  useEffect(() => {
+    return () => {
+      setError('');
+    };
+  }, []);
+
+  // Sync offline changes when connection is restored
+  useEffect(() => {
+    if (isWebSocketConnected) {
+      if (pendingChanges.length > 0) {
+        syncOfflineChanges();
+      } else {
+        // Clear any lingering error messages when connection is restored
+        setError('');
+      }
+    }
+  }, [isWebSocketConnected, pendingChanges.length, syncOfflineChanges]);
 
   const loadSavedOrder = useCallback((items: GatheringType[]) => {
     if (!user?.id) return items;
@@ -1894,15 +2212,39 @@ const AttendancePage: React.FC = () => {
               <h3 className="text-lg font-medium text-gray-900">
                 Attendance List - {selectedGathering.name}
               </h3>
-              <button
-                onClick={forceRefresh}
-                disabled={isLoading}
-                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
-                title="Refresh from server (reload latest attendance data)"
-              >
-                <ArrowPathIcon className={`h-4 w-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
-                Reload
-              </button>
+              <div className="flex items-center space-x-2">
+                {/* Connection Status Indicator */}
+                <div
+                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                    isWebSocketConnected 
+                      ? 'bg-green-100 text-green-800 border border-green-200' 
+                      : 'bg-red-100 text-red-800 border border-red-200'
+                  }`}
+                  title={
+                    isWebSocketConnected 
+                      ? pendingChanges.length > 0 
+                        ? `Connected - Syncing ${pendingChanges.length} offline changes...`
+                        : 'Connected - Real-time updates active'
+                      : pendingChanges.length > 0
+                        ? `Offline - ${pendingChanges.length} changes saved locally`
+                        : 'Offline - Changes will be saved locally'
+                  }
+                >
+                  <div className={`w-2 h-2 rounded-full mr-1.5 ${
+                    isWebSocketConnected ? 'bg-green-500' : 'bg-red-500'
+                  }`}></div>
+                  {isWebSocketConnected 
+                    ? pendingChanges.length > 0 
+                      ? isSyncing 
+                        ? `Syncing ${pendingChanges.length}...`
+                        : `${pendingChanges.length} Pending`
+                      : 'Connected'
+                    : pendingChanges.length > 0
+                      ? `${pendingChanges.length} Pending`
+                      : 'Offline'
+                  }
+                </div>
+              </div>
             </div>
 
             {isLoading ? (
@@ -1937,12 +2279,16 @@ const AttendancePage: React.FC = () => {
                         <button
                           onClick={() => toggleAllFamily(group.family_id)}
                           disabled={isAttendanceLocked}
-                          className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                          className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                            isAttendanceLocked 
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                              : 'bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200 hover:border-primary-300'
+                          }`}
                         >
                           {(() => {
                             const familyMembers = attendanceList.filter(person => person.familyId === group.family_id);
-                            const presentCount = familyMembers.filter(person => person.present).length;
-                            return presentCount >= 2 ? 'Uncheck all family' : 'Check all family';
+                            const presentCount = familyMembers.filter(person => (presentById[person.id] ?? person.present)).length;
+                            return presentCount > 0 ? 'Uncheck all family' : 'Check all family';
                           })()}
                         </button>
                       </div>
@@ -2053,14 +2399,18 @@ const AttendancePage: React.FC = () => {
                         <button
                           onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup || group.members[0].id)}
                           disabled={isAttendanceLocked}
-                          className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                          className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                            isAttendanceLocked 
+                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                              : 'bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200 hover:border-primary-300'
+                          }`}
                         >
                           {(() => {
                             const familyVisitors = group.members;
                             const presentCount = familyVisitors.filter((visitor: any) => {
                               return visitor.id && visitorAttendance[visitor.id];
                             }).length;
-                            return presentCount >= 2 ? 'Uncheck all family' : 'Check all family';
+                            return presentCount > 0 ? 'Uncheck all family' : 'Check all family';
                           })()}
                         </button>
                       )}

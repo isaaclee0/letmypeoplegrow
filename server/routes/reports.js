@@ -153,25 +153,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       console.error('Error querying visitors by session (attendance_records):', err);
     }
 
-    // Also include counts from legacy visitors table where visitors were tracked separately
-    let legacyVisitorsBySession = [];
-    try {
-      legacyVisitorsBySession = await Database.query(`
-        SELECT 
-          as_table.session_date,
-          SUM(CASE WHEN v.visitor_type = 'potential_regular' THEN 1 ELSE 0 END) as local_visitors_present,
-          SUM(CASE WHEN v.visitor_type = 'temporary_other' THEN 1 ELSE 0 END) as traveller_visitors_present
-        FROM attendance_sessions as_table
-        LEFT JOIN visitors v ON v.session_id = as_table.id
-        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-          AND as_table.church_id = ?
-        GROUP BY as_table.session_date
-        ORDER BY as_table.session_date DESC
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
-    } catch (err) {
-      console.error('Error querying visitors by session (legacy visitors table):', err);
-    }
+    // Legacy visitors table removed - visitors are now tracked via attendance_records with is_visitor flag
 
     const visitorCountsByDate = new Map();
     // Seed with attendance_records based counts
@@ -182,15 +164,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         traveller: row.traveller_visitors_present || 0,
       });
     });
-    // Merge legacy visitors table counts
-    legacyVisitorsBySession.forEach((row) => {
-      const key = normalizeDateKey(row.session_date);
-      const existing = visitorCountsByDate.get(key) || { local: 0, traveller: 0 };
-      visitorCountsByDate.set(key, {
-        local: (existing.local || 0) + (row.local_visitors_present || 0),
-        traveller: (existing.traveller || 0) + (row.traveller_visitors_present || 0),
-      });
-    });
+    // Legacy visitors table logic removed - all visitor data comes from attendance_records now
 
     // For stats purposes ignore sessions with zero attendance (no one present)
     // BUT include sessions that have visitor counts > 0 so the visitor chart is populated
@@ -353,23 +327,8 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       // Don't throw error, just use default value
     }
 
-    // Legacy visitors table count
-    let totalVisitorsLegacy = [{ total: 0 }];
-    try {
-      totalVisitorsLegacy = await Database.query(`
-        SELECT COUNT(*) as total
-        FROM visitors v
-        JOIN attendance_sessions as_table ON v.session_id = as_table.id
-        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-          AND as_table.church_id = ?
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
-      console.log(`Total visitors (legacy visitors table) found: ${totalVisitorsLegacy[0]?.total || 0}`);
-    } catch (err) {
-      console.error('Error querying total visitors (legacy visitors table):', err);
-    }
-
-    const totalVisitorsCombined = (totalVisitors[0]?.total || 0) + (totalVisitorsLegacy[0]?.total || 0);
+    // Legacy visitors table removed - all visitor counts come from attendance_records now
+    const totalVisitorsCombined = (totalVisitors[0]?.total || 0);
     console.log('Total visitors combined:', totalVisitorsCombined);
 
     // visitorsBySession and visitorCountsByDate already built above

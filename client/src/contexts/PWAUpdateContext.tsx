@@ -48,15 +48,21 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
   }, []);
 
   const performUpdate = () => {
+    console.log('Performing PWA update...', { waitingWorker: !!waitingWorker });
+    
     if (waitingWorker) {
       // Send message to service worker to skip waiting and activate
       waitingWorker.postMessage({ type: 'SKIP_WAITING' });
       
-      // Reload the page to use the new service worker
-      window.location.reload();
+      // Add a small delay to let the service worker process the message
+      setTimeout(() => {
+        console.log('Reloading page after service worker update');
+        window.location.reload();
+      }, 500);
     } else {
-      // Fallback: just reload the page
-      window.location.reload();
+      // Fallback: force a hard refresh to bypass cache
+      console.log('No waiting worker, forcing hard refresh');
+      window.location.href = window.location.href;
     }
   };
 

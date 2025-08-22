@@ -262,9 +262,17 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     const { id } = req.params;
     const { firstName, lastName, familyId, peopleType } = req.body;
 
-    // Build dynamic update to allow optional peopleType
-    const fields = ['first_name = ?', 'last_name = ?', 'family_id = ?'];
-    const values = [firstName, lastName, familyId || null];
+    console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType });
+
+    // Build dynamic update - only include fields that are actually provided
+    const fields = ['first_name = ?', 'last_name = ?'];
+    const values = [firstName, lastName];
+
+    // Only update familyId if it's explicitly provided (not undefined)
+    if (familyId !== undefined) {
+      fields.push('family_id = ?');
+      values.push(familyId);
+    }
 
     if (peopleType && ['regular', 'local_visitor', 'traveller_visitor'].includes(peopleType)) {
       fields.push('people_type = ?');
@@ -272,6 +280,9 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     }
 
     values.push(id, req.user.church_id);
+
+    console.log('SQL query:', `UPDATE individuals SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`);
+    console.log('Values:', values);
 
     const result = await Database.query(
       `UPDATE individuals SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`,

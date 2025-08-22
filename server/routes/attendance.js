@@ -3,6 +3,7 @@ const Database = require('../config/database');
 const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware/auth');
 const { requireLastAttendedColumn, columnExists } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
+const websocketBroadcast = require('../utils/websocketBroadcast');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -525,6 +526,23 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
       // Don't fail the attendance save if notifications fail
     }
 
+    // Broadcast WebSocket update for real-time attendance changes
+    try {
+      if (attendanceRecords && attendanceRecords.length > 0) {
+        websocketBroadcast.broadcastAttendanceRecords(
+          gatheringTypeId, 
+          date, 
+          req.user.church_id, 
+          attendanceRecords,
+          { updatedBy: req.user.id, updatedAt: new Date().toISOString() }
+        );
+        console.log('Broadcasted attendance update via WebSocket');
+      }
+    } catch (broadcastError) {
+      console.error('Error broadcasting attendance update:', broadcastError);
+      // Don't fail the attendance save if broadcast fails
+    }
+
     res.json({ message: 'Attendance recorded successfully' });
   } catch (error) {
     console.error('Record attendance error:', error);
@@ -860,6 +878,21 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
         visitors: visitorsPayload
       });
     });
+
+    // Broadcast WebSocket update for new visitors
+    try {
+      websocketBroadcast.broadcastVisitorFamilyAdded(
+        gatheringTypeId,
+        date,
+        req.user.church_id,
+        { id: familyId, name: familyName },
+        visitorsPayload
+      );
+      console.log('Broadcasted visitor addition via WebSocket');
+    } catch (broadcastError) {
+      console.error('Error broadcasting visitor addition:', broadcastError);
+      // Don't fail the visitor save if broadcast fails
+    }
   } catch (error) {
     console.error('Add visitor error:', error);
     res.status(500).json({ error: 'Failed to add visitor.' });
@@ -954,12 +987,35 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
         createdIndividuals.push({ id: individualId, firstName, lastName });
       }
 
-      res.json({ message: 'Visitor updated successfully', individuals: createdIndividuals, visitors: createdIndividuals.map(ind => ({
+      const updatedVisitors = createdIndividuals.map(ind => ({
         name: `${ind.firstName} ${ind.lastName}`,
         visitorType: visitorType || 'temporary_other',
         lastAttended: date
-      })) });
+      }));
+
+      res.json({ message: 'Visitor updated successfully', individuals: createdIndividuals, visitors: updatedVisitors });
     });
+
+    // Broadcast WebSocket update for visitor changes
+    try {
+      const updatedVisitors = createdIndividuals.map(ind => ({
+        name: `${ind.firstName} ${ind.lastName}`,
+        visitorType: visitorType || 'temporary_other',
+        lastAttended: date
+      }));
+
+      websocketBroadcast.broadcastVisitorFamilyUpdated(
+        gatheringTypeId,
+        date,
+        req.user.church_id,
+        { name: familyName },
+        updatedVisitors
+      );
+      console.log('Broadcasted visitor update via WebSocket');
+    } catch (broadcastError) {
+      console.error('Error broadcasting visitor update:', broadcastError);
+      // Don't fail the visitor save if broadcast fails
+    }
   } catch (error) {
     console.error('Update visitor error:', error);
     console.error('Error stack:', error.stack);
@@ -1251,12 +1307,39 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         WHERE id = ? AND church_id = ?
       `, [date, familyId, req.user.church_id]);
 
+      const visitorsPayload = createdIndividuals.map(ci => ({ 
+        name: `${ci.firstName} ${ci.lastName}`, 
+        visitorType: 'temporary_other', 
+        lastAttended: date 
+      }));
+
       res.json({ 
         message: 'Visitor family added and marked present',
         individuals: createdIndividuals,
-        visitors: createdIndividuals.map(ci => ({ name: `${ci.firstName} ${ci.lastName}`, visitorType: 'temporary_other', lastAttended: date }))
+        visitors: visitorsPayload
       });
     });
+
+    // Broadcast WebSocket update for visitor family addition
+    try {
+      const visitorsPayload = createdIndividuals.map(ci => ({ 
+        name: `${ci.firstName} ${ci.lastName}`, 
+        visitorType: 'temporary_other', 
+        lastAttended: date 
+      }));
+
+      websocketBroadcast.broadcastVisitorFamilyAdded(
+        gatheringTypeId,
+        date,
+        req.user.church_id,
+        { id: familyId },
+        visitorsPayload
+      );
+      console.log('Broadcasted visitor family addition via WebSocket');
+    } catch (broadcastError) {
+      console.error('Error broadcasting visitor family addition:', broadcastError);
+      // Don't fail the operation if broadcast fails
+    }
   } catch (error) {
     console.error('Add visitor family to service error:', error);
     res.status(500).json({ error: 'Failed to add visitor family to service.' });
