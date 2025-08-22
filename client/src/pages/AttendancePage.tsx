@@ -521,36 +521,8 @@ const AttendancePage: React.FC = () => {
     }
   }, [selectedGathering, selectedDate, loadAttendanceData]);
 
-  // Reload data when PWA becomes visible (user opens app or switches back to it)
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden && selectedGathering && selectedDate) {
-        console.log('📱 App became visible - checking for fresh data');
-        
-        // Only attempt to load fresh data if we're online
-        if (isWebSocketConnected) {
-          console.log('📱 Online - refreshing attendance data from server');
-          // Clear user modification timestamps so we get fresh server data
-          lastUserModificationRef.current = {};
-          // Load fresh data from server
-          loadAttendanceData();
-        } else {
-          console.log('📱 Offline - keeping cached data');
-        }
-      }
-    };
-
-    // Listen for visibility changes (app focus/unfocus)
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Also listen for window focus (additional safety net)
-    window.addEventListener('focus', handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleVisibilityChange);
-    };
-  }, [selectedGathering, selectedDate, loadAttendanceData, isWebSocketConnected]);
+  // WebSocket real-time updates handle all data synchronization now
+  // No need for visibility-based refreshes that cause issues on mobile PWA
 
   // Load recent visitors when gathering changes
   useEffect(() => {
@@ -894,7 +866,6 @@ const AttendancePage: React.FC = () => {
     enabled: useWebSocketForUpdates && isWebSocketConnected,
     onAttendanceChange: useCallback((records: Array<{ individualId: number; present: boolean }>) => {
       console.log('🔌 [WEBSOCKET] Received attendance update:', records);
-      // setLastWebSocketUpdate removed - no longer tracking for UI
       
       // Update presentById based on WebSocket updates, but preserve recent user changes
       const now = Date.now();
@@ -907,39 +878,66 @@ const AttendancePage: React.FC = () => {
           // Only update if user hasn't made recent changes (within 5 seconds)
           if (timeSinceUserModification > 5000) {
             updated[record.individualId] = record.present;
+            console.log(`🔌 [WEBSOCKET] Updated attendance for individual ${record.individualId}: ${record.present}`);
+          } else {
+            console.log(`🔌 [WEBSOCKET] Preserved user change for individual ${record.individualId} (modified ${timeSinceUserModification}ms ago)`);
           }
         });
         return updated;
       });
+      
+      // Also update the attendance list to reflect changes
+      setAttendanceList(prev => {
+        const updated = [...prev];
+        records.forEach((record: { individualId: number; present: boolean }) => {
+          const userModifiedTime = lastUserModificationRef.current[record.individualId];
+          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
+          
+          if (timeSinceUserModification > 5000) {
+            const index = updated.findIndex(person => person.id === record.individualId);
+            if (index !== -1) {
+              updated[index] = { ...updated[index], present: record.present };
+            }
+          }
+        });
+        return updated;
+      });
+      
+      console.log('🔌 [WEBSOCKET] Updated attendance state immediately:', {
+        recordCount: records.length,
+        updatedPresentById: records.reduce((acc, record) => ({ ...acc, [record.individualId]: record.present }), {})
+      });
     }, []),
     onVisitorChange: useCallback((visitors: Visitor[]) => {
       console.log('🔌 [WEBSOCKET] Received visitor update:', visitors);
-      // setLastWebSocketUpdate removed - no longer tracking for UI
-      // For now, we'll trigger a full refresh since visitor updates are complex
-      // In the future, we could handle incremental updates
-      // Use a ref to avoid dependency on loadAttendanceData function
-      if (selectedGathering && selectedDate) {
-        // Directly call the attendance API to avoid function dependency
-        (async () => {
-          try {
-            const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
-            setAttendanceList(response.data.attendanceList || []);
-            setVisitors(response.data.visitors || []);
-            
-            // Update visitor attendance state
-            const newVisitorAttendance: { [key: number]: boolean } = {};
-            (response.data.visitors || []).forEach((visitor: any) => {
-              if (visitor.id) {
-                newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-              }
-            });
-            setVisitorAttendance(newVisitorAttendance);
-          } catch (err) {
-            console.error('Failed to refresh attendance data after visitor update:', err);
-          }
-        })();
-      }
-    }, [selectedGathering, selectedDate]),
+      
+      // Update visitors state immediately
+      setVisitors(visitors);
+      
+      // Update visitor attendance state immediately
+      const newVisitorAttendance: { [key: number]: boolean } = {};
+      visitors.forEach((visitor: any) => {
+        if (visitor.id) {
+          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+        }
+      });
+      setVisitorAttendance(newVisitorAttendance);
+      
+      // Cache the updated data
+      const cacheData = {
+        gatheringId: selectedGathering?.id,
+        date: selectedDate,
+        attendanceList: attendanceList,
+        visitors: visitors,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+      
+      console.log('🔌 [WEBSOCKET] Updated visitor state immediately:', {
+        visitorCount: visitors.length,
+        visitorAttendance: newVisitorAttendance
+      });
+    }, [selectedGathering, selectedDate, attendanceList]),
     onFullRefresh: useCallback((attendanceList: Individual[], visitors: Visitor[]) => {
       console.log('🔌 [WEBSOCKET] Received full refresh');
       // setLastWebSocketUpdate removed - no longer tracking for UI

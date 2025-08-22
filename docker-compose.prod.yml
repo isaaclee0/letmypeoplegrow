@@ -43,8 +43,6 @@ services:
       OTC_EXPIRE_MINUTES: ${OTC_EXPIRE_MINUTES:-10}
       OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS:-60}
       EMAIL_FROM: ${EMAIL_FROM:-hello@letmypeoplegrow.com.au}
-    ports:
-      - "3001:3001"
     volumes:
       - ./server/uploads:/app/uploads
     depends_on:
@@ -58,8 +56,6 @@ services:
     image: staugustine1/letmypeoplegrow-client:${IMAGE_TAG:-latest}
     container_name: church_attendance_client
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     depends_on:
       - server
     networks:

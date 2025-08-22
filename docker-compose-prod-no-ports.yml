@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  db:
+    image: mariadb:10.6
+    container_name: church_attendance_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "${DB_USER}", "-p${DB_PASSWORD}", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: ${DB_USER}
+      PMA_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    # Removed ports - access through nginx-proxy-manager if needed
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+      - npm_proxy
+
+  # Node.js Backend Server
+  server:
+    image: staugustine1/letmypeoplegrow-server:latest
+    container_name: church_attendance_server
+    restart: on-failure:3
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRE: ${JWT_EXPIRE}
+      OTC_EXPIRE_MINUTES: ${OTC_EXPIRE_MINUTES}
+      OTC_RESEND_COOLDOWN_SECONDS: ${OTC_RESEND_COOLDOWN_SECONDS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      CRAZYTEL_API_KEY: ${CRAZYTEL_API_KEY}
+      CRAZYTEL_FROM_NUMBER: ${CRAZYTEL_FROM_NUMBER}
+      BREVO_API_KEY: ${BREVO_API_KEY}
+    # Removed ports - only accessible through nginx
+    volumes:
+      - server_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  # React Frontend Client
+  client:
+    image: staugustine1/letmypeoplegrow-client:latest
+    container_name: church_attendance_client
+    restart: unless-stopped
+    # Removed ports - only accessible through nginx
+    depends_on:
+      - server
+    networks:
+      - app-network
+
+  # nginx for handling websockets and external access
+  nginx:
+    image: nginx:alpine
+    container_name: church_attendance_nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl:ro  # Optional: for SSL certificates
+    depends_on:
+      - client
+      - server
+    networks:
+      - app-network
+      - npm_proxy
+
+volumes:
+  db_data:
+  server_uploads:
+
+networks:
+  app-network:
+    driver: bridge
+  npm_proxy:
+    external: true
