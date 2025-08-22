@@ -51,6 +51,7 @@ interface WebSocketContextType {
   activeUsers: ActiveUser[];
   joinAttendanceRoom: (gatheringId: number, date: string) => void;
   leaveAttendanceRoom: (gatheringId: number, date: string) => void;
+  sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
   onAttendanceUpdate: (callback: (update: AttendanceUpdate) => void) => () => void;
   onVisitorUpdate: (callback: (update: VisitorUpdate) => void) => () => void;
   onUserActivity: (callback: (activity: UserActivity) => void) => () => void;
@@ -66,7 +67,8 @@ interface WebSocketProviderProps {
 }
 
 export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }) => {
-  console.log('🔌 WebSocketProvider initialized');
+  const tabId = useRef(Math.random().toString(36).substr(2, 9));
+  console.log(`🔌 WebSocketProvider initialized for tab ${tabId.current}`);
   
   const { user } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -100,25 +102,17 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       return;
     }
 
-    // Prevent multiple connections (especially important in React StrictMode)
-    if (socket && socket.auth?.userId === user.id) {
-      // Check if socket is still connected or connecting
-      if (socket.connected || socket.connecting) {
-        console.log('🔌 WebSocket already exists for current user, reusing connection');
-        setIsConnected(socket.connected);
-        setConnectionStatus(socket.connected ? 'connected' : 'connecting');
-        return;
-      } else {
-        // Socket exists but is disconnected, clean it up
-        console.log('🔌 Cleaning up disconnected socket before creating new one');
-        socket.disconnect();
-        setSocket(null);
-      }
+    // Clean up existing socket if it exists (each tab needs its own connection)
+    if (socket) {
+      // Always create fresh connections for each tab to ensure proper room management
+      console.log(`🔌 [Tab ${tabId.current}] Cleaning up existing socket before creating new one`);
+      socket.disconnect();
+      setSocket(null);
     }
 
     // Prevent multiple initialization attempts
     if (initializingRef.current) {
-      console.log('🔌 WebSocket initialization already in progress, skipping');
+      console.log(`🔌 [Tab ${tabId.current}] WebSocket initialization already in progress, skipping`);
       return;
     }
 
@@ -181,26 +175,26 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       'resolved serverUrl': serverUrl
     });
 
-    console.log('🔌 Initializing WebSocket connection...', {
+    console.log(`🔌 [Tab ${tabId.current}] Initializing WebSocket connection...`, {
       serverUrl,
       authData,
       userAuthenticated: !!user
     });
 
-    // Create socket connection with polling-only for debugging
-    console.log('🔌 Creating socket connection to:', serverUrl, 'with auth:', authData);
+    // Create socket connection with fallback from WebSocket to polling
+    console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData);
     const newSocket = io(serverUrl, {
       auth: authData,
       withCredentials: true, // Important: send cookies with WebSocket connection
-      transports: ['polling'], // Polling-only for debugging
-      timeout: 30000, // Even longer timeout for debugging
+      transports: ['websocket', 'polling'], // WebSocket first, polling fallback
+      timeout: 20000, // Reasonable timeout
       reconnection: true,
-      reconnectionAttempts: 15, // Reasonable number of attempts
-      reconnectionDelay: 2000,   // Slower reconnection for stability
-      reconnectionDelayMax: 10000, // Longer max delay
-      forceNew: true, // Force new connection for debugging
-      upgrade: false,   // Disable upgrades to websocket for now
-      rememberUpgrade: false // Don't remember upgrade
+      reconnectionAttempts: 10, 
+      reconnectionDelay: 1000,   
+      reconnectionDelayMax: 5000, 
+      forceNew: true, // Force new connection to avoid cross-tab conflicts
+      upgrade: true,   // Allow upgrades to websocket
+      rememberUpgrade: false // Don't remember upgrade to prevent issues
     });
 
     // Connection event handlers with detailed debugging
@@ -232,6 +226,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     newSocket.on('connect_error', (error) => {
       console.error('❌ WebSocket connection error:', error.message);
+      console.log('🔍 Connection details:', {
+        serverUrl,
+        transport: newSocket.io.opts.transports,
+        forceNew: newSocket.io.opts.forceNew,
+        upgrade: newSocket.io.opts.upgrade
+      });
       setConnectionStatus('error');
       initializingRef.current = false; // Reset initialization flag on error
     });
@@ -360,6 +360,46 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     socket.emit('leave_attendance', { gatheringId, date });
   };
 
+  // Send attendance update via WebSocket
+  const sendAttendanceUpdate = async (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!socket || !isConnected) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      console.log(`📤 Sending attendance update via WebSocket: gathering ${gatheringId}, date ${date}`, records);
+      
+      // Set up one-time listeners for response
+      const handleSuccess = () => {
+        socket.off('attendance_update_error', handleError);
+        resolve();
+      };
+      
+      const handleError = (error: any) => {
+        socket.off('attendance_update_success', handleSuccess);
+        reject(new Error(error.message || 'Failed to update attendance'));
+      };
+
+      socket.once('attendance_update_success', handleSuccess);
+      socket.once('attendance_update_error', handleError);
+
+      // Send the update
+      socket.emit('record_attendance', {
+        gatheringId,
+        date,
+        records
+      });
+
+      // Add timeout to prevent hanging
+      setTimeout(() => {
+        socket.off('attendance_update_success', handleSuccess);
+        socket.off('attendance_update_error', handleError);
+        reject(new Error('WebSocket attendance update timeout'));
+      }, 10000); // 10 second timeout
+    });
+  };
+
   // Subscribe to attendance updates
   const onAttendanceUpdate = (callback: (update: AttendanceUpdate) => void): (() => void) => {
     attendanceCallbacks.current.add(callback);
@@ -421,6 +461,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     activeUsers,
     joinAttendanceRoom,
     leaveAttendanceRoom,
+    sendAttendanceUpdate,
     onAttendanceUpdate,
     onVisitorUpdate,
     onUserActivity,

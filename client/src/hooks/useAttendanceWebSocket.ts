@@ -69,13 +69,16 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
     stableOnError.current = onError;
   }, [onAttendanceChange, onVisitorChange, onFullRefresh, onError]);
 
+  // Unique hook ID for multi-tab debugging
+  const hookId = useRef(Math.random().toString(36).substr(2, 9));
+
   // Join room when parameters change
   const joinRoom = useCallback(() => {
     if (!enabled || !gatheringId || !date || !isConnected) {
       return;
     }
 
-    console.log(`📋 Joining attendance WebSocket room: gathering ${gatheringId}, date ${date}`);
+    console.log(`[Hook ${hookId.current}] 📋 Joining attendance WebSocket room: gathering ${gatheringId}, date ${date}`);
     joinAttendanceRoom(gatheringId, date);
     currentGatheringId.current = gatheringId;
     currentDate.current = date;
@@ -84,7 +87,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
   // Leave current room
   const leaveRoom = useCallback(() => {
     if (currentGatheringId.current && currentDate.current && isConnected) {
-      console.log(`🚪 Leaving attendance WebSocket room: gathering ${currentGatheringId.current}, date ${currentDate.current}`);
+      console.log(`[Hook ${hookId.current}] 🚪 Leaving attendance WebSocket room: gathering ${currentGatheringId.current}, date ${currentDate.current}`);
       leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
     }
     setIsInRoom(false);
@@ -94,33 +97,27 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
 
   // Auto-join room when connected and parameters are available
   useEffect(() => {
+    console.log(`[Hook ${hookId.current}] 📋 Room check: enabled=${enabled}, gatheringId=${gatheringId}, date=${date}, isConnected=${isConnected}`);
+    
     if (enabled && gatheringId && date && isConnected) {
-      // Only join if we're not already in the correct room
+      // Always join the room if not already in it
       if (currentGatheringId.current !== gatheringId || currentDate.current !== date) {
-        console.log(`📋 Room change detected: ${currentGatheringId.current}:${currentDate.current} -> ${gatheringId}:${date}`);
+        console.log(`[Hook ${hookId.current}] 📋 Room change detected: ${currentGatheringId.current}:${currentDate.current} -> ${gatheringId}:${date}`);
         
-        // Leave previous room if different
+        // Leave previous room if any
         if (currentGatheringId.current && currentDate.current) {
           leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
         }
         
-        // Small delay to avoid rapid join/leave cycles
-        const timeoutId = setTimeout(() => {
-          joinRoom();
-        }, 100);
-        
-        return () => clearTimeout(timeoutId);
+        joinRoom();
       } else {
-        console.log(`📋 Already in correct room: ${gatheringId}:${date}`);
+        console.log(`[Hook ${hookId.current}] 📋 Already in correct room: ${gatheringId}:${date}`);
       }
-    } else if (!enabled || !gatheringId || !date) {
-      // Leave room if no longer needed
-      if (currentGatheringId.current || currentDate.current) {
-        console.log('📋 Leaving room - conditions no longer met');
-        leaveRoom();
-      }
+    } else if (currentGatheringId.current || currentDate.current) {
+      console.log(`[Hook ${hookId.current}] 📋 Leaving room - conditions no longer met`);
+      leaveRoom();
     }
-  }, [enabled, gatheringId, date, isConnected]);
+  }, [enabled, gatheringId, date, isConnected, joinRoom, leaveRoom, leaveAttendanceRoom]);
 
   // Leave room when component unmounts or connection is lost
   useEffect(() => {

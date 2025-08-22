@@ -143,6 +143,35 @@ export const UI_CONFIG = {
   ANIMATION_DURATION: 300
 } as const;
 
+// WebSocket configuration
+export const WEBSOCKET_CONFIG = {
+  // Environment variable VITE_USE_WEBSOCKETS controls WebSocket usage
+  // Values: 'true' = WebSocket only, 'fallback' = WebSocket with API fallback, 'false' = API only
+  USE_WEBSOCKETS: import.meta.env.VITE_USE_WEBSOCKETS || 'fallback',
+  TIMEOUT_MS: 10000,
+  RETRY_ATTEMPTS: 3,
+  OFFLINE_SYNC_INTERVAL: 30000
+} as const;
+
+// Helper to check WebSocket mode
+export const getWebSocketMode = () => {
+  const mode = WEBSOCKET_CONFIG.USE_WEBSOCKETS.toLowerCase();
+  console.log('🔍 WebSocket Mode Debug:', {
+    rawEnvVar: import.meta.env.VITE_USE_WEBSOCKETS,
+    configValue: WEBSOCKET_CONFIG.USE_WEBSOCKETS,
+    processedMode: mode,
+    enabled: mode === 'true' || mode === 'fallback',
+    fallbackAllowed: mode === 'fallback',
+    pureWebSocket: mode === 'true'
+  });
+  
+  return {
+    enabled: mode === 'true' || mode === 'fallback',
+    fallbackAllowed: mode === 'fallback',
+    pureWebSocket: mode === 'true'
+  };
+};
+
 // Feature flags for toggling functionality
 export const FEATURE_FLAGS = {
   ENABLE_ADVANCED_SEARCH: true,

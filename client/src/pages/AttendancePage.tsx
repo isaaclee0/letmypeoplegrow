@@ -8,6 +8,7 @@ import { useToast } from '../components/ToastContainer';
 import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
+import { getWebSocketMode } from '../utils/constants';
 import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { 
@@ -73,7 +74,7 @@ const AttendancePage: React.FC = () => {
   };
 
   // Simple state sync: whenever attendanceList changes, update presentById from server data
-  // BUT preserve any recent user modifications (within last 30 seconds)
+  // WebSocket handles real-time changes, so we can use server data directly
   useEffect(() => {
     console.log('📋 Syncing presentById with attendanceList', {
       attendanceCount: attendanceList.length,
@@ -81,26 +82,9 @@ const AttendancePage: React.FC = () => {
       date: selectedDate
     });
     
-    const now = Date.now();
     const newPresentById: Record<number, boolean> = {};
-    
     attendanceList.forEach((person) => {
-      const userModifiedTime = lastUserModificationRef.current[person.id];
-      const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
-      
-      if (timeSinceUserModification <= 30000) {
-        // Preserve user's recent changes (within 30 seconds)
-        const userValue = presentByIdRef.current[person.id];
-        if (userValue !== undefined) {
-          newPresentById[person.id] = userValue;
-          console.log(`👤 Preserving user change for ${person.firstName} ${person.lastName}: ${userValue}`);
-        } else {
-          newPresentById[person.id] = Boolean(person.present);
-        }
-      } else {
-        // Use server data for people not recently modified
-        newPresentById[person.id] = Boolean(person.present);
-      }
+      newPresentById[person.id] = Boolean(person.present);
     });
     
     console.log('📊 Setting presentById:', newPresentById);
@@ -198,10 +182,68 @@ const AttendancePage: React.FC = () => {
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   
-  // WebSocket integration
-  const { isConnected: isWebSocketConnected, activeUsers } = useWebSocket();
-  const [useWebSocketForUpdates, setUseWebSocketForUpdates] = useState(true); // Forced to true for debugging
-  // lastWebSocketUpdate removed - no longer needed for UI display
+  // WebSocket integration with environment-based configuration
+  const { 
+    isConnected: isWebSocketConnected, 
+    connectionStatus, 
+    activeUsers, 
+    sendAttendanceUpdate 
+  } = useWebSocket();
+  const webSocketMode = getWebSocketMode();
+  const useWebSocketForUpdates = webSocketMode.enabled;
+
+  // Helper function to get connection status styling
+  const getConnectionStatusStyle = () => {
+    // If WebSocket is disabled via environment variable, show API mode
+    if (!webSocketMode.enabled) {
+      return {
+        containerClass: 'bg-blue-100 text-blue-800 border border-blue-200',
+        dotClass: 'bg-blue-500',
+        label: 'API Mode',
+        tooltip: 'Using REST API for updates (WebSocket disabled)'
+      };
+    }
+
+    switch (connectionStatus) {
+      case 'connected':
+        return {
+          containerClass: 'bg-green-100 text-green-800 border border-green-200',
+          dotClass: 'bg-green-500',
+          label: pendingChanges.length > 0 
+            ? isSyncing 
+              ? `Syncing ${pendingChanges.length}...`
+              : `${pendingChanges.length} Pending`
+            : 'Connected',
+          tooltip: pendingChanges.length > 0 
+            ? `Connected - Syncing ${pendingChanges.length} offline changes...`
+            : 'Connected - Real-time updates active'
+        };
+      case 'connecting':
+        return {
+          containerClass: 'bg-green-50 text-green-600 border border-green-200 connection-pulse',
+          dotClass: 'bg-green-400',
+          label: 'Connecting...',
+          tooltip: 'Connecting to real-time updates...'
+        };
+      case 'error':
+        return {
+          containerClass: 'bg-red-100 text-red-800 border border-red-200',
+          dotClass: 'bg-red-500',
+          label: 'Connection Error',
+          tooltip: 'Connection failed - Please refresh the page'
+        };
+      case 'disconnected':
+      default:
+        return {
+          containerClass: 'bg-red-100 text-red-800 border border-red-200',
+          dotClass: 'bg-red-500',
+          label: pendingChanges.length > 0 ? `${pendingChanges.length} Pending` : 'Offline',
+          tooltip: pendingChanges.length > 0
+            ? `Offline - ${pendingChanges.length} changes saved locally`
+            : 'Offline - Changes will be saved locally'
+        };
+    }
+  };
 
 
   // Add state for recent visitors
@@ -214,7 +256,6 @@ const AttendancePage: React.FC = () => {
   const [allChurchVisitors, setAllChurchVisitors] = useState<Visitor[]>([]);
   const [isLoadingAllVisitors, setIsLoadingAllVisitors] = useState(false);
   const [showAllVisitorsSection, setShowAllVisitorsSection] = useState(false);
-  const POLL_INTERVAL_MS = 10000; // Reduced to 10 seconds for faster updates while still avoiding race conditions
 
   // Keep refs in sync
   useEffect(() => { attendanceListRef.current = attendanceList; }, [attendanceList]);
@@ -398,11 +439,12 @@ const AttendancePage: React.FC = () => {
     
     try {
       const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
-      console.log(`📊 Received attendance data:`, {
+      console.log(`📊 Received fresh attendance data:`, {
         attendeeCount: response.data.attendanceList?.length || 0,
         visitorCount: response.data.visitors?.length || 0,
         gatheringId: selectedGathering.id,
-        date: selectedDate
+        date: selectedDate,
+        timestamp: new Date().toISOString()
       });
       
       setAttendanceList(response.data.attendanceList || []);
@@ -424,27 +466,12 @@ const AttendancePage: React.FC = () => {
         visitors: response.data.visitors?.length || 0
       });
       
-      // Update visitor attendance state, preserving recent user changes (within 30 seconds)
-      const now = Date.now();
+      // Update visitor attendance state from server data
+      // WebSocket handles real-time changes, so we can use server data directly
       const newVisitorAttendance: { [key: number]: boolean } = {};
       (response.data.visitors || []).forEach((visitor: any) => {
         if (visitor.id) {
-          const userModifiedTime = lastUserModificationRef.current[visitor.id];
-          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
-          
-          if (timeSinceUserModification <= 30000) {
-            // Preserve user's recent changes
-            const userValue = visitorAttendance[visitor.id];
-            if (userValue !== undefined) {
-              newVisitorAttendance[visitor.id] = userValue;
-              console.log(`👤 Preserving visitor change for ${visitor.name}: ${userValue}`);
-            } else {
-              newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-            }
-          } else {
-            // Use server data
-            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-          }
+          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
         }
       });
       console.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
@@ -481,24 +508,29 @@ const AttendancePage: React.FC = () => {
   // Load attendance data when date or gathering changes
   useEffect(() => {
     if (selectedGathering && selectedDate) {
-      // First try to load cached data immediately
+      // First try to load cached data immediately (for faster UX)
       const cachedData = localStorage.getItem('attendance_cached_data');
       if (cachedData) {
         try {
           const parsed = JSON.parse(cachedData);
           if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-            console.log('📱 Loading cached data immediately for offline fallback');
-            setAttendanceList(parsed.attendanceList || []);
-            setVisitors(parsed.visitors || []);
+            // Check if cache is fresh (less than 30 seconds old) to avoid showing stale data
+            const cacheAge = Date.now() - (parsed.timestamp || 0);
+            const isStale = cacheAge > 30000; // 30 seconds
             
-            // Also restore visitor attendance state
-            const newVisitorAttendance: { [key: number]: boolean } = {};
-            (parsed.visitors || []).forEach((visitor: any) => {
-              if (visitor.id) {
-                newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-              }
+            console.log('📱 Loading cached attendance data:', {
+              attendees: parsed.attendanceList?.length || 0,
+              visitors: parsed.visitors?.length || 0,
+              cacheAge: Math.round(cacheAge / 1000) + 's',
+              isStale
             });
-            setVisitorAttendance(newVisitorAttendance);
+            
+            if (!isStale) {
+              setAttendanceList(parsed.attendanceList || []);
+              setVisitors(parsed.visitors || []);
+            } else {
+              console.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
+            }
           }
         } catch (err) {
           console.error('Failed to parse cached attendance data:', err);
@@ -656,8 +688,59 @@ const AttendancePage: React.FC = () => {
   // Simple queue to serialize attendance writes per individual and reduce API thrash
   const pendingWritesRef = useRef<Map<number, Promise<void>>>(new Map());
 
+  // Helper function to send attendance updates based on configuration
+  const sendAttendanceChange = async (
+    gatheringId: number, 
+    date: string, 
+    records: Array<{ individualId: number; present: boolean }>
+  ) => {
+    console.log('🔍 sendAttendanceChange called:', {
+      webSocketModeEnabled: webSocketMode.enabled,
+      webSocketMode,
+      isWebSocketConnected,
+      gatheringId,
+      date,
+      recordsCount: records.length
+    });
+    
+    if (!webSocketMode.enabled) {
+      console.log('📡 Using REST API (WebSocket disabled)');
+      // WebSocket disabled - use API directly
+      await attendanceAPI.record(gatheringId, date, {
+        attendanceRecords: records,
+        visitors: []
+      });
+      return;
+    }
+
+    // WebSocket enabled - try WebSocket first
+    try {
+      await sendAttendanceUpdate(gatheringId, date, records);
+      console.log(`🔌 Successfully sent attendance via WebSocket`);
+    } catch (wsError) {
+      if (webSocketMode.fallbackAllowed) {
+        console.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
+        await attendanceAPI.record(gatheringId, date, {
+          attendanceRecords: records,
+          visitors: []
+        });
+        console.log(`✅ Successfully saved attendance via API fallback`);
+      } else {
+        // Pure WebSocket mode - no fallback allowed
+        console.error(`❌ WebSocket failed in pure mode:`, wsError);
+        throw new Error('WebSocket connection failed. Please check your connection and try again.');
+      }
+    }
+  };
+
   const toggleAttendance = async (individualId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    
+    // Prevent rapid double-clicks
+    if (savingById[individualId]) {
+      console.log(`⚠️ Already saving attendance for ${individualId}, ignoring duplicate click`);
+      return;
+    }
     
     const person = attendanceListRef.current.find(p => p.id === individualId);
     console.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
@@ -670,8 +753,11 @@ const AttendancePage: React.FC = () => {
 
     console.log(`📊 Attendance change: ${currentPresent} → ${newPresent} for gathering ${selectedGathering?.id} on ${selectedDate}`);
 
-    setSavingById(prev => ({ ...prev, [individualId]: true }));
-    setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
+    // Batch optimistic updates to prevent race conditions
+    startTransition(() => {
+      setSavingById(prev => ({ ...prev, [individualId]: true }));
+      setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
+    });
 
     if (!selectedGathering || !selectedDate) {
       console.error('❌ Missing gathering or date context');
@@ -693,7 +779,7 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // Online mode - save via API
+    // Online mode - send via configured method (WebSocket, API, or WebSocket with fallback)
     const run = async () => {
       try {
         console.log(`💾 Saving attendance record:`, {
@@ -704,16 +790,14 @@ const AttendancePage: React.FC = () => {
           personName: `${person?.firstName} ${person?.lastName}`
         });
         
-        await attendanceAPI.record(selectedGathering.id, selectedDate, {
-          attendanceRecords: [{ individualId, present: newPresent }],
-          visitors: []
-        });
+        await sendAttendanceChange(selectedGathering.id, selectedDate, [
+          { individualId, present: newPresent }
+        ]);
         
-        console.log(`✅ Successfully saved attendance for ${person?.firstName} ${person?.lastName}`);
         setSavingById(prev => ({ ...prev, [individualId]: false }));
       } catch (err) {
         console.error(`❌ Failed to save attendance change for ${person?.firstName} ${person?.lastName}:`, err);
-        setError('Failed to save change');
+        setError(err instanceof Error ? err.message : 'Failed to save change');
         setSavingById(prev => ({ ...prev, [individualId]: false }));
         setPresentById(prev => ({ ...prev, [individualId]: currentPresent }));
       } finally {
@@ -818,12 +902,9 @@ const AttendancePage: React.FC = () => {
         present: shouldCheckAll
       }));
 
-      console.log('Sending attendance records to API:', familyAttendanceRecords);
+      console.log('Sending attendance records:', familyAttendanceRecords);
 
-      await attendanceAPI.record(selectedGathering.id, selectedDate, {
-        attendanceRecords: familyAttendanceRecords,
-        visitors: []
-      });
+      await sendAttendanceChange(selectedGathering.id, selectedDate, familyAttendanceRecords);
 
       // Clear saving state
       setSavingById(prev => {
@@ -867,47 +948,84 @@ const AttendancePage: React.FC = () => {
     onAttendanceChange: useCallback((records: Array<{ individualId: number; present: boolean }>) => {
       console.log('🔌 [WEBSOCKET] Received attendance update:', records);
       
-      // Update presentById based on WebSocket updates, but preserve recent user changes
-      const now = Date.now();
-      setPresentById(prev => {
-        const updated = { ...prev };
-        records.forEach((record: { individualId: number; present: boolean }) => {
-          const userModifiedTime = lastUserModificationRef.current[record.individualId];
-          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
+      // Batch all state updates to prevent race conditions
+      startTransition(() => {
+        // Update presentById (main source of truth for UI)
+        setPresentById(prev => {
+          const updated = { ...prev };
+          let hasChanges = false;
           
-          // Only update if user hasn't made recent changes (within 5 seconds)
-          if (timeSinceUserModification > 5000) {
-            updated[record.individualId] = record.present;
-            console.log(`🔌 [WEBSOCKET] Updated attendance for individual ${record.individualId}: ${record.present}`);
-          } else {
-            console.log(`🔌 [WEBSOCKET] Preserved user change for individual ${record.individualId} (modified ${timeSinceUserModification}ms ago)`);
-          }
-        });
-        return updated;
-      });
-      
-      // Also update the attendance list to reflect changes
-      setAttendanceList(prev => {
-        const updated = [...prev];
-        records.forEach((record: { individualId: number; present: boolean }) => {
-          const userModifiedTime = lastUserModificationRef.current[record.individualId];
-          const timeSinceUserModification = userModifiedTime ? now - userModifiedTime : Infinity;
-          
-          if (timeSinceUserModification > 5000) {
-            const index = updated.findIndex(person => person.id === record.individualId);
-            if (index !== -1) {
-              updated[index] = { ...updated[index], present: record.present };
+          records.forEach((record: { individualId: number; present: boolean }) => {
+            // Only update if the value is actually different to prevent unnecessary re-renders
+            if (updated[record.individualId] !== record.present) {
+              updated[record.individualId] = record.present;
+              hasChanges = true;
+              console.log(`🔌 [WEBSOCKET] Updated attendance for individual ${record.individualId}: ${record.present}`);
+            } else {
+              console.log(`🔌 [WEBSOCKET] Skipped duplicate update for individual ${record.individualId}: ${record.present}`);
             }
-          }
+          });
+          
+          return hasChanges ? updated : prev;
         });
-        return updated;
+        
+        // Update attendance list (for consistency)
+        setAttendanceList(prev => {
+          const updated = [...prev];
+          let hasChanges = false;
+          
+          records.forEach((record: { individualId: number; present: boolean }) => {
+            const index = updated.findIndex(person => person.id === record.individualId);
+            if (index !== -1 && updated[index].present !== record.present) {
+              updated[index] = { ...updated[index], present: record.present };
+              hasChanges = true;
+            }
+          });
+          
+          return hasChanges ? updated : prev;
+        });
+        
+        // Clear saving indicators
+        setSavingById(prev => {
+          const updated = { ...prev };
+          let hasChanges = false;
+          
+          records.forEach((record: { individualId: number; present: boolean }) => {
+            if (updated[record.individualId] === true) {
+              updated[record.individualId] = false;
+              hasChanges = true;
+            }
+          });
+          
+          return hasChanges ? updated : prev;
+        });
       });
       
-      console.log('🔌 [WEBSOCKET] Updated attendance state immediately:', {
-        recordCount: records.length,
-        updatedPresentById: records.reduce((acc, record) => ({ ...acc, [record.individualId]: record.present }), {})
-      });
-    }, []),
+      console.log('🔌 [WEBSOCKET] Applied all attendance updates in batch');
+      
+      // Invalidate cache when we receive WebSocket updates to ensure fresh data on refresh
+      const cachedData = localStorage.getItem('attendance_cached_data');
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          if (parsed.gatheringId === selectedGathering?.id && parsed.date === selectedDate) {
+            // Update the cache with the new attendance state
+            const updatedCache = {
+              ...parsed,
+              attendanceList: attendanceListRef.current.map(person => ({
+                ...person,
+                present: presentByIdRef.current[person.id] ?? person.present
+              })),
+              timestamp: Date.now()
+            };
+            localStorage.setItem('attendance_cached_data', JSON.stringify(updatedCache));
+            console.log('💾 Updated cache with WebSocket changes');
+          }
+        } catch (err) {
+          console.error('Failed to update cache:', err);
+        }
+      }
+    }, [startTransition]),
     onVisitorChange: useCallback((visitors: Visitor[]) => {
       console.log('🔌 [WEBSOCKET] Received visitor update:', visitors);
       
@@ -961,24 +1079,20 @@ const AttendancePage: React.FC = () => {
     }, [])
   });
 
-  // POLLING DISABLED: Focusing on WebSocket-only implementation for debugging
+  // Polling is permanently disabled in favor of WebSocket real-time updates
   useEffect(() => {
-    // Always clear any existing polling interval since we're debugging WebSocket only
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
-
-    console.log('🔌 [POLLING] DISABLED - Using WebSocket only for debugging');
     
-    // Cleanup function
     return () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
     };
-  }, [selectedGathering, selectedDate]);
+  }, []);
 
   // Clean up old modification timestamps (older than 60 seconds)
   useEffect(() => {
@@ -1440,17 +1554,17 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // Online mode - save via API
+    // Online mode - send via configured method
     try {
-      await attendanceAPI.record(selectedGathering.id, selectedDate, {
-        attendanceRecords: [{ individualId: visitorId, present: newPresent }],
-        visitors: []
-      });
+      await sendAttendanceChange(selectedGathering.id, selectedDate, [
+        { individualId: visitorId, present: newPresent }
+      ]);
+      
       // Also update attendanceList present
       setAttendanceList(prev => prev.map(p => p.id === visitorId ? { ...p, present: newPresent } : p));
     } catch (err) {
       console.error('Failed to save visitor attendance change:', err);
-      setError('Failed to save change');
+      setError(err instanceof Error ? err.message : 'Failed to save change');
       // Revert on error
       setVisitorAttendance(prev => ({
         ...prev,
@@ -1512,17 +1626,17 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // Online mode - save via API
+    // Online mode - send via configured method
     try {
-      await attendanceAPI.record(selectedGathering.id, selectedDate, {
-        attendanceRecords: familyVisitorIds.map(id => ({ individualId: id, present: shouldCheckAll })),
-        visitors: []
-      });
+      const familyAttendanceRecords = familyVisitorIds.map(id => ({ individualId: id, present: shouldCheckAll }));
+      
+      await sendAttendanceChange(selectedGathering.id, selectedDate, familyAttendanceRecords);
+      
       // Reflect in attendanceList
       setAttendanceList(prev => prev.map(p => familyVisitorIds.includes(p.id) ? { ...p, present: shouldCheckAll } : p));
     } catch (err) {
       console.error('Failed to save visitor family attendance change:', err);
-      setError('Failed to save family changes');
+      setError(err instanceof Error ? err.message : 'Failed to save family changes');
       // Revert on error
       setVisitorAttendance(prev => {
         const updated = { ...prev };
@@ -1684,15 +1798,11 @@ const AttendancePage: React.FC = () => {
         console.log(`🔄 Syncing ${changes.length} changes for gathering ${gatheringId} on ${date}:`, changes);
         
         try {
-          await attendanceAPI.record(parseInt(gatheringId), date, {
-            attendanceRecords: changes,
-            visitors: []
-          });
-          
+          await sendAttendanceChange(parseInt(gatheringId), date, changes);
           console.log(`✅ Successfully synced ${changes.length} changes for gathering ${gatheringId} on ${date}`);
-        } catch (apiError) {
-          console.error(`❌ Failed to sync changes for gathering ${gatheringId} on ${date}:`, apiError);
-          throw apiError; // Re-throw to trigger the outer catch block
+        } catch (syncError) {
+          console.error(`❌ Failed to sync changes for gathering ${gatheringId} on ${date}:`, syncError);
+          throw syncError; // Re-throw to trigger the outer catch block
         }
       }
 
@@ -2214,34 +2324,11 @@ const AttendancePage: React.FC = () => {
               <div className="flex items-center space-x-2">
                 {/* Connection Status Indicator */}
                 <div
-                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                    isWebSocketConnected 
-                      ? 'bg-green-100 text-green-800 border border-green-200' 
-                      : 'bg-red-100 text-red-800 border border-red-200'
-                  }`}
-                  title={
-                    isWebSocketConnected 
-                      ? pendingChanges.length > 0 
-                        ? `Connected - Syncing ${pendingChanges.length} offline changes...`
-                        : 'Connected - Real-time updates active'
-                      : pendingChanges.length > 0
-                        ? `Offline - ${pendingChanges.length} changes saved locally`
-                        : 'Offline - Changes will be saved locally'
-                  }
+                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getConnectionStatusStyle().containerClass}`}
+                  title={getConnectionStatusStyle().tooltip}
                 >
-                  <div className={`w-2 h-2 rounded-full mr-1.5 ${
-                    isWebSocketConnected ? 'bg-green-500' : 'bg-red-500'
-                  }`}></div>
-                  {isWebSocketConnected 
-                    ? pendingChanges.length > 0 
-                      ? isSyncing 
-                        ? `Syncing ${pendingChanges.length}...`
-                        : `${pendingChanges.length} Pending`
-                      : 'Connected'
-                    : pendingChanges.length > 0
-                      ? `${pendingChanges.length} Pending`
-                      : 'Offline'
-                  }
+                  <div className={`w-2 h-2 rounded-full mr-1.5 ${getConnectionStatusStyle().dotClass}`}></div>
+                  {getConnectionStatusStyle().label}
                 </div>
 
                 {/* Active Users Indicator */}

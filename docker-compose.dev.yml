@@ -87,6 +87,7 @@ services:
       - PORT=3000
       - FAST_REFRESH=false
       - VITE_HMR=false
+      - VITE_USE_WEBSOCKETS=true
     depends_on:
       - server
     networks:

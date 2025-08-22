@@ -140,6 +140,11 @@ class WebSocketService {
       this.handleLeaveAttendance(socket, data);
     });
 
+    // Handle recording attendance via WebSocket
+    socket.on('record_attendance', (data) => {
+      this.handleRecordAttendance(socket, data);
+    });
+
     // Handle ping for connection health
     socket.on('ping', () => {
       socket.emit('pong');
@@ -223,6 +228,147 @@ class WebSocketService {
         data
       });
       socket.emit('error', { message: 'Failed to join attendance room' });
+    }
+  }
+
+  /**
+   * Handle recording attendance via WebSocket
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Attendance data {gatheringId, date, records}
+   */
+  async handleRecordAttendance(socket, data) {
+    let gatheringId, date, records;
+    
+    try {
+      ({ gatheringId, date, records } = data);
+      
+      if (!gatheringId || !date || !records || !Array.isArray(records)) {
+        socket.emit('attendance_update_error', { message: 'Invalid attendance data' });
+        return;
+      }
+
+      logger.info('WebSocket attendance update received', {
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        recordsCount: records.length
+      });
+
+      // Import the attendance recording logic
+      const Database = require('../config/database');
+      const { columnExists } = require('../utils/databaseSchema');
+
+      await Database.transaction(async (conn) => {
+        const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
+        
+        // Get or create attendance session
+        let sessionResult;
+        if (hasSessionsChurchId) {
+          sessionResult = await conn.query(
+            'SELECT * FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+            [gatheringId, date, socket.churchId]
+          );
+        } else {
+          sessionResult = await conn.query(
+            'SELECT * FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+            [gatheringId, date]
+          );
+        }
+
+        let sessionId;
+        if (sessionResult.length === 0) {
+          // Create session
+          const insertSessionQuery = hasSessionsChurchId
+            ? 'INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id) VALUES (?, ?, ?, ?)'
+            : 'INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by) VALUES (?, ?, ?)';
+          const insertSessionParams = hasSessionsChurchId
+            ? [gatheringId, date, socket.userId, socket.churchId]
+            : [gatheringId, date, socket.userId];
+          
+          const insertResult = await conn.query(insertSessionQuery, insertSessionParams);
+          sessionId = insertResult.insertId;
+        } else {
+          sessionId = sessionResult[0].id;
+        }
+
+        // Check if attendance_records has church_id column
+        const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
+        
+        // Record attendance
+        for (const record of records) {
+          const { individualId, present } = record;
+          
+          // Use REPLACE INTO to handle concurrent updates more reliably, same as REST API
+          if (hasAttendanceRecordsChurchId) {
+            await conn.query(
+              'REPLACE INTO attendance_records (session_id, individual_id, present, church_id) VALUES (?, ?, ?, ?)',
+              [sessionId, individualId, present, socket.churchId]
+            );
+          } else {
+            await conn.query(
+              'REPLACE INTO attendance_records (session_id, individual_id, present) VALUES (?, ?, ?)',
+              [sessionId, individualId, present]
+            );
+          }
+          
+          // Update last_attendance_date if person is marked present (same as REST API)
+          if (present) {
+            const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
+            if (hasIndividualsChurchId) {
+              await conn.query(
+                'UPDATE individuals SET last_attendance_date = ? WHERE id = ? AND church_id = ?',
+                [date, individualId, socket.churchId]
+              );
+            } else {
+              await conn.query(
+                'UPDATE individuals SET last_attendance_date = ? WHERE id = ?',
+                [date, individualId]
+              );
+            }
+          }
+        }
+      });
+
+      // Broadcast to all clients in the room (including sender for confirmation)
+      const roomName = this.getAttendanceRoomName(gatheringId, date, socket.churchId);
+      this.io.to(roomName).emit('attendance_update', {
+        type: 'attendance_records',
+        gatheringId,
+        date,
+        records,
+        updatedBy: socket.userId,
+        updatedAt: new Date().toISOString(),
+        timestamp: new Date().toISOString()
+      });
+
+      // Send success confirmation to sender
+      socket.emit('attendance_update_success');
+
+      logger.info('WebSocket attendance update processed successfully', {
+        userId: socket.userId,
+        gatheringId,
+        date,
+        recordsCount: records.length
+      });
+
+    } catch (error) {
+      logger.error('Error processing WebSocket attendance update', {
+        error: error.message,
+        stack: error.stack,
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        data
+      });
+      
+      // Send detailed error in development, generic error in production
+      const errorMessage = process.env.NODE_ENV === 'development' 
+        ? `Failed to process attendance update: ${error.message}`
+        : 'Failed to process attendance update';
+        
+      socket.emit('attendance_update_error', { message: errorMessage });
     }
   }
 
