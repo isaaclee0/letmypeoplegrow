@@ -192,17 +192,27 @@ class WebSocketService {
         roomSize: this.attendanceRooms.get(roomName).size
       });
 
+      // Get current users in the room (including this user)
+      const roomUsers = this.getRoomUsers(roomName);
+
       socket.emit('joined_attendance', {
         roomName,
         gatheringId,
         date,
-        message: 'Successfully joined attendance room'
+        message: 'Successfully joined attendance room',
+        activeUsers: roomUsers
       });
 
       // Notify others in the room about new user
       socket.to(roomName).emit('user_joined', {
         userId: socket.userId,
         userEmail: socket.userEmail,
+        timestamp: new Date().toISOString()
+      });
+
+      // Send updated user list to all users in the room
+      this.io.to(roomName).emit('room_users_updated', {
+        activeUsers: roomUsers,
         timestamp: new Date().toISOString()
       });
 
@@ -249,6 +259,13 @@ class WebSocketService {
         gatheringId,
         date,
         message: 'Successfully left attendance room'
+      });
+
+      // Send updated user list to remaining users in the room
+      const roomUsers = this.getRoomUsers(roomName);
+      socket.to(roomName).emit('room_users_updated', {
+        activeUsers: roomUsers,
+        timestamp: new Date().toISOString()
       });
 
     } catch (error) {
@@ -314,6 +331,46 @@ class WebSocketService {
    */
   getAttendanceRoomName(gatheringId, date, churchId) {
     return `attendance:${churchId}:${gatheringId}:${date}`;
+  }
+
+  /**
+   * Get list of users currently in a room
+   * @param {string} roomName - Room name
+   * @returns {Array} Array of user objects with id, email, firstName, lastName
+   */
+  getRoomUsers(roomName) {
+    if (!this.io || !this.attendanceRooms.has(roomName)) {
+      return [];
+    }
+
+    const socketIds = this.attendanceRooms.get(roomName);
+    const users = [];
+    const seenUsers = new Set(); // Prevent duplicate users with multiple connections
+
+    socketIds.forEach(socketId => {
+      const socket = this.io.sockets.sockets.get(socketId);
+      if (socket && socket.userId && !seenUsers.has(socket.userId)) {
+        seenUsers.add(socket.userId);
+        
+        // Parse name from email or use fallback
+        const email = socket.userEmail || '';
+        const emailName = email.split('@')[0] || '';
+        const nameParts = emailName.split(/[._-]/);
+        
+        const firstName = nameParts[0] ? nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1) : 'U';
+        const lastName = nameParts[1] ? nameParts[1].charAt(0).toUpperCase() + nameParts[1].slice(1) : '';
+
+        users.push({
+          id: socket.userId,
+          email: socket.userEmail,
+          firstName,
+          lastName,
+          role: socket.userRole
+        });
+      }
+    });
+
+    return users;
   }
 
   /**

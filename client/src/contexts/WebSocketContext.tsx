@@ -30,16 +30,31 @@ export interface UserActivity {
   timestamp: string;
 }
 
+export interface ActiveUser {
+  id: number;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+}
+
+export interface RoomUsersUpdate {
+  activeUsers: ActiveUser[];
+  timestamp: string;
+}
+
 // WebSocket context type
 interface WebSocketContextType {
   socket: Socket | null;
   isConnected: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  activeUsers: ActiveUser[];
   joinAttendanceRoom: (gatheringId: number, date: string) => void;
   leaveAttendanceRoom: (gatheringId: number, date: string) => void;
   onAttendanceUpdate: (callback: (update: AttendanceUpdate) => void) => () => void;
   onVisitorUpdate: (callback: (update: VisitorUpdate) => void) => () => void;
   onUserActivity: (callback: (activity: UserActivity) => void) => () => void;
+  onRoomUsersUpdate: (callback: (update: RoomUsersUpdate) => void) => () => void;
   getCurrentRoom: () => string | null;
   getConnectionStats: () => { connected: boolean; room: string | null; socketId: string | null };
 }
@@ -58,6 +73,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
+  const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
   
   // Flag to prevent multiple initialization attempts
   const initializingRef = useRef(false);
@@ -66,6 +82,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const attendanceCallbacks = useRef<Set<(update: AttendanceUpdate) => void>>(new Set());
   const visitorCallbacks = useRef<Set<(update: VisitorUpdate) => void>>(new Set());
   const userActivityCallbacks = useRef<Set<(activity: UserActivity) => void>>(new Set());
+  const roomUsersCallbacks = useRef<Set<(update: RoomUsersUpdate) => void>>(new Set());
   
   // Connection management with improved duplicate prevention
   useEffect(() => {
@@ -78,6 +95,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         setIsConnected(false);
         setConnectionStatus('disconnected');
         setCurrentRoom(null);
+        setActiveUsers([]);
       }
       return;
     }
@@ -209,6 +227,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       setIsConnected(false);
       setConnectionStatus('disconnected');
       setCurrentRoom(null);
+      setActiveUsers([]);
     });
 
     newSocket.on('connect_error', (error) => {
@@ -269,11 +288,31 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     newSocket.on('joined_attendance', (data) => {
       console.log('✅ Joined attendance room:', data);
       setCurrentRoom(data.roomName);
+      
+      // Set initial active users from server
+      if (data.activeUsers) {
+        console.log('👥 Initial active users:', data.activeUsers);
+        setActiveUsers(data.activeUsers);
+      }
     });
 
     newSocket.on('left_attendance', (data) => {
       console.log('🚪 Left attendance room:', data);
       setCurrentRoom(null);
+      setActiveUsers([]);
+    });
+
+    // Handle room users updates
+    newSocket.on('room_users_updated', (update: RoomUsersUpdate) => {
+      console.log('👥 Room users updated:', update);
+      setActiveUsers(update.activeUsers);
+      roomUsersCallbacks.current.forEach(callback => {
+        try {
+          callback(update);
+        } catch (error) {
+          console.error('Error in room users callback:', error);
+        }
+      });
     });
 
     newSocket.on('error', (error) => {
@@ -351,6 +390,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   };
 
+  // Subscribe to room users updates
+  const onRoomUsersUpdate = (callback: (update: RoomUsersUpdate) => void): (() => void) => {
+    roomUsersCallbacks.current.add(callback);
+    
+    // Return unsubscribe function
+    return () => {
+      roomUsersCallbacks.current.delete(callback);
+    };
+  };
+
   // Get current room
   const getCurrentRoom = (): string | null => {
     return currentRoom;
@@ -369,11 +418,13 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     socket,
     isConnected,
     connectionStatus,
+    activeUsers,
     joinAttendanceRoom,
     leaveAttendanceRoom,
     onAttendanceUpdate,
     onVisitorUpdate,
     onUserActivity,
+    onRoomUsersUpdate,
     getCurrentRoom,
     getConnectionStats
   };

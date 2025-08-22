@@ -1,10 +1,10 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-08-22T00:05:00.000Z (WebSocket fixes + cache refresh)
-// App Version: 0.9.9
+// Generated on 2025-08-22T04:20:08.672Z
+// App Version: 1.0.0
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v0.9.9-websocket-fixes-' + Date.now();
-const APP_VERSION = '0.9.9';
+const CACHE_NAME = 'let-my-people-grow-v1.0.0-' + Date.now();
+const APP_VERSION = '1.0.0';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -33,27 +33,28 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Fetch event - serve from cache if available
+// Fetch event - network first for app updates, cache first for static assets
 self.addEventListener('fetch', (event) => {
   // Skip API requests and other non-GET requests
   if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
     return;
   }
 
-  // For JavaScript and CSS files, always check network first for updates
-  const url = event.request.url;
-  const isStaticAsset = url.includes('.js') || url.includes('.css') || url.includes('/static/');
-  
-  if (isStaticAsset) {
-    // Network-first strategy for static assets to ensure updates
+  // Network-first strategy for navigation requests (app updates)
+  if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
+          // Cache the successful response
           if (response && response.status === 200) {
             const responseToCache = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
+            caches.open(CACHE_NAME)
+              .then((cache) => {
+                cache.put(event.request, responseToCache);
+              })
+              .catch((error) => {
+                console.warn('Failed to cache navigation response:', error);
+              });
           }
           return response;
         })
@@ -65,7 +66,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first strategy for other resources
+  // Cache-first strategy for static assets
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
@@ -127,18 +128,8 @@ self.addEventListener('activate', (event) => {
 // Listen for messages from the main thread
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
-    console.log('Received SKIP_WAITING message - clearing all caches and forcing update');
-    // Clear all caches before skipping waiting
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          console.log('Force deleting cache:', cacheName);
-          return caches.delete(cacheName);
-        })
-      );
-    }).then(() => {
-      self.skipWaiting();
-    });
+    console.log('Received SKIP_WAITING message');
+    self.skipWaiting();
   }
 });
 

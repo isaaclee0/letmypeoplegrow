@@ -36,10 +36,24 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
         // Store the waiting worker for later use
         if (registration.waiting) {
           setWaitingWorker(registration.waiting);
+          
+          // Automatically apply the update after a short delay
+          setTimeout(() => {
+            console.log('Auto-applying PWA update...');
+            if (registration.waiting) {
+              // Send message to service worker to skip waiting and activate
+              registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+              
+              // Add a small delay to let the service worker process the message
+              setTimeout(() => {
+                console.log('Reloading page after service worker update');
+                window.location.reload();
+              }, 500);
+            }
+          }, 2000); // 2 second delay to show the banner
         }
         
-        // Don't automatically update - let user choose via notification
-        console.log('PWA update available - showing notification');
+        console.log('PWA update available - auto-applying in 2 seconds');
       },
       onSuccess: (registration) => {
         console.log('PWA content is cached for offline use.');

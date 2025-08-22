@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, visitorConfigAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
+import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
 import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket';
@@ -198,7 +199,7 @@ const AttendancePage: React.FC = () => {
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   
   // WebSocket integration
-  const { isConnected: isWebSocketConnected } = useWebSocket();
+  const { isConnected: isWebSocketConnected, activeUsers } = useWebSocket();
   const [useWebSocketForUpdates, setUseWebSocketForUpdates] = useState(true); // Forced to true for debugging
   // lastWebSocketUpdate removed - no longer needed for UI display
 
@@ -800,8 +801,8 @@ const AttendancePage: React.FC = () => {
       return fallbackPresent;
     }).length;
     
-    // If 2 or more are present, uncheck all. Otherwise, check all
-    const shouldCheckAll = presentCount < 2;
+    // If any are present, uncheck all. Otherwise, check all
+    const shouldCheckAll = presentCount === 0;
     console.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
     console.log('Current presentById state:', presentById);
     console.log('=== END TOGGLE ALL FAMILY DEBUG ===');
@@ -2244,6 +2245,9 @@ const AttendancePage: React.FC = () => {
                       : 'Offline'
                   }
                 </div>
+
+                {/* Active Users Indicator */}
+                <ActiveUsersIndicator activeUsers={activeUsers} />
               </div>
             </div>
 

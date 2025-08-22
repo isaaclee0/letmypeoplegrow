@@ -59,7 +59,7 @@ const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, 
     firstName,
     lastName,
     role,
-    invitationLink,
+    loginLink,
     invitedBy: {
       firstName: invitedBy.first_name || invitedBy.firstName,
       lastName: invitedBy.last_name || invitedBy.lastName

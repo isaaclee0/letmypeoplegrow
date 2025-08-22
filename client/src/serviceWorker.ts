@@ -38,13 +38,10 @@ export function register(config?: Config) {
 }
 
 function registerValidSW(swUrl: string, config?: Config) {
-  // iOS Safari specific options
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const swOptions = isIOS ? { 
+  // Force cache bypass for all platforms
+  const swOptions = { 
     updateViaCache: 'none',
     scope: '/'
-  } : { 
-    updateViaCache: 'none' 
   };
 
   navigator.serviceWorker
@@ -93,8 +90,8 @@ function registerValidSW(swUrl: string, config?: Config) {
         };
       };
       
-      // More aggressive update checking for iOS
-      const updateInterval = isIOS ? 30000 : 60000; // 30 seconds for iOS, 1 minute for others
+      // More aggressive update checking for all platforms
+      const updateInterval = 15000; // Check every 15 seconds
       setInterval(() => {
         console.log('Checking for service worker updates...');
         registration.update();
