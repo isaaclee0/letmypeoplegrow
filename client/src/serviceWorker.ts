@@ -94,19 +94,29 @@ function registerValidSW(swUrl: string, config?: Config) {
         };
       };
       
-      // More aggressive update checking for all platforms
-      const updateInterval = 15000; // Check every 15 seconds
+      // Reasonable update checking - check every 4 hours
+      const updateInterval = 4 * 60 * 60 * 1000; // Check every 4 hours (14,400,000ms)
+      
+      console.log(`Service worker update checks scheduled every ${updateInterval / (60 * 60 * 1000)} hours`);
+      
       setInterval(() => {
-        console.log('Checking for service worker updates...');
+        console.log('Checking for service worker updates... (scheduled check)');
         registration.update();
       }, updateInterval);
       
       // Force update check on page visibility change (iOS specific)
+      // Reduced frequency to avoid interfering with WebSocket real-time updates
       if (isIOS) {
+        let lastVisibilityCheck = 0;
         document.addEventListener('visibilitychange', () => {
           if (!document.hidden) {
-            console.log('Page became visible, checking for updates...');
-            registration.update();
+            const now = Date.now();
+            // Only check for updates if it's been more than 30 seconds since last check
+            if (now - lastVisibilityCheck > 30000) {
+              console.log('Page became visible, checking for updates...');
+              registration.update();
+              lastVisibilityCheck = now;
+            }
           }
         });
       }

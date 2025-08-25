@@ -94,8 +94,13 @@ const UsersPage: React.FC = () => {
     role: 'attendance_taker' as 'admin' | 'coordinator' | 'attendance_taker'
   });
 
-  // Confirmation modal states (deactivate only)
+  // Validation states
+  const [validationErrors, setValidationErrors] = useState<{[key: string]: string}>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Confirmation modal states
   const [showDeactivateModal, setShowDeactivateModal] = useState(false);
+  const [showInviteConfirmation, setShowInviteConfirmation] = useState(false);
   const [cancelConfirmation, setCancelConfirmation] = useState<{
     invitationId: number | null;
   }>({ invitationId: null });
@@ -135,6 +140,10 @@ const UsersPage: React.FC = () => {
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to load data';
       setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
+      
       console.error('Failed to load data:', {
         error: errorMessage,
         response: err.response?.data,
@@ -145,26 +154,84 @@ const UsersPage: React.FC = () => {
     }
   };
 
+  // Real-time validation function
+  const validateInviteForm = () => {
+    const errors: {[key: string]: string} = {};
+    
+    // Validate first name
+    if (!inviteForm.firstName.trim()) {
+      errors.firstName = 'First name is required';
+    } else if (inviteForm.firstName.trim().length < 2) {
+      errors.firstName = 'First name must be at least 2 characters';
+    }
+    
+    // Validate last name
+    if (!inviteForm.lastName.trim()) {
+      errors.lastName = 'Last name is required';
+    } else if (inviteForm.lastName.trim().length < 2) {
+      errors.lastName = 'Last name must be at least 2 characters';
+    }
+    
+    // Validate email
+    if (!inviteForm.email.trim()) {
+      errors.email = 'Email address is required';
+    } else {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(inviteForm.email.trim())) {
+        errors.email = 'Please enter a valid email address';
+      }
+    }
+    
+    // Validate mobile number if provided
+    if (inviteForm.mobileNumber.trim()) {
+      const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
+      if (!phoneRegex.test(inviteForm.mobileNumber.replace(/\s/g, ''))) {
+        errors.mobileNumber = 'Please enter a valid mobile number';
+      }
+    }
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSendInvitation = async () => {
     try {
       setError('');
+      setValidationErrors({});
       
       // Validate form
-      if (!inviteForm.firstName || !inviteForm.lastName) {
-        const errorMsg = 'First name and last name are required';
-        setError(errorMsg);
+      if (!validateInviteForm()) {
         return;
       }
 
-      // Require at least one contact method
-      if (!inviteForm.email && !inviteForm.mobileNumber) {
-        const errorMsg = 'Provide at least an email or a mobile number';
-        setError(errorMsg);
-        return;
-      }
+      // Show confirmation modal
+      setShowInviteConfirmation(true);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      const serverErrors = err.response?.data?.errors;
+      const errorMessage = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors.length ? serverErrors[0]?.msg : 'Failed to send invitation');
+      setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
+      
+      console.error('Failed to send invitation:', {
+        error: errorMessage,
+        formData: inviteForm,
+        response: err.response?.data,
+        status: err.response?.status,
+        statusText: err.response?.statusText
+      });
+    }
+  };
 
-      // Choose primary contact method if both provided
-      const primaryContactMethod = inviteForm.email ? 'email' : 'sms';
+  const handleConfirmInvitation = async () => {
+    try {
+      setIsSubmitting(true);
+      setShowInviteConfirmation(false);
+      
+      // Set primary contact method to email
+      const primaryContactMethod = 'email';
 
       await fetch('/api/invitations/send', {
         method: 'POST',
@@ -173,7 +240,7 @@ const UsersPage: React.FC = () => {
         body: JSON.stringify({ ...inviteForm, primaryContactMethod })
       });
       
-      setSuccess('Invitation sent successfully');
+      setSuccess('User invited successfully! They can now log in using their email or mobile number with a one-time code.');
       setShowInviteModal(false);
       setInviteForm({
         firstName: '',
@@ -185,12 +252,23 @@ const UsersPage: React.FC = () => {
         gatheringIds: []
       });
       
-      // No pending invitations reload
+      // Reload data to show the new user
+      loadData();
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setSuccess(''), 5000);
+      
+      setIsSubmitting(false);
       
     } catch (err: any) {
+      setIsSubmitting(false);
       const serverErrors = err.response?.data?.errors;
       const errorMessage = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors.length ? serverErrors[0]?.msg : 'Failed to send invitation');
       setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
+      
       console.error('Failed to send invitation:', {
         error: errorMessage,
         formData: inviteForm,
@@ -211,7 +289,11 @@ const UsersPage: React.FC = () => {
       setAvailableGatherings(response.data.availableGatherings || []);
       setShowUserDetails(true);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load user details');
+      const errorMessage = err.response?.data?.error || 'Failed to load user details';
+      setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
     }
   };
 
@@ -226,7 +308,11 @@ const UsersPage: React.FC = () => {
       });
       setShowAssignGatherings(true);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to load user assignments');
+      const errorMessage = err.response?.data?.error || 'Failed to load user assignments';
+      setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
     }
   };
 
@@ -238,8 +324,15 @@ const UsersPage: React.FC = () => {
       setSuccess('Gathering assignments updated successfully');
       setShowAssignGatherings(false);
       loadData();
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to update assignments');
+      const errorMessage = err.response?.data?.error || 'Failed to update assignments';
+      setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
     }
   };
 
@@ -255,8 +348,15 @@ const UsersPage: React.FC = () => {
       await usersAPI.delete(deactivateConfirmation.userId);
       setSuccess('User deactivated successfully');
       loadData();
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to deactivate user');
+      const errorMessage = err.response?.data?.error || 'Failed to deactivate user';
+      setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
     }
   };
 
@@ -330,9 +430,16 @@ const UsersPage: React.FC = () => {
       });
       loadData();
       
+      // Clear success message after 5 seconds
+      setTimeout(() => setSuccess(''), 5000);
+      
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to update user';
       setError(errorMessage);
+      
+      // Clear error message after 8 seconds
+      setTimeout(() => setError(''), 8000);
+      
       console.error('Failed to update user:', {
         error: errorMessage,
         formData: editForm,
@@ -596,42 +703,104 @@ const UsersPage: React.FC = () => {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">First Name</label>
+                    <label className="block text-sm font-medium text-gray-700">
+                      First Name
+                      <span className="text-red-500 ml-1">*</span>
+                    </label>
                     <input
                       type="text"
                       value={inviteForm.firstName}
-                      onChange={(e) => setInviteForm({ ...inviteForm, firstName: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      onChange={(e) => {
+                        setInviteForm({ ...inviteForm, firstName: e.target.value });
+                        // Clear validation error when user starts typing
+                        if (validationErrors.firstName) {
+                          setValidationErrors({ ...validationErrors, firstName: '' });
+                        }
+                      }}
+                      placeholder="Enter first name"
+                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
+                        validationErrors.firstName ? 'border-red-300' : 'border-gray-300'
+                      }`}
                     />
+                    {validationErrors.firstName && (
+                      <p className="mt-1 text-sm text-red-600">{validationErrors.firstName}</p>
+                    )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Last Name
+                      <span className="text-red-500 ml-1">*</span>
+                    </label>
                     <input
                       type="text"
                       value={inviteForm.lastName}
-                      onChange={(e) => setInviteForm({ ...inviteForm, lastName: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      onChange={(e) => {
+                        setInviteForm({ ...inviteForm, lastName: e.target.value });
+                        // Clear validation error when user starts typing
+                        if (validationErrors.lastName) {
+                          setValidationErrors({ ...validationErrors, lastName: '' });
+                        }
+                      }}
+                      placeholder="Enter last name"
+                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
+                        validationErrors.lastName ? 'border-red-300' : 'border-gray-300'
+                      }`}
                     />
+                    {validationErrors.lastName && (
+                      <p className="mt-1 text-sm text-red-600">{validationErrors.lastName}</p>
+                    )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Email (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Email Address
+                    <span className="text-red-500 ml-1">*</span>
+                  </label>
                   <input
                     type="email"
                     value={inviteForm.email}
-                    onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    onChange={(e) => {
+                      setInviteForm({ ...inviteForm, email: e.target.value });
+                      // Clear validation error when user starts typing
+                      if (validationErrors.email) {
+                        setValidationErrors({ ...validationErrors, email: '' });
+                      }
+                    }}
+                    placeholder="Enter email address"
+                    className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
+                      validationErrors.email ? 'border-red-300' : 'border-gray-300'
+                    }`}
                   />
+                  {validationErrors.email && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.email}</p>
+                  )}
+                  <p className="mt-1 text-sm text-gray-500">Required for login and notifications</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Mobile Number (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Mobile Number
+                    <span className="text-gray-400 ml-1">(optional)</span>
+                  </label>
                   <input
                     type="tel"
                     value={inviteForm.mobileNumber}
-                    onChange={(e) => setInviteForm({ ...inviteForm, mobileNumber: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    onChange={(e) => {
+                      setInviteForm({ ...inviteForm, mobileNumber: e.target.value });
+                      // Clear validation error when user starts typing
+                      if (validationErrors.mobileNumber) {
+                        setValidationErrors({ ...validationErrors, mobileNumber: '' });
+                      }
+                    }}
+                    placeholder="Enter mobile number"
+                    className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
+                      validationErrors.mobileNumber ? 'border-red-300' : 'border-gray-300'
+                    }`}
                   />
+                  {validationErrors.mobileNumber && (
+                    <p className="mt-1 text-sm text-red-600">{validationErrors.mobileNumber}</p>
+                  )}
+                  <p className="mt-1 text-sm text-gray-500">Optional backup for login and SMS notifications</p>
                 </div>
 
                 <div>
@@ -688,9 +857,21 @@ const UsersPage: React.FC = () => {
                 </button>
                 <button
                   onClick={handleSendInvitation}
-                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
+                  disabled={isSubmitting}
+                  className={`px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${
+                    isSubmitting 
+                      ? 'bg-gray-400 cursor-not-allowed' 
+                      : 'bg-primary-600 hover:bg-primary-700'
+                  }`}
                 >
-                  Send Invitation
+                  {isSubmitting ? (
+                    <div className="flex items-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Sending...
+                    </div>
+                  ) : (
+                    'Send Invitation'
+                  )}
                 </button>
               </div>
             </div>
@@ -968,6 +1149,74 @@ const UsersPage: React.FC = () => {
       ) : null}
 
       {/* Cancel Invitation Confirmation Modal removed */}
+
+      {/* Invite User Confirmation Modal */}
+      {showInviteConfirmation ? createPortal(
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Invitation
+                </h3>
+                <button
+                  onClick={() => setShowInviteConfirmation(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-blue-100 rounded-full">
+                <EnvelopeIcon className="h-6 w-6 text-blue-600" />
+              </div>
+              
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500 mb-2">
+                  You are about to invite <strong>{inviteForm.firstName} {inviteForm.lastName}</strong> to join your organization.
+                </p>
+                <p className="text-sm text-gray-500">
+                  They will receive an invitation email and can log in using their email address with a one-time code.
+                </p>
+              </div>
+              
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <h4 className="text-sm font-medium text-gray-700 mb-2">Invitation Details:</h4>
+                <div className="space-y-1 text-sm text-gray-600">
+                  <div><strong>Name:</strong> {inviteForm.firstName} {inviteForm.lastName}</div>
+                  <div><strong>Email:</strong> {inviteForm.email}</div>
+                  {inviteForm.mobileNumber && <div><strong>Mobile:</strong> {inviteForm.mobileNumber}</div>}
+                  <div><strong>Role:</strong> {inviteForm.role.replace('_', ' ')}</div>
+                  {inviteForm.gatheringIds.length > 0 && (
+                    <div><strong>Gatherings:</strong> {inviteForm.gatheringIds.length} assigned</div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowInviteConfirmation(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmInvitation}
+                  disabled={isSubmitting}
+                  className={`flex-1 px-4 py-2 text-sm font-medium text-white border border-transparent rounded-md ${
+                    isSubmitting 
+                      ? 'bg-gray-400 cursor-not-allowed' 
+                      : 'bg-primary-600 hover:bg-primary-700'
+                  }`}
+                >
+                  {isSubmitting ? 'Sending...' : 'Send Invitation'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
 
       {/* Deactivate User Confirmation Modal */}
       {showDeactivateModal ? createPortal(

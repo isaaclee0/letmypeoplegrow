@@ -17,6 +17,7 @@ import NotificationRulesPage from './pages/NotificationRulesPage';
 import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
 import ProfilePage from './pages/ProfilePage';
+import WebSocketTestPage from './pages/WebSocketTestPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -132,6 +133,14 @@ function App() {
                   element={<TokenClearPage />}
                 />
                 <Route
+                  path="/websocket-test"
+                  element={
+                    <ProtectedRoute>
+                      <WebSocketTestPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="/"
                   element={<Navigate to="/login" replace />}
                 />
@@ -162,7 +171,8 @@ function App() {
                   />
                   {/* Advanced Migrations removed */}
                   <Route path="settings" element={<SettingsPage />} />
-                   <Route path="profile" element={<ProfilePage />} />
+                  <Route path="profile" element={<ProfilePage />} />
+                  <Route path="websocket-test" element={<WebSocketTestPage />} />
                   <Route path="notification-rules" element={
                     <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
                       <NotificationRulesPage />

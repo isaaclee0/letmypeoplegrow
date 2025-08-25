@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS user_invitations (
   role ENUM('admin', 'coordinator', 'attendance_taker') NOT NULL,
   first_name VARCHAR(100),
   last_name VARCHAR(100),
-  invited_by INT NOT NULL,
+  invited_by INT,
   invitation_token VARCHAR(255) NOT NULL,
   gathering_assignments JSON,
   expires_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

@@ -52,6 +52,7 @@ interface WebSocketContextType {
   joinAttendanceRoom: (gatheringId: number, date: string) => void;
   leaveAttendanceRoom: (gatheringId: number, date: string) => void;
   sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
+  loadAttendanceData: (gatheringId: number, date: string) => Promise<{ attendanceList: any[]; visitors: any[] }>;
   onAttendanceUpdate: (callback: (update: AttendanceUpdate) => void) => () => void;
   onVisitorUpdate: (callback: (update: VisitorUpdate) => void) => () => void;
   onUserActivity: (callback: (activity: UserActivity) => void) => () => void;
@@ -86,10 +87,13 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const userActivityCallbacks = useRef<Set<(activity: UserActivity) => void>>(new Set());
   const roomUsersCallbacks = useRef<Set<(update: RoomUsersUpdate) => void>>(new Set());
   
-  // Connection management with improved duplicate prevention
+  // Connection management with stable user reference
+  const userRef = useRef(user);
+  userRef.current = user;
+
   useEffect(() => {
     // Only connect if user is authenticated and has a valid token
-    if (!user) {
+    if (!userRef.current) {
       if (socket) {
         console.log('🔌 Disconnecting WebSocket (user logged out)');
         socket.disconnect();
@@ -108,6 +112,10 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       console.log(`🔌 [Tab ${tabId.current}] Cleaning up existing socket before creating new one`);
       socket.disconnect();
       setSocket(null);
+      setIsConnected(false);
+      setConnectionStatus('disconnected');
+      setCurrentRoom(null);
+      setActiveUsers([]);
     }
 
     // Prevent multiple initialization attempts
@@ -122,34 +130,36 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     // Since the app uses cookie-based authentication, we'll use a different approach
     // We'll pass the user info and let the server validate the session via cookies
     const getUserAuthData = () => {
-      if (!user) {
+      if (!userRef.current) {
         console.log('🔌 No user available for WebSocket auth');
         return null;
       }
       
       console.log('🔌 User data for WebSocket auth:', {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        church_id: user.church_id
+        id: userRef.current.id,
+        email: userRef.current.email,
+        role: userRef.current.role,
+        church_id: userRef.current.church_id
       });
       
       // Generate a temporary token for WebSocket auth using user data
       // The server will still validate the actual session via cookies
       // If church_id is missing, we'll use a fallback (the user must have access to some church data 
       // since they can use the REST API)
-      const churchId = user.church_id || '1'; // Fallback to '1' if missing
+      const churchId = userRef.current.church_id || '1'; // Fallback to '1' if missing
       
       console.log('🔌 Church ID resolution:', {
-        userChurchId: user.church_id,
+        userChurchId: userRef.current.church_id,
         resolvedChurchId: churchId,
-        usingFallback: !user.church_id
+        usingFallback: !userRef.current.church_id,
+        isPWA: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
+        userAgent: navigator.userAgent.includes('PWA') ? 'PWA' : 'Browser'
       });
       
       return {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
+        userId: userRef.current.id,
+        email: userRef.current.email,
+        role: userRef.current.role,
         churchId: churchId
       };
     };
@@ -163,10 +173,26 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     setConnectionStatus('connecting');
 
     // Determine server URL
-    // In Docker development, the client runs on port 3000 and connects to server on port 3001
-    // But since we access via nginx on port 80, we should connect to the same origin
-    const serverUrl = process.env.REACT_APP_SERVER_URL || 
-                     (process.env.NODE_ENV === 'development' ? window.location.origin : window.location.origin);
+    // In Docker development, ensure we connect through nginx on port 80
+    let serverUrl = process.env.REACT_APP_SERVER_URL;
+    
+    if (!serverUrl) {
+      // If no explicit server URL, construct it based on current location
+      const protocol = window.location.protocol;
+      const hostname = window.location.hostname;
+      let port = window.location.port;
+      
+      // Handle port logic for Docker development
+      if (port === '3000') {
+        // Client is on port 3000, connect through nginx on port 80
+        port = '80';
+      } else if (!port || port === '') {
+        // No port specified, default to 80 for HTTP
+        port = '80';
+      }
+      
+      serverUrl = `${protocol}//${hostname}:${port}`;
+    }
     
     console.log('🔌 WebSocket serverUrl resolution:', {
       REACT_APP_SERVER_URL: process.env.REACT_APP_SERVER_URL,
@@ -178,24 +204,43 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     console.log(`🔌 [Tab ${tabId.current}] Initializing WebSocket connection...`, {
       serverUrl,
       authData,
-      userAuthenticated: !!user
+      userAuthenticated: !!userRef.current
     });
 
     // Create socket connection with fallback from WebSocket to polling
-    console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData);
-    const newSocket = io(serverUrl, {
-      auth: authData,
+    const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+    console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData, 'isPWA:', isPWA);
+    
+    // Tab-specific configuration to prevent conflicts
+    const connectionId = `${authData.userId}_${tabId.current}_${Date.now()}`;
+    const socketConfig = {
+      auth: { 
+        ...authData, 
+        tabId: tabId.current,
+        connectionId: connectionId
+      }, // Include tab ID and unique connection ID
       withCredentials: true, // Important: send cookies with WebSocket connection
-      transports: ['websocket', 'polling'], // WebSocket first, polling fallback
-      timeout: 20000, // Reasonable timeout
+      transports: ['polling', 'websocket'], // Start with polling, upgrade to WebSocket
+      timeout: 10000, // 10 second timeout
       reconnection: true,
-      reconnectionAttempts: 10, 
-      reconnectionDelay: 1000,   
-      reconnectionDelayMax: 5000, 
-      forceNew: true, // Force new connection to avoid cross-tab conflicts
-      upgrade: true,   // Allow upgrades to websocket
-      rememberUpgrade: false // Don't remember upgrade to prevent issues
-    });
+      reconnectionAttempts: 3, // Fewer attempts, faster failure detection
+      reconnectionDelay: 1000, // 1 second delay
+      reconnectionDelayMax: 5000, // 5 second max delay  
+      forceNew: true, // Force new connection per tab to prevent conflicts
+      upgrade: true, // Enable upgrade to WebSocket
+      rememberUpgrade: true, // Remember the upgraded transport
+      autoConnect: true, // Automatically connect
+      // Add query parameters to make connection even more unique
+      query: {
+        tabId: tabId.current,
+        connectionId: connectionId,
+        timestamp: Date.now()
+      }
+    };
+    
+    console.log(`🔌 [Tab ${tabId.current}] Socket config for ${isPWA ? 'PWA' : 'Browser'}:`, socketConfig);
+    
+    const newSocket = io(serverUrl, socketConfig);
 
     // Connection event handlers with detailed debugging
     newSocket.on('connect', () => {
@@ -222,6 +267,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       setConnectionStatus('disconnected');
       setCurrentRoom(null);
       setActiveUsers([]);
+      
+      // For unexpected disconnections, provide user feedback
+      if (reason === 'transport close' || reason === 'transport error') {
+        console.log('🔄 Unexpected disconnection detected, WebSocket will attempt to reconnect automatically');
+      }
     });
 
     newSocket.on('connect_error', (error) => {
@@ -230,8 +280,10 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         serverUrl,
         transport: newSocket.io.opts.transports,
         forceNew: newSocket.io.opts.forceNew,
-        upgrade: newSocket.io.opts.upgrade
+        upgrade: newSocket.io.opts.upgrade,
+        attemptNumber: (newSocket as any).reconnectionAttempts || 0
       });
+      setIsConnected(false);
       setConnectionStatus('error');
       initializingRef.current = false; // Reset initialization flag on error
     });
@@ -252,7 +304,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     // Event handlers for real-time updates
     newSocket.on('attendance_update', (update: AttendanceUpdate) => {
-      console.log('📊 Received attendance update:', update);
+      const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+      console.log(`📊 [${isPWA ? 'PWA' : 'Browser'}] Received attendance update:`, {
+        ...update,
+        socketId: newSocket.id,
+        currentRoom: currentRoom
+      });
       attendanceCallbacks.current.forEach(callback => {
         try {
           callback(update);
@@ -286,12 +343,18 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     // Room management handlers
     newSocket.on('joined_attendance', (data) => {
-      console.log('✅ Joined attendance room:', data);
+      const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+      console.log(`✅ [${isPWA ? 'PWA' : 'Browser'}] Joined attendance room:`, {
+        ...data,
+        socketId: newSocket.id,
+        authChurchId: authData?.churchId,
+        isPWAMode: isPWA
+      });
       setCurrentRoom(data.roomName);
       
       // Set initial active users from server
       if (data.activeUsers) {
-        console.log('👥 Initial active users:', data.activeUsers);
+        console.log(`👥 [${isPWA ? 'PWA' : 'Browser'}] Initial active users:`, data.activeUsers);
         setActiveUsers(data.activeUsers);
       }
     });
@@ -332,11 +395,13 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     // Cleanup on unmount or user change
     return () => {
-      console.log('🧹 Cleaning up WebSocket connection');
-      initializingRef.current = false; // Reset flag during cleanup
-      newSocket.disconnect();
+      if (socket) {
+        console.log('🧹 Cleaning up WebSocket connection');
+        initializingRef.current = false; // Reset flag during cleanup
+        socket.disconnect();
+      }
     };
-  }, [user]); // Depend on user to reconnect when auth changes
+  }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
 
   // Join attendance room
   const joinAttendanceRoom = (gatheringId: number, date: string) => {
@@ -396,6 +461,48 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         socket.off('attendance_update_success', handleSuccess);
         socket.off('attendance_update_error', handleError);
         reject(new Error('WebSocket attendance update timeout'));
+      }, 10000); // 10 second timeout
+    });
+  };
+
+  // Load attendance data via WebSocket
+  const loadAttendanceData = async (gatheringId: number, date: string): Promise<{ attendanceList: any[]; visitors: any[] }> => {
+    return new Promise((resolve, reject) => {
+      if (!socket || !isConnected) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      console.log(`📤 Loading attendance data via WebSocket: gathering ${gatheringId}, date ${date}`);
+      
+      // Set up one-time listeners for response
+      const handleSuccess = (data: any) => {
+        socket.off('load_attendance_error', handleError);
+        resolve({
+          attendanceList: data.attendanceList || [],
+          visitors: data.visitors || []
+        });
+      };
+      
+      const handleError = (error: any) => {
+        socket.off('load_attendance_success', handleSuccess);
+        reject(new Error(error.message || 'Failed to load attendance data'));
+      };
+
+      socket.once('load_attendance_success', handleSuccess);
+      socket.once('load_attendance_error', handleError);
+
+      // Send the load request
+      socket.emit('load_attendance', {
+        gatheringId,
+        date
+      });
+
+      // Add timeout to prevent hanging
+      setTimeout(() => {
+        socket.off('load_attendance_success', handleSuccess);
+        socket.off('load_attendance_error', handleError);
+        reject(new Error('WebSocket load attendance timeout'));
       }, 10000); // 10 second timeout
     });
   };
@@ -462,6 +569,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     joinAttendanceRoom,
     leaveAttendanceRoom,
     sendAttendanceUpdate,
+    loadAttendanceData,
     onAttendanceUpdate,
     onVisitorUpdate,
     onUserActivity,

@@ -73,25 +73,7 @@ const AttendancePage: React.FC = () => {
     localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
   };
 
-  // Simple state sync: whenever attendanceList changes, update presentById from server data
-  // WebSocket handles real-time changes, so we can use server data directly
-  useEffect(() => {
-    console.log('📋 Syncing presentById with attendanceList', {
-      attendanceCount: attendanceList.length,
-      gathering: selectedGathering?.id,
-      date: selectedDate
-    });
-    
-    const newPresentById: Record<number, boolean> = {};
-    attendanceList.forEach((person) => {
-      newPresentById[person.id] = Boolean(person.present);
-    });
-    
-    console.log('📊 Setting presentById:', newPresentById);
-    setPresentById(newPresentById);
-    presentByIdRef.current = newPresentById;
-  }, [attendanceList, selectedGathering?.id, selectedDate]);
-
+  // Keep refs in sync for WebSocket handler
   useEffect(() => {
     presentByIdRef.current = presentById;
   }, [presentById]);
@@ -187,9 +169,10 @@ const AttendancePage: React.FC = () => {
     isConnected: isWebSocketConnected, 
     connectionStatus, 
     activeUsers, 
-    sendAttendanceUpdate 
+    sendAttendanceUpdate,
+    loadAttendanceData: loadAttendanceDataWebSocket
   } = useWebSocket();
-  const webSocketMode = getWebSocketMode();
+  const webSocketMode = useMemo(() => getWebSocketMode(), []);
   const useWebSocketForUpdates = webSocketMode.enabled;
 
   // Helper function to get connection status styling
@@ -229,18 +212,32 @@ const AttendancePage: React.FC = () => {
         return {
           containerClass: 'bg-red-100 text-red-800 border border-red-200',
           dotClass: 'bg-red-500',
-          label: 'Connection Error',
-          tooltip: 'Connection failed - Please refresh the page'
+          label: webSocketMode.fallbackAllowed ? 'Using API Fallback' : 'Connection Error',
+          tooltip: webSocketMode.fallbackAllowed 
+            ? 'WebSocket connection failed - Using REST API for updates'
+            : 'Connection failed - Please refresh the page'
         };
       case 'disconnected':
       default:
+        const hasApiFailback = webSocketMode.fallbackAllowed;
+        const label = pendingChanges.length > 0 
+          ? `${pendingChanges.length} Pending` 
+          : hasApiFailback 
+            ? 'API Mode' 
+            : 'Offline';
+        const tooltip = pendingChanges.length > 0
+          ? `Disconnected - ${pendingChanges.length} changes saved locally`
+          : hasApiFailback
+            ? 'WebSocket disconnected - Using REST API for updates'
+            : 'Offline - Changes will be saved locally';
+            
         return {
-          containerClass: 'bg-red-100 text-red-800 border border-red-200',
-          dotClass: 'bg-red-500',
-          label: pendingChanges.length > 0 ? `${pendingChanges.length} Pending` : 'Offline',
-          tooltip: pendingChanges.length > 0
-            ? `Offline - ${pendingChanges.length} changes saved locally`
-            : 'Offline - Changes will be saved locally'
+          containerClass: hasApiFailback 
+            ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
+            : 'bg-red-100 text-red-800 border border-red-200',
+          dotClass: hasApiFailback ? 'bg-yellow-500' : 'bg-red-500',
+          label,
+          tooltip
         };
     }
   };
@@ -438,58 +435,130 @@ const AttendancePage: React.FC = () => {
     const currentVisitors = visitorsRef.current;
     
     try {
-      const response = await attendanceAPI.get(selectedGathering.id, selectedDate);
-      console.log(`📊 Received fresh attendance data:`, {
-        attendeeCount: response.data.attendanceList?.length || 0,
-        visitorCount: response.data.visitors?.length || 0,
-        gatheringId: selectedGathering.id,
-        date: selectedDate,
-        timestamp: new Date().toISOString()
-      });
+      let response;
       
-      setAttendanceList(response.data.attendanceList || []);
-      setVisitors(response.data.visitors || []);
+      // Try WebSocket first if connected, fall back to REST API
+      if (isWebSocketConnected) {
+        try {
+          console.log(`📡 Loading via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
+          response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
+          console.log(`📊 Received fresh attendance data via WebSocket:`, {
+            attendeeCount: response.attendanceList?.length || 0,
+            visitorCount: response.visitors?.length || 0,
+            gatheringId: selectedGathering.id,
+            date: selectedDate,
+            timestamp: new Date().toISOString()
+          });
+        } catch (wsError) {
+          console.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
+          throw wsError; // Re-throw to trigger REST API fallback
+        }
+      } else {
+        throw new Error('WebSocket not connected, using REST API');
+      }
+      
+      setAttendanceList(response.attendanceList || []);
+      setVisitors(response.visitors || []);
+      
+      // Initialize presentById from server data (since we removed the automatic sync effect)
+      const newPresentById: Record<number, boolean> = {};
+      (response.attendanceList || []).forEach((person: any) => {
+        newPresentById[person.id] = Boolean(person.present);
+      });
+      setPresentById(newPresentById);
+      presentByIdRef.current = newPresentById;
       
       // Cache the attendance data for offline use
       const cacheData = {
         gatheringId: selectedGathering.id,
         date: selectedDate,
-        attendanceList: response.data.attendanceList || [],
-        visitors: response.data.visitors || [],
+        attendanceList: response.attendanceList || [],
+        visitors: response.visitors || [],
         timestamp: Date.now()
       };
       localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
       console.log('💾 Cached attendance data for offline use:', {
         gatheringId: selectedGathering.id,
         date: selectedDate,
-        attendees: response.data.attendanceList?.length || 0,
-        visitors: response.data.visitors?.length || 0
+        attendees: response.attendanceList?.length || 0,
+        visitors: response.visitors?.length || 0
       });
       
       // Update visitor attendance state from server data
       // WebSocket handles real-time changes, so we can use server data directly
       const newVisitorAttendance: { [key: number]: boolean } = {};
-      (response.data.visitors || []).forEach((visitor: any) => {
+      (response.visitors || []).forEach((visitor: any) => {
         if (visitor.id) {
           newVisitorAttendance[visitor.id] = Boolean(visitor.present);
         }
       });
       console.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
       setVisitorAttendance(newVisitorAttendance);
-    } catch (err) {
-      console.error(`❌ Failed to load attendance data for gathering ${selectedGathering.id} on ${selectedDate}:`, err);
-      setError('Failed to load attendance data - using cached data');
       
-      // Preserve existing data instead of clearing it on connection failure
-      if (currentAttendanceList.length > 0 || currentVisitors.length > 0) {
-        console.log('📱 Preserving existing attendance data due to connection failure');
-        setAttendanceList(currentAttendanceList);
-        setVisitors(currentVisitors);
+    } catch (err) {
+      // Fall back to REST API if WebSocket failed or not connected
+      try {
+        console.log(`📡 Falling back to REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
+        const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
+        console.log(`📊 Received attendance data via REST API:`, {
+          attendeeCount: apiResponse.data.attendanceList?.length || 0,
+          visitorCount: apiResponse.data.visitors?.length || 0,
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          timestamp: new Date().toISOString()
+        });
+        
+        setAttendanceList(apiResponse.data.attendanceList || []);
+        setVisitors(apiResponse.data.visitors || []);
+        
+        // Initialize presentById from server data (since we removed the automatic sync effect)
+        const newPresentById: Record<number, boolean> = {};
+        (apiResponse.data.attendanceList || []).forEach((person: any) => {
+          newPresentById[person.id] = Boolean(person.present);
+        });
+        setPresentById(newPresentById);
+        presentByIdRef.current = newPresentById;
+        
+        // Cache the attendance data for offline use
+        const cacheData = {
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          attendanceList: apiResponse.data.attendanceList || [],
+          visitors: apiResponse.data.visitors || [],
+          timestamp: Date.now()
+        };
+        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+        
+        // Update visitor attendance state from server data
+        const newVisitorAttendance: { [key: number]: boolean } = {};
+        (apiResponse.data.visitors || []).forEach((visitor: any) => {
+          if (visitor.id) {
+            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+          }
+        });
+        setVisitorAttendance(newVisitorAttendance);
+        
+        // Clear any previous error since REST API worked
+        setError('');
+        
+      } catch (apiError) {
+        console.error(`❌ Both WebSocket and REST API failed for gathering ${selectedGathering.id} on ${selectedDate}:`, { 
+          originalError: err, 
+          apiError 
+        });
+        setError('Failed to load attendance data - using cached data');
+        
+        // Preserve existing data instead of clearing it on connection failure
+        if (currentAttendanceList.length > 0 || currentVisitors.length > 0) {
+          console.log('📱 Preserving existing attendance data due to connection failure');
+          setAttendanceList(currentAttendanceList);
+          setVisitors(currentVisitors);
+        }
       }
     } finally {
       setIsLoading(false);
     }
-  }, [selectedGathering, selectedDate]);
+  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket]);
 
   // Manual refresh function removed - automatic syncing handles refreshes now
 
@@ -528,6 +597,14 @@ const AttendancePage: React.FC = () => {
             if (!isStale) {
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
+              
+              // Initialize presentById from cached data (since we removed the automatic sync effect)
+              const newPresentById: Record<number, boolean> = {};
+              (parsed.attendanceList || []).forEach((person: any) => {
+                newPresentById[person.id] = Boolean(person.present);
+              });
+              setPresentById(newPresentById);
+              presentByIdRef.current = newPresentById;
             } else {
               console.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
             }
@@ -537,8 +614,20 @@ const AttendancePage: React.FC = () => {
         }
       }
       
-      // Then attempt to load fresh data from server
-      loadAttendanceData();
+      // Always load fresh data, but prefer WebSocket when available
+      // The loadAttendanceData function will handle WebSocket vs REST API fallback automatically
+      const shouldLoadFreshData = !cachedData || attendanceListRef.current.length === 0 || !isWebSocketConnected;
+      
+      if (shouldLoadFreshData) {
+        if (isWebSocketConnected) {
+          console.log('🔌 WebSocket connected - loading fresh data via WebSocket');
+        } else {
+          console.log('📡 WebSocket not connected - loading fresh data via REST API');
+        }
+        loadAttendanceData();
+      } else {
+        console.log('📱 Using cached data, WebSocket will handle real-time updates');
+      }
       
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
@@ -551,7 +640,7 @@ const AttendancePage: React.FC = () => {
       // Save as last viewed
       saveLastViewed(selectedGathering.id, selectedDate);
     }
-  }, [selectedGathering, selectedDate, loadAttendanceData]);
+  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Include WebSocket connection status
 
   // WebSocket real-time updates handle all data synchronization now
   // No need for visibility-based refreshes that cause issues on mobile PWA
@@ -713,10 +802,30 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // WebSocket enabled - try WebSocket first
+    // Check if WebSocket is available and connected
+    const shouldUseWebSocket = isWebSocketConnected && connectionStatus === 'connected';
+    
+    if (!shouldUseWebSocket && webSocketMode.fallbackAllowed) {
+      console.log('📡 WebSocket not available, using REST API fallback');
+      await attendanceAPI.record(gatheringId, date, {
+        attendanceRecords: records,
+        visitors: []
+      });
+      return;
+    }
+
+    // WebSocket enabled and connected - try WebSocket first
     try {
+      const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+      console.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Attempting to send attendance via WebSocket:`, {
+        gatheringId,
+        date,
+        recordsCount: records.length,
+        isPWAMode: isPWA,
+        connectionStatus
+      });
       await sendAttendanceUpdate(gatheringId, date, records);
-      console.log(`🔌 Successfully sent attendance via WebSocket`);
+      console.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Successfully sent attendance via WebSocket`);
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
         console.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
@@ -741,11 +850,33 @@ const AttendancePage: React.FC = () => {
       console.log(`⚠️ Already saving attendance for ${individualId}, ignoring duplicate click`);
       return;
     }
+
+    // Add additional debug logging to track duplicate calls
+    console.log(`🔄 Toggling attendance for individual ${individualId} at ${Date.now()}`);
+    
+    // Track recent toggle calls to prevent duplicates
+    const recentToggles = (window as any)._recentToggles || new Map();
+    const now = Date.now();
+    const lastToggle = recentToggles.get(individualId) || 0;
+    
+    if (now - lastToggle < 500) { // Prevent toggles within 500ms
+      console.log(`⚠️ Duplicate toggle detected for ${individualId}, ignoring (${now - lastToggle}ms ago)`);
+      console.trace('Duplicate toggle call stack:');
+      return;
+    }
+    
+    recentToggles.set(individualId, now);
+    // Clean up old entries
+    for (const [id, timestamp] of recentToggles.entries()) {
+      if (now - timestamp > 2000) {
+        recentToggles.delete(id);
+      }
+    }
+    (window as any)._recentToggles = recentToggles;
     
     const person = attendanceListRef.current.find(p => p.id === individualId);
     console.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
     
-    const now = Date.now();
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
     // Compute new present using refs to avoid stale state reads
     const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
