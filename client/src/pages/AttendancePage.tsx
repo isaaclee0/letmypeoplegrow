@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, visitorConfigAPI, GatheringType, Individual, Visitor } from '../services/api';
@@ -43,7 +44,28 @@ interface VisitorFormState {
 const AttendancePage: React.FC = () => {
   const { user, updateUser } = useAuth();
   const { showSuccess } = useToast();
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const navigate = useNavigate();
+  // Initialize selectedDate from cache if available, otherwise use today
+  const [selectedDate, setSelectedDate] = useState(() => {
+    try {
+      const cachedData = localStorage.getItem('attendance_cached_data');
+      if (cachedData) {
+        const parsed = JSON.parse(cachedData);
+        const cacheAge = Date.now() - (parsed.timestamp || 0);
+        const isStale = cacheAge > 300000; // 5 minutes
+        
+        if (!isStale && parsed.date && parsed.attendanceList?.length > 0) {
+          console.log('📅 Initializing selectedDate from cache:', parsed.date);
+          return parsed.date;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to initialize date from cache:', err);
+    }
+    
+    console.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
+    return format(new Date(), 'yyyy-MM-dd');
+  });
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
   const [attendanceList, setAttendanceList] = useState<Individual[]>([]);
@@ -63,6 +85,17 @@ const AttendancePage: React.FC = () => {
   const [savingById, setSavingById] = useState<Record<number, boolean>>({});
   const presentByIdRef = useRef<Record<number, boolean>>({});
   
+  // Offline storage for pending attendance changes - declared early to avoid initialization order issues
+  const [pendingChanges, setPendingChanges] = useState<Array<{
+    individualId: number;
+    present: boolean;
+    timestamp: number;
+    gatheringId: number;
+    date: string;
+  }>>([]);
+  
+  const [isSyncing, setIsSyncing] = useState(false);
+  
   // Helper functions for localStorage
   const saveLastViewed = (gatheringId: number, date: string) => {
     const lastViewed = {
@@ -77,6 +110,94 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     presentByIdRef.current = presentById;
   }, [presentById]);
+
+  // Load cached data immediately on component mount for better UX during navigation
+  useEffect(() => {
+    console.log('🔍 AttendancePage mounted - checking for cached data...');
+    
+    // Debug: List all localStorage keys
+    console.log('🔑 All localStorage keys:', Object.keys(localStorage));
+    console.log('📋 LocalStorage content:');
+    for (const key of Object.keys(localStorage)) {
+      if (key.includes('attendance') || key.includes('gathering')) {
+        console.log(`  ${key}:`, localStorage.getItem(key)?.substring(0, 100) + '...');
+      }
+    }
+    
+    const cachedData = localStorage.getItem('attendance_cached_data');
+    
+    if (!cachedData) {
+      console.log('❌ No cached attendance data found in localStorage');
+      return;
+    }
+    
+    try {
+      const parsed = JSON.parse(cachedData);
+      const cacheAge = Date.now() - (parsed.timestamp || 0);
+      const isStale = cacheAge > 300000; // 5 minutes instead of 15 seconds
+      
+      console.log('📦 Found cached data:', {
+        gatheringId: parsed.gatheringId,
+        date: parsed.date,
+        attendees: parsed.attendanceList?.length || 0,
+        visitors: parsed.visitors?.length || 0,
+        cacheAge: Math.round(cacheAge / 1000) + 's',
+        isStale,
+        hasAttendanceList: !!parsed.attendanceList?.length
+      });
+      
+      if (!isStale && parsed.attendanceList?.length > 0) {
+        console.log('🚀 Loading cached data immediately on navigation');
+        
+        // Load cached attendance data immediately
+        setAttendanceList(parsed.attendanceList || []);
+        setVisitors(parsed.visitors || []);
+        
+        // Initialize presentById from cached data with pending changes applied
+        const newPresentById: Record<number, boolean> = {};
+        (parsed.attendanceList || []).forEach((person: any) => {
+          newPresentById[person.id] = Boolean(person.present);
+        });
+        
+        // Apply any pending offline changes
+        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+        currentPendingChanges.forEach((change: any) => {
+          if (change.gatheringId === parsed.gatheringId && change.date === parsed.date) {
+            newPresentById[change.individualId] = change.present;
+          }
+        });
+        
+        setPresentById(newPresentById);
+        presentByIdRef.current = newPresentById;
+        
+        // Update visitor attendance state from cached data
+        const newVisitorAttendance: { [key: number]: boolean } = {};
+        (parsed.visitors || []).forEach((visitor: any) => {
+          if (visitor.id) {
+            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+          }
+        });
+        setVisitorAttendance(newVisitorAttendance);
+        
+        console.log('✅ Cached data loaded successfully');
+        console.log('📊 Cache load summary:', {
+          attendanceListLength: parsed.attendanceList?.length || 0,
+          visitorsLength: parsed.visitors?.length || 0,
+          presentByIdKeys: Object.keys(newPresentById).length,
+          samplePresentById: Object.fromEntries(Object.entries(newPresentById).slice(0, 5))
+        });
+        
+        // Mark that we have loaded cached data to prevent immediate clearing
+        sessionStorage.setItem('attendance_cache_loaded', 'true');
+      } else if (isStale) {
+        console.log('⏰ Cache is stale, will load fresh data');
+      } else if (!parsed.attendanceList?.length) {
+        console.log('📭 Cache exists but no attendance data');
+      }
+    } catch (err) {
+      console.error('❌ Failed to parse cached attendance data on mount:', err);
+    }
+  }, []); // Run only once on mount
   
   const getLastViewed = () => {
     try {
@@ -158,8 +279,6 @@ const AttendancePage: React.FC = () => {
   const [showGatheringDropdown, setShowGatheringDropdown] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
-  const [showEditVisitorModal, setShowEditVisitorModal] = useState(false);
-  const [editingVisitor, setEditingVisitor] = useState<Visitor | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
@@ -397,7 +516,34 @@ const AttendancePage: React.FC = () => {
             }
           }
 
-          setSelectedGathering(gatheringToSelect || ordered[0] || userGatherings[0]);
+          // Check if we have cached data that should influence our gathering/date selection
+          const cachedData = localStorage.getItem('attendance_cached_data');
+          let finalGatheringToSelect = gatheringToSelect || ordered[0] || userGatherings[0];
+          
+          if (cachedData && !gatheringToSelect) {
+            try {
+              const parsed = JSON.parse(cachedData);
+              const cacheAge = Date.now() - (parsed.timestamp || 0);
+              const isStale = cacheAge > 300000; // 5 minutes
+              
+              if (!isStale && parsed.gatheringId && parsed.attendanceList?.length > 0) {
+                const cachedGathering = userGatherings.find((g: GatheringType) => g.id === parsed.gatheringId);
+                if (cachedGathering) {
+                  console.log('🎯 Using gathering from cache for consistency:', {
+                    gatheringId: parsed.gatheringId,
+                    gatheringName: cachedGathering.name,
+                    date: parsed.date
+                  });
+                  finalGatheringToSelect = cachedGathering;
+                  // We'll set the date in the next effect when validDates is calculated
+                }
+              }
+            } catch (err) {
+              console.error('Failed to parse cached data for gathering selection:', err);
+            }
+          }
+          
+          setSelectedGathering(finalGatheringToSelect);
         }
       } catch (err) {
         setError('Failed to load gatherings');
@@ -407,22 +553,64 @@ const AttendancePage: React.FC = () => {
     loadGatherings();
   }, [user?.gatheringAssignments]);
 
-  // Set date when gathering changes (use last viewed or nearest date)
+  // Set date when gathering changes (use cached, last viewed, or nearest date)
   useEffect(() => {
     if (validDates.length > 0) {
-      const lastViewed = getLastViewed();
-      let dateToSelect = findNearestDate(validDates); // Default to nearest date
+      let dateToSelect = null;
+      let shouldUpdate = false;
       
-      if (lastViewed && validDates.includes(lastViewed.date)) {
-        // Use last viewed date if it's valid for current gathering
-        dateToSelect = lastViewed.date;
+      // First, check if current selectedDate is valid for this gathering
+      if (validDates.includes(selectedDate)) {
+        console.log('📅 Current selectedDate is valid, keeping it:', selectedDate);
+        return; // Don't change date if current one is valid
       }
       
-      if (dateToSelect) {
+      // If current date is not valid, find a replacement
+      console.log('📅 Current selectedDate not valid for gathering, finding replacement');
+      
+      // First, check if we have cached data for this gathering
+      const cachedData = localStorage.getItem('attendance_cached_data');
+      if (cachedData && selectedGathering) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          const cacheAge = Date.now() - (parsed.timestamp || 0);
+          const isStale = cacheAge > 300000; // 5 minutes
+          
+          if (!isStale && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
+            console.log('📅 Using date from cache for gathering change:', {
+              gatheringId: parsed.gatheringId,
+              date: parsed.date
+            });
+            dateToSelect = parsed.date;
+            shouldUpdate = true;
+          }
+        } catch (err) {
+          console.error('Failed to parse cached data for date selection:', err);
+        }
+      }
+      
+      // Fallback to last viewed if no cached data was used
+      if (!shouldUpdate) {
+        const lastViewed = getLastViewed();
+        if (lastViewed && validDates.includes(lastViewed.date)) {
+          console.log('📅 Using date from last viewed:', lastViewed.date);
+          dateToSelect = lastViewed.date;
+          shouldUpdate = true;
+        }
+      }
+      
+      // Final fallback to nearest date
+      if (!shouldUpdate) {
+        dateToSelect = findNearestDate(validDates);
+        console.log('📅 Using nearest date as final fallback:', dateToSelect);
+        shouldUpdate = true;
+      }
+      
+      if (shouldUpdate && dateToSelect) {
         setSelectedDate(dateToSelect);
       }
     }
-  }, [validDates]);
+  }, [validDates, selectedGathering, selectedDate]);
 
   const loadAttendanceData = useCallback(async () => {
     if (!selectedGathering) return;
@@ -465,23 +653,62 @@ const AttendancePage: React.FC = () => {
       (response.attendanceList || []).forEach((person: any) => {
         newPresentById[person.id] = Boolean(person.present);
       });
-      setPresentById(newPresentById);
-      presentByIdRef.current = newPresentById;
       
-      // Cache the attendance data for offline use
+      const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
+      
+      console.log('🔄 Setting presentById from fresh data:', {
+        newPresentByIdKeys: Object.keys(newPresentById).length,
+        sampleNewPresentById: Object.fromEntries(Object.entries(newPresentById).slice(0, 5)),
+        cacheWasLoaded,
+        currentPresentByIdKeys: Object.keys(presentById).length
+      });
+      
+      // Only update presentById if cache wasn't loaded or if we have more complete data
+      if (!cacheWasLoaded || Object.keys(presentById).length === 0) {
+        console.log('📝 Updating presentById with fresh data');
+        setPresentById(newPresentById);
+        presentByIdRef.current = newPresentById;
+      } else {
+        console.log('🔒 Preserving cached presentById state');
+        // Update attendanceList to match our cached presentById for consistency
+        const updatedAttendanceList = (response.attendanceList || []).map((person: any) => ({
+          ...person,
+          present: presentById[person.id] ?? person.present
+        }));
+        setAttendanceList(updatedAttendanceList);
+      }
+      
+      // Cache the attendance data for offline use with pending changes applied
+      const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
+        // Apply any pending changes to the cached data
+        const pendingChange = pendingChanges.find(change => 
+          change.individualId === person.id && 
+          change.gatheringId === selectedGathering.id && 
+          change.date === selectedDate
+        );
+        if (pendingChange) {
+          return { ...person, present: pendingChange.present };
+        }
+        return person;
+      });
+      
       const cacheData = {
         gatheringId: selectedGathering.id,
         date: selectedDate,
-        attendanceList: response.attendanceList || [],
+        attendanceList: attendanceListForCache,
         visitors: response.visitors || [],
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        hasPendingChanges: pendingChanges.some(change => 
+          change.gatheringId === selectedGathering.id && change.date === selectedDate
+        )
       };
       localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
       console.log('💾 Cached attendance data for offline use:', {
         gatheringId: selectedGathering.id,
         date: selectedDate,
-        attendees: response.attendanceList?.length || 0,
-        visitors: response.visitors?.length || 0
+        attendees: attendanceListForCache.length,
+        visitors: response.visitors?.length || 0,
+        hasPendingChanges: cacheData.hasPendingChanges
       });
       
       // Update visitor attendance state from server data
@@ -516,16 +743,47 @@ const AttendancePage: React.FC = () => {
         (apiResponse.data.attendanceList || []).forEach((person: any) => {
           newPresentById[person.id] = Boolean(person.present);
         });
-        setPresentById(newPresentById);
-        presentByIdRef.current = newPresentById;
         
-        // Cache the attendance data for offline use
+        const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
+        
+        // Only update presentById if cache wasn't loaded or if we have more complete data
+        if (!cacheWasLoaded || Object.keys(presentById).length === 0) {
+          console.log('📝 Updating presentById with fresh API data');
+          setPresentById(newPresentById);
+          presentByIdRef.current = newPresentById;
+        } else {
+          console.log('🔒 Preserving cached presentById state (API fallback)');
+          // Update attendanceList to match our cached presentById for consistency
+          const updatedAttendanceList = (apiResponse.data.attendanceList || []).map((person: any) => ({
+            ...person,
+            present: presentById[person.id] ?? person.present
+          }));
+          setAttendanceList(updatedAttendanceList);
+        }
+        
+        // Cache the attendance data for offline use with pending changes applied
+        const attendanceListForCache = (apiResponse.data.attendanceList || []).map((person: any) => {
+          // Apply any pending changes to the cached data
+          const pendingChange = pendingChanges.find(change => 
+            change.individualId === person.id && 
+            change.gatheringId === selectedGathering.id && 
+            change.date === selectedDate
+          );
+          if (pendingChange) {
+            return { ...person, present: pendingChange.present };
+          }
+          return person;
+        });
+        
         const cacheData = {
           gatheringId: selectedGathering.id,
           date: selectedDate,
-          attendanceList: apiResponse.data.attendanceList || [],
+          attendanceList: attendanceListForCache,
           visitors: apiResponse.data.visitors || [],
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          hasPendingChanges: pendingChanges.some(change => 
+            change.gatheringId === selectedGathering.id && change.date === selectedDate
+          )
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
@@ -577,15 +835,35 @@ const AttendancePage: React.FC = () => {
   // Load attendance data when date or gathering changes
   useEffect(() => {
     if (selectedGathering && selectedDate) {
+      console.log('📅 Main data loading effect triggered:', {
+        gatheringId: selectedGathering.id,
+        gatheringName: selectedGathering.name,
+        date: selectedDate
+      });
+      
+      // Only clear state if we don't have data already loaded (to preserve immediate cache loading)
+      const hasExistingData = attendanceList.length > 0 || visitors.length > 0;
+      const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
+      
+      if (!hasExistingData && !cacheWasLoaded) {
+        console.log('🧹 Clearing state (no existing data, no cache loaded)');
+        setAttendanceList([]);
+        setVisitors([]);
+        setPresentById({});
+        presentByIdRef.current = {};
+      } else {
+        console.log('📋 Preserving existing data during main load (hasData:', hasExistingData, 'cacheLoaded:', cacheWasLoaded, ')');
+      }
+      
       // First try to load cached data immediately (for faster UX)
       const cachedData = localStorage.getItem('attendance_cached_data');
       if (cachedData) {
         try {
           const parsed = JSON.parse(cachedData);
           if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-            // Check if cache is fresh (less than 30 seconds old) to avoid showing stale data
+            // Check if cache is fresh (less than 5 minutes old) to avoid showing stale data
             const cacheAge = Date.now() - (parsed.timestamp || 0);
-            const isStale = cacheAge > 30000; // 30 seconds
+            const isStale = cacheAge > 300000; // 5 minutes - same as mount effect
             
             console.log('📱 Loading cached attendance data:', {
               attendees: parsed.attendanceList?.length || 0,
@@ -598,11 +876,20 @@ const AttendancePage: React.FC = () => {
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
               
-              // Initialize presentById from cached data (since we removed the automatic sync effect)
+              // Initialize presentById from cached data with pending changes applied
               const newPresentById: Record<number, boolean> = {};
               (parsed.attendanceList || []).forEach((person: any) => {
                 newPresentById[person.id] = Boolean(person.present);
               });
+              
+              // Apply any pending offline changes
+              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+              currentPendingChanges.forEach((change: any) => {
+                if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
+                  newPresentById[change.individualId] = change.present;
+                }
+              });
+              
               setPresentById(newPresentById);
               presentByIdRef.current = newPresentById;
             } else {
@@ -614,20 +901,17 @@ const AttendancePage: React.FC = () => {
         }
       }
       
-      // Always load fresh data, but prefer WebSocket when available
-      // The loadAttendanceData function will handle WebSocket vs REST API fallback automatically
-      const shouldLoadFreshData = !cachedData || attendanceListRef.current.length === 0 || !isWebSocketConnected;
+      // Always load fresh data on page load to ensure accuracy
+      // Cache is only used for immediate UX while fresh data loads
+      console.log('🔄 Loading fresh attendance data (cache used for immediate UX only)');
       
-      if (shouldLoadFreshData) {
-        if (isWebSocketConnected) {
-          console.log('🔌 WebSocket connected - loading fresh data via WebSocket');
-        } else {
-          console.log('📡 WebSocket not connected - loading fresh data via REST API');
-        }
-        loadAttendanceData();
+      if (isWebSocketConnected) {
+        console.log('🔌 WebSocket connected - loading fresh data via WebSocket');
       } else {
-        console.log('📱 Using cached data, WebSocket will handle real-time updates');
+        console.log('📡 WebSocket not connected - loading fresh data via REST API');
       }
+      
+      loadAttendanceData();
       
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
@@ -640,7 +924,7 @@ const AttendancePage: React.FC = () => {
       // Save as last viewed
       saveLastViewed(selectedGathering.id, selectedDate);
     }
-  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Include WebSocket connection status
+  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Removed pendingChanges dependency
 
   // WebSocket real-time updates handle all data synchronization now
   // No need for visibility-based refreshes that cause issues on mobile PWA
@@ -766,8 +1050,27 @@ const AttendancePage: React.FC = () => {
 
       showSuccess(`Added ${recentVisitor.name} from recent visitors`);
       
-      // Reload attendance data
+      // Reload attendance data and related visitor data to ensure immediate visibility
       await loadAttendanceData();
+      
+      // Also refresh recent visitors and all church people to ensure newly added visitors appear immediately
+      if (selectedGathering) {
+        try {
+          // Refresh recent visitors for this gathering
+          const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+          setRecentVisitors(recentResponse.data.visitors || []);
+          setAllRecentVisitorsPool(recentResponse.data.visitors || []);
+          
+          // Refresh all church people to include the newly added visitor
+          const allPeopleResponse = await attendanceAPI.getAllPeople();
+          setAllChurchVisitors(allPeopleResponse.data.visitors || []);
+          
+          console.log('✅ Refreshed all visitor data after adding recent visitor');
+        } catch (refreshErr) {
+          console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+          // Don't throw error since the main operation succeeded
+        }
+      }
     } catch (err: any) {
       console.error('Failed to add recent visitor:', err);
       setError(err.response?.data?.error || 'Failed to add recent visitor');
@@ -1079,6 +1382,27 @@ const AttendancePage: React.FC = () => {
     onAttendanceChange: useCallback((records: Array<{ individualId: number; present: boolean }>) => {
       console.log('🔌 [WEBSOCKET] Received attendance update:', records);
       
+      // Remove any pending offline changes that match these records
+      setPendingChanges(prev => {
+        const filtered = prev.filter(pendingChange => {
+          const hasMatchingRecord = records.some(record => 
+            record.individualId === pendingChange.individualId &&
+            pendingChange.gatheringId === selectedGathering?.id &&
+            pendingChange.date === selectedDate
+          );
+          if (hasMatchingRecord) {
+            console.log(`🔌 [WEBSOCKET] Removing pending change for individual ${pendingChange.individualId} - now synced`);
+          }
+          return !hasMatchingRecord;
+        });
+        
+        if (filtered.length !== prev.length) {
+          localStorage.setItem('attendance_offline_changes', JSON.stringify(filtered));
+        }
+        
+        return filtered;
+      });
+      
       // Batch all state updates to prevent race conditions
       startTransition(() => {
         // Update presentById (main source of truth for UI)
@@ -1134,29 +1458,35 @@ const AttendancePage: React.FC = () => {
       
       console.log('🔌 [WEBSOCKET] Applied all attendance updates in batch');
       
-      // Invalidate cache when we receive WebSocket updates to ensure fresh data on refresh
-      const cachedData = localStorage.getItem('attendance_cached_data');
-      if (cachedData) {
-        try {
-          const parsed = JSON.parse(cachedData);
-          if (parsed.gatheringId === selectedGathering?.id && parsed.date === selectedDate) {
-            // Update the cache with the new attendance state
-            const updatedCache = {
-              ...parsed,
-              attendanceList: attendanceListRef.current.map(person => ({
-                ...person,
-                present: presentByIdRef.current[person.id] ?? person.present
-              })),
-              timestamp: Date.now()
-            };
-            localStorage.setItem('attendance_cached_data', JSON.stringify(updatedCache));
-            console.log('💾 Updated cache with WebSocket changes');
+      // Debounced cache update to avoid excessive localStorage writes during batch updates
+      setTimeout(() => {
+        const cachedData = localStorage.getItem('attendance_cached_data');
+        if (cachedData) {
+          try {
+            const parsed = JSON.parse(cachedData);
+            if (parsed.gatheringId === selectedGathering?.id && parsed.date === selectedDate) {
+              // Update the cache with the new attendance state
+              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+              const updatedCache = {
+                ...parsed,
+                attendanceList: attendanceListRef.current.map(person => ({
+                  ...person,
+                  present: presentByIdRef.current[person.id] ?? person.present
+                })),
+                timestamp: Date.now(),
+                hasPendingChanges: currentPendingChanges.some((change: any) => 
+                  change.gatheringId === selectedGathering?.id && change.date === selectedDate
+                )
+              };
+              localStorage.setItem('attendance_cached_data', JSON.stringify(updatedCache));
+              console.log('💾 Updated cache with WebSocket changes');
+            }
+          } catch (err) {
+            console.error('Failed to update cache:', err);
           }
-        } catch (err) {
-          console.error('Failed to update cache:', err);
         }
-      }
-    }, [startTransition]),
+      }, 100); // 100ms debounce
+    }, [startTransition, selectedGathering?.id, selectedDate]),
     onVisitorChange: useCallback((visitors: Visitor[]) => {
       console.log('🔌 [WEBSOCKET] Received visitor update:', visitors);
       
@@ -1172,21 +1502,27 @@ const AttendancePage: React.FC = () => {
       });
       setVisitorAttendance(newVisitorAttendance);
       
-      // Cache the updated data
-      const cacheData = {
-        gatheringId: selectedGathering?.id,
-        date: selectedDate,
-        attendanceList: attendanceList,
-        visitors: visitors,
-        timestamp: Date.now()
-      };
-      localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+      // Debounced cache update to avoid excessive localStorage writes
+      setTimeout(() => {
+        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+        const cacheData = {
+          gatheringId: selectedGathering?.id,
+          date: selectedDate,
+          attendanceList: attendanceListRef.current,
+          visitors: visitors,
+          timestamp: Date.now(),
+          hasPendingChanges: currentPendingChanges.some((change: any) => 
+            change.gatheringId === selectedGathering?.id && change.date === selectedDate
+          )
+        };
+        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+      }, 100); // 100ms debounce
       
       console.log('🔌 [WEBSOCKET] Updated visitor state immediately:', {
         visitorCount: visitors.length,
         visitorAttendance: newVisitorAttendance
       });
-    }, [selectedGathering, selectedDate, attendanceList]),
+    }, [selectedGathering, selectedDate]),
     onFullRefresh: useCallback((attendanceList: Individual[], visitors: Visitor[]) => {
       console.log('🔌 [WEBSOCKET] Received full refresh');
       // setLastWebSocketUpdate removed - no longer tracking for UI
@@ -1263,35 +1599,6 @@ const AttendancePage: React.FC = () => {
       autoFillSurname: false
     });
     setShowAddVisitorModal(true);
-  };
-
-  const handleEditVisitor = (visitor: Visitor) => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    // Find ALL visitors in the same family group (including the clicked visitor)
-    const familyMembers = visitor.visitorFamilyGroup 
-      ? visitors.filter(v => v.visitorFamilyGroup === visitor.visitorFamilyGroup)
-      : [visitor]; // If no family group, just edit the individual visitor
-    
-    const personsData = familyMembers.map((member, index) => {
-      const parts = member.name.trim().split(' ');
-      const firstName = parts[0] || '';
-      const lastName = parts.slice(1).join(' ') || '';
-      return {
-        firstName: firstName === 'Unknown' ? '' : firstName,
-        lastName: lastName === 'Unknown' ? '' : lastName,
-        lastNameUnknown: lastName === 'Unknown',
-        fillLastNameFromAbove: index > 0 // For editing, assume subsequent people should fill from above
-      };
-    });
-    
-    setVisitorForm({
-      personType: visitor.visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor',
-      notes: visitor.notes || '',
-      persons: personsData,
-      autoFillSurname: false
-    });
-    setEditingVisitor(visitor);
-    setShowEditVisitorModal(true);
   };
 
 
@@ -1431,8 +1738,27 @@ const AttendancePage: React.FC = () => {
         showSuccess('Added successfully');
       }
 
-      // Reload attendance data
+      // Reload attendance data and related visitor data to ensure immediate visibility
       await loadAttendanceData();
+      
+      // Also refresh recent visitors and all church people to ensure new visitors appear immediately
+      if (selectedGathering) {
+        try {
+          // Refresh recent visitors for this gathering
+          const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+          setRecentVisitors(recentResponse.data.visitors || []);
+          setAllRecentVisitorsPool(recentResponse.data.visitors || []);
+          
+          // Refresh all church people to include the newly added visitor
+          const allPeopleResponse = await attendanceAPI.getAllPeople();
+          setAllChurchVisitors(allPeopleResponse.data.visitors || []);
+          
+          console.log('✅ Refreshed all visitor data after adding new visitor');
+        } catch (refreshErr) {
+          console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+          // Don't throw error since the main operation succeeded
+        }
+      }
       
       // Reset form and close modal
       setVisitorForm({
@@ -1454,74 +1780,7 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-  const handleSubmitEditVisitor = async () => {
-    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    if (!selectedGathering || !editingVisitor) return;
-    
-    try {
-      // Validate form
-      for (const person of visitorForm.persons) {
-        if (!person.firstName.trim()) {
-          setError('First name is required for all persons');
-          return;
-        }
-        if (!person.lastName.trim() && !person.lastNameUnknown) {
-          setError('Last name is required for all persons (or check "Unknown")');
-          return;
-        }
-      }
 
-      // Build people array
-      const people = visitorForm.persons.map(person => ({
-        firstName: person.firstName.trim(),
-        lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
-        firstUnknown: false,
-        lastUnknown: person.lastNameUnknown,
-        isChild: false // No distinction
-      }));
-
-      const notes = visitorForm.notes.trim();
-
-      // NEW APPROACH: Update visitor family in People system
-      // For now, we'll keep the old approach for editing since it's more complex
-      // TODO: Implement proper editing of visitor families in People system
-      const response = await attendanceAPI.updateVisitor(selectedGathering.id, selectedDate, editingVisitor.id!, {
-        people,
-        visitorType: visitorForm.personType === 'local_visitor' ? 'potential_regular' : 'temporary_other',
-        notes: notes ? notes : undefined
-      });
-
-      // Show success toast
-      if (response.data.individuals && response.data.individuals.length > 0) {
-        const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
-        showSuccess(`Updated: ${names}`);
-      } else {
-        showSuccess('Updated successfully');
-      }
-
-      // Reload attendance data
-      await loadAttendanceData();
-      
-      // Reset form and close modal
-      setVisitorForm({
-        personType: 'local_visitor',
-        notes: '',
-        persons: [{
-          firstName: '',
-          lastName: '',
-          lastNameUnknown: false,
-          fillLastNameFromAbove: false
-        }],
-        autoFillSurname: false
-      });
-      setShowEditVisitorModal(false);
-      setEditingVisitor(null);
-      setError('');
-    } catch (err: any) {
-      console.error('Failed to update:', err);
-      setError(err.response?.data?.error || 'Failed to update');
-    }
-  };
 
   // Group attendees by family and filter based on search term (memoized)
   const groupedAttendees = useMemo(() => {
@@ -1786,7 +2045,26 @@ const AttendancePage: React.FC = () => {
     try {
       const response = await attendanceAPI.addVisitorFamilyToService(selectedGathering.id, selectedDate, familyId);
       showSuccess('Added visitor family to this service');
+      
+      // Reload attendance data and related visitor data to ensure immediate visibility
       await loadAttendanceData();
+      
+      // Also refresh recent visitors and all church people to ensure newly added visitors appear immediately
+      try {
+        // Refresh recent visitors for this gathering
+        const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+        setRecentVisitors(recentResponse.data.visitors || []);
+        setAllRecentVisitorsPool(recentResponse.data.visitors || []);
+        
+        // Refresh all church people to reflect the change
+        const allPeopleResponse = await attendanceAPI.getAllPeople();
+        setAllChurchVisitors(allPeopleResponse.data.visitors || []);
+        
+        console.log('✅ Refreshed all visitor data after adding visitor family from all church people');
+      } catch (refreshErr) {
+        console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+        // Don't throw error since the main operation succeeded
+      }
     } catch (err: any) {
       console.error('Failed to add visitor family from All Visitors:', err);
       setError(err.response?.data?.error || 'Failed to add visitor family');
@@ -1844,16 +2122,7 @@ const AttendancePage: React.FC = () => {
     }));
   };
 
-  // Helper function to get the appropriate edit button text
-  const getEditButtonText = () => {
-    const totalPeople = visitorForm.persons.length;
-    
-    if (totalPeople === 1) {
-      return 'Update Visitor';
-    } else {
-      return 'Update Visitors';
-    }
-  };
+
 
   // Gatherings order management (drag & drop) with localStorage persistence
   const [isReorderMode, setIsReorderMode] = useState(false);
@@ -1861,17 +2130,6 @@ const AttendancePage: React.FC = () => {
   const draggingGatheringId = useRef<number | null>(null);
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [reorderList, setReorderList] = useState<GatheringType[]>([]);
-
-  // Offline storage for pending attendance changes
-  const [pendingChanges, setPendingChanges] = useState<Array<{
-    individualId: number;
-    present: boolean;
-    timestamp: number;
-    gatheringId: number;
-    date: string;
-  }>>([]);
-  
-  const [isSyncing, setIsSyncing] = useState(false);
   const dragIndexRef = useRef<number | null>(null);
 
   // Offline storage functions
@@ -2601,18 +2859,25 @@ const AttendancePage: React.FC = () => {
                         }`}>
                           {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
                         </span>
+                                                                                        {(user?.role === 'admin' || user?.role === 'coordinator') && (
                         <button
-                          disabled={isAttendanceLocked}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleEditVisitor(group.members[0]);
-                          }}
-                          className={`p-1 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
-                          title="Edit"
+                                      // Navigate to People page with this visitor's family
+                                      const familyId = group.members[0].familyId;
+                                      if (familyId) {
+                                        navigate(`/app/people?familyId=${familyId}`);
+                                      } else {
+                                        navigate(`/app/people?search=${encodeURIComponent(group.members[0].name)}`);
+                                      }
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="Edit in People page"
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
+                                )}
 
                       </div>
                       {group.members.length > 1 && (
@@ -2689,18 +2954,25 @@ const AttendancePage: React.FC = () => {
                                 }`}>
                                   {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
                                 </span>
+                                {(user?.role === 'admin' || user?.role === 'coordinator') && (
                                 <button
-                                  disabled={isAttendanceLocked}
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
-                                    handleEditVisitor(person);
-                                  }}
-                                  className={`p-0.5 ${isAttendanceLocked ? 'text-gray-200 cursor-not-allowed' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
-                                  title="Edit visitor"
+                                      // Navigate to People page with this visitor's family
+                                      const familyId = person.familyId;
+                                      if (familyId) {
+                                        navigate(`/app/people?familyId=${familyId}`);
+                                      } else {
+                                        navigate(`/app/people?search=${encodeURIComponent(person.name)}`);
+                                      }
+                                    }}
+                                    className="p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="Edit in People page"
                                 >
                                   <PencilIcon className="h-3 w-3" />
                                 </button>
+                                )}
 
                               </div>
                             )}
@@ -2949,10 +3221,13 @@ const AttendancePage: React.FC = () => {
                           </button>
                         )}
                       </div>
-                      {/* Add Person button and auto-fill checkbox under person 1 info */}
-                      {index === 0 && (
-                        <div className="md:col-span-2 mt-4 space-y-3">
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add Another Person button */}
                           {visitorForm.persons.length < 10 && (
+                  <div>
                             <button
                               type="button"
                               onClick={addPerson}
@@ -2961,13 +3236,8 @@ const AttendancePage: React.FC = () => {
                               <PlusIcon className="h-4 w-4 mr-2" />
                               Add Another Person
                             </button>
-                          )}
-
                         </div>
                       )}
-                    </div>
-                  ))}
-                </div>
 
                 {/* Help text for regular attendees */}
                 {visitorForm.personType === 'regular' && (
@@ -3018,199 +3288,7 @@ const AttendancePage: React.FC = () => {
         document.body
       )}
 
-      {/* Edit Visitor Modal */}
-      {showEditVisitorModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
-          <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Edit Visitor
-                </h3>
-                <button
-                  onClick={() => setShowEditVisitorModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <form onSubmit={(e) => { e.preventDefault(); handleSubmitEditVisitor(); }} className="space-y-4">
-                {/* Person Type */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Person Type
-                  </label>
-                  <div className="flex space-x-4">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="editPersonType"
-                        value="local_visitor"
-                        checked={visitorForm.personType === 'local_visitor'}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                      />
-                      <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="editPersonType"
-                        value="traveller_visitor"
-                        checked={visitorForm.personType === 'traveller_visitor'}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                      />
-                      <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="editPersonType"
-                        value="regular"
-                        checked={visitorForm.personType === 'regular'}
-                        onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                      />
-                      <span className="ml-2 text-sm text-gray-900">Regular Attendee</span>
-                    </label>
-                  </div>
-                </div>
 
-                {/* Persons List */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Family Members (up to 10)
-                    </label>
-                  </div>
-                  {visitorForm.persons.map((person, index) => (
-                    <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200' : ''}`}>
-                      <div>
-                        <label htmlFor={`editPersonFirstName-${index}`} className="block text-sm font-medium text-gray-700">
-                          First Name {index + 1}
-                        </label>
-                        <input
-                          id={`editPersonFirstName-${index}`}
-                          type="text"
-                          value={person.firstName}
-                          onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="First name"
-                          required
-                        />
-                      </div>
-                      <div className="relative">
-                        <label htmlFor={`editPersonLastName-${index}`} className="block text-sm font-medium text-gray-700">
-                          Last Name {index + 1}
-                        </label>
-                        <input
-                          id={`editPersonLastName-${index}`}
-                          type="text"
-                          value={person.lastName}
-                          onChange={(e) => updatePerson(index, { lastName: e.target.value })}
-                          disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
-                          placeholder="Last name"
-                        />
-                        <div className="flex flex-col space-y-1 mt-1">
-                          {/* For person 1 or any person: Unknown checkbox */}
-                          <div className="flex items-center">
-                            <input
-                              id={`editPersonLastNameUnknown-${index}`}
-                              type="checkbox"
-                              checked={person.lastNameUnknown}
-                              onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                            />
-                            <label htmlFor={`editPersonLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                              Unknown
-                            </label>
-                          </div>
-                          {/* For person 2+: Fill from above checkbox */}
-                          {index > 0 && (
-                            <div className="flex items-center">
-                              <input
-                                id={`editPersonFillLastName-${index}`}
-                                type="checkbox"
-                                checked={person.fillLastNameFromAbove}
-                                onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
-                                disabled={person.lastNameUnknown}
-                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                              />
-                              <label htmlFor={`editPersonFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
-                                Fill from above
-                              </label>
-                            </div>
-                          )}
-                        </div>
-                        {index > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => removePerson(index)}
-                            className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-700"
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </div>
-                      {/* Add Person button and auto-fill checkbox under person 1 info */}
-                      {index === 0 && (
-                        <div className="md:col-span-2 mt-4 space-y-3">
-                          {visitorForm.persons.length < 10 && (
-                            <button
-                              type="button"
-                              onClick={addPerson}
-                              className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200"
-                            >
-                              <PlusIcon className="h-4 w-4 mr-2" />
-                              Add Another Person
-                            </button>
-                          )}
-
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Notes field */}
-                <div>
-                  <label htmlFor="editNotes" className="block text-sm font-medium text-gray-700">
-                    Notes
-                  </label>
-                  <textarea
-                    id="editNotes"
-                    value={visitorForm.notes}
-                    onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Any additional notes (optional)"
-                    rows={3}
-                  />
-                </div>
-                
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowEditVisitorModal(false)}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                  >
-                    {getEditButtonText()}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
       {/* Reorder Modal */}
       {showReorderModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
@@ -3277,6 +3355,7 @@ const AttendancePage: React.FC = () => {
         </div>,
         document.body
       )}
+
 
 
     </div>

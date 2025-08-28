@@ -11,6 +11,7 @@ interface AuthContextType {
   updateUser: (userData: Partial<User>) => void;
   refreshOnboardingStatus: () => Promise<void>;
   refreshUserData: () => Promise<void>;
+  refreshTokenAndUserData: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -181,6 +182,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const refreshTokenAndUserData = async () => {
+    try {
+      console.log('🔄 Refreshing token and user data to sync church ID...');
+      // First refresh the token to get updated church ID in JWT
+      await authAPI.refreshToken();
+      console.log('✅ Token refreshed');
+      
+      // Then refresh the user data to get latest church_id
+      await refreshUserData();
+      console.log('✅ Token and user data refreshed successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to refresh token and user data:', error);
+      return false;
+    }
+  };
+
   const value: AuthContextType = {
     user,
     isLoading,
@@ -191,6 +209,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     updateUser,
     refreshOnboardingStatus,
     refreshUserData,
+    refreshTokenAndUserData,
   };
 
   return (

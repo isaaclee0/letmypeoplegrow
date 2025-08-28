@@ -111,9 +111,9 @@ function registerValidSW(swUrl: string, config?: Config) {
         document.addEventListener('visibilitychange', () => {
           if (!document.hidden) {
             const now = Date.now();
-            // Only check for updates if it's been more than 30 seconds since last check
-            if (now - lastVisibilityCheck > 30000) {
-              console.log('Page became visible, checking for updates...');
+            // Only check for updates if it's been more than 5 minutes since last check
+            if (now - lastVisibilityCheck > 300000) { // 5 minutes instead of 30 seconds
+              console.log('Page became visible after 5+ minutes, checking for updates...');
               registration.update();
               lastVisibilityCheck = now;
             }

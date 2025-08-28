@@ -71,7 +71,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const tabId = useRef(Math.random().toString(36).substr(2, 9));
   console.log(`🔌 WebSocketProvider initialized for tab ${tabId.current}`);
   
-  const { user } = useAuth();
+  const { user, refreshTokenAndUserData } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -220,12 +220,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         connectionId: connectionId
       }, // Include tab ID and unique connection ID
       withCredentials: true, // Important: send cookies with WebSocket connection
-      transports: ['polling', 'websocket'], // Start with polling, upgrade to WebSocket
-      timeout: 10000, // 10 second timeout
+      transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
+      timeout: 15000, // 15 second timeout - increased for reliability
       reconnection: true,
-      reconnectionAttempts: 3, // Fewer attempts, faster failure detection
-      reconnectionDelay: 1000, // 1 second delay
-      reconnectionDelayMax: 5000, // 5 second max delay  
+      reconnectionAttempts: 5, // More attempts for better resilience
+      reconnectionDelay: 2000, // 2 second delay
+      reconnectionDelayMax: 10000, // 10 second max delay  
       forceNew: true, // Force new connection per tab to prevent conflicts
       upgrade: true, // Enable upgrade to WebSocket
       rememberUpgrade: true, // Remember the upgraded transport
@@ -274,7 +274,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       }
     });
 
-    newSocket.on('connect_error', (error) => {
+    newSocket.on('connect_error', async (error) => {
       console.error('❌ WebSocket connection error:', error.message);
       console.log('🔍 Connection details:', {
         serverUrl,
@@ -283,6 +283,28 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         upgrade: newSocket.io.opts.upgrade,
         attemptNumber: (newSocket as any).reconnectionAttempts || 0
       });
+      
+      // Check if this is a church ID mismatch error and try to fix it
+      if (error.message && error.message.includes('Church ID mismatch')) {
+        console.log('🔧 Detected church ID mismatch - attempting to refresh token and user data');
+        try {
+          const refreshSuccess = await refreshTokenAndUserData();
+          if (refreshSuccess) {
+            console.log('✅ Token and user data refreshed successfully - will retry connection on next attempt');
+            // The WebSocket will automatically retry and should work with the fresh token
+          } else {
+            console.log('❌ Failed to refresh token and user data - falling back to page refresh');
+            window.location.reload();
+          }
+          return;
+        } catch (refreshError) {
+          console.error('❌ Failed to handle church ID mismatch:', refreshError);
+          console.log('🔄 Falling back to page refresh');
+          window.location.reload();
+          return;
+        }
+      }
+      
       setIsConnected(false);
       setConnectionStatus('error');
       initializingRef.current = false; // Reset initialization flag on error

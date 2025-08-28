@@ -42,47 +42,39 @@ const generateSecureChurchId = async (churchName) => {
  * Generate a simple church ID based on the church name (legacy method)
  * This is less secure but more readable - use only for development/testing
  * Examples:
- * - "Development Church" -> "devch1"
- * - "Redeemer Christian Church" -> "redcc1"
+ * - "Development Church" -> "dev_abc123"
+ * - "Enjoy Church" -> "enj_def456"
+ * - "Redeemer Christian Church" -> "red_xyz789"
  */
 const generateSimpleChurchId = async (churchName) => {
   try {
-    // Convert church name to simple format (lowercase, no spaces, no special chars)
-    let baseId = churchName.toLowerCase()
+    // Create a base identifier from church name (first 3 letters)
+    const baseId = churchName.toLowerCase()
       .replace(/[^a-z0-9]/g, '') // Remove all non-alphanumeric characters
-      .substring(0, 20); // Limit to 20 characters
+      .substring(0, 3); // Use only first 3 characters
     
     // If baseId is empty after cleaning, use a default
-    if (!baseId) {
-      baseId = 'church';
+    const finalBaseId = baseId || 'chr';
+    
+    // Generate a shorter random suffix for development (6 chars instead of 12)
+    const randomSuffix = crypto.randomBytes(3).toString('hex'); // 6 character hex string
+    
+    const developmentId = `${finalBaseId}_${randomSuffix}`;
+    
+    // Check if this ID already exists
+    const existing = await Database.query(
+      'SELECT 1 FROM church_settings WHERE church_id = ?',
+      [developmentId]
+    );
+    
+    if (existing.length > 0) {
+      // If collision, generate a new one (very unlikely but possible)
+      return generateSimpleChurchId(churchName);
     }
     
-    // Check if this base_id already exists and find the next available number
-    let counter = 1;
-    let finalId = baseId;
-    
-    while (true) {
-      const existing = await Database.query(
-        'SELECT 1 FROM church_settings WHERE church_id = ?',
-        [finalId]
-      );
-      
-      if (existing.length === 0) {
-        break; // This ID is available
-      }
-      
-      counter++;
-      finalId = `${baseId}${counter}`;
-      
-      // Prevent infinite loop (max 999 churches with same base name)
-      if (counter > 999) {
-        throw new Error('Too many churches with similar names');
-      }
-    }
-    
-    return finalId;
+    return developmentId;
   } catch (error) {
-    console.error('Error generating church ID:', error);
+    console.error('Error generating simple church ID:', error);
     throw error;
   }
 };
@@ -130,9 +122,15 @@ const isValidChurchId = (churchId) => {
     return true;
   }
   
-  // Check for simple format (base + optional number)
-  const simplePattern = /^[a-z0-9]{1,20}\d*$/;
+  // Check for simple format (3 chars + underscore + 6 hex chars, like dev_abc123)
+  const simplePattern = /^[a-z0-9]{3}_[a-f0-9]{6}$/;
   if (simplePattern.test(churchId)) {
+    return true;
+  }
+  
+  // Also accept legacy simple format (base + optional number) for backwards compatibility
+  const legacyPattern = /^[a-z0-9]{1,20}\d*$/;
+  if (legacyPattern.test(churchId)) {
     return true;
   }
   

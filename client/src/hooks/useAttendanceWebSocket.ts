@@ -140,7 +140,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
       if (!enabled || !gatheringId || !date || !isConnected) {
         return;
       }
-
+ 
       // Track this hook's operation (per-tab tracking, not global blocking)
       globalRoomState.recentHookOperations.set(hookId.current, Date.now());
       isProcessingRoomChange.current = true;

@@ -594,6 +594,7 @@ router.get('/me', verifyToken, async (req, res) => {
         role: user.role,
         firstName: user.first_name,
         lastName: user.last_name,
+        church_id: user.church_id,
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
         gatheringAssignments: assignmentsWithNumbers,

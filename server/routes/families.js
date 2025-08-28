@@ -59,9 +59,9 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_FAMILY'
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMILY'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { familyName, familyType } = req.body;
+    const { familyName, familyType, familyNotes } = req.body;
 
-    if (!familyName && !familyType) {
+    if (!familyName && !familyType && familyNotes === undefined) {
       return res.status(400).json({ error: 'Nothing to update' });
     }
 
@@ -76,6 +76,11 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMIL
     if (familyType && ['regular', 'local_visitor', 'traveller_visitor'].includes(familyType)) {
       fields.push('family_type = ?');
       values.push(familyType);
+    }
+
+    if (familyNotes !== undefined) {
+      fields.push('family_notes = ?');
+      values.push(familyNotes);
     }
 
     values.push(id, req.user.church_id);

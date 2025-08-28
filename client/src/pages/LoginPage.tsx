@@ -21,6 +21,7 @@ const LoginPage: React.FC = () => {
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
   const [hasNonAdminUsers, setHasNonAdminUsers] = useState<boolean | null>(null);
+  const [hasExpiredToken, setHasExpiredToken] = useState<boolean | null>(null);
   
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -28,10 +29,28 @@ const LoginPage: React.FC = () => {
   const contactForm = useForm<ContactFormData>();
   const codeForm = useForm<CodeFormData>();
 
-  // Check if users exist on component mount
+  // Check if users exist and if current user has expired token on component mount
   useEffect(() => {
-    const checkUsers = async () => {
+    const checkUsersAndAuth = async () => {
       try {
+        // Check for expired token first
+        try {
+          await authAPI.getCurrentUser();
+          // If this succeeds, user is authenticated
+          setHasExpiredToken(false);
+        } catch (error: any) {
+          if (error.response?.status === 401) {
+            if (error.response?.data?.code === 'TOKEN_EXPIRED') {
+              setHasExpiredToken(true);
+            } else {
+              setHasExpiredToken(false);
+            }
+          } else {
+            setHasExpiredToken(false);
+          }
+        }
+
+        // Check if users exist
         const response = await authAPI.checkUsers();
         setHasUsers(response.data.hasUsers);
         setHasNonAdminUsers(response.data.hasNonAdminUsers);
@@ -43,7 +62,7 @@ const LoginPage: React.FC = () => {
       }
     };
     
-    checkUsers();
+    checkUsersAndAuth();
   }, []);
 
   // Cooldown timer effect
@@ -121,8 +140,8 @@ const LoginPage: React.FC = () => {
     codeForm.reset({ code: '' });
   };
 
-  // Show loading state while checking users
-  if (hasUsers === null) {
+  // Show loading state while checking users and auth status
+  if (hasUsers === null || hasExpiredToken === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-500 via-primary-600 to-secondary-500 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8 bg-white rounded-xl shadow-2xl p-8">
@@ -159,10 +178,15 @@ const LoginPage: React.FC = () => {
             />
           </div>
           <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 font-title">
-            {hasNonAdminUsers ? 'Welcome Back' : 'Welcome to Let My People Grow'}
+            {hasExpiredToken ? 'Welcome Back to Let My People Grow' : 'Welcome to Let My People Grow'}
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            {hasNonAdminUsers ? 'Sign in to your church attendance tracking system' : 'Set up your church attendance tracking system'}
+            {hasExpiredToken 
+              ? 'Sign in again to continue with your church attendance tracking system'
+              : hasNonAdminUsers 
+                ? 'Sign in to your church attendance tracking system' 
+                : 'Set up your church attendance tracking system'
+            }
           </p>
         </div>
 

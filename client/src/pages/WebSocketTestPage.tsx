@@ -10,6 +10,8 @@ const WebSocketTestPage: React.FC = () => {
   const [messages, setMessages] = useState<string[]>([]);
   const [testMessage, setTestMessage] = useState('');
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
+  const [currentRoom, setCurrentRoom] = useState<string | null>(null);
+  const [roomToJoin, setRoomToJoin] = useState('test-room-1');
 
   console.log('🧪 WebSocketTestPage - State:', {
     socket: !!socket,
@@ -48,6 +50,31 @@ const WebSocketTestPage: React.FC = () => {
     socket.on('test_message', handleTestMessage);
     socket.on('test_echo', handleTestMessage);
 
+    // Listen for room events
+    const handleJoinedRoom = (data: any) => {
+      const msg = `[${new Date().toLocaleTimeString()}] 🚪 Joined room: ${data.roomName} (${data.roomSize} members)`;
+      console.log('🚪 Joined room:', data);
+      setMessages(prev => [...prev, msg]);
+      setCurrentRoom(data.roomName);
+    };
+
+    const handleLeftRoom = (data: any) => {
+      const msg = `[${new Date().toLocaleTimeString()}] 🚪 Left room: ${data.roomName}`;
+      console.log('🚪 Left room:', data);
+      setMessages(prev => [...prev, msg]);
+      setCurrentRoom(null);
+    };
+
+    const handleRoomMessage = (data: any) => {
+      const msg = `[${new Date().toLocaleTimeString()}] 📨 Room message: ${data.message} (from ${data.userEmail})`;
+      console.log('📨 Room message received:', data);
+      setMessages(prev => [...prev, msg]);
+    };
+
+    socket.on('joined_test_room', handleJoinedRoom);
+    socket.on('left_test_room', handleLeftRoom);
+    socket.on('test_room_message', handleRoomMessage);
+
     // Listen for connection events
     const handleConnect = () => {
       const msg = `[${new Date().toLocaleTimeString()}] ✅ Connected with socket ID: ${socket.id}`;
@@ -67,6 +94,9 @@ const WebSocketTestPage: React.FC = () => {
     return () => {
       socket.off('test_message', handleTestMessage);
       socket.off('test_echo', handleTestMessage);
+      socket.off('joined_test_room', handleJoinedRoom);
+      socket.off('left_test_room', handleLeftRoom);
+      socket.off('test_room_message', handleRoomMessage);
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
     };
@@ -93,6 +123,46 @@ const WebSocketTestPage: React.FC = () => {
 
   const clearMessages = () => {
     setMessages([]);
+  };
+
+  const joinRoom = () => {
+    if (!socket || !roomToJoin.trim()) return;
+
+    console.log('🚪 Joining room:', roomToJoin);
+    socket.emit('join_test_room', { roomName: roomToJoin });
+    
+    const msg = `[${new Date().toLocaleTimeString()}] 📤 Requesting to join room: ${roomToJoin}`;
+    setMessages(prev => [...prev, msg]);
+  };
+
+  const leaveRoom = () => {
+    if (!socket || !currentRoom) return;
+
+    console.log('🚪 Leaving room:', currentRoom);
+    socket.emit('leave_test_room', { roomName: currentRoom });
+    
+    const msg = `[${new Date().toLocaleTimeString()}] 📤 Requesting to leave room: ${currentRoom}`;
+    setMessages(prev => [...prev, msg]);
+  };
+
+  const sendRoomMessage = () => {
+    if (!socket || !testMessage.trim() || !currentRoom) return;
+
+    const messageData = {
+      message: testMessage,
+      userId: user?.id,
+      userEmail: user?.email,
+      timestamp: new Date().toISOString(),
+      socketId: socket.id,
+      roomName: currentRoom
+    };
+
+    console.log('📤 Sending room message:', messageData);
+    socket.emit('test_room_message', messageData);
+    
+    const sentMsg = `[${new Date().toLocaleTimeString()}] 📤 Sent to room: ${testMessage}`;
+    setMessages(prev => [...prev, sentMsg]);
+    setTestMessage('');
   };
 
   const getConnectionStatusColor = () => {
@@ -150,6 +220,9 @@ const WebSocketTestPage: React.FC = () => {
                 <p className="text-sm text-gray-600">
                   Socket ID: {socket?.id || 'Not connected'}
                 </p>
+                <p className="text-sm text-gray-600">
+                  Current Room: {currentRoom || 'Not in any room'}
+                </p>
               </div>
               <div>
                 <p className="text-sm text-gray-600">
@@ -164,26 +237,74 @@ const WebSocketTestPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Room Controls */}
+          <div className="bg-purple-50 rounded-lg p-4 mb-6">
+            <h2 className="text-lg font-semibold mb-3">Room Controls (Testing Room-Based Broadcasting)</h2>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={roomToJoin}
+                  onChange={(e) => setRoomToJoin(e.target.value)}
+                  placeholder="Room name to join..."
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  disabled={!isConnected}
+                />
+                <button
+                  onClick={joinRoom}
+                  disabled={!isConnected || !roomToJoin.trim() || currentRoom === roomToJoin}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Join Room
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={leaveRoom}
+                  disabled={!isConnected || !currentRoom}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Leave Current Room
+                </button>
+                <span className="px-3 py-2 text-sm text-gray-600">
+                  {currentRoom ? `In room: ${currentRoom}` : 'Not in any room'}
+                </span>
+              </div>
+            </div>
+          </div>
+
           {/* Test Message Sender */}
           <div className="bg-blue-50 rounded-lg p-4 mb-6">
             <h2 className="text-lg font-semibold mb-3">Send Test Message</h2>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={testMessage}
-                onChange={(e) => setTestMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && sendTestMessage()}
-                placeholder="Enter test message..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={!isConnected}
-              />
-              <button
-                onClick={sendTestMessage}
-                disabled={!isConnected || !testMessage.trim()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-              >
-                Send
-              </button>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={testMessage}
+                  onChange={(e) => setTestMessage(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && sendTestMessage()}
+                  placeholder="Enter test message..."
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!isConnected}
+                />
+                <button
+                  onClick={sendTestMessage}
+                  disabled={!isConnected || !testMessage.trim()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Send Global
+                </button>
+                <button
+                  onClick={sendRoomMessage}
+                  disabled={!isConnected || !testMessage.trim() || !currentRoom}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Send to Room
+                </button>
+              </div>
+              <p className="text-sm text-gray-600">
+                Global messages use manual broadcasting (working). Room messages use Socket.IO rooms (testing).
+              </p>
             </div>
           </div>
 

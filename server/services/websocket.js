@@ -8,6 +8,7 @@ class WebSocketService {
     this.connectedUsers = new Map(); // Track user connections
     this.attendanceRooms = new Map(); // Track room subscriptions
     this.recentUpdates = new Map(); // Track recent updates for deduplication
+    this.churchSockets = new Map(); // Track sockets by church ID for efficient broadcasting
   }
 
   /**
@@ -46,41 +47,91 @@ class WebSocketService {
 
   /**
    * Setup authentication middleware for WebSocket connections
-   * Uses cookie-based session validation like the REST API
+   * Uses JWT token validation like the REST API for security
    */
   setupAuthentication() {
     this.io.use(async (socket, next) => {
       try {
-        // Get auth data from handshake
+        const jwt = require('jsonwebtoken');
+        const Database = require('../config/database');
+        
+        // Extract JWT token from cookies (same as REST API)
+        let token = null;
+        
+        // Parse cookies from handshake headers
+        const cookieHeader = socket.handshake.headers.cookie;
+        if (cookieHeader) {
+          const cookies = cookieHeader.split('; ');
+          const authTokenCookie = cookies.find(cookie => cookie.startsWith('authToken='));
+          if (authTokenCookie) {
+            token = authTokenCookie.split('=')[1];
+          }
+        }
+        
+        // Also check auth data as fallback (but verify it)
         const authData = socket.handshake.auth;
         
         console.log('🔌 WebSocket auth attempt:', {
-          authData,
-          hasUserId: !!authData?.userId,
-          hasChurchId: !!authData?.churchId,
-          allKeys: authData ? Object.keys(authData) : 'no authData'
+          hasToken: !!token,
+          hasAuthData: !!authData,
+          authDataKeys: authData ? Object.keys(authData) : 'none',
+          cookieHeader: cookieHeader ? 'present' : 'missing'
         });
         
-        if (!authData || !authData.userId || !authData.churchId) {
-          console.log('❌ WebSocket auth failed: missing required data', {
+        if (!token) {
+          console.log('❌ WebSocket auth failed: no token found', {
             socketId: socket.id,
-            hasAuthData: !!authData,
-            hasUserId: !!authData?.userId,
-            hasChurchId: !!authData?.churchId,
-            authDataKeys: authData ? Object.keys(authData) : 'none'
+            cookieHeader: cookieHeader ? 'present but no authToken' : 'missing'
           });
-          return next(new Error('Authentication data required'));
+          return next(new Error('Authentication required - no token'));
         }
 
-        // For now, trust the client auth data since they have a valid session
-        // In production, you might want to validate the session via database
-        // or implement a session token system
+        // Verify JWT token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
-        // Add user info to socket
-        socket.userId = authData.userId;
-        socket.userEmail = authData.email;
-        socket.userRole = authData.role;
-        socket.churchId = authData.churchId;
+        // Get user details from database to ensure they still exist and are active
+        const users = await Database.query(
+          'SELECT id, email, role, first_name, last_name, is_active, church_id FROM users WHERE id = ? AND is_active = true',
+          [decoded.userId]
+        );
+
+        if (users.length === 0) {
+          console.log('❌ WebSocket auth failed: user not found or inactive', {
+            socketId: socket.id,
+            userId: decoded.userId
+          });
+          return next(new Error('User not found or inactive'));
+        }
+
+        const user = users[0];
+        const churchId = decoded.churchId || user.church_id;
+        
+        // Verify auth data matches token if provided
+        if (authData) {
+          if (authData.userId && authData.userId !== decoded.userId) {
+            console.log('❌ WebSocket auth failed: user ID mismatch', {
+              socketId: socket.id,
+              tokenUserId: decoded.userId,
+              authDataUserId: authData.userId
+            });
+            return next(new Error('Authentication data mismatch'));
+          }
+          
+          if (authData.churchId && authData.churchId !== churchId) {
+            console.log('❌ WebSocket auth failed: church ID mismatch', {
+              socketId: socket.id,
+              tokenChurchId: churchId,
+              authDataChurchId: authData.churchId
+            });
+            return next(new Error('Church ID mismatch'));
+          }
+        }
+        
+        // Add verified user info to socket
+        socket.userId = user.id;
+        socket.userEmail = user.email;
+        socket.userRole = user.role;
+        socket.churchId = churchId;
 
         logger.info('WebSocket authentication successful', {
           userId: socket.userId,
@@ -92,12 +143,22 @@ class WebSocketService {
 
         next();
       } catch (error) {
+        console.error('❌ WebSocket authentication error:', error);
+        
+        let errorMessage = 'Authentication failed';
+        if (error.name === 'TokenExpiredError') {
+          errorMessage = 'Token expired';
+        } else if (error.name === 'JsonWebTokenError') {
+          errorMessage = 'Invalid token';
+        }
+        
         logger.warn('WebSocket authentication failed', {
           error: error.message,
-          socketId: socket.id,
-          authData: socket.handshake.auth
+          errorName: error.name,
+          socketId: socket.id
         });
-        next(new Error('Authentication failed'));
+        
+        next(new Error(errorMessage));
       }
     });
   }
@@ -134,6 +195,12 @@ class WebSocketService {
     }
     this.connectedUsers.get(userKey).add(socket.id);
 
+    // Track socket by church ID for efficient broadcasting
+    if (!this.churchSockets.has(socket.churchId)) {
+      this.churchSockets.set(socket.churchId, new Set());
+    }
+    this.churchSockets.get(socket.churchId).add(socket.id);
+
     console.log('🔌 WebSocket client connected:', {
       socketId: socket.id,
       userId: socket.userId,
@@ -152,15 +219,18 @@ class WebSocketService {
       totalConnections: this.io.engine.clientsCount
     });
 
-    // Handle attendance room subscription
-    socket.on('join_attendance', (data) => {
-      this.handleJoinAttendance(socket, data);
-    });
+    // Handle attendance room subscription (DISABLED - using manual broadcasting for better UX)
+    // Room-based broadcasting is too restrictive - only users viewing the exact same 
+    // gathering/date would receive updates. Manual broadcasting ensures all church users 
+    // see real-time updates regardless of which gathering they're currently viewing.
+    // socket.on('join_attendance', (data) => {
+    //   this.handleJoinAttendance(socket, data);
+    // });
 
-    // Handle leaving attendance room
-    socket.on('leave_attendance', (data) => {
-      this.handleLeaveAttendance(socket, data);
-    });
+    // Handle leaving attendance room (DISABLED - using manual broadcasting for better UX)
+    // socket.on('leave_attendance', (data) => {
+    //   this.handleLeaveAttendance(socket, data);
+    // });
 
     // Handle recording attendance via WebSocket
     socket.on('record_attendance', (data) => {
@@ -204,20 +274,38 @@ class WebSocketService {
       
       console.log('📤 Broadcasting test message to church', socket.churchId);
       
-      // Get all sockets and manually broadcast to same church users
-      const sockets = this.io.sockets.sockets;
+      // Get sockets for this church only (optimized broadcasting)
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
       let broadcastCount = 0;
       
-      sockets.forEach((clientSocket, socketId) => {
-        // Don't send to self, only to other clients in same church
-        if (socketId !== socket.id && clientSocket.churchId === socket.churchId) {
-          console.log(`📡 Sending to socket ${socketId} (user ${clientSocket.userId})`);
-          clientSocket.emit('test_message', broadcastData);
-          broadcastCount++;
-        }
-      });
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          // Don't send to self, only to other clients in same church
+          if (socketId !== socket.id) {
+            const clientSocket = this.io.sockets.sockets.get(socketId);
+            if (clientSocket) {
+              console.log(`📡 Sending to socket ${socketId} (user ${clientSocket.userId})`);
+              clientSocket.emit('test_message', broadcastData);
+              broadcastCount++;
+            }
+          }
+        });
+      }
       
       console.log(`📡 Broadcasted to ${broadcastCount} other clients in church ${socket.churchId}`);
+    });
+
+    // Handle test room functionality
+    socket.on('join_test_room', (data) => {
+      this.handleJoinTestRoom(socket, data);
+    });
+
+    socket.on('leave_test_room', (data) => {
+      this.handleLeaveTestRoom(socket, data);
+    });
+
+    socket.on('test_room_message', (data) => {
+      this.handleTestRoomMessage(socket, data);
     });
 
     // Handle disconnection
@@ -438,7 +526,7 @@ class WebSocketService {
         }
       });
 
-      // Broadcast to all clients in the same church (manual broadcasting - working solution)
+      // Broadcast to all clients in the same church (optimized church-based broadcasting)
       const broadcastData = {
         type: 'attendance_records',
         gatheringId,
@@ -451,18 +539,20 @@ class WebSocketService {
       
       console.log('📤 Broadcasting attendance update to church', socket.churchId);
       
-      // Get all sockets and manually broadcast to same church users
-      const sockets = this.io.sockets.sockets;
+      // Get sockets for this church only (O(church_sockets) instead of O(all_sockets))
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
       let broadcastCount = 0;
       
-      sockets.forEach((clientSocket, socketId) => {
-        // Send to all clients in same church (including sender for confirmation)
-        if (clientSocket.churchId === socket.churchId) {
-          console.log(`📡 Sending attendance update to socket ${socketId} (user ${clientSocket.userId})`);
-          clientSocket.emit('attendance_update', broadcastData);
-          broadcastCount++;
-        }
-      });
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            console.log(`📡 Sending attendance update to socket ${socketId} (user ${clientSocket.userId})`);
+            clientSocket.emit('attendance_update', broadcastData);
+            broadcastCount++;
+          }
+        });
+      }
       
       console.log(`📡 Attendance update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
 
@@ -539,11 +629,8 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
-              i.mobile_phone as mobilePhone,
-              i.email,
-              i.birth_date as birthDate,
               i.last_attendance_date as lastAttendanceDate,
-              i.is_visitor as isVisitor,
+              i.people_type,
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -553,6 +640,10 @@ class WebSocketService {
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ? AND ats.church_id = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id AND ar.church_id = ?
             WHERE i.church_id = ? AND gl.gathering_type_id = ?
+            AND (
+              f.family_type = 'regular' OR 
+              (f.family_type IS NULL AND i.people_type = 'regular')
+            )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
           attendanceListParams = [socket.churchId, socket.churchId, gatheringId, date, socket.churchId, socket.churchId, socket.churchId, gatheringId];
@@ -562,11 +653,8 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
-              i.mobile_phone as mobilePhone,
-              i.email,
-              i.birth_date as birthDate,
               i.last_attendance_date as lastAttendanceDate,
-              i.is_visitor as isVisitor,
+              i.people_type,
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -576,6 +664,10 @@ class WebSocketService {
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id
             WHERE gl.gathering_type_id = ?
+            AND (
+              f.family_type = 'regular' OR 
+              (f.family_type IS NULL AND i.people_type = 'regular')
+            )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
           attendanceListParams = [gatheringId, date, gatheringId];
@@ -593,11 +685,8 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
-              i.mobile_phone as mobilePhone,
-              i.email,
-              i.birth_date as birthDate,
               i.last_attendance_date as lastAttendanceDate,
-              i.is_visitor as isVisitor,
+              i.people_type,
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -605,7 +694,7 @@ class WebSocketService {
             LEFT JOIN families f ON i.family_id = f.id AND f.church_id = ?
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ? AND ats.church_id = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id AND ar.church_id = ?
-            WHERE i.church_id = ? AND i.is_visitor = true
+            WHERE i.church_id = ? AND i.people_type IN ('local_visitor', 'traveller_visitor')
             AND EXISTS (
               SELECT 1 FROM gathering_lists gl 
               WHERE gl.individual_id = i.id 
@@ -621,11 +710,8 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
-              i.mobile_phone as mobilePhone,
-              i.email,
-              i.birth_date as birthDate,
               i.last_attendance_date as lastAttendanceDate,
-              i.is_visitor as isVisitor,
+              i.people_type,
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -633,7 +719,7 @@ class WebSocketService {
             LEFT JOIN families f ON i.family_id = f.id
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id
-            WHERE i.is_visitor = true
+            WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
             AND EXISTS (
               SELECT 1 FROM gathering_lists gl 
               WHERE gl.individual_id = i.id 
@@ -747,6 +833,14 @@ class WebSocketService {
       this.connectedUsers.get(userKey).delete(socket.id);
       if (this.connectedUsers.get(userKey).size === 0) {
         this.connectedUsers.delete(userKey);
+      }
+    }
+
+    // Remove from church socket tracking
+    if (this.churchSockets.has(socket.churchId)) {
+      this.churchSockets.get(socket.churchId).delete(socket.id);
+      if (this.churchSockets.get(socket.churchId).size === 0) {
+        this.churchSockets.delete(socket.churchId);
       }
     }
 
@@ -957,6 +1051,133 @@ class WebSocketService {
    * Gracefully shutdown WebSocket service
    */
   /**
+   * Generate attendance room name
+   * @param {number} gatheringId - Gathering ID
+   * @param {string} date - Date string
+   * @param {string} churchId - Church ID
+   * @returns {string} Room name
+   */
+  getAttendanceRoomName(gatheringId, date, churchId) {
+    return `attendance:${churchId}:${gatheringId}:${date}`;
+  }
+
+  /**
+   * Handle joining test room
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Room data {roomName}
+   */
+  async handleJoinTestRoom(socket, data) {
+    try {
+      const { roomName } = data;
+      
+      if (!roomName) {
+        socket.emit('error', { message: 'Missing room name' });
+        return;
+      }
+
+      console.log(`🧪 User ${socket.userId} joining test room: ${roomName}`);
+      
+      // Join the Socket.IO room
+      socket.join(roomName);
+      
+      // Track room membership for our own tracking
+      if (!this.attendanceRooms.has(roomName)) {
+        this.attendanceRooms.set(roomName, new Set());
+      }
+      this.attendanceRooms.get(roomName).add(socket.id);
+
+      const roomSize = this.attendanceRooms.get(roomName).size;
+
+      console.log(`🧪 User ${socket.userId} joined test room ${roomName} (${roomSize} members)`);
+
+      // Emit confirmation to the user who joined
+      socket.emit('joined_test_room', {
+        roomName,
+        roomSize,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('Error joining test room:', error);
+      socket.emit('error', { message: 'Failed to join test room' });
+    }
+  }
+
+  /**
+   * Handle leaving test room
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Room data {roomName}
+   */
+  async handleLeaveTestRoom(socket, data) {
+    try {
+      const { roomName } = data;
+      
+      if (!roomName) {
+        socket.emit('error', { message: 'Missing room name' });
+        return;
+      }
+
+      console.log(`🧪 User ${socket.userId} leaving test room: ${roomName}`);
+      
+      // Leave the Socket.IO room
+      socket.leave(roomName);
+      
+      // Remove from our tracking
+      if (this.attendanceRooms.has(roomName)) {
+        this.attendanceRooms.get(roomName).delete(socket.id);
+        
+        // Clean up empty rooms
+        if (this.attendanceRooms.get(roomName).size === 0) {
+          this.attendanceRooms.delete(roomName);
+        }
+      }
+
+      console.log(`🧪 User ${socket.userId} left test room ${roomName}`);
+
+      // Emit confirmation
+      socket.emit('left_test_room', {
+        roomName,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('Error leaving test room:', error);
+      socket.emit('error', { message: 'Failed to leave test room' });
+    }
+  }
+
+  /**
+   * Handle test room messages
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Message data
+   */
+  async handleTestRoomMessage(socket, data) {
+    try {
+      const { roomName, message } = data;
+      
+      if (!roomName || !message) {
+        socket.emit('error', { message: 'Missing room name or message' });
+        return;
+      }
+
+      console.log(`🧪 Room message from user ${socket.userId} to room ${roomName}: ${message}`);
+      
+      // Broadcast to all clients in the room using Socket.IO rooms
+      socket.to(roomName).emit('test_room_message', {
+        ...data,
+        fromSocketId: socket.id,
+        serverTimestamp: new Date().toISOString()
+      });
+
+      console.log(`🧪 Broadcasted room message to room ${roomName}`);
+
+    } catch (error) {
+      console.error('Error handling test room message:', error);
+      socket.emit('error', { message: 'Failed to send room message' });
+    }
+  }
+
+  /**
    * Handle joining attendance room
    * @param {Socket} socket - Socket instance
    * @param {Object} data - Room data {gatheringId, date}
@@ -1080,6 +1301,7 @@ class WebSocketService {
       this.connectedUsers.clear();
       this.attendanceRooms.clear();
       this.recentUpdates.clear();
+      this.churchSockets.clear();
     }
     
     // Clear cleanup interval

@@ -767,8 +767,20 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
             }
           }
 
-          const mainFirstName = peopleToCreate[0].firstName !== 'Unknown' ? peopleToCreate[0].firstName : 'Visitor';
-          finalFamilyName = `${mainFirstName} ${familyLastName} Family`;
+          // If surnames are unknown, name family by first names only (limited to 2 names)
+          if (familyLastName === 'Unknown') {
+            const firstNames = peopleToCreate.slice(0, 2).map(p => p.firstName || 'Unknown').filter(name => name !== 'Unknown');
+            if (firstNames.length === 1) {
+              finalFamilyName = firstNames[0];
+            } else if (firstNames.length > 1) {
+              finalFamilyName = firstNames.join(' and ');
+            } else {
+              finalFamilyName = 'Visitor Family';
+            }
+          } else {
+            const mainFirstName = peopleToCreate[0].firstName !== 'Unknown' ? peopleToCreate[0].firstName : 'Visitor';
+            finalFamilyName = `${mainFirstName} ${familyLastName} Family`;
+          }
         }
 
         const familyResult = await conn.query(`
@@ -947,7 +959,20 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
         if (!finalFamilyName) {
           const mainPerson = people.find(p => !p.isChild) || people[0];
           familyLastName = (mainPerson.lastName || 'Unknown').toUpperCase();
-          finalFamilyName = `${familyLastName}, ${people.map(p => p.firstName || 'Unknown').join(' & ')}`;
+          
+          // If surnames are unknown, name family by first names only (limited to 2 names)
+          if (familyLastName === 'UNKNOWN' || !mainPerson.lastName || mainPerson.lastUnknown) {
+            const firstNames = people.slice(0, 2).map(p => p.firstName || 'Unknown').filter(name => name !== 'Unknown');
+            if (firstNames.length === 1) {
+              finalFamilyName = firstNames[0];
+            } else if (firstNames.length > 1) {
+              finalFamilyName = firstNames.join(' and ');
+            } else {
+              finalFamilyName = 'Visitor Family';
+            }
+          } else {
+            finalFamilyName = `${familyLastName}, ${people.slice(0, 2).map(p => p.firstName || 'Unknown').join(' & ')}`;
+          }
         }
         const familyResult = await conn.query(
           'INSERT INTO families (family_name, created_by, church_id) VALUES (?, ?, ?)',

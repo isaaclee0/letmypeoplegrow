@@ -27,6 +27,16 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
 
   useEffect(() => {
+    // Skip service worker registration in development to avoid caching issues
+    const isDevelopment = process.env.NODE_ENV === 'development' || 
+                         window.location.hostname === 'localhost' ||
+                         window.location.hostname.includes('127.0.0.1');
+    
+    if (isDevelopment) {
+      console.log('🚫 Service worker registration disabled in development');
+      return;
+    }
+    
     // Register service worker with update callbacks
     register({
       onUpdate: (registration) => {

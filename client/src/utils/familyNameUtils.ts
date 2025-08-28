@@ -12,47 +12,67 @@ export interface PersonForFamilyName {
 
 /**
  * Generates a family name from an array of people
- * Format: "SURNAME, Person1 and Person2" or "SURNAME, Person1, Person2 and Person3"
+ * Format: "SURNAME, Person1" for single person or "SURNAME, Person1 and Person2" for multiple people
+ * For visitors with unknown surnames, format: "Person1" or "Person1 and Person2" (first names only)
+ * Note: Only the first two people's names are included for consistency, regardless of family size
  * 
  * @param people Array of people with firstName and lastName
  * @returns Formatted family name string
  */
 export const generateFamilyName = (people: PersonForFamilyName[]): string => {
-  // Filter out people with missing required names
-  const validPeople = people.filter(person => 
-    person.firstName.trim() && 
-    person.lastName.trim() &&
-    !person.firstUnknown &&
-    !person.lastUnknown
+  // Filter people with valid first names
+  const peopleWithFirstNames = people.filter(person => 
+    person.firstName.trim() && !person.firstUnknown
   );
   
-  if (validPeople.length === 0) {
+  if (peopleWithFirstNames.length === 0) {
     return '';
   }
   
-  if (validPeople.length === 1) {
-    return `${validPeople[0].lastName}, ${validPeople[0].firstName}`;
+  // Filter people with both valid first and last names (traditional format)
+  const validPeople = peopleWithFirstNames.filter(person => 
+    person.lastName.trim() && !person.lastUnknown
+  );
+  
+  // If we have people with known surnames, use traditional format
+  if (validPeople.length > 0) {
+    if (validPeople.length === 1) {
+      return `${validPeople[0].lastName}, ${validPeople[0].firstName}`;
+    }
+    
+    // Multiple people with surnames: "SURNAME, Person1 and Person2" (limit to first two people)
+    const surname = validPeople[0].lastName;
+    const firstNames = validPeople.slice(0, 2).map(person => person.firstName);
+    
+    // Use Intl.ListFormat for better internationalization support
+    try {
+      const listFormatter = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
+      const formattedNames = listFormatter.format(firstNames);
+      return `${surname}, ${formattedNames}`;
+    } catch (error) {
+      // Fallback to manual formatting if Intl.ListFormat is not supported
+      if (firstNames.length === 1) {
+        return `${surname}, ${firstNames[0]}`;
+      } else {
+        return `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
+      }
+    }
   }
   
-  // Multiple people: "SURNAME, Person1 and Person2" - enhanced for i18n
-  const surname = validPeople[0].lastName;
-  const firstNames = validPeople.map(person => person.firstName);
+  // No people with known surnames - use first names only (for visitors with unknown surnames)
+  if (peopleWithFirstNames.length === 1) {
+    return peopleWithFirstNames[0].firstName;
+  }
   
-  // Use Intl.ListFormat for better internationalization support
+  // Multiple people with only first names known: "Person1 and Person2" (limit to first two)
+  const firstNames = peopleWithFirstNames.slice(0, 2).map(person => person.firstName);
+  
   try {
     const listFormatter = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
-    const formattedNames = listFormatter.format(firstNames);
-    return `${surname}, ${formattedNames}`;
+    return listFormatter.format(firstNames);
   } catch (error) {
     // Fallback to manual formatting if Intl.ListFormat is not supported
-    const lastName = firstNames[firstNames.length - 1];
-    const otherNames = firstNames.slice(0, -1);
-    
-    if (otherNames.length === 0) {
-      return `${surname}, ${lastName}`;
-    } else {
-      return `${surname}, ${otherNames.join(', ')} and ${lastName}`;
-    }
+    return `${firstNames[0]} and ${firstNames[1]}`;
   }
 };
 

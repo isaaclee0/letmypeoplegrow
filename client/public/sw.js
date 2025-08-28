@@ -1,10 +1,10 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-08-22T04:20:08.672Z
-// App Version: 1.0.0
+// Generated on 2025-08-28T07:33:17.160Z
+// App Version: 1.0.2
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1.0.0-' + Date.now();
-const APP_VERSION = '1.0.0';
+const CACHE_NAME = 'let-my-people-grow-v1.0.2-1756366397160';
+const APP_VERSION = '1.0.2';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -33,40 +33,13 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Fetch event - network first for app updates, cache first for static assets
+// Fetch event - serve from cache if available
 self.addEventListener('fetch', (event) => {
   // Skip API requests and other non-GET requests
   if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
     return;
   }
 
-  // Network-first strategy for navigation requests (app updates)
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          // Cache the successful response
-          if (response && response.status === 200) {
-            const responseToCache = response.clone();
-            caches.open(CACHE_NAME)
-              .then((cache) => {
-                cache.put(event.request, responseToCache);
-              })
-              .catch((error) => {
-                console.warn('Failed to cache navigation response:', error);
-              });
-          }
-          return response;
-        })
-        .catch(() => {
-          // Fallback to cache if network fails
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
-
-  // Cache-first strategy for static assets
   event.respondWith(
     caches.match(event.request)
       .then((response) => {

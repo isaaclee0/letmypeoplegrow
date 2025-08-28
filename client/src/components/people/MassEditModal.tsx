@@ -148,7 +148,7 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                   onChange={(e) => setMassEdit(d => ({ ...d, applyToWholeFamily: e.target.checked }))} 
                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" 
                 />
-                <span>Apply changes to entire families (not just selected members)</span>
+                <span>Apply to entire family</span>
               </label>
               <div className="text-xs text-gray-500 mt-1">
                 When checked, changes will affect all family members, even those not selected

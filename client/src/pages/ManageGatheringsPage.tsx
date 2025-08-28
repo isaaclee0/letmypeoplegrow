@@ -76,16 +76,41 @@ const ManageGatheringsPage: React.FC = () => {
     gatheringId: number | null;
     gatheringName: string;
   }>({ gatheringId: null, gatheringName: '' });
+  
+  // People prompt states - now just for tracking if we should show the animated arrow
+  const [showArrowPrompt, setShowArrowPrompt] = useState(false);
 
   useEffect(() => {
     loadGatherings();
   }, []);
 
+  // Auto-hide the arrow after 8 seconds
+  useEffect(() => {
+    if (showArrowPrompt) {
+      const timer = setTimeout(() => {
+        setShowArrowPrompt(false);
+      }, 8000);
+      return () => clearTimeout(timer);
+    }
+  }, [showArrowPrompt]);
+
   const loadGatherings = async () => {
     try {
       setIsLoading(true);
       const response = await gatheringsAPI.getAll();
-      setGatherings(response.data.gatherings || []);
+      const gatherings = response.data.gatherings || [];
+      setGatherings(gatherings);
+      
+      // Check if user has gatherings but they have very few people (likely a new user) - show arrow prompt
+      if (gatherings.length > 0) {
+        const totalMembers = gatherings.reduce((sum: number, gathering: Gathering) => sum + (gathering.memberCount || 0), 0);
+        const hasSeenPrompt = localStorage.getItem('people_prompt_dismissed') === 'true';
+        // Show arrow prompt if they have no people, or if they have only 1-2 people across all gatherings (might be test data)
+        // and they haven't dismissed it before
+        if (totalMembers <= 2 && !hasSeenPrompt) {
+          setShowArrowPrompt(true);
+        }
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load gatherings');
     } finally {
@@ -178,6 +203,12 @@ const ManageGatheringsPage: React.FC = () => {
       setSuccess(`Gathering "${createGatheringData.name}" created successfully.`);
       setShowAddGatheringWizard(false);
       resetWizardState();
+      
+      // Check if this is the first gathering and it has no members - show arrow prompt
+      const hasSeenPrompt = localStorage.getItem('people_prompt_dismissed') === 'true';
+      if (gatherings.length === 0 && newGathering.memberCount === 0 && !hasSeenPrompt) {
+        setShowArrowPrompt(true);
+      }
 
     } catch (err: any) {
       console.error('Create gathering error:', err);
@@ -355,13 +386,40 @@ const ManageGatheringsPage: React.FC = () => {
                             • {gathering.recentVisitorCount} recent visitors
                           </span>
                         )}
+                        {(gathering.memberCount || 0) === 0 && (
+                          <button 
+                            className="ml-2 text-purple-600 font-medium relative hover:text-purple-700 hover:underline transition-colors underline decoration-dotted"
+                            onClick={() => {
+                              localStorage.setItem('people_prompt_dismissed', 'true');
+                              setShowArrowPrompt(false);
+                              navigate('/app/people');
+                            }}
+                          >
+                            • Click here to add people to this gathering
+                            {showArrowPrompt && (
+                              <div className="absolute -right-32 top-1/2 transform -translate-y-1/2 flex items-center animate-bounce z-10">
+                                <svg width="80" height="20" viewBox="0 0 80 20" className="text-purple-500">
+                                  <defs>
+                                    <marker id="arrowhead-purple" markerWidth="8" markerHeight="8" refX="0" refY="3" orient="auto">
+                                      <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
+                                    </marker>
+                                  </defs>
+                                  <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
+                                </svg>
+                                <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
+                                  Click here!
+                                </span>
+                              </div>
+                            )}
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="flex space-x-2">
                       <ActionMenu 
                         items={[
                           {
-                            label: 'Manage Members',
+                            label: (gathering.memberCount || 0) === 0 ? 'Add People' : 'Manage Members',
                             onClick: handleManageMembers,
                             icon: <UserGroupIcon className="h-4 w-4" />
                           },
@@ -639,7 +697,7 @@ const ManageGatheringsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleCreateGathering}
-                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
                       disabled={isCreating || !canProceedFromStep1()}
                     >
                       {isCreating ? 'Creating...' : 'Create Gathering'}
@@ -704,6 +762,8 @@ const ManageGatheringsPage: React.FC = () => {
         </div>,
         document.body
       ) : null}
+
+
 
       {/* Floating Add Gathering Button */}
       <button
