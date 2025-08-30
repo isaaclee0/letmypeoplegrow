@@ -148,8 +148,8 @@ export const WEBSOCKET_CONFIG = {
   // Environment variable VITE_USE_WEBSOCKETS controls WebSocket usage
   // Values: 'true' = WebSocket only, 'fallback' = WebSocket with API fallback, 'false' = API only
   USE_WEBSOCKETS: import.meta.env.VITE_USE_WEBSOCKETS || 'fallback',
-  TIMEOUT_MS: 10000,
-  RETRY_ATTEMPTS: 3,
+  TIMEOUT_MS: 8000, // Reduced timeout for faster failure detection
+  RETRY_ATTEMPTS: 2, // Reduced retry attempts
   OFFLINE_SYNC_INTERVAL: 30000
 } as const;
 

@@ -167,38 +167,21 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     const authData = getUserAuthData();
     if (!authData) {
       console.warn('🔌 No user auth data available for WebSocket connection');
+      initializingRef.current = false;
       return;
     }
 
     setConnectionStatus('connecting');
 
-    // Determine server URL
-    // In Docker development, ensure we connect through nginx on port 80
-    let serverUrl = process.env.REACT_APP_SERVER_URL;
-    
-    if (!serverUrl) {
-      // If no explicit server URL, construct it based on current location
-      const protocol = window.location.protocol;
-      const hostname = window.location.hostname;
-      let port = window.location.port;
-      
-      // Handle port logic for Docker development
-      if (port === '3000') {
-        // Client is on port 3000, connect through nginx on port 80
-        port = '80';
-      } else if (!port || port === '') {
-        // No port specified, default to 80 for HTTP
-        port = '80';
-      }
-      
-      serverUrl = `${protocol}//${hostname}:${port}`;
-    }
+    // Simplified server URL resolution - use current origin
+    const serverUrl = window.location.origin;
     
     console.log('🔌 WebSocket serverUrl resolution:', {
-      REACT_APP_SERVER_URL: process.env.REACT_APP_SERVER_URL,
-      NODE_ENV: process.env.NODE_ENV,
-      'window.location.origin': window.location.origin,
-      'resolved serverUrl': serverUrl
+      serverUrl,
+      origin: window.location.origin,
+      protocol: window.location.protocol,
+      hostname: window.location.hostname,
+      port: window.location.port
     });
 
     console.log(`🔌 [Tab ${tabId.current}] Initializing WebSocket connection...`, {
@@ -211,31 +194,34 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
     console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData, 'isPWA:', isPWA);
     
-    // Tab-specific configuration to prevent conflicts
+    // Simplified configuration to prevent connection issues
     const connectionId = `${authData.userId}_${tabId.current}_${Date.now()}`;
     const socketConfig = {
       auth: { 
         ...authData, 
         tabId: tabId.current,
         connectionId: connectionId
-      }, // Include tab ID and unique connection ID
+      },
       withCredentials: true, // Important: send cookies with WebSocket connection
       transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
-      timeout: 15000, // 15 second timeout - increased for reliability
+      timeout: 15000, // Increased timeout for better stability
       reconnection: true,
       reconnectionAttempts: 5, // More attempts for better resilience
-      reconnectionDelay: 2000, // 2 second delay
-      reconnectionDelayMax: 10000, // 10 second max delay  
+      reconnectionDelay: 1000, // Start with 1 second
+      reconnectionDelayMax: 10000, // Max 10 seconds
       forceNew: true, // Force new connection per tab to prevent conflicts
       upgrade: true, // Enable upgrade to WebSocket
       rememberUpgrade: true, // Remember the upgraded transport
       autoConnect: true, // Automatically connect
-      // Add query parameters to make connection even more unique
+      // Simplified query parameters
       query: {
         tabId: tabId.current,
-        connectionId: connectionId,
-        timestamp: Date.now()
-      }
+        connectionId: connectionId
+      },
+      // Additional stability settings
+      pingTimeout: 60000, // 60 second ping timeout
+      pingInterval: 25000, // 25 second ping interval
+      maxReconnectionAttempts: 5
     };
     
     console.log(`🔌 [Tab ${tabId.current}] Socket config for ${isPWA ? 'PWA' : 'Browser'}:`, socketConfig);
@@ -244,10 +230,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     // Connection event handlers with detailed debugging
     newSocket.on('connect', () => {
-      console.log('✅ WebSocket connected:', newSocket.id, {
+      console.log(`✅ [Tab ${tabId.current}] WebSocket connected:`, newSocket.id, {
         transport: newSocket.io.engine.transport.name,
         upgraded: newSocket.io.engine.upgraded,
-        readyState: newSocket.io.engine.readyState
+        readyState: newSocket.io.engine.readyState,
+        tabId: tabId.current,
+        connectionId: connectionId
       });
       setIsConnected(true);
       setConnectionStatus('connected');
@@ -255,13 +243,15 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
 
     newSocket.on('connected', (data) => {
-      console.log('📨 WebSocket welcome message:', data);
+      console.log(`📨 [Tab ${tabId.current}] WebSocket welcome message:`, data);
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('📴 WebSocket disconnected:', reason, {
+      console.log(`📴 [Tab ${tabId.current}] WebSocket disconnected:`, reason, {
         transport: newSocket.io?.engine?.transport?.name,
-        upgraded: newSocket.io?.engine?.upgraded
+        upgraded: newSocket.io?.engine?.upgraded,
+        tabId: tabId.current,
+        connectionId: connectionId
       });
       setIsConnected(false);
       setConnectionStatus('disconnected');
@@ -270,36 +260,38 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       
       // For unexpected disconnections, provide user feedback
       if (reason === 'transport close' || reason === 'transport error') {
-        console.log('🔄 Unexpected disconnection detected, WebSocket will attempt to reconnect automatically');
+        console.log(`🔄 [Tab ${tabId.current}] Unexpected disconnection detected, WebSocket will attempt to reconnect automatically`);
       }
     });
 
-    newSocket.on('connect_error', async (error) => {
-      console.error('❌ WebSocket connection error:', error.message);
-      console.log('🔍 Connection details:', {
+    newSocket.on('connect_error', async (error: any) => {
+      console.error(`❌ [Tab ${tabId.current}] WebSocket connection error:`, error.message);
+      console.log(`🔍 [Tab ${tabId.current}] Connection details:`, {
         serverUrl,
         transport: newSocket.io.opts.transports,
         forceNew: newSocket.io.opts.forceNew,
         upgrade: newSocket.io.opts.upgrade,
-        attemptNumber: (newSocket as any).reconnectionAttempts || 0
+        attemptNumber: (newSocket as any).reconnectionAttempts || 0,
+        tabId: tabId.current,
+        connectionId: connectionId
       });
       
       // Check if this is a church ID mismatch error and try to fix it
       if (error.message && error.message.includes('Church ID mismatch')) {
-        console.log('🔧 Detected church ID mismatch - attempting to refresh token and user data');
+        console.log(`🔧 [Tab ${tabId.current}] Detected church ID mismatch - attempting to refresh token and user data`);
         try {
           const refreshSuccess = await refreshTokenAndUserData();
           if (refreshSuccess) {
-            console.log('✅ Token and user data refreshed successfully - will retry connection on next attempt');
+            console.log(`✅ [Tab ${tabId.current}] Token and user data refreshed successfully - will retry connection on next attempt`);
             // The WebSocket will automatically retry and should work with the fresh token
           } else {
-            console.log('❌ Failed to refresh token and user data - falling back to page refresh');
+            console.log(`❌ [Tab ${tabId.current}] Failed to refresh token and user data - falling back to page refresh`);
             window.location.reload();
           }
           return;
         } catch (refreshError) {
-          console.error('❌ Failed to handle church ID mismatch:', refreshError);
-          console.log('🔄 Falling back to page refresh');
+          console.error(`❌ [Tab ${tabId.current}] Failed to handle church ID mismatch:`, refreshError);
+          console.log(`🔄 [Tab ${tabId.current}] Falling back to page refresh`);
           window.location.reload();
           return;
         }
@@ -311,16 +303,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
 
     newSocket.on('reconnect', (attemptNumber) => {
-      console.log(`🔄 WebSocket reconnected after ${attemptNumber} attempts`);
+      console.log(`🔄 [Tab ${tabId.current}] WebSocket reconnected after ${attemptNumber} attempts`);
       setConnectionStatus('connected');
     });
 
-    newSocket.on('reconnect_error', (error) => {
-      console.error('❌ WebSocket reconnection error:', error.message);
+    newSocket.on('reconnect_error', (error: any) => {
+      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection error:`, error.message);
     });
 
     newSocket.on('reconnect_failed', () => {
-      console.error('❌ WebSocket reconnection failed');
+      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection failed`);
       setConnectionStatus('error');
     });
 

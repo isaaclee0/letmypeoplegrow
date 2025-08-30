@@ -26,6 +26,7 @@ import {
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { Bars3Icon } from '@heroicons/react/24/outline';
+import WebSocketDiagnostic from '../components/WebSocketDiagnostic';
 
 interface PersonForm {
   firstName: string;
@@ -293,6 +294,17 @@ const AttendancePage: React.FC = () => {
   } = useWebSocket();
   const webSocketMode = useMemo(() => getWebSocketMode(), []);
   const useWebSocketForUpdates = webSocketMode.enabled;
+
+  // Add connection debugging
+  useEffect(() => {
+    console.log('🔌 WebSocket Connection Status:', {
+      isConnected: isWebSocketConnected,
+      connectionStatus,
+      webSocketMode,
+      useWebSocketForUpdates,
+      activeUsersCount: activeUsers.length
+    });
+  }, [isWebSocketConnected, connectionStatus, webSocketMode, useWebSocketForUpdates, activeUsers.length]);
 
   // Helper function to get connection status styling
   const getConnectionStatusStyle = () => {
@@ -3070,6 +3082,8 @@ const AttendancePage: React.FC = () => {
           )}
         </div>
       </div>
+
+
 
       {/* Floating Add Visitor Button */}
       <button

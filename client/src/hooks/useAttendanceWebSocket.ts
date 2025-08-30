@@ -74,9 +74,8 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
   const currentGatheringId = useRef<number | null>(null);
   const currentDate = useRef<string | null>(null);
   
-  // Debouncing refs to prevent rapid join/leave cycles
+  // Simplified debouncing - single timeout per hook instance
   const joinTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const leaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingRoomChange = useRef(false);
 
   // Stable callbacks to avoid dependency issues
@@ -96,7 +95,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
   // Unique hook ID for multi-tab debugging
   const hookId = useRef(Math.random().toString(36).substr(2, 9));
 
-  // Join attendance room (prevent duplicate operations within same hook instance)
+  // Simplified join room logic
   const joinRoom = useCallback(() => {
     console.log(`[Hook ${hookId.current}] 🚪 joinRoom called - enabled=${enabled}, gatheringId=${gatheringId}, date=${date}, isConnected=${isConnected}`);
     
@@ -107,33 +106,17 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
 
     // Get church ID from user context, fallback to 1 if not available
     const churchId = user?.church_id || '1';
-    const targetRoom = `attendance:${churchId}:${gatheringId}:${date}`; // Use actual church ID
-    const now = Date.now();
+    const targetRoom = `attendance:${churchId}:${gatheringId}:${date}`;
     
-    // Check if this specific hook instance has made a recent join operation (per-tab debouncing)
-    const lastOperation = globalRoomState.recentHookOperations.get(hookId.current) || 0;
-    if (now - lastOperation < 500) { // 500ms cooldown per hook instance
-      console.log(`[Hook ${hookId.current}] 📋 Recent operation, skipping join`);
-      return;
-    }
-
-    // Only check for overlapping operations within the same hook instance, not globally
-    // This allows multiple tabs to join the same room simultaneously
-    if (isProcessingRoomChange.current) {
-      console.log(`[Hook ${hookId.current}] 📋 Hook instance operation in progress, deferring join`);
-      setTimeout(() => joinRoom(), 250); // Retry after short delay
-      return;
-    }
-
-    // Clear any pending leave operation for this hook instance
-    if (leaveTimeoutRef.current) {
-      clearTimeout(leaveTimeoutRef.current);
-      leaveTimeoutRef.current = null;
-    }
-
-    // Debounce join operations to prevent rapid-fire within this hook instance
+    // Simple debouncing - prevent rapid calls
     if (joinTimeoutRef.current) {
       clearTimeout(joinTimeoutRef.current);
+    }
+
+    if (isProcessingRoomChange.current) {
+      console.log(`[Hook ${hookId.current}] 📋 Already processing room change, deferring join`);
+      setTimeout(() => joinRoom(), 100);
+      return;
     }
 
     joinTimeoutRef.current = setTimeout(() => {
@@ -141,83 +124,52 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
         return;
       }
  
-      // Track this hook's operation (per-tab tracking, not global blocking)
-      globalRoomState.recentHookOperations.set(hookId.current, Date.now());
       isProcessingRoomChange.current = true;
       
       console.log(`[Hook ${hookId.current}] 📋 Joining attendance WebSocket room: gathering ${gatheringId}, date ${date}`);
-      console.log(`[Hook ${hookId.current}] 🔌 About to call joinAttendanceRoom(${gatheringId}, ${date})`);
       joinAttendanceRoom(gatheringId, date);
       currentGatheringId.current = gatheringId;
       currentDate.current = date;
-      console.log(`[Hook ${hookId.current}] ✅ Called joinAttendanceRoom, updated refs`);
       
-      // Reset processing flag for this hook instance after a delay
+      // Reset processing flag after a short delay
       setTimeout(() => {
         isProcessingRoomChange.current = false;
-      }, 300); // Reduced delay for better responsiveness
-    }, 150); // Reduced debounce for better responsiveness
-  }, [enabled, gatheringId, date, isConnected, joinAttendanceRoom]); // Removed user?.church_id to prevent recreation
+      }, 200);
+    }, 100);
+  }, [enabled, gatheringId, date, isConnected, joinAttendanceRoom, user?.church_id]);
 
-  // Leave current room (prevent duplicate operations within same hook instance)
+  // Simplified leave room logic
   const leaveRoom = useCallback(() => {
-    // Check if we actually have a room to leave
     if (!currentGatheringId.current || !currentDate.current) {
       console.log(`[Hook ${hookId.current}] 🚪 No room to leave - already clean`);
       return;
     }
 
-    const roomKey = `${hookId.current}:${currentGatheringId.current}:${currentDate.current}`;
-    
-    // Prevent duplicate leave operations within this hook instance only
     if (isProcessingRoomChange.current) {
-      console.log(`[Hook ${hookId.current}] 🚪 Skipping leave - already processing room change within this hook`);
+      console.log(`[Hook ${hookId.current}] 🚪 Skipping leave - already processing room change`);
       return;
     }
 
-    // Clear any pending join operation for this hook instance
+    // Clear any pending join operation
     if (joinTimeoutRef.current) {
       clearTimeout(joinTimeoutRef.current);
       joinTimeoutRef.current = null;
     }
 
-    // Prevent duplicate leave operations within this hook instance
-    if (leaveTimeoutRef.current) {
-      console.log(`[Hook ${hookId.current}] 🚪 Leave already pending for this hook - skipping`);
-      return;
-    }
-
-    // Mark this hook instance as having a pending leave operation (per-tab tracking)
-    globalRoomState.pendingLeaveOperations.add(roomKey);
-
-    leaveTimeoutRef.current = setTimeout(() => {
-      // Double-check we still need to leave and not already processing within this hook
-      if (!currentGatheringId.current || !currentDate.current || !isConnected || isProcessingRoomChange.current) {
-        globalRoomState.pendingLeaveOperations.delete(roomKey);
-        leaveTimeoutRef.current = null;
-        return;
-      }
-
-      // Track this hook's operation (per-tab tracking, not global blocking)
-      globalRoomState.recentHookOperations.set(hookId.current, Date.now());
-      isProcessingRoomChange.current = true;
-      
-      console.log(`[Hook ${hookId.current}] 🚪 Leaving attendance WebSocket room: gathering ${currentGatheringId.current}, date ${currentDate.current}`);
-      leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
-      
-      // Clear state immediately to prevent duplicate calls within this hook
-      setIsInRoom(false);
-      currentGatheringId.current = null;
-      currentDate.current = null;
-      leaveTimeoutRef.current = null;
-      
-      // Reset processing flag for this hook instance after a delay
-      setTimeout(() => {
-        isProcessingRoomChange.current = false;
-        globalRoomState.pendingLeaveOperations.delete(roomKey);
-      }, 1000); // Longer delay to prevent rapid re-triggering
-    }, 300); // Slightly longer debounce for leaves
-  }, [isConnected, leaveAttendanceRoom]);
+    isProcessingRoomChange.current = true;
+    
+    console.log(`[Hook ${hookId.current}] 🚪 Leaving attendance room: gathering ${currentGatheringId.current}, date ${currentDate.current}`);
+    leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
+    
+    // Clear current room tracking
+    currentGatheringId.current = null;
+    currentDate.current = null;
+    
+    // Reset processing flag after a short delay
+    setTimeout(() => {
+      isProcessingRoomChange.current = false;
+    }, 200);
+  }, [leaveAttendanceRoom]);
 
   // Auto-join room when connected and parameters are available
   useEffect(() => {
@@ -259,10 +211,6 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
       if (joinTimeoutRef.current) {
         clearTimeout(joinTimeoutRef.current);
         joinTimeoutRef.current = null;
-      }
-      if (leaveTimeoutRef.current) {
-        clearTimeout(leaveTimeoutRef.current);
-        leaveTimeoutRef.current = null;
       }
       
       // Only leave room if we actually have one to leave and aren't already processing

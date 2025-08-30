@@ -5,7 +5,7 @@
 # If no version is provided, uses the default version
 
 # Default version (change this when releasing new versions)
-VERSION=${1:-v1.0.2}
+VERSION=${1:-v1.0.3}
 
 # Configuration
 REGISTRY="staugustine1"
