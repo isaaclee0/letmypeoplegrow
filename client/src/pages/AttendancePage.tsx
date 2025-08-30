@@ -675,20 +675,10 @@ const AttendancePage: React.FC = () => {
         currentPresentByIdKeys: Object.keys(presentById).length
       });
       
-      // Only update presentById if cache wasn't loaded or if we have more complete data
-      if (!cacheWasLoaded || Object.keys(presentById).length === 0) {
-        console.log('📝 Updating presentById with fresh data');
-        setPresentById(newPresentById);
-        presentByIdRef.current = newPresentById;
-      } else {
-        console.log('🔒 Preserving cached presentById state');
-        // Update attendanceList to match our cached presentById for consistency
-        const updatedAttendanceList = (response.attendanceList || []).map((person: any) => ({
-          ...person,
-          present: presentById[person.id] ?? person.present
-        }));
-        setAttendanceList(updatedAttendanceList);
-      }
+      // Always update presentById with fresh server data to ensure accuracy
+      console.log('📝 Updating presentById with fresh server data');
+      setPresentById(newPresentById);
+      presentByIdRef.current = newPresentById;
       
       // Cache the attendance data for offline use with pending changes applied
       const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
