@@ -192,6 +192,28 @@ const PeoplePage: React.FC = () => {
     'bg-cyan-500'
   ];
 
+  // Helper function to get optimized display name
+  const getPersonDisplayName = (person: Person, familyName?: string) => {
+    // If person has a family and their last name matches the family surname, show only first name
+    if (familyName && person.lastName) {
+      // Extract surname from family name (format: "SURNAME, First and Second")
+      const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
+      const personSurname = person.lastName.toLowerCase();
+      
+      if (familySurname === personSurname) {
+        return person.firstName;
+      }
+    }
+    
+    // Default to full name
+    return `${person.firstName} ${person.lastName}`;
+  };
+
+  const shouldUseWideLayout = (name: string) => {
+    // Names longer than 20 characters or containing very long individual words
+    return name.length > 20 || name.split(' ').some(word => word.length > 15);
+  };
+
   // Get color for a gathering
   const getGatheringColor = (gatheringId: number) => {
     return gatheringColors[gatheringId % gatheringColors.length];
@@ -1075,36 +1097,32 @@ const PeoplePage: React.FC = () => {
   */
 
   const handleEditPerson = (person: Person) => {
-    // Set the person as selected and open unified mass edit modal
-    setSelectedPeople([person.id]);
-
-    // Build gathering assignments for the mass edit modal
+    // Use the dedicated person editor modal
     const gatheringAssignments: { [key: number]: boolean } = {};
-    const originalAssignments: { [key: number]: Set<number> } = {};
     
     gatheringTypes.forEach(g => {
       const hasAssignment = person.gatheringAssignments?.some(ga => ga.id === g.id) || false;
       gatheringAssignments[g.id] = hasAssignment;
     });
     
-    originalAssignments[person.id] = new Set(
+    const originalAssignments = new Set(
       (person.gatheringAssignments || []).map(ga => ga.id)
     );
 
-    // Prepare mass edit state with the single person's data
-    setMassEdit({
+    // Set up the person editor state
+    setPersonEditorData({
+      id: person.id,
       firstName: person.firstName,
       lastName: person.lastName,
+      peopleType: person.peopleType,
       familyInput: person.familyName || '',
       selectedFamilyId: person.familyId || null,
       newFamilyName: '',
-      peopleType: person.peopleType || '',
       assignments: gatheringAssignments,
       originalAssignments,
-      applyToWholeFamily: false,
     });
 
-    setShowMassEditModal(true);
+    setShowPersonEditor(true);
   };
 
   // removed: handleUpdatePerson
@@ -1293,7 +1311,7 @@ const PeoplePage: React.FC = () => {
 
       {/* Person Editor Modal */}
       {showPersonEditor ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]" style={{ top: 0, left: 0, right: 0, bottom: 0 }}>
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-1/2 lg:w-1/3 max-w-xl p-5 border shadow-lg rounded-md bg-white">
               <div className="flex items-center justify-between mb-4">
@@ -1820,16 +1838,20 @@ const PeoplePage: React.FC = () => {
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                    {group.members.map((person: Person) => (
-                      <div
-                        key={person.id}
-                        className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                          selectedPeople.includes(person.id)
-                            ? 'border-primary-500 bg-primary-50'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                        onClick={() => togglePersonSelection(person.id)}
-                      >
+                    {group.members.map((person: Person) => {
+                      const displayName = getPersonDisplayName(person, group.familyName);
+                      const needsWideLayout = shouldUseWideLayout(displayName);
+                      
+                      return (
+                        <div
+                          key={person.id}
+                          className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
+                            selectedPeople.includes(person.id)
+                              ? 'border-primary-500 bg-primary-50'
+                              : 'border-gray-200 hover:border-gray-300'
+                          } ${needsWideLayout ? 'col-span-2' : ''}`}
+                          onClick={() => togglePersonSelection(person.id)}
+                        >
                         <div className="flex items-center space-x-3 flex-1 min-w-0">
                           <input
                             type="checkbox"
@@ -1840,7 +1862,7 @@ const PeoplePage: React.FC = () => {
                           />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium text-gray-900 truncate">
-                              {person.firstName} {person.lastName}
+                              {displayName}
                             </div>
                             <div className="text-xs text-gray-500">
                               {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
@@ -1874,7 +1896,8 @@ const PeoplePage: React.FC = () => {
                           ]}
                         />
                       </div>
-                    ))}
+                    );
+                    })}
                   </div>
                 </div>
               ))}
@@ -1882,16 +1905,20 @@ const PeoplePage: React.FC = () => {
           ) : (
             // Individual view (not grouped by family)
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {filteredIndividualPeople.map((person: Person) => (
-                <div
-                  key={person.id}
-                  className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                    selectedPeople.includes(person.id)
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                  onClick={() => togglePersonSelection(person.id)}
-                >
+              {filteredIndividualPeople.map((person: Person) => {
+                const displayName = getPersonDisplayName(person); // No family context in individual view
+                const needsWideLayout = shouldUseWideLayout(displayName);
+                
+                return (
+                  <div
+                    key={person.id}
+                    className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
+                      selectedPeople.includes(person.id)
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    } ${needsWideLayout ? 'col-span-2' : ''}`}
+                    onClick={() => togglePersonSelection(person.id)}
+                  >
                   <div className="flex items-center space-x-3 flex-1 min-w-0">
                     <input
                       type="checkbox"
@@ -1902,7 +1929,7 @@ const PeoplePage: React.FC = () => {
                     />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 truncate">
-                        {person.firstName} {person.lastName}
+                        {displayName}
                       </div>
                       {person.familyName && (
                         <div className="text-xs text-gray-500 truncate">
@@ -1941,7 +1968,8 @@ const PeoplePage: React.FC = () => {
                     ]}
                   />
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
@@ -2115,15 +2143,19 @@ const PeoplePage: React.FC = () => {
                       </div>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                      {group.members.map((person: Person) => (
-                        <div
-                          key={person.id}
-                          className={`flex items-center justify-between p-3 rounded-md border-2 ${
-                            selectedPeople.includes(person.id)
-                              ? 'border-primary-500 bg-primary-50'
-                              : 'border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
+                      {group.members.map((person: Person) => {
+                        const displayName = getPersonDisplayName(person, group.familyName);
+                        const needsWideLayout = shouldUseWideLayout(displayName);
+                        
+                        return (
+                          <div
+                            key={person.id}
+                            className={`flex items-center justify-between p-3 rounded-md border-2 ${
+                              selectedPeople.includes(person.id)
+                                ? 'border-primary-500 bg-primary-50'
+                                : 'border-gray-200 hover:border-gray-300'
+                            } ${needsWideLayout ? 'col-span-2' : ''}`}
+                          >
                           <div className="flex items-center space-x-3 flex-1 min-w-0">
                             <input
                               type="checkbox"
@@ -2133,7 +2165,7 @@ const PeoplePage: React.FC = () => {
                             />
                             <div className="flex-1 min-w-0">
                               <div className="text-sm font-medium text-gray-900 truncate">
-                                {person.firstName} {person.lastName}
+                                {displayName}
                               </div>
                               <div className="text-xs text-gray-500">
                                 {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
@@ -2167,7 +2199,8 @@ const PeoplePage: React.FC = () => {
                             ]}
                           />
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                   ))}
@@ -2225,15 +2258,19 @@ const PeoplePage: React.FC = () => {
                             </div>
                           )}
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                            {group.members.map((person: Person) => (
-                              <div
-                                key={person.id}
-                                className={`flex items-center justify-between p-3 rounded-md border-2 ${
-                                  selectedPeople.includes(person.id)
-                                    ? 'border-primary-500 bg-primary-50'
-                                    : 'border-gray-200 hover:border-gray-300'
-                                }`}
-                              >
+                            {group.members.map((person: Person) => {
+                              const displayName = getPersonDisplayName(person, group.familyName);
+                              const needsWideLayout = shouldUseWideLayout(displayName);
+                              
+                              return (
+                                <div
+                                  key={person.id}
+                                  className={`flex items-center justify-between p-3 rounded-md border-2 ${
+                                    selectedPeople.includes(person.id)
+                                      ? 'border-primary-500 bg-primary-50'
+                                      : 'border-gray-200 hover:border-gray-300'
+                                  } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                >
                                 <div className="flex items-center space-x-3 flex-1 min-w-0">
                                   <input
                                     type="checkbox"
@@ -2243,7 +2280,7 @@ const PeoplePage: React.FC = () => {
                                   />
                                   <div className="flex-1 min-w-0">
                                     <div className="text-sm font-medium text-gray-900 truncate">
-                                      {person.firstName} {person.lastName}
+                                      {displayName}
                                     </div>
                                     <div className="text-xs text-gray-500">
                                       {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
@@ -2277,7 +2314,8 @@ const PeoplePage: React.FC = () => {
                                   ]}
                                 />
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       ))}
@@ -2306,11 +2344,18 @@ const PeoplePage: React.FC = () => {
             </div>
             {showArchivedPeople && (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                {archivedPeople.map((person: Person) => (
-                  <div key={`arch-${person.id}`} className="flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300">
+                {archivedPeople.map((person: Person) => {
+                  const displayName = getPersonDisplayName(person); // No family context for archived
+                  const needsWideLayout = shouldUseWideLayout(displayName);
+                  
+                  return (
+                    <div 
+                      key={`arch-${person.id}`} 
+                      className={`flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300 ${needsWideLayout ? 'col-span-2' : ''}`}
+                    >
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 truncate">
-                        {person.firstName} {person.lastName}
+                        {displayName}
                       </div>
                       <div className="text-xs text-gray-500">
                         {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
@@ -2332,7 +2377,8 @@ const PeoplePage: React.FC = () => {
                       ]}
                     />
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

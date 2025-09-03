@@ -19,7 +19,7 @@ router.get('/', async (req, res) => {
         f.last_attended AS lastAttended,
         COUNT(i.id) AS memberCount
       FROM families f
-      LEFT JOIN individuals i ON f.id = i.family_id AND i.is_active = true
+      JOIN individuals i ON f.id = i.family_id AND i.is_active = true
       WHERE f.church_id = ?
       GROUP BY f.id
       ORDER BY f.family_name
@@ -36,6 +36,40 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Failed to retrieve families.' });
+  }
+});
+
+// Get all families (including those with inactive members) - Admin only
+router.get('/all', requireRole(['admin']), async (req, res) => {
+  try {
+    const families = await Database.query(`
+      SELECT 
+        f.id,
+        f.family_name AS familyName,
+        f.family_notes AS familyNotes,
+        f.family_type AS familyType,
+        f.last_attended AS lastAttended,
+        COUNT(CASE WHEN i.is_active = true THEN i.id END) AS activeMemberCount,
+        COUNT(i.id) AS totalMemberCount
+      FROM families f
+      LEFT JOIN individuals i ON f.id = i.family_id
+      WHERE f.church_id = ?
+      GROUP BY f.id
+      ORDER BY f.family_name
+    `, [req.user.church_id]);
+
+    // Convert BigInt values to regular numbers to avoid JSON serialization issues
+    const processedFamilies = families.map((family) => ({
+      ...family,
+      id: Number(family.id),
+      activeMemberCount: Number(family.activeMemberCount),
+      totalMemberCount: Number(family.totalMemberCount)
+    }));
+
+    res.json({ families: processedFamilies });
+  } catch (error) {
+    console.error('Get all families error:', error);
+    res.status(500).json({ error: 'Failed to retrieve all families.' });
   }
 });
 

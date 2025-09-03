@@ -387,6 +387,8 @@ export const invitationsAPI = {
 export const familiesAPI = {
   getAll: () => 
     api.get('/families'),
+  getAllIncludingInactive: () => 
+    api.get('/families/all'),
     
   create: (data: { familyName: string }) => 
     api.post('/families', data),

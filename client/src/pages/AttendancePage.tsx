@@ -154,22 +154,37 @@ const AttendancePage: React.FC = () => {
         setAttendanceList(parsed.attendanceList || []);
         setVisitors(parsed.visitors || []);
         
-        // Initialize presentById from cached data with pending changes applied
-        const newPresentById: Record<number, boolean> = {};
-        (parsed.attendanceList || []).forEach((person: any) => {
-          newPresentById[person.id] = Boolean(person.present);
-        });
-        
-        // Apply any pending offline changes
-        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-        currentPendingChanges.forEach((change: any) => {
-          if (change.gatheringId === parsed.gatheringId && change.date === parsed.date) {
-            newPresentById[change.individualId] = change.present;
-          }
-        });
-        
-        setPresentById(newPresentById);
-        presentByIdRef.current = newPresentById;
+                      // Initialize presentById from cached data with merge logic
+              const cachedPresentById: Record<number, boolean> = {};
+              (parsed.attendanceList || []).forEach((person: any) => {
+                cachedPresentById[person.id] = Boolean(person.present);
+              });
+              
+              // Apply any pending offline changes to cached data
+              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+              currentPendingChanges.forEach((change: any) => {
+                if (change.gatheringId === parsed.gatheringId && change.date === parsed.date) {
+                  cachedPresentById[change.individualId] = change.present;
+                }
+              });
+              
+              // Merge with existing state: prefer 'present' from any source
+              const mergedPresentById: Record<number, boolean> = { ...presentById };
+              Object.keys(cachedPresentById).forEach(idStr => {
+                const id = parseInt(idStr);
+                const cachedPresent = cachedPresentById[id];
+                const currentPresent = presentById[id];
+                
+                // Merge rule: if either source says present, then present
+                if (cachedPresent || currentPresent) {
+                  mergedPresentById[id] = true;
+                } else {
+                  mergedPresentById[id] = false;
+                }
+              });
+              
+              setPresentById(mergedPresentById);
+              presentByIdRef.current = mergedPresentById;
         
         // Update visitor attendance state from cached data
         const newVisitorAttendance: { [key: number]: boolean } = {};
@@ -660,38 +675,45 @@ const AttendancePage: React.FC = () => {
       setAttendanceList(response.attendanceList || []);
       setVisitors(response.visitors || []);
       
-      // Initialize presentById from server data (since we removed the automatic sync effect)
-      const newPresentById: Record<number, boolean> = {};
+      // Initialize presentById from server data with smart merging
+      const serverPresentById: Record<number, boolean> = {};
       (response.attendanceList || []).forEach((person: any) => {
-        newPresentById[person.id] = Boolean(person.present);
+        serverPresentById[person.id] = Boolean(person.present);
       });
       
-      const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
-      
-      console.log('🔄 Setting presentById from fresh data:', {
-        newPresentByIdKeys: Object.keys(newPresentById).length,
-        sampleNewPresentById: Object.fromEntries(Object.entries(newPresentById).slice(0, 5)),
-        cacheWasLoaded,
-        currentPresentByIdKeys: Object.keys(presentById).length
-      });
-      
-      // Always update presentById with fresh server data to ensure accuracy
-      console.log('📝 Updating presentById with fresh server data');
-      setPresentById(newPresentById);
-      presentByIdRef.current = newPresentById;
-      
-      // Cache the attendance data for offline use with pending changes applied
-      const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
-        // Apply any pending changes to the cached data
-        const pendingChange = pendingChanges.find(change => 
-          change.individualId === person.id && 
-          change.gatheringId === selectedGathering.id && 
-          change.date === selectedDate
-        );
-        if (pendingChange) {
-          return { ...person, present: pendingChange.present };
+      // Apply merge logic: prefer 'present' over 'absent' from any source
+      const mergedPresentById: Record<number, boolean> = { ...presentById };
+      Object.keys(serverPresentById).forEach(idStr => {
+        const id = parseInt(idStr);
+        const serverPresent = serverPresentById[id];
+        const currentPresent = presentById[id];
+        
+        // Merge rule: if either source says present, then present
+        // Only set to absent if both sources agree on absent
+        if (serverPresent || currentPresent) {
+          mergedPresentById[id] = true;
+        } else {
+          mergedPresentById[id] = false;
         }
-        return person;
+      });
+      
+      console.log('🔄 Merging presentById state:', {
+        serverKeys: Object.keys(serverPresentById).length,
+        currentKeys: Object.keys(presentById).length,
+        mergedKeys: Object.keys(mergedPresentById).length,
+        sampleMerged: Object.fromEntries(Object.entries(mergedPresentById).slice(0, 5))
+      });
+      
+      // Update with merged data
+      console.log('📝 Updating presentById with merged server + cache data');
+      setPresentById(mergedPresentById);
+      presentByIdRef.current = mergedPresentById;
+      
+      // Cache the attendance data for offline use with merged state applied
+      const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
+        // Use the merged present state which includes cache + server + pending changes
+        const mergedPresent = mergedPresentById[person.id] ?? person.present;
+        return { ...person, present: mergedPresent };
       });
       
       const cacheData = {
@@ -740,41 +762,37 @@ const AttendancePage: React.FC = () => {
         setAttendanceList(apiResponse.data.attendanceList || []);
         setVisitors(apiResponse.data.visitors || []);
         
-        // Initialize presentById from server data (since we removed the automatic sync effect)
-        const newPresentById: Record<number, boolean> = {};
+        // Initialize presentById from server data with smart merging (API fallback)
+        const serverPresentById: Record<number, boolean> = {};
         (apiResponse.data.attendanceList || []).forEach((person: any) => {
-          newPresentById[person.id] = Boolean(person.present);
+          serverPresentById[person.id] = Boolean(person.present);
         });
         
-        const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
-        
-        // Only update presentById if cache wasn't loaded or if we have more complete data
-        if (!cacheWasLoaded || Object.keys(presentById).length === 0) {
-          console.log('📝 Updating presentById with fresh API data');
-          setPresentById(newPresentById);
-          presentByIdRef.current = newPresentById;
-        } else {
-          console.log('🔒 Preserving cached presentById state (API fallback)');
-          // Update attendanceList to match our cached presentById for consistency
-          const updatedAttendanceList = (apiResponse.data.attendanceList || []).map((person: any) => ({
-            ...person,
-            present: presentById[person.id] ?? person.present
-          }));
-          setAttendanceList(updatedAttendanceList);
-        }
-        
-        // Cache the attendance data for offline use with pending changes applied
-        const attendanceListForCache = (apiResponse.data.attendanceList || []).map((person: any) => {
-          // Apply any pending changes to the cached data
-          const pendingChange = pendingChanges.find(change => 
-            change.individualId === person.id && 
-            change.gatheringId === selectedGathering.id && 
-            change.date === selectedDate
-          );
-          if (pendingChange) {
-            return { ...person, present: pendingChange.present };
+        // Apply merge logic: prefer 'present' over 'absent' from any source
+        const mergedPresentById: Record<number, boolean> = { ...presentById };
+        Object.keys(serverPresentById).forEach(idStr => {
+          const id = parseInt(idStr);
+          const serverPresent = serverPresentById[id];
+          const currentPresent = presentById[id];
+          
+          // Merge rule: if either source says present, then present
+          // Only set to absent if both sources agree on absent
+          if (serverPresent || currentPresent) {
+            mergedPresentById[id] = true;
+          } else {
+            mergedPresentById[id] = false;
           }
-          return person;
+        });
+        
+        console.log('📝 Updating presentById with merged API data');
+        setPresentById(mergedPresentById);
+        presentByIdRef.current = mergedPresentById;
+        
+        // Cache the attendance data for offline use with merged state applied
+        const attendanceListForCache = (apiResponse.data.attendanceList || []).map((person: any) => {
+          // Use the merged present state which includes cache + server + pending changes
+          const mergedPresent = mergedPresentById[person.id] ?? person.present;
+          return { ...person, present: mergedPresent };
         });
         
         const cacheData = {
@@ -878,22 +896,37 @@ const AttendancePage: React.FC = () => {
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
               
-              // Initialize presentById from cached data with pending changes applied
-              const newPresentById: Record<number, boolean> = {};
+              // Initialize presentById from cached data with merge logic
+              const cachedPresentById: Record<number, boolean> = {};
               (parsed.attendanceList || []).forEach((person: any) => {
-                newPresentById[person.id] = Boolean(person.present);
+                cachedPresentById[person.id] = Boolean(person.present);
               });
               
-              // Apply any pending offline changes
+              // Apply any pending offline changes to cached data
               const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
               currentPendingChanges.forEach((change: any) => {
                 if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
-                  newPresentById[change.individualId] = change.present;
+                  cachedPresentById[change.individualId] = change.present;
                 }
               });
               
-              setPresentById(newPresentById);
-              presentByIdRef.current = newPresentById;
+              // Merge with existing state: prefer 'present' from any source
+              const mergedPresentById: Record<number, boolean> = { ...presentById };
+              Object.keys(cachedPresentById).forEach(idStr => {
+                const id = parseInt(idStr);
+                const cachedPresent = cachedPresentById[id];
+                const currentPresent = presentById[id];
+                
+                // Merge rule: if either source says present, then present
+                if (cachedPresent || currentPresent) {
+                  mergedPresentById[id] = true;
+                } else {
+                  mergedPresentById[id] = false;
+                }
+              });
+              
+              setPresentById(mergedPresentById);
+              presentByIdRef.current = mergedPresentById;
             } else {
               console.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
             }
@@ -2134,6 +2167,42 @@ const AttendancePage: React.FC = () => {
   const [reorderList, setReorderList] = useState<GatheringType[]>([]);
   const dragIndexRef = useRef<number | null>(null);
 
+  // Helper functions for responsive grid layout
+  const getPersonDisplayName = (person: any, familyName?: string) => {
+    // For visitors with .name property
+    if (person.name) {
+      if (familyName) {
+        // Extract surname from family name and compare with visitor's name
+        const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
+        const parts = person.name.trim().split(' ');
+        const firstName = parts[0];
+        const lastName = parts.slice(1).join(' ');
+        
+        if (lastName && familySurname === lastName.toLowerCase()) {
+          return firstName;
+        }
+      }
+      return person.name;
+    }
+    
+    // For regular attendees with firstName/lastName
+    if (familyName && person.lastName) {
+      const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
+      const personSurname = person.lastName.toLowerCase();
+      
+      if (familySurname === personSurname) {
+        return person.firstName;
+      }
+    }
+    
+    return `${person.firstName || ''} ${person.lastName || ''}`.trim();
+  };
+
+  const shouldUseWideLayout = (name: string) => {
+    // Names longer than 20 characters or containing very long individual words
+    return name.length > 20 || name.split(' ').some(word => word.length > 15);
+  };
+
   // Offline storage functions
   const saveToOfflineStorage = useCallback((change: {
     individualId: number;
@@ -2777,6 +2846,9 @@ const AttendancePage: React.FC = () => {
                       {group.members.map((person: Individual) => {
                         const isPresent = (presentById[person.id] ?? person.present) as boolean;
                         const isSaving = Boolean(savingById[person.id] || person.isSaving);
+                        const displayName = getPersonDisplayName(person, group.familyName);
+                        const needsWideLayout = shouldUseWideLayout(displayName);
+                        
                         return (
                           <label
                             key={person.id}
@@ -2792,7 +2864,7 @@ const AttendancePage: React.FC = () => {
                                       ? 'bg-primary-50'
                                       : 'hover:bg-gray-50'
                                   } ${isSaving ? 'opacity-75' : ''}`
-                            }`}
+                            } ${needsWideLayout ? 'col-span-2' : ''}`}
                           >
                             <input
                               type="checkbox"
@@ -2809,7 +2881,7 @@ const AttendancePage: React.FC = () => {
                               )}
                             </div>
                             <span className="ml-3 text-sm font-medium text-gray-900">
-                              {person.firstName} {person.lastName}
+                              {displayName}
                               {isSaving && (
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
                               )}
@@ -2910,6 +2982,8 @@ const AttendancePage: React.FC = () => {
                       const lastName = parts.slice(1).join(' ');
                       const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                       const isPresent = person.id ? visitorAttendance[person.id] || false : false;
+                      const displayName = getPersonDisplayName(person, group.familyName);
+                      const needsWideLayout = shouldUseWideLayout(displayName);
 
                       return (
                         <label
@@ -2926,7 +3000,7 @@ const AttendancePage: React.FC = () => {
                                     ? 'bg-primary-50'
                                     : 'hover:bg-gray-50'
                                 }`
-                          }`}
+                          } ${needsWideLayout ? 'col-span-2' : ''}`}
                         >
                           <input
                             type="checkbox"
@@ -2944,7 +3018,7 @@ const AttendancePage: React.FC = () => {
                           </div>
                           <div className="ml-3 flex-1">
                             <span className="text-sm font-medium text-gray-900">
-                              {cleanName}
+                              {displayName}
                             </span>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
@@ -3045,9 +3119,15 @@ const AttendancePage: React.FC = () => {
                           const firstName = parts[0];
                           const lastName = parts.slice(1).join(' ');
                           const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
+                          const displayName = getPersonDisplayName(person, group.familyName);
+                          const needsWideLayout = shouldUseWideLayout(displayName);
+                          
                           return (
-                            <div key={person.id || `all_${idx}`} className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'}`}>
-                              <div className="text-sm font-medium text-gray-900">{cleanName}</div>
+                            <div 
+                              key={person.id || `all_${idx}`} 
+                              className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'} ${needsWideLayout ? 'col-span-2' : ''}`}
+                            >
+                              <div className="text-sm font-medium text-gray-900">{displayName}</div>
                               {!groupByFamily && group.familyId && (
                                 <div className="mt-2">
                                   <button

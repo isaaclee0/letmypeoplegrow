@@ -134,8 +134,7 @@ dist/
 # package-lock.json
 
 # Local SQL dump (ignore sensitive DB exports)
-/20250821_church_attendance.sql
-/20250823church_attendance.sql
+sqldumps/
 
 # Local one-off SQL migration
 /migration.sql
