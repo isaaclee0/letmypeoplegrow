@@ -6,6 +6,7 @@ import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfig
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
+import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import {
@@ -60,8 +61,8 @@ const PeoplePage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedFamily, setSelectedFamily] = useState<number | null>(null);
   const [selectedGathering, setSelectedGathering] = useState<number | null>(null);
-  const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
-  const [showPersonDetails, setShowPersonDetails] = useState(false);
+  // Removed selectedPerson state - no longer used
+  // Removed showPersonDetails - not used anymore
   const [showAddModal, setShowAddModal] = useState(false);
   const [addModalMode, setAddModalMode] = useState<'person' | 'family' | 'csv' | 'copy-paste'>('person');
   // Removed old management modals
@@ -88,14 +89,7 @@ const PeoplePage: React.FC = () => {
   const [familyName, setFamilyName] = useState('');
   const [useSameSurname, setUseSameSurname] = useState(false);
 
-  // Form states
-  const [personForm, setPersonForm] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    familyId: ''
-  });
+  // Removed personForm state - no longer used
 
 
 
@@ -105,19 +99,7 @@ const PeoplePage: React.FC = () => {
   const [gatheringTypes, setGatheringTypes] = useState<Array<{id: number, name: string}>>([]);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
-  // New unified editors state
-  const [showPersonEditor, setShowPersonEditor] = useState(false);
-  const [personEditorData, setPersonEditorData] = useState<{
-    id: number;
-    firstName: string;
-    lastName: string;
-    peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
-    familyInput: string;
-    selectedFamilyId: number | null;
-    newFamilyName: string;
-    assignments: { [key: number]: boolean };
-    originalAssignments: Set<number>;
-  }>({ id: 0, firstName: '', lastName: '', peopleType: 'regular', familyInput: '', selectedFamilyId: null, newFamilyName: '', assignments: {}, originalAssignments: new Set() });
+  // Removed individual person editor - using mass edit modal for all edits
 
   const [showMassEditModal, setShowMassEditModal] = useState(false);
   const [massEdit, setMassEdit] = useState<{
@@ -131,6 +113,9 @@ const PeoplePage: React.FC = () => {
     originalAssignments: { [key: number]: Set<number> };
     applyToWholeFamily: boolean;
   }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', firstName: '', lastName: '', peopleType: '', assignments: {}, originalAssignments: {}, applyToWholeFamily: false });
+  
+  // Add a separate state for the modal's selected count to avoid race conditions
+  const [modalSelectedCount, setModalSelectedCount] = useState(0);
 
   const [showFamilyEditorModal, setShowFamilyEditorModal] = useState(false);
   const [familyEditor, setFamilyEditor] = useState<{
@@ -562,7 +547,7 @@ const PeoplePage: React.FC = () => {
       ));
       
       setShowNotesModal(false);
-      setSuccess('Family notes updated successfully');
+      showSuccess('Family notes updated successfully');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to update family notes');
     } finally {
@@ -1097,7 +1082,9 @@ const PeoplePage: React.FC = () => {
   */
 
   const handleEditPerson = (person: Person) => {
-    // Use the dedicated person editor modal
+    // Use mass edit modal for single person editing
+    console.log('handleEditPerson called with:', person);
+    
     const gatheringAssignments: { [key: number]: boolean } = {};
     
     gatheringTypes.forEach(g => {
@@ -1105,24 +1092,36 @@ const PeoplePage: React.FC = () => {
       gatheringAssignments[g.id] = hasAssignment;
     });
     
-    const originalAssignments = new Set(
+    const originalAssignments: { [key: number]: Set<number> } = {};
+    originalAssignments[person.id] = new Set(
       (person.gatheringAssignments || []).map(ga => ga.id)
     );
 
-    // Set up the person editor state
-    setPersonEditorData({
-      id: person.id,
-      firstName: person.firstName,
-      lastName: person.lastName,
-      peopleType: person.peopleType,
+    const massEditData = {
       familyInput: person.familyName || '',
       selectedFamilyId: person.familyId || null,
       newFamilyName: '',
+      firstName: person.firstName,
+      lastName: person.lastName,
+      peopleType: person.peopleType,
       assignments: gatheringAssignments,
       originalAssignments,
-    });
-
-    setShowPersonEditor(true);
+      applyToWholeFamily: false
+    };
+    
+    console.log('Person data:', person);
+    console.log('Setting massEdit data:', massEditData);
+    console.log('Setting selectedPeople to:', [person.id]);
+    
+    // Pre-populate mass edit modal with person's data
+    setMassEdit(massEditData);
+    
+    // Select only this person and open modal
+    setSelectedPeople([person.id]);
+    setModalSelectedCount(1); // Set the count directly for the modal
+    
+    // Open modal immediately - no need for setTimeout now
+    setShowMassEditModal(true);
   };
 
   // removed: handleUpdatePerson
@@ -1309,122 +1308,13 @@ const PeoplePage: React.FC = () => {
 
       
 
-      {/* Person Editor Modal */}
-      {showPersonEditor ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]" style={{ top: 0, left: 0, right: 0, bottom: 0 }}>
-          <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-1/2 lg:w-1/3 max-w-xl p-5 border shadow-lg rounded-md bg-white">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Edit Person</h3>
-                <button onClick={() => setShowPersonEditor(false)} className="text-gray-400 hover:text-gray-600">
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-md p-2 mb-3 text-sm text-red-700">{error}</div>
-              )}
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">First Name *</label>
-                    <input type="text" value={personEditorData.firstName} onChange={(e) => setPersonEditorData(d => ({ ...d, firstName: e.target.value }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Last Name *</label>
-                    <input type="text" value={personEditorData.lastName} onChange={(e) => setPersonEditorData(d => ({ ...d, lastName: e.target.value }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Family</label>
-                  <input list="family-options" value={personEditorData.familyInput} onChange={(e) => {
-                    const value = e.target.value;
-                    const match = families.find(f => f.familyName.toLowerCase() === value.toLowerCase());
-                    setPersonEditorData(d => ({ ...d, familyInput: value, selectedFamilyId: match ? match.id : null, newFamilyName: match ? '' : value }));
-                  }} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" placeholder="Search or type to create new" />
-                  <datalist id="family-options">
-                    {families.map(f => (
-                      <option key={f.id} value={f.familyName} />
-                    ))}
-                  </datalist>
-                  <div className="text-xs text-gray-500 mt-1">Leave blank for no family</div>
-                </div>
-
-                {/* People Type is governed by Family. Hidden in person editor. */}
-
-                {gatheringTypes.length > 0 && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Gathering Assignments</label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-1">
-                      {gatheringTypes.map(g => (
-                        <label key={g.id} className="flex items-center space-x-2 text-sm">
-                          <input type="checkbox" checked={!!personEditorData.assignments[g.id]} onChange={() => setPersonEditorData(d => ({ ...d, assignments: { ...d.assignments, [g.id]: !d.assignments[g.id] } }))} className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-                          <span>{g.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-end space-x-3 pt-2">
-                  <button onClick={() => setShowPersonEditor(false)} className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Cancel</button>
-                  <button onClick={async () => {
-                    try {
-                      setIsLoading(true);
-                      setError('');
-                      // Resolve family
-                      let familyIdToUse: number | undefined = undefined;
-                      const input = personEditorData.familyInput.trim();
-                      if (input) {
-                        const match = families.find(f => f.familyName.toLowerCase() === input.toLowerCase());
-                        if (match) {
-                          familyIdToUse = match.id;
-                        } else {
-                          const created = await familiesAPI.create({ familyName: input });
-                          familyIdToUse = created.data.id;
-                        }
-                      }
-
-                      await individualsAPI.update(personEditorData.id, {
-                        firstName: personEditorData.firstName.trim(),
-                        lastName: personEditorData.lastName.trim(),
-                        familyId: familyIdToUse,
-                      });
-
-                      // Sync gathering assignments
-                      for (const g of gatheringTypes) {
-                        const want = !!personEditorData.assignments[g.id];
-                        const had = personEditorData.originalAssignments.has(g.id);
-                        if (want && !had) {
-                          await individualsAPI.assignToGathering(personEditorData.id, g.id);
-                        } else if (!want && had) {
-                          await individualsAPI.unassignFromGathering(personEditorData.id, g.id);
-                        }
-                      }
-
-                      showSuccess('Person updated');
-                      setShowPersonEditor(false);
-                      await loadPeople();
-                      await loadFamilies();
-                    } catch (err: any) {
-                      setError(err.response?.data?.error || 'Failed to update person');
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  }} className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700">Save</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ) : null}
+      {/* Removed individual person editor modal - now using mass edit modal for all edits */}
 
       {/* Mass Edit Modal */}
       <MassEditModal
         isOpen={showMassEditModal}
         onClose={() => setShowMassEditModal(false)}
-        selectedCount={selectedPeople.length}
+        selectedCount={modalSelectedCount}
         massEdit={massEdit}
         setMassEdit={setMassEdit}
         families={families}
@@ -1510,138 +1400,72 @@ const PeoplePage: React.FC = () => {
       />
 
       {/* Family Editor Modal */}
-      {showFamilyEditorModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
-          <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Edit Family</h3>
-                <button onClick={() => setShowFamilyEditorModal(false)} className="text-gray-400 hover:text-gray-600">
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
+      <FamilyEditorModal
+        isOpen={showFamilyEditorModal}
+        onClose={() => setShowFamilyEditorModal(false)}
+        familyEditor={familyEditor}
+        setFamilyEditor={setFamilyEditor}
+        people={people}
+        onSave={async () => {
+          try {
+            setIsLoading(true);
+            setError('');
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Family Name</label>
-                    <input type="text" value={familyEditor.familyName} onChange={(e) => setFamilyEditor(d => ({ ...d, familyName: e.target.value }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Family Type</label>
-                    <select value={familyEditor.familyType} onChange={(e) => setFamilyEditor(d => ({ ...d, familyType: e.target.value as any }))} className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500">
-                      <option value="regular">Regular</option>
-                      <option value="local_visitor">Local Visitor</option>
-                      <option value="traveller_visitor">Traveller Visitor</option>
-                    </select>
-                  </div>
-                </div>
+            // Update family name/type
+            await familiesAPI.update(familyEditor.familyId, {
+              familyName: familyEditor.familyName.trim() || undefined,
+              familyType: familyEditor.familyType,
+            });
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Members</label>
-                  <div className="flex items-center space-x-2 mb-2">
-                    <input list="people-options" value={familyEditor.addMemberQuery} onChange={(e) => setFamilyEditor(d => ({ ...d, addMemberQuery: e.target.value }))} placeholder="Search people by name" className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" />
-                    <button onClick={() => {
-                      const name = familyEditor.addMemberQuery.trim().toLowerCase();
-                      if (!name) return;
-                      const person = people.find(p => `${p.firstName} ${p.lastName}`.toLowerCase() === name);
-                      if (person && !familyEditor.memberIds.includes(person.id)) {
-                        setFamilyEditor(d => ({ ...d, memberIds: [...d.memberIds, person.id], addMemberQuery: '' }));
-                      }
-                    }} className="px-3 py-2 bg-primary-600 text-white rounded-md text-sm">Add</button>
-                  </div>
-                  <datalist id="people-options">
-                    {people.filter(p => !familyEditor.memberIds.includes(p.id)).map(p => (
-                      <option key={p.id} value={`${p.firstName} ${p.lastName}`} />
-                    ))}
-                  </datalist>
-                  <div className="border border-gray-200 rounded-md p-3 max-h-64 overflow-y-auto">
-                    {familyEditor.memberIds.length === 0 ? (
-                      <div className="text-sm text-gray-500">No members</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {familyEditor.memberIds.map(id => {
-                          const p = people.find(pp => pp.id === id);
-                          if (!p) return null;
-                          return (
-                            <div key={id} className="flex items-center justify-between text-sm">
-                              <span>{p.firstName} {p.lastName}</span>
-                              <button onClick={() => setFamilyEditor(d => ({ ...d, memberIds: d.memberIds.filter(pid => pid !== id) }))} className="text-red-600 hover:text-red-800">Remove</button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-2">Adding a member will move them into this family. Removing will detach them from any family.</div>
-                </div>
+            // Determine current members of this family from people
+            const currentMembersArr = people.filter(p => p.familyId === familyEditor.familyId).map(p => p.id);
+            const desiredMembersArr = [...familyEditor.memberIds];
 
-                <div className="flex justify-end space-x-3 pt-2">
-                  <button onClick={() => setShowFamilyEditorModal(false)} className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">Cancel</button>
-                  <button onClick={async () => {
-                    try {
-                      setIsLoading(true);
-                      setError('');
+            const peopleMap = new Map(people.map(p => [p.id, p]));
 
-                      // Update family name/type
-                      await familiesAPI.update(familyEditor.familyId, {
-                        familyName: familyEditor.familyName.trim() || undefined,
-                        familyType: familyEditor.familyType,
-                      });
+            // Add new members
+            for (const id of desiredMembersArr) {
+              if (currentMembersArr.indexOf(id) === -1) {
+                const p = peopleMap.get(id);
+                if (!p) continue;
+                await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
+              }
+            }
 
-                      // Determine current members of this family from people
-                      const currentMembersArr = people.filter(p => p.familyId === familyEditor.familyId).map(p => p.id);
-                      const desiredMembersArr = [...familyEditor.memberIds];
+            // Remove members not desired
+            for (const id of currentMembersArr) {
+              if (desiredMembersArr.indexOf(id) === -1) {
+                const p = peopleMap.get(id);
+                if (!p) continue;
+                await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: undefined });
+              }
+            }
 
-                      const peopleMap = new Map(people.map(p => [p.id, p]));
+            // Propagate family type to all desired members (enforce rule)
+            for (const id of desiredMembersArr) {
+              const p = peopleMap.get(id);
+              if (!p) continue;
+              await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
+            }
 
-                      // Add new members
-                      for (const id of desiredMembersArr) {
-                        if (currentMembersArr.indexOf(id) === -1) {
-                          const p = peopleMap.get(id);
-                          if (!p) continue;
-                          await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
-                        }
-                      }
+            // If family became empty, delete it
+            if (desiredMembersArr.length === 0) {
+              await familiesAPI.delete(familyEditor.familyId);
+            }
 
-                      // Remove members not desired
-                      for (const id of currentMembersArr) {
-                        if (desiredMembersArr.indexOf(id) === -1) {
-                          const p = peopleMap.get(id);
-                          if (!p) continue;
-                          await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: undefined });
-                        }
-                      }
-
-                      // Propagate family type to all desired members (enforce rule)
-                      for (const id of desiredMembersArr) {
-                        const p = peopleMap.get(id);
-                        if (!p) continue;
-                        await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
-                      }
-
-                      // If family became empty, delete it
-                      if (desiredMembersArr.length === 0) {
-                        await familiesAPI.delete(familyEditor.familyId);
-                      }
-
-                      showSuccess('Family updated');
-                      setShowFamilyEditorModal(false);
-                      await loadPeople();
-                      await loadFamilies();
-                    } catch (err: any) {
-                      setError(err.response?.data?.error || 'Failed to update family');
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  }} className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700">Save</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ) : null}
+            showSuccess('Family updated');
+            setShowFamilyEditorModal(false);
+            await loadPeople();
+            await loadFamilies();
+          } catch (err: any) {
+            setError(err.response?.data?.error || 'Failed to update family');
+          } finally {
+            setIsLoading(false);
+          }
+        }}
+        error={error}
+        isLoading={isLoading}
+      />
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-md p-4">
           <div className="flex">
@@ -2392,7 +2216,7 @@ const PeoplePage: React.FC = () => {
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  {addModalMode === 'person' && (selectedPerson ? 'Edit Person' : 'Add New People')}
+                  {addModalMode === 'person' && 'Add New People'}
                   {addModalMode === 'csv' && 'Upload CSV File'}
                   {addModalMode === 'copy-paste' && 'Copy & Paste Data'}
                 </h3>
@@ -2483,9 +2307,28 @@ const PeoplePage: React.FC = () => {
                 <div className="space-y-6">
 
                   {/* Individual Person Edit Form */}
-                  {selectedPerson && (
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-medium text-gray-700">Edit Person</h4>
+                  {/* Removed inline edit person form - now using MassEditModal for all edits */}
+
+                  {/* Family Members Form */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-medium text-gray-700">Family Members</h4>
+                  
+                  {familyMembers.map((member, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h5 className="text-sm font-medium text-gray-700">
+                          Person {index + 1}
+                        </h5>
+                        {familyMembers.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeFamilyMember(index)}
+                            className="text-red-600 hover:text-red-800 text-sm"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
@@ -2494,8 +2337,8 @@ const PeoplePage: React.FC = () => {
                           </label>
                           <input
                             type="text"
-                            value={personForm.firstName}
-                            onChange={(e) => setPersonForm({...personForm, firstName: e.target.value})}
+                            value={member.firstName}
+                            onChange={(e) => updateFamilyMember(index, 'firstName', e.target.value)}
                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             placeholder="First name"
                             required
@@ -2507,118 +2350,46 @@ const PeoplePage: React.FC = () => {
                           </label>
                           <input
                             type="text"
-                            value={personForm.lastName}
-                            onChange={(e) => setPersonForm({...personForm, lastName: e.target.value})}
+                            value={member.lastName}
+                            onChange={(e) => updateFamilyMember(index, 'lastName', e.target.value)}
                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             placeholder="Last name"
                             required
                           />
                         </div>
                       </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700">
-                          Family
-                        </label>
-                        <select
-                          value={personForm.familyId}
-                          onChange={(e) => setPersonForm({...personForm, familyId: e.target.value})}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                        >
-                          <option value="">No family</option>
-                          {families.map(family => (
-                            <option key={family.id} value={family.id}>
-                              {family.familyName}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Same Surname Checkbox */}
+                  {familyMembers.length > 1 && (
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={useSameSurname}
+                        onChange={(e) => handleUseSameSurnameChange(e.target.checked)}
+                        disabled={!familyMembers[0].lastName.trim()}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
+                      />
+                      <span 
+                        className={`text-sm ${!familyMembers[0].lastName.trim() ? 'text-gray-400' : 'text-gray-700'}`}
+                        title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
+                      >
+                        Use same surname for all family members
+                      </span>
                     </div>
                   )}
-
-                  {/* Family Members Form (only show when not editing) */}
-                  {!selectedPerson && (
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-medium text-gray-700">Family Members</h4>
-                    
-                    {familyMembers.map((member, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <h5 className="text-sm font-medium text-gray-700">
-                            Person {index + 1}
-                          </h5>
-                          {familyMembers.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeFamilyMember(index)}
-                              className="text-red-600 hover:text-red-800 text-sm"
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              First Name *
-                            </label>
-                            <input
-                              type="text"
-                              value={member.firstName}
-                              onChange={(e) => updateFamilyMember(index, 'firstName', e.target.value)}
-                              className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="First name"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Last Name *
-                            </label>
-                            <input
-                              type="text"
-                              value={member.lastName}
-                              onChange={(e) => updateFamilyMember(index, 'lastName', e.target.value)}
-                              className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="Last name"
-                              required
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {/* Same Surname Checkbox */}
-                    {familyMembers.length > 1 && (
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={useSameSurname}
-                          onChange={(e) => handleUseSameSurnameChange(e.target.checked)}
-                          disabled={!familyMembers[0].lastName.trim()}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
-                        />
-                        <span 
-                          className={`text-sm ${!familyMembers[0].lastName.trim() ? 'text-gray-400' : 'text-gray-700'}`}
-                          title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
-                        >
-                          Use same surname for all family members
-                        </span>
-                      </div>
-                    )}
-                    
-                    {/* Add Another Family Member Button */}
-                    <button
-                      type="button"
-                      onClick={addFamilyMember}
-                      className="w-full py-2 px-4 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
-                    >
-                      + Add Another Family Member
-                    </button>
-                  </div>
-                  )}
+                  
+                  {/* Add Another Family Member Button */}
+                  <button
+                    type="button"
+                    onClick={addFamilyMember}
+                    className="w-full py-2 px-4 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
+                  >
+                    + Add Another Family Member
+                  </button>
+                </div>
                   
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
@@ -2629,10 +2400,10 @@ const PeoplePage: React.FC = () => {
                       Cancel
                     </button>
                     <button
-                      onClick={selectedPerson ? async () => { /* removed old edit flow */ } : handleCombinedFamilyPerson}
+                      onClick={handleCombinedFamilyPerson}
                       className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
                     >
-                      {selectedPerson ? 'Update Person' : 'Add People'}
+                      Add People
                     </button>
                   </div>
                 </div>
@@ -2799,74 +2570,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
         document.body
       ) : null}
 
-      {/* Person Details Modal */}
-      {showPersonDetails && selectedPerson ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-            <div className="mt-3">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Person Details
-                </h3>
-                <button
-                  onClick={() => setShowPersonDetails(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <span className="sr-only">Close</span>
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Name</label>
-                  <p className="mt-1 text-sm text-gray-900">{selectedPerson.firstName} {selectedPerson.lastName}</p>
-                </div>
-
-                {selectedPerson.familyName && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Family</label>
-                    <p className="mt-1 text-sm text-gray-900">{selectedPerson.familyName}</p>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Type</label>
-                  <p className="mt-1 text-sm text-gray-900">
-                    {selectedPerson.peopleType === 'regular' ? 'Regular Attendee' : 
-                     selectedPerson.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                  </p>
-                </div>
-
-                {selectedPerson.gatheringAssignments && selectedPerson.gatheringAssignments.length > 0 && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Gathering Assignments</label>
-                    <div className="mt-1">
-                      {selectedPerson.gatheringAssignments.map(gathering => (
-                        <span key={gathering.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 mr-2 mb-2">
-                          {gathering.name}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                
-                <div className="flex justify-end pt-4">
-                  <button
-                    onClick={() => setShowPersonDetails(false)}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ) : null}
+      {/* Removed duplicate Person Details Modal */}
 
       {/* Delete Person Confirmation Modal */}
       {showDeleteModal ? createPortal(
@@ -3026,73 +2730,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
              {/* Manage People Type Modal */}
       {/* removed: showManagePeopleTypeModal UI */}
 
-             {/* Person Details Modal */}
-       {showPersonDetails && selectedPerson && (
-         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-             <div className="mt-3">
-               <div className="flex items-center justify-between mb-4">
-                 <h3 className="text-lg font-medium text-gray-900">
-                   Person Details
-                 </h3>
-                 <button
-                   onClick={() => setShowPersonDetails(false)}
-                   className="text-gray-400 hover:text-gray-600"
-                 >
-                   <span className="sr-only">Close</span>
-                   <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                   </svg>
-                 </button>
-               </div>
-               
-               <div className="space-y-4">
-                 <div>
-                   <label className="block text-sm font-medium text-gray-700">Name</label>
-                   <p className="mt-1 text-sm text-gray-900">{selectedPerson.firstName} {selectedPerson.lastName}</p>
-                 </div>
-
-                 {selectedPerson.familyName && (
-                   <div>
-                     <label className="block text-sm font-medium text-gray-700">Family</label>
-                     <p className="mt-1 text-sm text-gray-900">{selectedPerson.familyName}</p>
-                   </div>
-                 )}
-
-                 <div>
-                   <label className="block text-sm font-medium text-gray-700">Type</label>
-                   <p className="mt-1 text-sm text-gray-900">
-                     {selectedPerson.peopleType === 'regular' ? 'Regular Attendee' : 
-                      selectedPerson.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                   </p>
-                 </div>
-
-                 {selectedPerson.gatheringAssignments && selectedPerson.gatheringAssignments.length > 0 && (
-                   <div>
-                     <label className="block text-sm font-medium text-gray-700">Gathering Assignments</label>
-                     <div className="mt-1">
-                       {selectedPerson.gatheringAssignments.map(gathering => (
-                         <span key={gathering.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 mr-2 mb-2">
-                           {gathering.name}
-                         </span>
-                       ))}
-                     </div>
-                   </div>
-                 )}
-                 
-                 <div className="flex justify-end pt-4">
-                   <button
-                     onClick={() => setShowPersonDetails(false)}
-                     className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                   >
-                     Close
-                   </button>
-                 </div>
-               </div>
-             </div>
-           </div>
-         </div>
-       )}
+             {/* Removed duplicate Person Details Modal */}
 
        {/* Delete Person Confirmation Modal */}
        {showDeleteModal && (
@@ -3208,7 +2846,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
              </div>
              <button
                 onClick={() => {
-                  // Initialize mass edit with current values from selected people
+                  // Initialize mass edit with meaningful data from selected people
                   const selectedPeopleData = people.filter(p => selectedPeople.includes(p.id));
                   
                   // Initialize assignments based on current gathering assignments
@@ -3238,17 +2876,47 @@ Sarah       Smith      Smith, John and Sarah</pre>
                     );
                   });
                   
+                  // Determine common family info
+                  const familyIds = new Set(selectedPeopleData.map(p => p.familyId).filter(Boolean));
+                  let familyInput = '';
+                  let selectedFamilyId: number | null = null;
+                  
+                  if (familyIds.size === 1) {
+                    // All people are in the same family
+                    const familyId = Array.from(familyIds)[0];
+                    const family = families.find(f => f.id === familyId);
+                    if (family) {
+                      familyInput = family.familyName;
+                      selectedFamilyId = familyId;
+                    }
+                  }
+                  
+                  // Determine common people type
+                  const peopleTypes = new Set(selectedPeopleData.map(p => p.peopleType));
+                  let peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor' = '';
+                  if (peopleTypes.size === 1) {
+                    peopleType = Array.from(peopleTypes)[0];
+                  }
+                  
+                  // Determine common last name (only if all have same last name)
+                  const lastNames = new Set(selectedPeopleData.map(p => p.lastName));
+                  let lastName = '';
+                  if (lastNames.size === 1) {
+                    lastName = Array.from(lastNames)[0];
+                  }
+                  
                   setMassEdit({ 
-                    familyInput: '', 
-                    selectedFamilyId: null, 
+                    familyInput, 
+                    selectedFamilyId, 
                     newFamilyName: '', 
-                    firstName: '',
-                    lastName: '', 
-                    peopleType: '', 
+                    firstName: '', // Always empty for multiple people
+                    lastName, // Show if all have same last name
+                    peopleType, // Show if all have same type
                     assignments,
                     originalAssignments,
                     applyToWholeFamily: false
                   });
+                  setModalSelectedCount(selectedPeople.length); // Set the count directly
                   setShowMassEditModal(true);
                 }}
                className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
