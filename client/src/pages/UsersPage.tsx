@@ -187,17 +187,26 @@ const UsersPage: React.FC = () => {
     
     // Validate mobile number if provided - be very flexible
     if (inviteForm.mobileNumber.trim()) {
-      // Remove all non-digit characters except + at the start
       const cleanedNumber = inviteForm.mobileNumber.trim();
-      const digitsOnly = cleanedNumber.replace(/[^\d+]/g, '');
       
       // Check if it starts with + (international format)
       if (cleanedNumber.startsWith('+')) {
-        // International format: + followed by 7-15 digits
+        // For international format, remove all non-digit characters except + at start
+        let digitsOnly = cleanedNumber.replace(/[^\d+]/g, '');
+        
+        // Handle the (0) convention - if we have +61 followed by 0, remove the 0
+        // This handles cases like +61 (0) 478 622 814 -> +61 478 622 814
+        digitsOnly = digitsOnly.replace(/^\+61(0)/, '+61');
+        
+        // International format: + followed by country code + number (no leading 0 after country code)
+        // Common patterns: +61 4xxxxxxx, +1 555xxxxxxx, +44 7xxxxxxxx
         if (!/^\+[1-9]\d{6,14}$/.test(digitsOnly)) {
           errors.mobileNumber = 'Please enter a valid international mobile number (e.g., +61 4 1234 5678)';
         }
       } else {
+        // For local format, remove all non-digit characters
+        const digitsOnly = cleanedNumber.replace(/[^\d]/g, '');
+        
         // Local format: 4-15 digits, can start with 0
         if (!/^[0-9]{4,15}$/.test(digitsOnly)) {
           errors.mobileNumber = 'Please enter a valid mobile number (e.g., 0412 345 678 or 04 1234 5678)';
@@ -924,7 +933,7 @@ const UsersPage: React.FC = () => {
                         setValidationErrors({ ...validationErrors, mobileNumber: '' });
                       }
                     }}
-                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, 04-1234-5678"
+                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, +61 (0) 478 622 814"
                     className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
                       validationErrors.mobileNumber ? 'border-red-300' : 'border-gray-300'
                     }`}
@@ -1216,7 +1225,7 @@ const UsersPage: React.FC = () => {
                     type="tel"
                     value={editForm.mobileNumber}
                     onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
-                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, 04-1234-5678"
+                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, +61 (0) 478 622 814"
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   />
                   <p className="mt-1 text-sm text-gray-500">Accepts any format: spaces, dashes, +61, leading zeros</p>
