@@ -6,6 +6,7 @@ const { processApiResponse } = require('../utils/caseConverter');
 const websocketBroadcast = require('../utils/websocketBroadcast');
 
 const router = express.Router();
+
 router.use(verifyToken);
 
 // Middleware to disable caching for attendance endpoints
@@ -18,6 +19,233 @@ const disableCache = (req, res, next) => {
   res.removeHeader('ETag');
   next();
 };
+
+// ===== HEADCOUNT ENDPOINTS (MUST BE FIRST TO AVOID ROUTE CONFLICTS) =====
+
+// Get headcount for a specific gathering and date
+router.get('/headcount/:gatheringTypeId/:date', (req, res, next) => {
+  console.log('🚨 HEADCOUNT ROUTE: Matched headcount route!', {
+    path: req.path,
+    params: req.params
+  });
+  next();
+}, disableCache, requireGatheringAccess, async (req, res) => {
+  console.log('🚨 HEADCOUNT ENDPOINT: Starting execution');
+  try {
+    console.log('🔍 HEADCOUNT GET: Request received', {
+      gatheringTypeId: req.params.gatheringTypeId,
+      date: req.params.date,
+      userId: req.user?.id,
+      churchId: req.user?.church_id
+    });
+    
+    console.log('🔍 STEP 1: About to verify gathering type');
+    
+    const { gatheringTypeId, date } = req.params;
+
+    // First, verify this is a headcount gathering
+    const gathering = await Database.query(`
+      SELECT attendance_type FROM gathering_types 
+      WHERE id = ? AND church_id = ?
+    `, [gatheringTypeId, req.user.church_id]);
+
+    console.log('🔍 STEP 2: Gathering query result:', gathering);
+
+    if (gathering.length === 0) {
+      console.log('🔍 STEP 3: Gathering not found, returning 404');
+      return res.status(404).json({ error: 'Gathering not found.' });
+    }
+
+    if (gathering[0].attendance_type !== 'headcount') {
+      console.log('🔍 STEP 4: Wrong attendance type, returning 400');
+      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+    }
+
+    console.log('🔍 STEP 5: Gathering validation passed');
+
+    // Get or create attendance session (use transaction for consistency)
+    let sessionId;
+    console.log('🔍 STEP 6: About to start transaction');
+    await Database.transaction(async (conn) => {
+      console.log('🔍 STEP 7: Inside transaction, querying for session');
+      console.log('🔍 STEP 7.1: Query parameters:', {
+        gatheringTypeId,
+        date,
+        churchId: req.user.church_id
+      });
+      let sessionResult = await conn.query(`
+        SELECT id, session_date, created_by FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      `, [gatheringTypeId, date, req.user.church_id]);
+
+      console.log('🔍 STEP 8: Session query result:', sessionResult);
+      
+      // Also check if there are any other sessions for this gathering
+      let allSessions = await conn.query(`
+        SELECT id, session_date, created_by FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND church_id = ?
+        ORDER BY session_date DESC LIMIT 5
+      `, [gatheringTypeId, req.user.church_id]);
+      console.log('🔍 STEP 8.1: All recent sessions for this gathering:', allSessions);
+
+      if (sessionResult.length === 0) {
+        console.log('🔍 STEP 9: Creating new session');
+        // Create new session
+        const newSession = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+        sessionId = newSession.insertId;
+        console.log('🔍 STEP 10: New session created with ID:', sessionId);
+      } else {
+        sessionId = sessionResult[0].id;
+        console.log('🔍 STEP 11: Using existing session ID:', sessionId);
+      }
+    });
+    console.log('🔍 STEP 12: Transaction completed, sessionId:', sessionId);
+
+    // Get headcount record
+    console.log('🔍 HEADCOUNT: Getting headcount record for sessionId:', sessionId);
+    const headcountResult = await Database.query(`
+      SELECT h.headcount, h.updated_at, h.session_id, u.first_name, u.last_name,
+             s.session_date, s.gathering_type_id
+      FROM headcount_records h
+      LEFT JOIN users u ON h.updated_by = u.id
+      LEFT JOIN attendance_sessions s ON h.session_id = s.id
+      WHERE h.session_id = ?
+    `, [sessionId]);
+
+    console.log('🔍 HEADCOUNT: Detailed query result:', headcountResult);
+    
+    // Also check if there are headcount records for other sessions of this gathering
+    const allHeadcounts = await Database.query(`
+      SELECT h.headcount, h.session_id, s.session_date, s.gathering_type_id
+      FROM headcount_records h
+      JOIN attendance_sessions s ON h.session_id = s.id
+      WHERE s.gathering_type_id = ? AND s.church_id = ?
+      ORDER BY s.session_date DESC LIMIT 3
+    `, [gatheringTypeId, req.user.church_id]);
+    console.log('🔍 HEADCOUNT: All recent headcounts for this gathering:', allHeadcounts);
+
+    const headcount = headcountResult.length > 0 ? headcountResult[0].headcount : 0;
+    const lastUpdated = headcountResult.length > 0 ? headcountResult[0].updated_at : null;
+    const lastUpdatedBy = headcountResult.length > 0 ? 
+      `${headcountResult[0].first_name} ${headcountResult[0].last_name}` : null;
+
+    const response = {
+      headcount,
+      lastUpdated,
+      lastUpdatedBy,
+      sessionId
+    };
+
+    console.log('🔍 HEADCOUNT: Sending response:', response);
+    res.json(response);
+
+  } catch (error) {
+    console.error('🚨 HEADCOUNT ERROR: Caught error in headcount route');
+    console.error('🔍 ERROR TYPE:', error.constructor.name);
+    console.error('🔍 ERROR MESSAGE:', error.message);
+    console.error('🔍 ERROR STACK:', error.stack);
+    console.error('🔍 ERROR CODE:', error.code);
+    console.error('🔍 ERROR ERRNO:', error.errno);
+    console.error('🔍 ERROR SQLSTATE:', error.sqlState);
+    console.error('🔍 ERROR SQLMESSAGE:', error.sqlMessage);
+    console.error('🔍 REQUEST DETAILS:', {
+      gatheringTypeId: req.params.gatheringTypeId,
+      date: req.params.date,
+      userId: req.user?.id,
+      churchId: req.user?.church_id,
+      path: req.path,
+      method: req.method,
+      url: req.url
+    });
+    console.error('🔍 FULL ERROR OBJECT:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    res.status(500).json({ error: 'Failed to retrieve headcount.' });
+  }
+});
+
+// Update headcount for a specific gathering and date
+router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT'), async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { headcount } = req.body;
+
+    if (typeof headcount !== 'number' || headcount < 0) {
+      return res.status(400).json({ error: 'Valid headcount number is required.' });
+    }
+
+    // First, verify this is a headcount gathering
+    const gathering = await Database.query(`
+      SELECT attendance_type FROM gathering_types 
+      WHERE id = ? AND church_id = ?
+    `, [gatheringTypeId, req.user.church_id]);
+
+    if (gathering.length === 0) {
+      return res.status(404).json({ error: 'Gathering not found.' });
+    }
+
+    if (gathering[0].attendance_type !== 'headcount') {
+      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+    }
+
+    await Database.transaction(async (conn) => {
+      // Get or create attendance session
+      let sessionResult = await conn.query(`
+        SELECT id FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      `, [gatheringTypeId, date, req.user.church_id]);
+
+      let sessionId;
+      if (sessionResult.length === 0) {
+        // Create new session
+        const newSession = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+        sessionId = newSession.insertId;
+      } else {
+        sessionId = sessionResult[0].id;
+      }
+
+      // Insert or update headcount record
+      await conn.query(`
+        INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+        headcount = VALUES(headcount),
+        updated_by = VALUES(updated_by),
+        updated_at = CURRENT_TIMESTAMP
+      `, [sessionId, headcount, req.user.id, req.user.church_id]);
+    });
+
+    // Broadcast the update via WebSocket
+    try {
+      websocketBroadcast('headcount_updated', {
+        gatheringId: parseInt(gatheringTypeId),
+        date,
+        headcount,
+        updatedBy: req.user.id,
+        updatedByName: `${req.user.first_name} ${req.user.last_name}`,
+        timestamp: new Date().toISOString(),
+        churchId: req.user.church_id
+      });
+    } catch (wsError) {
+      console.error('WebSocket broadcast error:', wsError);
+      // Don't fail the request if WebSocket fails
+    }
+
+    res.json({ 
+      message: 'Headcount updated successfully',
+      headcount,
+      updatedBy: `${req.user.first_name} ${req.user.last_name}`
+    });
+
+  } catch (error) {
+    console.error('Update headcount error:', error);
+    res.status(500).json({ error: 'Failed to update headcount.' });
+  }
+});
 
 // Helper function to get the last N service dates for a gathering type
 const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount) => {
@@ -1371,161 +1599,5 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
   }
 });
 
-// ===== HEADCOUNT ENDPOINTS =====
-
-// Get headcount for a specific gathering and date
-router.get('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
-  try {
-    const { gatheringTypeId, date } = req.params;
-
-    // First, verify this is a headcount gathering
-    const gathering = await Database.query(`
-      SELECT attendance_type FROM gathering_types 
-      WHERE id = ? AND church_id = ?
-    `, [gatheringTypeId, req.user.church_id]);
-
-    if (gathering.length === 0) {
-      return res.status(404).json({ error: 'Gathering not found.' });
-    }
-
-    if (gathering[0].attendance_type !== 'headcount') {
-      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
-    }
-
-    // Get or create attendance session (use transaction for consistency)
-    let sessionId;
-    await Database.transaction(async (conn) => {
-      let sessionResult = await conn.query(`
-        SELECT id FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-      `, [gatheringTypeId, date, req.user.church_id]);
-
-      if (sessionResult.length === 0) {
-        // Create new session
-        const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-        sessionId = newSession.insertId;
-      } else {
-        sessionId = sessionResult[0].id;
-      }
-    });
-
-    // Get headcount record
-    const headcountResult = await Database.query(`
-      SELECT h.headcount, h.updated_at, u.first_name, u.last_name
-      FROM headcount_records h
-      LEFT JOIN users u ON h.updated_by = u.id
-      WHERE h.session_id = ?
-    `, [sessionId]);
-
-    const headcount = headcountResult.length > 0 ? headcountResult[0].headcount : 0;
-    const lastUpdated = headcountResult.length > 0 ? headcountResult[0].updated_at : null;
-    const lastUpdatedBy = headcountResult.length > 0 ? 
-      `${headcountResult[0].first_name} ${headcountResult[0].last_name}` : null;
-
-    res.json({
-      headcount,
-      lastUpdated,
-      lastUpdatedBy,
-      sessionId
-    });
-
-  } catch (error) {
-    console.error('Get headcount error:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      gatheringTypeId: req.params.gatheringTypeId,
-      date: req.params.date,
-      userId: req.user?.id,
-      churchId: req.user?.church_id
-    });
-    res.status(500).json({ error: 'Failed to retrieve headcount.' });
-  }
-});
-
-// Update headcount for a specific gathering and date
-router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT'), async (req, res) => {
-  try {
-    const { gatheringTypeId, date } = req.params;
-    const { headcount } = req.body;
-
-    if (typeof headcount !== 'number' || headcount < 0) {
-      return res.status(400).json({ error: 'Valid headcount number is required.' });
-    }
-
-    // First, verify this is a headcount gathering
-    const gathering = await Database.query(`
-      SELECT attendance_type FROM gathering_types 
-      WHERE id = ? AND church_id = ?
-    `, [gatheringTypeId, req.user.church_id]);
-
-    if (gathering.length === 0) {
-      return res.status(404).json({ error: 'Gathering not found.' });
-    }
-
-    if (gathering[0].attendance_type !== 'headcount') {
-      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
-    }
-
-    await Database.transaction(async (conn) => {
-      // Get or create attendance session
-      let sessionResult = await conn.query(`
-        SELECT id FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-      `, [gatheringTypeId, date, req.user.church_id]);
-
-      let sessionId;
-      if (sessionResult.length === 0) {
-        // Create new session
-        const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-        sessionId = newSession.insertId;
-      } else {
-        sessionId = sessionResult[0].id;
-      }
-
-      // Insert or update headcount record
-      await conn.query(`
-        INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
-        VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-        headcount = VALUES(headcount),
-        updated_by = VALUES(updated_by),
-        updated_at = CURRENT_TIMESTAMP
-      `, [sessionId, headcount, req.user.id, req.user.church_id]);
-    });
-
-    // Broadcast the update via WebSocket
-    try {
-      websocketBroadcast('headcount_updated', {
-        gatheringId: parseInt(gatheringTypeId),
-        date,
-        headcount,
-        updatedBy: req.user.id,
-        updatedByName: `${req.user.first_name} ${req.user.last_name}`,
-        timestamp: new Date().toISOString(),
-        churchId: req.user.church_id
-      });
-    } catch (wsError) {
-      console.error('WebSocket broadcast error:', wsError);
-      // Don't fail the request if WebSocket fails
-    }
-
-    res.json({ 
-      message: 'Headcount updated successfully',
-      headcount,
-      updatedBy: `${req.user.first_name} ${req.user.last_name}`
-    });
-
-  } catch (error) {
-    console.error('Update headcount error:', error);
-    res.status(500).json({ error: 'Failed to update headcount.' });
-  }
-});
 
 module.exports = router; 

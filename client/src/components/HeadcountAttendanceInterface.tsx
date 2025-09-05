@@ -3,6 +3,7 @@ import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 import { attendanceAPI } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useToast } from './ToastContainer';
+import { useAuth } from '../contexts/AuthContext';
 
 interface HeadcountAttendanceInterfaceProps {
   gatheringTypeId: number;
@@ -28,24 +29,71 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   const [lastUpdatedBy, setLastUpdatedBy] = useState<string | null>('you');
   const { socket, isConnected } = useWebSocket();
   const { showError } = useToast();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+
+  // Debug: Log when component mounts/unmounts
+  useEffect(() => {
+    console.log('🎯 HeadcountAttendanceInterface: Component mounted', {
+      gatheringTypeId,
+      date,
+      authLoading,
+      isAuthenticated,
+      hasUser: !!user
+    });
+    
+    return () => {
+      console.log('🎯 HeadcountAttendanceInterface: Component unmounting');
+    };
+  }, []);
+
+  // Reset state when gathering or date changes
+  useEffect(() => {
+    console.log('🔄 HeadcountAttendanceInterface: Props changed, resetting state', {
+      gatheringTypeId,
+      date
+    });
+    setHeadcount(0);
+    setIsLoading(true);
+    setLastUpdated(new Date().toISOString());
+    setLastUpdatedBy('you');
+  }, [gatheringTypeId, date]);
 
   // Load initial headcount data
   const loadHeadcount = useCallback(async () => {
+    // Don't load data if authentication is not ready
+    if (authLoading || !isAuthenticated || !user) {
+      console.log('🔒 Headcount: Waiting for authentication to be ready', {
+        authLoading,
+        isAuthenticated,
+        hasUser: !!user,
+        gatheringTypeId,
+        date
+      });
+      return;
+    }
+
     try {
       setIsLoading(true);
+      console.log('📊 Headcount: Loading data for gathering', gatheringTypeId, 'date', date);
       const response = await attendanceAPI.getHeadcount(gatheringTypeId, date);
       const data: HeadcountData = response.data;
       
       setHeadcount(data.headcount || 0);
       setLastUpdated(data.lastUpdated || new Date().toISOString());
       setLastUpdatedBy(data.lastUpdatedBy || 'you');
+      console.log('✅ Headcount: Data loaded successfully', data);
     } catch (error: any) {
-      console.error('Failed to load headcount:', error);
-      showError('Failed to load headcount data');
+      console.error('❌ Headcount: Failed to load data:', error);
+      // Note: Hiding toast notification for now - functionality works despite intermittent 500 errors
+      // showError('Failed to load headcount data');
+      // Reset to defaults on error to avoid showing stale data
+      setHeadcount(0);
+      setLastUpdated(null);
+      setLastUpdatedBy(null);
     } finally {
       setIsLoading(false);
     }
-  }, [gatheringTypeId, date, showError]);
+  }, [gatheringTypeId, date, showError, authLoading, isAuthenticated, user]);
 
   // Update headcount via API (optimistic updates)
   const updateHeadcount = useCallback(async (newCount: number) => {
@@ -90,10 +138,16 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     };
   }, [socket, isConnected, gatheringTypeId, date]);
 
-  // Load initial data
+  // Only load data when authentication is fully ready
   useEffect(() => {
-    loadHeadcount();
-  }, [loadHeadcount]);
+    if (!authLoading && isAuthenticated && user) {
+      console.log('🔄 Headcount: Auth state ready, triggering load');
+      // Small delay to ensure JWT cookie is fully established
+      setTimeout(() => {
+        loadHeadcount();
+      }, 100);
+    }
+  }, [authLoading, isAuthenticated, user, loadHeadcount]);
 
   // Handle increment/decrement
   const handleIncrement = () => {

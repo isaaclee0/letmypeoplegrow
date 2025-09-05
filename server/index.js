@@ -372,6 +372,40 @@ Object.entries(routes).forEach(([name, router]) => {
   }
 });
 
+// ===== EXPRESS ERROR HANDLER =====
+// This catches all errors that occur in API routes
+app.use('/api', (error, req, res, next) => {
+  console.error('🚨 EXPRESS ERROR HANDLER: Caught unhandled error in API route');
+  console.error('🔍 ERROR TYPE:', error.constructor.name);
+  console.error('🔍 ERROR MESSAGE:', error.message);
+  console.error('🔍 ERROR STACK:', error.stack);
+  console.error('🔍 ERROR CODE:', error.code);
+  console.error('🔍 ERROR ERRNO:', error.errno);
+  console.error('🔍 ERROR SQLSTATE:', error.sqlState);
+  console.error('🔍 ERROR SQLMESSAGE:', error.sqlMessage);
+  console.error('🔍 REQUEST DETAILS:', {
+    method: req.method,
+    url: req.url,
+    path: req.path,
+    originalUrl: req.originalUrl,
+    params: req.params,
+    query: req.query,
+    headers: req.headers,
+    userId: req.user?.id,
+    churchId: req.user?.church_id
+  });
+  console.error('🔍 FULL ERROR OBJECT:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+  
+  // Send a generic 500 error response
+  if (!res.headersSent) {
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Google Sheets test endpoints (AFTER routes are loaded)
 app.get('/api/sheets-test', (req, res) => {
   console.log('📊 Google Sheets test endpoint called');
