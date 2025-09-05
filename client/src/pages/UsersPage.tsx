@@ -757,13 +757,12 @@ const UsersPage: React.FC = () => {
       {/* Floating Action Buttons */}
       {selectedUsers.length > 0 ? (
         <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
-          <div className="flex items-center justify-end space-x-3">
-            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
-              {selectedUsers.length === 1 ? 'Edit User' : `${selectedUsers.length} Users Selected`}
-            </div>
-            
-            {/* Edit User Button - only for single selection */}
-            {selectedUsers.length === 1 && (
+          {/* Edit User Button - only for single selection */}
+          {selectedUsers.length === 1 && (
+            <div className="flex items-center justify-end space-x-3">
+              <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                Edit User
+              </div>
               <button
                 onClick={handleEditSelectedUser}
                 className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
@@ -771,9 +770,14 @@ const UsersPage: React.FC = () => {
               >
                 <PencilIcon className="h-6 w-6" />
               </button>
-            )}
-            
-            {/* Assign to Gathering Button */}
+            </div>
+          )}
+          
+          {/* Assign to Gathering Button */}
+          <div className="flex items-center justify-end space-x-3">
+            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+              {selectedUsers.length === 1 ? "Assign to Gathering" : "Assign to Gatherings"}
+            </div>
             <button
               onClick={handleAssignSelectedUsers}
               className="w-14 h-14 bg-green-600 hover:bg-green-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
@@ -781,8 +785,13 @@ const UsersPage: React.FC = () => {
             >
               <UserGroupIcon className="h-6 w-6" />
             </button>
-            
-            {/* Delete User Button */}
+          </div>
+          
+          {/* Delete User Button */}
+          <div className="flex items-center justify-end space-x-3">
+            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+              {selectedUsers.length === 1 ? "Delete User" : "Delete Users"}
+            </div>
             <button
               onClick={handleDeleteSelectedUsers}
               className="w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
@@ -795,10 +804,10 @@ const UsersPage: React.FC = () => {
       ) : (
         <button
           onClick={() => setShowInviteModal(true)}
-          className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-lg bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
+          className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-[9999]"
           aria-label="Invite User"
         >
-          <PlusIcon className="h-7 w-7" />
+          <PlusIcon className="h-6 w-6" />
         </button>
       )}
 
