@@ -185,11 +185,23 @@ const UsersPage: React.FC = () => {
       }
     }
     
-    // Validate mobile number if provided
+    // Validate mobile number if provided - be very flexible
     if (inviteForm.mobileNumber.trim()) {
-      const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-      if (!phoneRegex.test(inviteForm.mobileNumber.replace(/\s/g, ''))) {
-        errors.mobileNumber = 'Please enter a valid mobile number';
+      // Remove all non-digit characters except + at the start
+      const cleanedNumber = inviteForm.mobileNumber.trim();
+      const digitsOnly = cleanedNumber.replace(/[^\d+]/g, '');
+      
+      // Check if it starts with + (international format)
+      if (cleanedNumber.startsWith('+')) {
+        // International format: + followed by 7-15 digits
+        if (!/^\+[1-9]\d{6,14}$/.test(digitsOnly)) {
+          errors.mobileNumber = 'Please enter a valid international mobile number (e.g., +61 4 1234 5678)';
+        }
+      } else {
+        // Local format: 4-15 digits, can start with 0
+        if (!/^[0-9]{4,15}$/.test(digitsOnly)) {
+          errors.mobileNumber = 'Please enter a valid mobile number (e.g., 0412 345 678 or 04 1234 5678)';
+        }
       }
     }
     
@@ -912,7 +924,7 @@ const UsersPage: React.FC = () => {
                         setValidationErrors({ ...validationErrors, mobileNumber: '' });
                       }
                     }}
-                    placeholder="Enter mobile number"
+                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, 04-1234-5678"
                     className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
                       validationErrors.mobileNumber ? 'border-red-300' : 'border-gray-300'
                     }`}
@@ -920,7 +932,7 @@ const UsersPage: React.FC = () => {
                   {validationErrors.mobileNumber && (
                     <p className="mt-1 text-sm text-red-600">{validationErrors.mobileNumber}</p>
                   )}
-                  <p className="mt-1 text-sm text-gray-500">Optional backup for login and SMS notifications</p>
+                  <p className="mt-1 text-sm text-gray-500">Accepts any format: spaces, dashes, +61, leading zeros</p>
                 </div>
 
                 <div>
@@ -1204,8 +1216,10 @@ const UsersPage: React.FC = () => {
                     type="tel"
                     value={editForm.mobileNumber}
                     onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
+                    placeholder="e.g., 0412 345 678, +61 4 1234 5678, 04-1234-5678"
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   />
+                  <p className="mt-1 text-sm text-gray-500">Accepts any format: spaces, dashes, +61, leading zeros</p>
                 </div>
 
                 <div>
