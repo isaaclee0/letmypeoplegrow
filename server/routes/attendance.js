@@ -1392,23 +1392,25 @@ router.get('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAc
       return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
     }
 
-    // Get or create attendance session
-    let sessionResult = await Database.query(`
-      SELECT id FROM attendance_sessions 
-      WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
-    `, [gatheringTypeId, date, req.user.church_id]);
-
+    // Get or create attendance session (use transaction for consistency)
     let sessionId;
-    if (sessionResult.length === 0) {
-      // Create new session
-      const newSession = await Database.query(`
-        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-        VALUES (?, ?, ?, ?)
-      `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
-      sessionId = newSession.insertId;
-    } else {
-      sessionId = sessionResult[0].id;
-    }
+    await Database.transaction(async (conn) => {
+      let sessionResult = await conn.query(`
+        SELECT id FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      `, [gatheringTypeId, date, req.user.church_id]);
+
+      if (sessionResult.length === 0) {
+        // Create new session
+        const newSession = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+        sessionId = newSession.insertId;
+      } else {
+        sessionId = sessionResult[0].id;
+      }
+    });
 
     // Get headcount record
     const headcountResult = await Database.query(`
@@ -1432,6 +1434,14 @@ router.get('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAc
 
   } catch (error) {
     console.error('Get headcount error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      gatheringTypeId: req.params.gatheringTypeId,
+      date: req.params.date,
+      userId: req.user?.id,
+      churchId: req.user?.church_id
+    });
     res.status(500).json({ error: 'Failed to retrieve headcount.' });
   }
 });
