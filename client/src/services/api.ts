@@ -139,9 +139,22 @@ export interface GatheringType {
   id: number;
   name: string;
   description?: string;
-  dayOfWeek: string;
-  startTime: string;
-  frequency: string;
+  dayOfWeek?: string;
+  startTime?: string;
+  frequency?: string;
+  attendanceType: 'standard' | 'headcount';
+  customSchedule?: {
+    type: 'one_off' | 'recurring';
+    startDate: string;
+    endDate?: string;
+    pattern?: {
+      frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+      interval: number;
+      daysOfWeek?: string[];
+      dayOfMonth?: number;
+      customDates?: string[];
+    };
+  };
   isActive: boolean;
   memberCount?: number;
   createdAt?: string;
@@ -246,9 +259,22 @@ export const gatheringsAPI = {
   create: (data: {
     name: string;
     description?: string;
-    dayOfWeek: string;
-    startTime: string;
-    frequency: string;
+    dayOfWeek?: string;
+    startTime?: string;
+    frequency?: string;
+    attendanceType: 'standard' | 'headcount';
+    customSchedule?: {
+      type: 'one_off' | 'recurring';
+      startDate: string;
+      endDate?: string;
+      pattern?: {
+        frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+        interval: number;
+        daysOfWeek?: string[];
+        dayOfMonth?: number;
+        customDates?: string[];
+      };
+    };
     setAsDefault?: boolean;
   }) => 
     api.post('/gatherings', data),
@@ -256,14 +282,30 @@ export const gatheringsAPI = {
   update: (gatheringId: number, data: {
     name: string;
     description?: string;
-    dayOfWeek: string;
-    startTime: string;
-    frequency: string;
+    dayOfWeek?: string;
+    startTime?: string;
+    frequency?: string;
+    attendanceType: 'standard' | 'headcount';
+    customSchedule?: {
+      type: 'one_off' | 'recurring';
+      startDate: string;
+      endDate?: string;
+      pattern?: {
+        frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+        interval: number;
+        daysOfWeek?: string[];
+        dayOfMonth?: number;
+        customDates?: string[];
+      };
+    };
   }) => 
     api.put(`/gatherings/${gatheringId}`, data),
     
   getMembers: (gatheringId: number) => 
     api.get(`/gatherings/${gatheringId}/members`),
+    
+  duplicate: (gatheringId: number, name: string) => 
+    api.post(`/gatherings/${gatheringId}/duplicate`, { name }),
     
   delete: (gatheringId: number) => 
     api.delete(`/gatherings/${gatheringId}`),
@@ -311,6 +353,13 @@ export const attendanceAPI = {
     
   addVisitorFamilyToService: (gatheringTypeId: number, date: string, familyId: number) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitor-family/${familyId}`),
+
+  // Headcount endpoints
+  getHeadcount: (gatheringTypeId: number, date: string) => 
+    api.get(`/attendance/headcount/${gatheringTypeId}/${date}`),
+    
+  updateHeadcount: (gatheringTypeId: number, date: string, headcount: number) => 
+    api.post(`/attendance/headcount/${gatheringTypeId}/${date}`, { headcount }),
 };
 
 // Users API
@@ -475,6 +524,9 @@ export const individualsAPI = {
     
   getAttendanceHistory: (id: number) => 
     api.get(`/individuals/${id}/attendance-history`),
+    
+  getArchived: () => 
+    api.get('/individuals/archived'),
 };
 
 // Reports API

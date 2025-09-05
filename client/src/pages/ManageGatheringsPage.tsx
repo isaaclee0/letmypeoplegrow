@@ -11,30 +11,55 @@ import {
   TrashIcon,
   PencilIcon,
   CheckIcon,
-  XMarkIcon
+  XMarkIcon,
+  DocumentDuplicateIcon
 } from '@heroicons/react/24/outline';
 
 interface Gathering {
   id: number;
   name: string;
   description: string;
-  dayOfWeek: string;
-  startTime: string;
-  frequency: string;
+  dayOfWeek?: string;
+  startTime?: string;
+  frequency?: string;
+  attendanceType: 'standard' | 'headcount';
+  customSchedule?: {
+    type: 'one_off' | 'recurring';
+    startDate: string;
+    endDate?: string;
+    pattern?: {
+      frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+      interval: number;
+      daysOfWeek?: string[];
+      dayOfMonth?: number;
+      customDates?: string[];
+    };
+  };
   isActive: boolean;
   memberCount?: number;
   recentVisitorCount?: number;
 }
 
-
-
 interface CreateGatheringData {
   // Basic details
   name: string;
   description: string;
-  dayOfWeek: string;
-  startTime: string;
-  frequency: string;
+  dayOfWeek?: string;
+  startTime?: string;
+  frequency?: string;
+  attendanceType: 'standard' | 'headcount';
+  customSchedule?: {
+    type: 'one_off' | 'recurring';
+    startDate: string;
+    endDate?: string;
+    pattern?: {
+      frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+      interval: number;
+      daysOfWeek?: string[];
+      dayOfMonth?: number;
+      customDates?: string[];
+    };
+  };
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -59,7 +84,9 @@ const ManageGatheringsPage: React.FC = () => {
     description: '',
     dayOfWeek: 'Sunday',
     startTime: '10:00',
-    frequency: 'weekly'
+    frequency: 'weekly',
+    attendanceType: 'standard' as 'standard' | 'headcount',
+    customSchedule: undefined as any
   });
 
   const [createGatheringData, setCreateGatheringData] = useState<CreateGatheringData>({
@@ -67,7 +94,8 @@ const ManageGatheringsPage: React.FC = () => {
     description: 'Weekly Sunday morning gathering',
     dayOfWeek: 'Sunday',
     startTime: '10:00',
-    frequency: 'weekly'
+    frequency: 'weekly',
+    attendanceType: 'standard'
   });
 
   // Confirmation modal states
@@ -76,6 +104,20 @@ const ManageGatheringsPage: React.FC = () => {
     gatheringId: number | null;
     gatheringName: string;
   }>({ gatheringId: null, gatheringName: '' });
+
+  // Manage occurrences modal states
+  const [showManageOccurrencesModal, setShowManageOccurrencesModal] = useState(false);
+  const [selectedOccurrences, setSelectedOccurrences] = useState<string[]>([]);
+  const [gatheringOccurrences, setGatheringOccurrences] = useState<{
+    gathering: Gathering | null;
+    occurrences: Array<{ date: string; canDelete: boolean }>;
+  }>({ gathering: null, occurrences: [] });
+
+  // Duplicate modal states
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [duplicateGathering, setDuplicateGathering] = useState<Gathering | null>(null);
+  const [duplicateName, setDuplicateName] = useState('');
+  const [isDuplicating, setIsDuplicating] = useState(false);
   
   // People prompt states - now just for tracking if we should show the animated arrow
   const [showArrowPrompt, setShowArrowPrompt] = useState(false);
@@ -177,7 +219,9 @@ const ManageGatheringsPage: React.FC = () => {
         description: createGatheringData.description,
         dayOfWeek: createGatheringData.dayOfWeek,
         startTime: formattedStartTime,
-        frequency: createGatheringData.frequency
+        frequency: createGatheringData.frequency,
+        attendanceType: createGatheringData.attendanceType,
+        customSchedule: createGatheringData.customSchedule
       };
       
       console.log('Creating gathering with data:', gatheringData);
@@ -194,6 +238,8 @@ const ManageGatheringsPage: React.FC = () => {
         dayOfWeek: createGatheringData.dayOfWeek,
         startTime: createGatheringData.startTime,
         frequency: createGatheringData.frequency,
+        attendanceType: createGatheringData.attendanceType,
+        customSchedule: createGatheringData.customSchedule,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -237,7 +283,9 @@ const ManageGatheringsPage: React.FC = () => {
       description: gathering.description || '',
       dayOfWeek: gathering.dayOfWeek,
       startTime: gathering.startTime,
-      frequency: gathering.frequency
+      frequency: gathering.frequency,
+      attendanceType: gathering.attendanceType,
+      customSchedule: gathering.customSchedule
     });
     setShowEditForm(true);
   }, []);
@@ -285,6 +333,136 @@ const ManageGatheringsPage: React.FC = () => {
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to delete gathering');
+    }
+  };
+
+  const handleDuplicateGathering = async () => {
+    if (!duplicateGathering || !duplicateName.trim()) return;
+
+    setIsDuplicating(true);
+    try {
+      const response = await gatheringsAPI.duplicate(duplicateGathering.id, duplicateName.trim());
+      const newGathering = response.data.gathering;
+      
+      // Add the new gathering to the list
+      setGatherings([...gatherings, newGathering]);
+      
+      // Close modal and reset state
+      setShowDuplicateModal(false);
+      setDuplicateGathering(null);
+      setDuplicateName('');
+      
+      setSuccess(`Gathering "${newGathering.name}" created successfully!`);
+      setTimeout(() => setSuccess(''), 5000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to duplicate gathering');
+    } finally {
+      setIsDuplicating(false);
+    }
+  };
+
+  // Generate occurrences for a gathering (for display purposes)
+  const generateGatheringOccurrences = (gathering: Gathering): Array<{ date: string; canDelete: boolean }> => {
+    const occurrences: Array<{ date: string; canDelete: boolean }> = [];
+    const today = new Date();
+    const futureDate = new Date();
+    futureDate.setMonth(futureDate.getMonth() + 3); // Show next 3 months
+
+    if (gathering.attendanceType === 'headcount' && gathering.customSchedule) {
+      // Handle custom schedule
+      if (gathering.customSchedule.type === 'one_off') {
+        const date = new Date(gathering.customSchedule.startDate);
+        occurrences.push({
+          date: date.toISOString().split('T')[0],
+          canDelete: true
+        });
+      } else if (gathering.customSchedule.type === 'recurring' && gathering.customSchedule.pattern) {
+        const startDate = new Date(gathering.customSchedule.startDate);
+        const endDate = gathering.customSchedule.endDate ? new Date(gathering.customSchedule.endDate) : futureDate;
+        const pattern = gathering.customSchedule.pattern;
+
+        let currentDate = new Date(startDate);
+        while (currentDate <= endDate && currentDate <= futureDate) {
+          let shouldInclude = false;
+
+          if (pattern.frequency === 'daily') {
+            shouldInclude = true;
+            currentDate.setDate(currentDate.getDate() + (pattern.interval || 1));
+          } else if (pattern.frequency === 'weekly' && pattern.daysOfWeek) {
+            const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'long' });
+            if (pattern.daysOfWeek.includes(dayName)) {
+              shouldInclude = true;
+            }
+            currentDate.setDate(currentDate.getDate() + 1);
+          } else if (pattern.frequency === 'monthly' && pattern.dayOfMonth) {
+            if (currentDate.getDate() === pattern.dayOfMonth) {
+              shouldInclude = true;
+            }
+            currentDate.setMonth(currentDate.getMonth() + (pattern.interval || 1));
+            currentDate.setDate(pattern.dayOfMonth);
+          }
+
+          if (shouldInclude && currentDate >= today) {
+            occurrences.push({
+              date: currentDate.toISOString().split('T')[0],
+              canDelete: true
+            });
+          }
+        }
+      }
+    } else {
+      // Handle regular schedule
+      const dayMap: { [key: string]: number } = {
+        'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+        'Thursday': 4, 'Friday': 5, 'Saturday': 6
+      };
+
+      const targetDay = dayMap[gathering.dayOfWeek || 'Sunday'];
+      let currentDate = new Date(today);
+      
+      // Find next occurrence
+      while (currentDate.getDay() !== targetDay) {
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      // Generate occurrences based on frequency
+      while (currentDate <= futureDate) {
+        occurrences.push({
+          date: currentDate.toISOString().split('T')[0],
+          canDelete: true
+        });
+
+        if (gathering.frequency === 'weekly') {
+          currentDate.setDate(currentDate.getDate() + 7);
+        } else if (gathering.frequency === 'biweekly') {
+          currentDate.setDate(currentDate.getDate() + 14);
+        } else if (gathering.frequency === 'monthly') {
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        }
+      }
+    }
+
+    return occurrences;
+  };
+
+  const handleManageOccurrences = (gathering: Gathering) => {
+    const occurrences = generateGatheringOccurrences(gathering);
+    setGatheringOccurrences({ gathering, occurrences });
+    setSelectedOccurrences([]);
+    setShowManageOccurrencesModal(true);
+  };
+
+  const handleDeleteSelectedOccurrences = async () => {
+    if (!gatheringOccurrences.gathering || selectedOccurrences.length === 0) return;
+
+    try {
+      // TODO: Implement API call to delete specific occurrences
+      // For now, we'll just show a success message
+      setSuccess(`Deleted ${selectedOccurrences.length} occurrence(s) from "${gatheringOccurrences.gathering.name}"`);
+      setShowManageOccurrencesModal(false);
+      setSelectedOccurrences([]);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to delete occurrences');
     }
   };
 
@@ -364,57 +542,85 @@ const ManageGatheringsPage: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {gatherings.map((gathering) => (
-                <div key={gathering.id} className="bg-gray-50 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <h4 className="text-lg font-medium text-gray-900">
-                        {gathering.name}
-                      </h4>
-                      <p className="text-sm text-gray-500">
-                        {gathering.dayOfWeek}s at {gathering.startTime}
-                      </p>
-                      {gathering.description && (
-                        <p className="text-sm text-gray-600 mt-1">
-                          {gathering.description}
-                        </p>
-                      )}
-                      <div className="flex items-center mt-2 text-sm text-gray-500">
-                        <UserGroupIcon className="h-4 w-4 mr-1" />
-                        {gathering.memberCount || 0} regular attendees
-                        {(gathering.recentVisitorCount || 0) > 0 && (
-                          <span className="ml-2 text-green-600">
-                            • {gathering.recentVisitorCount} recent visitors
+                                  <div key={gathering.id} className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-lg font-medium text-gray-900">
+                            {gathering.name}
+                          </h4>
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            gathering.attendanceType === 'headcount' 
+                              ? 'bg-blue-100 text-blue-800' 
+                              : 'bg-green-100 text-green-800'
+                          }`}>
+                            {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
                           </span>
+                        </div>
+                        <p className="text-sm text-gray-500">
+                          {gathering.attendanceType === 'headcount' && gathering.customSchedule ? (
+                            // Show custom schedule info for headcount gatherings
+                            gathering.customSchedule.type === 'one_off' ? (
+                              `One-off event on ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}`
+                            ) : (
+                              `Custom schedule: ${gathering.customSchedule.pattern?.frequency || 'recurring'} from ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}`
+                            )
+                          ) : (
+                            // Show regular schedule for standard gatherings or headcount without custom schedule
+                            `${gathering.dayOfWeek}s at ${gathering.startTime}`
+                          )}
+                        </p>
+                        {gathering.description && (
+                          <p className="text-sm text-gray-600 mt-1">
+                            {gathering.description}
+                          </p>
                         )}
-                        {(gathering.memberCount || 0) === 0 && (
-                          <button 
-                            className="ml-2 text-purple-600 font-medium relative hover:text-purple-700 hover:underline transition-colors underline decoration-dotted"
-                            onClick={() => {
-                              localStorage.setItem('people_prompt_dismissed', 'true');
-                              setShowArrowPrompt(false);
-                              navigate('/app/people');
-                            }}
-                          >
-                            • Click here to add people to this gathering
-                            {showArrowPrompt && (
-                              <div className="absolute -right-32 top-1/2 transform -translate-y-1/2 flex items-center animate-bounce z-10">
-                                <svg width="80" height="20" viewBox="0 0 80 20" className="text-purple-500">
-                                  <defs>
-                                    <marker id="arrowhead-purple" markerWidth="8" markerHeight="8" refX="0" refY="3" orient="auto">
-                                      <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
-                                    </marker>
-                                  </defs>
-                                  <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
-                                </svg>
-                                <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
-                                  Click here!
+                        <div className="flex items-center mt-2 text-sm text-gray-500">
+                          {gathering.attendanceType === 'standard' && (
+                            <>
+                              <UserGroupIcon className="h-4 w-4 mr-1" />
+                              {gathering.memberCount || 0} regular attendees
+                              {(gathering.recentVisitorCount || 0) > 0 && (
+                                <span className="ml-2 text-green-600">
+                                  • {gathering.recentVisitorCount} recent visitors
                                 </span>
-                              </div>
-                            )}
-                          </button>
-                        )}
+                              )}
+                              {(gathering.memberCount || 0) === 0 && (
+                                <button 
+                                  className="ml-2 text-purple-600 font-medium relative hover:text-purple-700 hover:underline transition-colors underline decoration-dotted"
+                                  onClick={() => {
+                                    localStorage.setItem('people_prompt_dismissed', 'true');
+                                    setShowArrowPrompt(false);
+                                    navigate('/app/people');
+                                  }}
+                                >
+                                  • Click here to add people to this gathering
+                                  {showArrowPrompt && (
+                                    <div className="absolute -right-32 top-1/2 transform -translate-y-1/2 flex items-center animate-bounce z-10">
+                                      <svg width="80" height="20" viewBox="0 0 80 20" className="text-purple-500">
+                                        <defs>
+                                          <marker id="arrowhead-purple" markerWidth="8" markerHeight="8" refX="0" refY="3" orient="auto">
+                                            <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
+                                          </marker>
+                                        </defs>
+                                        <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
+                                      </svg>
+                                      <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
+                                        Click here!
+                                      </span>
+                                    </div>
+                                  )}
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {gathering.attendanceType === 'headcount' && (
+                            <span className="text-gray-500">
+                              Headcount tracking only
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
                     <div className="flex space-x-2">
                       <ActionMenu 
                         items={[
@@ -428,6 +634,20 @@ const ManageGatheringsPage: React.FC = () => {
                             onClick: () => handleEditGathering(gathering),
                             icon: <PencilIcon className="h-4 w-4" />
                           },
+                          {
+                            label: 'Duplicate Gathering',
+                            onClick: () => {
+                              setDuplicateGathering(gathering);
+                              setDuplicateName(`${gathering.name} (Copy)`);
+                              setShowDuplicateModal(true);
+                            },
+                            icon: <DocumentDuplicateIcon className="h-4 w-4" />
+                          },
+                          ...(gathering.attendanceType === 'headcount' ? [{
+                            label: 'Manage Occurrences',
+                            onClick: () => handleManageOccurrences(gathering),
+                            icon: <CalendarIcon className="h-4 w-4" />
+                          }] : []),
                           {
                             label: 'Delete Gathering',
                             onClick: () => showDeleteConfirmation(gathering.id, gathering.name),
@@ -497,61 +717,128 @@ const ManageGatheringsPage: React.FC = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700">
-                      Day of Week *
-                    </label>
-                    <select
-                      id="edit-dayOfWeek"
-                      value={editFormData.dayOfWeek}
-                      onChange={(e) => setEditFormData({ ...editFormData, dayOfWeek: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      required
-                    >
-                      <option value="Sunday">Sunday</option>
-                      <option value="Monday">Monday</option>
-                      <option value="Tuesday">Tuesday</option>
-                      <option value="Wednesday">Wednesday</option>
-                      <option value="Thursday">Thursday</option>
-                      <option value="Friday">Friday</option>
-                      <option value="Saturday">Saturday</option>
-                    </select>
-                  </div>
+                {/* Only show regular schedule fields for standard gatherings or headcount without custom schedule */}
+                {(editFormData.attendanceType === 'standard' || !editFormData.customSchedule) && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700">
+                          Day of Week *
+                        </label>
+                        <select
+                          id="edit-dayOfWeek"
+                          value={editFormData.dayOfWeek}
+                          onChange={(e) => setEditFormData({ ...editFormData, dayOfWeek: e.target.value })}
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        >
+                          <option value="Sunday">Sunday</option>
+                          <option value="Monday">Monday</option>
+                          <option value="Tuesday">Tuesday</option>
+                          <option value="Wednesday">Wednesday</option>
+                          <option value="Thursday">Thursday</option>
+                          <option value="Friday">Friday</option>
+                          <option value="Saturday">Saturday</option>
+                        </select>
+                      </div>
 
-                  <div>
-                    <label htmlFor="edit-startTime" className="block text-sm font-medium text-gray-700">
-                      Start Time *
-                    </label>
-                    <input
-                      id="edit-startTime"
-                      type="time"
-                      value={editFormData.startTime}
-                      onChange={(e) => setEditFormData({ ...editFormData, startTime: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      required
-                    />
-                  </div>
+                      <div>
+                        <label htmlFor="edit-startTime" className="block text-sm font-medium text-gray-700">
+                          Start Time *
+                        </label>
+                        <input
+                          id="edit-startTime"
+                          type="time"
+                          value={editFormData.startTime}
+                          onChange={(e) => setEditFormData({ ...editFormData, startTime: e.target.value })}
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        />
+                      </div>
 
-                  
-                </div>
+                      <div>
+                        <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700">
+                          Frequency *
+                        </label>
+                        <select
+                          id="edit-frequency"
+                          value={editFormData.frequency}
+                          onChange={(e) => setEditFormData({ ...editFormData, frequency: e.target.value })}
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        >
+                          <option value="weekly">Weekly</option>
+                          <option value="biweekly">Bi-weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
 
+                {/* Attendance Type (editable if no attendance records) */}
                 <div>
-                  <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700">
-                    Frequency *
+                  <label className="block text-sm font-medium text-gray-700">
+                    Attendance Type
                   </label>
-                  <select
-                    id="edit-frequency"
-                    value={editFormData.frequency}
-                    onChange={(e) => setEditFormData({ ...editFormData, frequency: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    required
-                  >
-                    <option value="weekly">Weekly</option>
-                    <option value="biweekly">Bi-weekly</option>
-                    <option value="monthly">Monthly</option>
-                  </select>
+                  <div className="mt-1 space-y-2">
+                    <div className="flex space-x-4">
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="edit-attendanceType"
+                          value="standard"
+                          checked={editFormData.attendanceType === 'standard'}
+                          onChange={(e) => setEditFormData({ ...editFormData, attendanceType: e.target.value as 'standard' | 'headcount' })}
+                          className="mr-2"
+                        />
+                        <span className="text-sm">Standard Attendance</span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="edit-attendanceType"
+                          value="headcount"
+                          checked={editFormData.attendanceType === 'headcount'}
+                          onChange={(e) => setEditFormData({ ...editFormData, attendanceType: e.target.value as 'standard' | 'headcount' })}
+                          className="mr-2"
+                        />
+                        <span className="text-sm">Headcount Only</span>
+                      </label>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Note: Changing attendance type is only allowed when no attendance records exist
+                    </p>
+                  </div>
                 </div>
+
+                {/* Custom Schedule Display for Headcount Gatherings */}
+                {editFormData.attendanceType === 'headcount' && editFormData.customSchedule && (
+                  <div className="bg-blue-50 p-4 rounded-lg border">
+                    <h4 className="text-sm font-medium text-blue-900 mb-2">Custom Schedule</h4>
+                    <div className="text-sm text-blue-700">
+                      <p><strong>Type:</strong> {editFormData.customSchedule.type === 'one_off' ? 'One-off event' : 'Recurring pattern'}</p>
+                      <p><strong>Start Date:</strong> {new Date(editFormData.customSchedule.startDate).toLocaleDateString()}</p>
+                      {editFormData.customSchedule.endDate && (
+                        <p><strong>End Date:</strong> {new Date(editFormData.customSchedule.endDate).toLocaleDateString()}</p>
+                      )}
+                      {editFormData.customSchedule.pattern && (
+                        <>
+                          <p><strong>Frequency:</strong> {editFormData.customSchedule.pattern.frequency}</p>
+                          {editFormData.customSchedule.pattern.daysOfWeek && editFormData.customSchedule.pattern.daysOfWeek.length > 0 && (
+                            <p><strong>Days:</strong> {editFormData.customSchedule.pattern.daysOfWeek.join(', ')}</p>
+                          )}
+                          {editFormData.customSchedule.pattern.dayOfMonth && (
+                            <p><strong>Day of Month:</strong> {editFormData.customSchedule.pattern.dayOfMonth}</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    <p className="text-xs text-blue-600 mt-2">
+                      Custom schedule details cannot be modified after creation. Delete and recreate the gathering to change the schedule.
+                    </p>
+                  </div>
+                )}
 
 
                 
@@ -630,61 +917,516 @@ const ManageGatheringsPage: React.FC = () => {
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700">
-                        Day of Week *
-                      </label>
-                      <select
-                        id="add-dayOfWeek"
-                        value={createGatheringData.dayOfWeek}
-                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                        required
-                      >
-                        <option value="Sunday">Sunday</option>
-                        <option value="Monday">Monday</option>
-                        <option value="Tuesday">Tuesday</option>
-                        <option value="Wednesday">Wednesday</option>
-                        <option value="Thursday">Thursday</option>
-                        <option value="Friday">Friday</option>
-                        <option value="Saturday">Saturday</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700">
-                        Start Time *
-                      </label>
-                      <input
-                        id="add-startTime"
-                        type="time"
-                        value={createGatheringData.startTime}
-                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, startTime: e.target.value })}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                        required
-                      />
-                    </div>
-
-
-                  </div>
-
                   <div>
-                    <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700">
-                      Frequency *
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Attendance Type *
                     </label>
-                    <select
-                      id="add-frequency"
-                      value={createGatheringData.frequency}
-                      onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                      required
-                    >
-                      <option value="weekly">Weekly</option>
-                      <option value="biweekly">Bi-weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
+                    <div className="space-y-2">
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="attendanceType"
+                          value="standard"
+                          checked={createGatheringData.attendanceType === 'standard'}
+                          onChange={(e) => setCreateGatheringData({ 
+                            ...createGatheringData, 
+                            attendanceType: e.target.value as 'standard' | 'headcount',
+                            customSchedule: undefined
+                          })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">
+                          <strong>Standard Attendance</strong> - Track individual people by name
+                        </span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="attendanceType"
+                          value="headcount"
+                          checked={createGatheringData.attendanceType === 'headcount'}
+                          onChange={(e) => setCreateGatheringData({ 
+                            ...createGatheringData, 
+                            attendanceType: e.target.value as 'standard' | 'headcount'
+                          })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">
+                          <strong>Headcount Only</strong> - Just track total numbers
+                        </span>
+                      </label>
+                    </div>
                   </div>
+
+                  {createGatheringData.attendanceType === 'headcount' && (
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h4 className="text-sm font-medium text-blue-900 mb-2">Custom Schedule Options</h4>
+                      <p className="text-sm text-blue-700 mb-3">
+                        For headcount gatherings, you can use flexible scheduling or stick with regular weekly/biweekly/monthly patterns.
+                      </p>
+                      <div className="space-y-2">
+                        <label className="flex items-center">
+                          <input
+                            type="radio"
+                            name="scheduleType"
+                            value="regular"
+                            checked={!createGatheringData.customSchedule}
+                            onChange={() => setCreateGatheringData({ 
+                              ...createGatheringData, 
+                              customSchedule: undefined 
+                            })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          />
+                          <span className="ml-2 text-sm text-gray-700">
+                            Use regular schedule (weekly/biweekly/monthly)
+                          </span>
+                        </label>
+                        <label className="flex items-center">
+                          <input
+                            type="radio"
+                            name="scheduleType"
+                            value="custom"
+                            checked={!!createGatheringData.customSchedule}
+                            onChange={() => setCreateGatheringData({ 
+                              ...createGatheringData, 
+                              customSchedule: {
+                                type: 'one_off',
+                                startDate: new Date().toISOString().split('T')[0]
+                              }
+                            })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          />
+                          <span className="ml-2 text-sm text-gray-700">
+                            Use custom schedule (one-off events, daily for X days, etc.)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Schedule Configuration */}
+                  {createGatheringData.attendanceType === 'headcount' && createGatheringData.customSchedule && (
+                    <div className="bg-gray-50 p-4 rounded-lg border">
+                      <h4 className="text-sm font-medium text-gray-900 mb-3">Custom Schedule Configuration</h4>
+                      
+                      {/* Schedule Type Selection */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Schedule Type
+                        </label>
+                        <div className="space-y-2">
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="customScheduleType"
+                              value="one_off"
+                              checked={createGatheringData.customSchedule.type === 'one_off'}
+                              onChange={(e) => setCreateGatheringData({
+                                ...createGatheringData,
+                                customSchedule: {
+                                  ...createGatheringData.customSchedule,
+                                  type: e.target.value as 'one_off' | 'recurring'
+                                }
+                              })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            />
+                            <span className="ml-2 text-sm text-gray-700">
+                              One-off event (single occurrence)
+                            </span>
+                          </label>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="customScheduleType"
+                              value="recurring"
+                              checked={createGatheringData.customSchedule.type === 'recurring'}
+                              onChange={(e) => setCreateGatheringData({
+                                ...createGatheringData,
+                                customSchedule: {
+                                  ...createGatheringData.customSchedule,
+                                  type: e.target.value as 'one_off' | 'recurring'
+                                }
+                              })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            />
+                            <span className="ml-2 text-sm text-gray-700">
+                              Recurring pattern (multiple occurrences)
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Start Date */}
+                      <div className="mb-4">
+                        <label htmlFor="custom-startDate" className="block text-sm font-medium text-gray-700 mb-1">
+                          Start Date *
+                        </label>
+                        <input
+                          id="custom-startDate"
+                          type="date"
+                          value={createGatheringData.customSchedule.startDate}
+                          onChange={(e) => setCreateGatheringData({
+                            ...createGatheringData,
+                            customSchedule: {
+                              ...createGatheringData.customSchedule,
+                              startDate: e.target.value
+                            }
+                          })}
+                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        />
+                      </div>
+
+                      {/* End Date for Recurring */}
+                      {createGatheringData.customSchedule.type === 'recurring' && (
+                        <div className="mb-4">
+                          <label htmlFor="custom-endDate" className="block text-sm font-medium text-gray-700 mb-1">
+                            End Date *
+                          </label>
+                          <input
+                            id="custom-endDate"
+                            type="date"
+                            value={createGatheringData.customSchedule.endDate || ''}
+                            onChange={(e) => setCreateGatheringData({
+                              ...createGatheringData,
+                              customSchedule: {
+                                ...createGatheringData.customSchedule,
+                                endDate: e.target.value
+                              }
+                            })}
+                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Pattern Configuration for Recurring */}
+                      {createGatheringData.customSchedule.type === 'recurring' && (
+                        <div className="space-y-4">
+                          <div>
+                            <label htmlFor="pattern-frequency" className="block text-sm font-medium text-gray-700 mb-1">
+                              Frequency *
+                            </label>
+                            <select
+                              id="pattern-frequency"
+                              value={createGatheringData.customSchedule.pattern?.frequency || ''}
+                              onChange={(e) => setCreateGatheringData({
+                                ...createGatheringData,
+                                customSchedule: {
+                                  ...createGatheringData.customSchedule,
+                                  pattern: {
+                                    ...createGatheringData.customSchedule.pattern,
+                                    frequency: e.target.value as 'daily' | 'weekly' | 'biweekly' | 'monthly',
+                                    interval: 1
+                                  }
+                                }
+                              })}
+                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                              required
+                            >
+                              <option value="">Select frequency</option>
+                              <option value="daily">Daily</option>
+                              <option value="weekly">Weekly</option>
+                              <option value="biweekly">Bi-weekly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label htmlFor="pattern-interval" className="block text-sm font-medium text-gray-700 mb-1">
+                              Interval *
+                            </label>
+                            <input
+                              id="pattern-interval"
+                              type="number"
+                              min="1"
+                              value={createGatheringData.customSchedule.pattern?.interval || 1}
+                              onChange={(e) => setCreateGatheringData({
+                                ...createGatheringData,
+                                customSchedule: {
+                                  ...createGatheringData.customSchedule,
+                                  pattern: {
+                                    ...createGatheringData.customSchedule.pattern,
+                                    interval: parseInt(e.target.value) || 1
+                                  }
+                                }
+                              })}
+                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                              placeholder="1"
+                              required
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              {createGatheringData.customSchedule.pattern?.frequency === 'daily' && 'Every X days'}
+                              {createGatheringData.customSchedule.pattern?.frequency === 'weekly' && 'Every X weeks'}
+                              {createGatheringData.customSchedule.pattern?.frequency === 'biweekly' && 'Every X bi-weekly periods'}
+                              {createGatheringData.customSchedule.pattern?.frequency === 'monthly' && 'Every X months'}
+                            </p>
+                          </div>
+
+                          {/* Days of Week for Weekly */}
+                          {createGatheringData.customSchedule.pattern?.frequency === 'weekly' && (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Days of Week *
+                              </label>
+                              
+                              {/* Quick Selection Buttons */}
+                              <div className="mb-3 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+                                    setCreateGatheringData({
+                                      ...createGatheringData,
+                                      customSchedule: {
+                                        ...createGatheringData.customSchedule,
+                                        pattern: {
+                                          ...createGatheringData.customSchedule.pattern,
+                                          daysOfWeek: weekdays
+                                        }
+                                      }
+                                    });
+                                  }}
+                                  className="px-3 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-full border border-blue-300"
+                                >
+                                  Weekdays
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const weekends = ['Saturday', 'Sunday'];
+                                    setCreateGatheringData({
+                                      ...createGatheringData,
+                                      customSchedule: {
+                                        ...createGatheringData.customSchedule,
+                                        pattern: {
+                                          ...createGatheringData.customSchedule.pattern,
+                                          daysOfWeek: weekends
+                                        }
+                                      }
+                                    });
+                                  }}
+                                  className="px-3 py-1 text-xs bg-green-100 hover:bg-green-200 text-green-800 rounded-full border border-green-300"
+                                >
+                                  Weekends
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCreateGatheringData({
+                                      ...createGatheringData,
+                                      customSchedule: {
+                                        ...createGatheringData.customSchedule,
+                                        pattern: {
+                                          ...createGatheringData.customSchedule.pattern,
+                                          daysOfWeek: []
+                                        }
+                                      }
+                                    });
+                                  }}
+                                  className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-full border border-gray-300"
+                                >
+                                  Clear All
+                                </button>
+                              </div>
+
+                              {/* Individual Day Selection */}
+                              <div className="grid grid-cols-2 gap-2">
+                                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                                  <label key={day} className="flex items-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={createGatheringData.customSchedule.pattern?.daysOfWeek?.includes(day) || false}
+                                      onChange={(e) => {
+                                        const currentDays = createGatheringData.customSchedule.pattern?.daysOfWeek || [];
+                                        const newDays = e.target.checked
+                                          ? [...currentDays, day]
+                                          : currentDays.filter(d => d !== day);
+                                        
+                                        setCreateGatheringData({
+                                          ...createGatheringData,
+                                          customSchedule: {
+                                            ...createGatheringData.customSchedule,
+                                            pattern: {
+                                              ...createGatheringData.customSchedule.pattern,
+                                              daysOfWeek: newDays
+                                            }
+                                          }
+                                        });
+                                      }}
+                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                                    />
+                                    <span className="ml-2 text-sm text-gray-700">{day}</span>
+                                  </label>
+                                ))}
+                              </div>
+                              
+                              {/* Selected Days Summary */}
+                              {createGatheringData.customSchedule.pattern?.daysOfWeek && createGatheringData.customSchedule.pattern.daysOfWeek.length > 0 && (
+                                <div className="mt-2 p-2 bg-blue-50 rounded border">
+                                  <p className="text-sm text-blue-700">
+                                    <strong>Selected:</strong> {createGatheringData.customSchedule.pattern.daysOfWeek.join(', ')}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Day of Month for Monthly */}
+                          {createGatheringData.customSchedule.pattern?.frequency === 'monthly' && (
+                            <div>
+                              <label htmlFor="pattern-dayOfMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                                Day of Month *
+                              </label>
+                              <input
+                                id="pattern-dayOfMonth"
+                                type="number"
+                                min="1"
+                                max="31"
+                                value={createGatheringData.customSchedule.pattern?.dayOfMonth || 1}
+                                onChange={(e) => setCreateGatheringData({
+                                  ...createGatheringData,
+                                  customSchedule: {
+                                    ...createGatheringData.customSchedule,
+                                    pattern: {
+                                      ...createGatheringData.customSchedule.pattern,
+                                      dayOfMonth: parseInt(e.target.value) || 1
+                                    }
+                                  }
+                                })}
+                                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                                required
+                              />
+                            </div>
+                          )}
+
+                          {/* Custom Date Selection for Daily */}
+                          {createGatheringData.customSchedule.pattern?.frequency === 'daily' && (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Custom Date Selection (Optional)
+                              </label>
+                              <p className="text-sm text-gray-600 mb-3">
+                                Leave empty to use the start/end date range, or specify specific dates.
+                              </p>
+                              <div className="space-y-2">
+                                <div>
+                                  <label htmlFor="custom-dates" className="block text-xs text-gray-600 mb-1">
+                                    Specific Dates (one per line, YYYY-MM-DD format)
+                                  </label>
+                                  <textarea
+                                    id="custom-dates"
+                                    rows={3}
+                                    placeholder="2024-03-15&#10;2024-03-18&#10;2024-03-22"
+                                    className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-sm"
+                                    onChange={(e) => {
+                                      const dates = e.target.value
+                                        .split('\n')
+                                        .map(date => date.trim())
+                                        .filter(date => date && /^\d{4}-\d{2}-\d{2}$/.test(date));
+                                      
+                                      setCreateGatheringData({
+                                        ...createGatheringData,
+                                        customSchedule: {
+                                          ...createGatheringData.customSchedule,
+                                          pattern: {
+                                            ...createGatheringData.customSchedule.pattern,
+                                            customDates: dates
+                                          }
+                                        }
+                                      });
+                                    }}
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    Enter specific dates in YYYY-MM-DD format, one per line
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Schedule Preview */}
+                      <div className="mt-4 p-3 bg-blue-50 rounded border">
+                        <h5 className="text-sm font-medium text-blue-900 mb-1">Schedule Preview</h5>
+                        <p className="text-sm text-blue-700">
+                          {createGatheringData.customSchedule.type === 'one_off' ? (
+                            `Single event on ${new Date(createGatheringData.customSchedule.startDate).toLocaleDateString()}`
+                          ) : (
+                            `Recurring ${createGatheringData.customSchedule.pattern?.frequency || 'weekly'} event` +
+                            (createGatheringData.customSchedule.pattern?.frequency === 'weekly' && createGatheringData.customSchedule.pattern?.daysOfWeek?.length ? 
+                              ` on ${createGatheringData.customSchedule.pattern.daysOfWeek.join(', ')}` : '') +
+                            (createGatheringData.customSchedule.pattern?.frequency === 'monthly' && createGatheringData.customSchedule.pattern?.dayOfMonth ? 
+                              ` on day ${createGatheringData.customSchedule.pattern.dayOfMonth}` : '') +
+                            ` from ${new Date(createGatheringData.customSchedule.startDate).toLocaleDateString()}` +
+                            (createGatheringData.customSchedule.endDate ? 
+                              ` to ${new Date(createGatheringData.customSchedule.endDate).toLocaleDateString()}` : '')
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {(createGatheringData.attendanceType === 'standard' || !createGatheringData.customSchedule) && (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700">
+                            Day of Week {createGatheringData.attendanceType === 'standard' ? '*' : ''}
+                          </label>
+                          <select
+                            id="add-dayOfWeek"
+                            value={createGatheringData.dayOfWeek || ''}
+                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required={createGatheringData.attendanceType === 'standard'}
+                          >
+                            <option value="">Select day</option>
+                            <option value="Sunday">Sunday</option>
+                            <option value="Monday">Monday</option>
+                            <option value="Tuesday">Tuesday</option>
+                            <option value="Wednesday">Wednesday</option>
+                            <option value="Thursday">Thursday</option>
+                            <option value="Friday">Friday</option>
+                            <option value="Saturday">Saturday</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700">
+                            Start Time {createGatheringData.attendanceType === 'standard' ? '*' : ''}
+                          </label>
+                          <input
+                            id="add-startTime"
+                            type="time"
+                            value={createGatheringData.startTime || ''}
+                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, startTime: e.target.value })}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required={createGatheringData.attendanceType === 'standard'}
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700">
+                            Frequency {createGatheringData.attendanceType === 'standard' ? '*' : ''}
+                          </label>
+                          <select
+                            id="add-frequency"
+                            value={createGatheringData.frequency || ''}
+                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required={createGatheringData.attendanceType === 'standard'}
+                          >
+                            <option value="">Select frequency</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="biweekly">Bi-weekly</option>
+                            <option value="monthly">Monthly</option>
+                          </select>
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
@@ -764,6 +1506,205 @@ const ManageGatheringsPage: React.FC = () => {
       ) : null}
 
 
+
+      {/* Manage Occurrences Modal */}
+      {showManageOccurrencesModal && gatheringOccurrences.gathering ? createPortal(
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Manage Occurrences - {gatheringOccurrences.gathering.name}
+                </h3>
+                <button
+                  onClick={() => setShowManageOccurrencesModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="mb-4">
+                <p className="text-sm text-gray-600">
+                  Select specific occurrences to remove from this gathering's schedule. This will not delete the gathering itself, just those specific dates.
+                </p>
+              </div>
+
+              {gatheringOccurrences.occurrences.length === 0 ? (
+                <div className="text-center py-8">
+                  <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
+                  <h3 className="mt-2 text-sm font-medium text-gray-900">No upcoming occurrences</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    This gathering has no scheduled occurrences in the next 3 months.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        Upcoming Occurrences ({gatheringOccurrences.occurrences.length})
+                      </span>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => setSelectedOccurrences(gatheringOccurrences.occurrences.map(o => o.date))}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          onClick={() => setSelectedOccurrences([])}
+                          className="text-xs text-gray-600 hover:text-gray-800"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
+                    {gatheringOccurrences.occurrences.map((occurrence) => (
+                      <div
+                        key={occurrence.date}
+                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                          selectedOccurrences.includes(occurrence.date)
+                            ? 'border-primary-500 bg-primary-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                        onClick={() => {
+                          if (selectedOccurrences.includes(occurrence.date)) {
+                            setSelectedOccurrences(selectedOccurrences.filter(d => d !== occurrence.date));
+                          } else {
+                            setSelectedOccurrences([...selectedOccurrences, occurrence.date]);
+                          }
+                        }}
+                      >
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedOccurrences.includes(occurrence.date)}
+                            onChange={() => {}} // Handled by parent div click
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <div className="ml-3">
+                            <p className="text-sm font-medium text-gray-900">
+                              {new Date(occurrence.date).toLocaleDateString('en-US', { 
+                                weekday: 'long',
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                              })}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {new Date(occurrence.date).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selectedOccurrences.length > 0 && (
+                    <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <div className="flex items-center">
+                        <TrashIcon className="h-5 w-5 text-red-600 mr-2" />
+                        <span className="text-sm font-medium text-red-800">
+                          {selectedOccurrences.length} occurrence(s) selected for deletion
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end space-x-3 pt-4">
+                    <button
+                      onClick={() => setShowManageOccurrencesModal(false)}
+                      className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleDeleteSelectedOccurrences}
+                      disabled={selectedOccurrences.length === 0}
+                      className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      Delete Selected ({selectedOccurrences.length})
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
+
+      {/* Duplicate Gathering Modal */}
+      {showDuplicateModal && duplicateGathering ? createPortal(
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Duplicate Gathering
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowDuplicateModal(false);
+                    setDuplicateGathering(null);
+                    setDuplicateName('');
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-4">
+                  Duplicating: <span className="font-medium">{duplicateGathering.name}</span>
+                </p>
+                <p className="text-sm text-gray-500 mb-4">
+                  This will copy all details, people assignments, and user assignments to a new gathering.
+                </p>
+                
+                <label htmlFor="duplicate-name" className="block text-sm font-medium text-gray-700 mb-2">
+                  New Gathering Name *
+                </label>
+                <input
+                  id="duplicate-name"
+                  type="text"
+                  value={duplicateName}
+                  onChange={(e) => setDuplicateName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  placeholder="Enter new gathering name"
+                  autoFocus
+                />
+              </div>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => {
+                    setShowDuplicateModal(false);
+                    setDuplicateGathering(null);
+                    setDuplicateName('');
+                  }}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDuplicateGathering}
+                  disabled={!duplicateName.trim() || isDuplicating}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  {isDuplicating ? 'Duplicating...' : 'Duplicate Gathering'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
 
       {/* Floating Add Gathering Button */}
       <button

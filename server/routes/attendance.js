@@ -1371,4 +1371,151 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
   }
 });
 
+// ===== HEADCOUNT ENDPOINTS =====
+
+// Get headcount for a specific gathering and date
+router.get('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+
+    // First, verify this is a headcount gathering
+    const gathering = await Database.query(`
+      SELECT attendance_type FROM gathering_types 
+      WHERE id = ? AND church_id = ?
+    `, [gatheringTypeId, req.user.church_id]);
+
+    if (gathering.length === 0) {
+      return res.status(404).json({ error: 'Gathering not found.' });
+    }
+
+    if (gathering[0].attendance_type !== 'headcount') {
+      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+    }
+
+    // Get or create attendance session
+    let sessionResult = await Database.query(`
+      SELECT id FROM attendance_sessions 
+      WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+    `, [gatheringTypeId, date, req.user.church_id]);
+
+    let sessionId;
+    if (sessionResult.length === 0) {
+      // Create new session
+      const newSession = await Database.query(`
+        INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+        VALUES (?, ?, ?, ?)
+      `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+      sessionId = newSession.insertId;
+    } else {
+      sessionId = sessionResult[0].id;
+    }
+
+    // Get headcount record
+    const headcountResult = await Database.query(`
+      SELECT h.headcount, h.updated_at, u.first_name, u.last_name
+      FROM headcount_records h
+      LEFT JOIN users u ON h.updated_by = u.id
+      WHERE h.session_id = ?
+    `, [sessionId]);
+
+    const headcount = headcountResult.length > 0 ? headcountResult[0].headcount : 0;
+    const lastUpdated = headcountResult.length > 0 ? headcountResult[0].updated_at : null;
+    const lastUpdatedBy = headcountResult.length > 0 ? 
+      `${headcountResult[0].first_name} ${headcountResult[0].last_name}` : null;
+
+    res.json({
+      headcount,
+      lastUpdated,
+      lastUpdatedBy,
+      sessionId
+    });
+
+  } catch (error) {
+    console.error('Get headcount error:', error);
+    res.status(500).json({ error: 'Failed to retrieve headcount.' });
+  }
+});
+
+// Update headcount for a specific gathering and date
+router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT'), async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { headcount } = req.body;
+
+    if (typeof headcount !== 'number' || headcount < 0) {
+      return res.status(400).json({ error: 'Valid headcount number is required.' });
+    }
+
+    // First, verify this is a headcount gathering
+    const gathering = await Database.query(`
+      SELECT attendance_type FROM gathering_types 
+      WHERE id = ? AND church_id = ?
+    `, [gatheringTypeId, req.user.church_id]);
+
+    if (gathering.length === 0) {
+      return res.status(404).json({ error: 'Gathering not found.' });
+    }
+
+    if (gathering[0].attendance_type !== 'headcount') {
+      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+    }
+
+    await Database.transaction(async (conn) => {
+      // Get or create attendance session
+      let sessionResult = await conn.query(`
+        SELECT id FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      `, [gatheringTypeId, date, req.user.church_id]);
+
+      let sessionId;
+      if (sessionResult.length === 0) {
+        // Create new session
+        const newSession = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+        sessionId = newSession.insertId;
+      } else {
+        sessionId = sessionResult[0].id;
+      }
+
+      // Insert or update headcount record
+      await conn.query(`
+        INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+        headcount = VALUES(headcount),
+        updated_by = VALUES(updated_by),
+        updated_at = CURRENT_TIMESTAMP
+      `, [sessionId, headcount, req.user.id, req.user.church_id]);
+    });
+
+    // Broadcast the update via WebSocket
+    try {
+      websocketBroadcast('headcount_updated', {
+        gatheringId: parseInt(gatheringTypeId),
+        date,
+        headcount,
+        updatedBy: req.user.id,
+        updatedByName: `${req.user.first_name} ${req.user.last_name}`,
+        timestamp: new Date().toISOString(),
+        churchId: req.user.church_id
+      });
+    } catch (wsError) {
+      console.error('WebSocket broadcast error:', wsError);
+      // Don't fail the request if WebSocket fails
+    }
+
+    res.json({ 
+      message: 'Headcount updated successfully',
+      headcount,
+      updatedBy: `${req.user.first_name} ${req.user.last_name}`
+    });
+
+  } catch (error) {
+    console.error('Update headcount error:', error);
+    res.status(500).json({ error: 'Failed to update headcount.' });
+  }
+});
+
 module.exports = router; 

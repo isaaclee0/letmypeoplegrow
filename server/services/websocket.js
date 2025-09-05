@@ -242,6 +242,16 @@ class WebSocketService {
       this.handleLoadAttendance(socket, data);
     });
 
+    // Handle headcount updates via WebSocket
+    socket.on('update_headcount', (data) => {
+      this.handleUpdateHeadcount(socket, data);
+    });
+
+    // Handle loading headcount data via WebSocket
+    socket.on('load_headcount', (data) => {
+      this.handleLoadHeadcount(socket, data);
+    });
+
     // Handle ping for connection health
     socket.on('ping', () => {
       socket.emit('pong');
@@ -1291,6 +1301,153 @@ class WebSocketService {
         data
       });
       socket.emit('error', { message: 'Failed to leave attendance room' });
+    }
+  }
+
+  /**
+   * Handle headcount updates via WebSocket
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Headcount data {gatheringId, date, headcount}
+   */
+  async handleUpdateHeadcount(socket, data) {
+    let gatheringId, date, headcount;
+    
+    try {
+      ({ gatheringId, date, headcount } = data);
+      
+      if (!gatheringId || !date || typeof headcount !== 'number') {
+        socket.emit('headcount_update_error', { message: 'Invalid headcount data' });
+        return;
+      }
+
+      // Create deduplication key
+      const dedupeKey = `${socket.userId}:${gatheringId}:${date}:${headcount}`;
+      const now = Date.now();
+      
+      // Smart deduplication: only block very rapid duplicates (within 500ms)
+      if (this.recentUpdates.has(dedupeKey)) {
+        const lastUpdate = this.recentUpdates.get(dedupeKey);
+        const timeSinceLastUpdate = now - lastUpdate;
+        
+        if (timeSinceLastUpdate < 500) {
+          logger.info('Rapid duplicate WebSocket headcount update blocked', {
+            userId: socket.userId,
+            churchId: socket.churchId,
+            gatheringId,
+            date,
+            headcount,
+            timeSinceLastUpdate
+          });
+          socket.emit('headcount_update_success');
+          return;
+        }
+      }
+      
+      // Track this update
+      this.recentUpdates.set(dedupeKey, now);
+
+      logger.info('WebSocket headcount update received', {
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        headcount
+      });
+
+      // Broadcast to all clients in the same church (same approach as standard attendance)
+      const broadcastData = {
+        gatheringId: parseInt(gatheringId),
+        date,
+        headcount,
+        updatedBy: socket.userId,
+        updatedByName: socket.userName,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log('📤 Broadcasting headcount update to church', socket.churchId);
+      
+      // Get sockets for this church only (same as standard attendance)
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
+      let broadcastCount = 0;
+      
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            console.log(`📡 Sending headcount update to socket ${socketId} (user ${clientSocket.userId})`);
+            clientSocket.emit('headcount_updated', broadcastData);
+            broadcastCount++;
+          }
+        });
+      }
+      
+      console.log(`📡 Headcount update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
+
+      // Send success response to sender
+      socket.emit('headcount_update_success');
+
+      logger.info('Headcount update broadcasted via WebSocket', {
+        gatheringId,
+        date,
+        headcount,
+        updatedBy: socket.userId,
+        broadcastCount
+      });
+
+    } catch (error) {
+      logger.error('WebSocket headcount update error:', {
+        error: error.message,
+        userId: socket.userId,
+        churchId: socket.churchId,
+        data
+      });
+      socket.emit('headcount_update_error', { message: 'Failed to update headcount' });
+    }
+  }
+
+  /**
+   * Handle loading headcount data via WebSocket
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Request data {gatheringId, date}
+   */
+  async handleLoadHeadcount(socket, data) {
+    try {
+      const { gatheringId, date } = data;
+      
+      if (!gatheringId || !date) {
+        socket.emit('headcount_load_error', { message: 'Invalid request data' });
+        return;
+      }
+
+      logger.info('WebSocket headcount load request', {
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date
+      });
+
+      // Acknowledge the headcount load request (no room joining needed with church-based broadcasting)
+      socket.emit('headcount_loaded', {
+        gatheringId: parseInt(gatheringId),
+        date,
+        message: 'Headcount load request acknowledged'
+      });
+
+      logger.info('WebSocket headcount load request acknowledged', {
+        socketId: socket.id,
+        userId: socket.userId,
+        gatheringId,
+        date
+      });
+
+    } catch (error) {
+      logger.error('WebSocket headcount load error:', {
+        error: error.message,
+        userId: socket.userId,
+        churchId: socket.churchId,
+        data
+      });
+      socket.emit('headcount_load_error', { message: 'Failed to load headcount data' });
     }
   }
 

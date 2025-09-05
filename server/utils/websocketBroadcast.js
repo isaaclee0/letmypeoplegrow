@@ -116,6 +116,21 @@ function broadcastFullRefresh(gatheringId, date, churchId, attendanceList, visit
 }
 
 /**
+ * Broadcast headcount updates
+ * @param {string} event - Event name
+ * @param {Object} data - Data to broadcast
+ * @param {string} roomName - Room name (optional, for room-based broadcasting)
+ */
+function websocketBroadcast(event, data, roomName) {
+  if (!webSocketService) {
+    return; // WebSocket not available, skip broadcast
+  }
+
+  // Use the WebSocket service's broadcast method
+  webSocketService.broadcastToChurch(data.churchId || 'default', event, data);
+}
+
+/**
  * Get connection status
  * @returns {boolean} True if WebSocket service is available
  */
@@ -130,5 +145,6 @@ module.exports = {
   broadcastVisitorFamilyAdded,
   broadcastVisitorFamilyUpdated,
   broadcastFullRefresh,
+  websocketBroadcast,
   isConnected
 };

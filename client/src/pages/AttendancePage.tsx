@@ -10,8 +10,9 @@ import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
 import { getWebSocketMode } from '../utils/constants';
-import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket';
+// import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket'; // Disabled - using direct socket access
 import { useWebSocket } from '../contexts/WebSocketContext';
+import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -316,6 +317,7 @@ const AttendancePage: React.FC = () => {
   
   // WebSocket integration with environment-based configuration
   const { 
+    socket,
     isConnected: isWebSocketConnected, 
     connectionStatus, 
     activeUsers, 
@@ -455,6 +457,109 @@ const AttendancePage: React.FC = () => {
   const validDates = useMemo(() => {
     if (!selectedGathering) return [];
 
+    // Handle custom schedule for headcount gatherings
+    if (selectedGathering.attendanceType === 'headcount' && selectedGathering.customSchedule) {
+      const customSchedule = selectedGathering.customSchedule;
+      const dates: string[] = [];
+
+      if (customSchedule.type === 'one_off') {
+        // One-off event - just return the start date
+        dates.push(customSchedule.startDate);
+      } else if (customSchedule.type === 'recurring' && customSchedule.pattern) {
+        const pattern = customSchedule.pattern;
+        const startDate = parseISO(customSchedule.startDate);
+        const endDate = customSchedule.endDate ? parseISO(customSchedule.endDate) : addWeeks(new Date(), 4);
+        
+        if (pattern.frequency === 'daily') {
+          // Daily frequency
+          if (pattern.customDates && pattern.customDates.length > 0) {
+            // Use specific custom dates
+            dates.push(...pattern.customDates);
+          } else {
+            // Generate daily dates from start to end
+            let currentDate = startDate;
+            while (isBefore(currentDate, endDate)) {
+              dates.push(format(currentDate, 'yyyy-MM-dd'));
+              currentDate = addDays(currentDate, pattern.interval || 1);
+            }
+          }
+        } else if (pattern.frequency === 'weekly') {
+          // Weekly frequency
+          const dayMap: { [key: string]: number } = {
+            'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+            'Thursday': 4, 'Friday': 5, 'Saturday': 6
+          };
+          
+          if (pattern.daysOfWeek && pattern.daysOfWeek.length > 0) {
+            // Use specific days of week
+            const targetDays = pattern.daysOfWeek.map(day => dayMap[day]).filter(day => day !== undefined);
+            
+            let currentDate = startDate;
+            while (isBefore(currentDate, endDate)) {
+              const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
+              
+              for (const targetDay of targetDays) {
+                const eventDate = addDays(weekStart, targetDay);
+                if (isBefore(eventDate, endDate) && !isBefore(eventDate, startDate)) {
+                  dates.push(format(eventDate, 'yyyy-MM-dd'));
+                }
+              }
+              
+              currentDate = addWeeks(currentDate, pattern.interval || 1);
+            }
+          }
+        } else if (pattern.frequency === 'biweekly') {
+          // Biweekly frequency
+          const dayMap: { [key: string]: number } = {
+            'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
+            'Thursday': 4, 'Friday': 5, 'Saturday': 6
+          };
+          
+          if (pattern.daysOfWeek && pattern.daysOfWeek.length > 0) {
+            const targetDays = pattern.daysOfWeek.map(day => dayMap[day]).filter(day => day !== undefined);
+            
+            let currentDate = startDate;
+            let weekCount = 0;
+            while (isBefore(currentDate, endDate)) {
+              if (weekCount % 2 === 0) { // Every other week
+                const weekStart = startOfWeek(currentDate, { weekStartsOn: 0 });
+                
+                for (const targetDay of targetDays) {
+                  const eventDate = addDays(weekStart, targetDay);
+                  if (isBefore(eventDate, endDate) && !isBefore(eventDate, startDate)) {
+                    dates.push(format(eventDate, 'yyyy-MM-dd'));
+                  }
+                }
+              }
+              
+              currentDate = addWeeks(currentDate, 1);
+              weekCount++;
+            }
+          }
+        } else if (pattern.frequency === 'monthly') {
+          // Monthly frequency
+          if (pattern.dayOfMonth) {
+            let currentDate = startDate;
+            while (isBefore(currentDate, endDate)) {
+              const eventDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), pattern.dayOfMonth);
+              if (isBefore(eventDate, endDate) && !isBefore(eventDate, startDate)) {
+                dates.push(format(eventDate, 'yyyy-MM-dd'));
+              }
+              currentDate = addWeeks(currentDate, 4); // Move to next month
+            }
+          }
+        }
+      }
+
+      return dates.sort((a, b) => b.localeCompare(a)); // Sort newest first
+    }
+
+    // Handle standard gatherings with dayOfWeek
+    // Skip if this is a headcount gathering (should have been handled above)
+    if (selectedGathering.attendanceType === 'headcount') {
+      return [];
+    }
+
     const dayMap: { [key: string]: number } = {
       'Sunday': 0,
       'Monday': 1,
@@ -466,7 +571,7 @@ const AttendancePage: React.FC = () => {
     };
 
     const targetDay = dayMap[selectedGathering.dayOfWeek];
-    if (targetDay === undefined) return [];
+    if (targetDay === undefined || selectedGathering.dayOfWeek === null) return [];
 
     const dates: string[] = [];
     const today = startOfDay(new Date());
@@ -520,9 +625,12 @@ const AttendancePage: React.FC = () => {
     const loadGatherings = async () => {
       try {
         const response = await gatheringsAPI.getAll();
-        const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
-          user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
-        );
+        // Admin users see all gatherings, other users only see their assigned gatherings
+        const userGatherings = user?.role === 'admin' 
+          ? response.data.gatherings 
+          : response.data.gatherings.filter((g: GatheringType) => 
+              user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
+            );
         setGatherings(userGatherings);
         
         // Set default gathering honoring saved order and default preference
@@ -1425,177 +1533,75 @@ const AttendancePage: React.FC = () => {
 
   // Family operation tracking removed - no longer needed without polling
 
-  // WebSocket attendance updates
-  const attendanceWebSocket = useAttendanceWebSocket({
-    gatheringId: selectedGathering?.id || null,
-    date: selectedDate,
-    enabled: useWebSocketForUpdates && isWebSocketConnected,
-    onAttendanceChange: useCallback((records: Array<{ individualId: number; present: boolean }>) => {
-      console.log('🔌 [WEBSOCKET] Received attendance update:', records);
-      
-      // Remove any pending offline changes that match these records
-      setPendingChanges(prev => {
-        const filtered = prev.filter(pendingChange => {
-          const hasMatchingRecord = records.some(record => 
-            record.individualId === pendingChange.individualId &&
-            pendingChange.gatheringId === selectedGathering?.id &&
-            pendingChange.date === selectedDate
-          );
-          if (hasMatchingRecord) {
-            console.log(`🔌 [WEBSOCKET] Removing pending change for individual ${pendingChange.individualId} - now synced`);
-          }
-          return !hasMatchingRecord;
-        });
-        
-        if (filtered.length !== prev.length) {
-          localStorage.setItem('attendance_offline_changes', JSON.stringify(filtered));
-        }
-        
-        return filtered;
-      });
-      
-      // Batch all state updates to prevent race conditions
-      startTransition(() => {
-        // Update presentById (main source of truth for UI)
-        setPresentById(prev => {
-          const updated = { ...prev };
-          let hasChanges = false;
-          
-          records.forEach((record: { individualId: number; present: boolean }) => {
-            // Only update if the value is actually different to prevent unnecessary re-renders
-            if (updated[record.individualId] !== record.present) {
-              updated[record.individualId] = record.present;
-              hasChanges = true;
-              console.log(`🔌 [WEBSOCKET] Updated attendance for individual ${record.individualId}: ${record.present}`);
-            } else {
-              console.log(`🔌 [WEBSOCKET] Skipped duplicate update for individual ${record.individualId}: ${record.present}`);
-            }
+  // Handle all WebSocket events directly (no room management needed)
+  useEffect(() => {
+    if (!isWebSocketConnected || !selectedGathering || !selectedDate) {
+      return;
+    }
+
+    const handleAttendanceUpdated = (data: any) => {
+      // Only process updates for the current gathering and date
+      if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
+        console.log('🔌 [WEBSOCKET] Received attendance update:', data);
+        // Handle standard attendance updates
+        if (data.records) {
+          // Update attendance records
+          setPendingChanges(prev => {
+            const filtered = prev.filter(pendingChange => {
+              const hasMatchingRecord = data.records.some((record: any) =>
+                record.individualId === pendingChange.individualId
+              );
+              return !hasMatchingRecord;
+            });
+            return filtered;
           });
-          
-          return hasChanges ? updated : prev;
-        });
-        
-        // Update attendance list (for consistency)
-        setAttendanceList(prev => {
-          const updated = [...prev];
-          let hasChanges = false;
-          
-          records.forEach((record: { individualId: number; present: boolean }) => {
-            const index = updated.findIndex(person => person.id === record.individualId);
-            if (index !== -1 && updated[index].present !== record.present) {
-              updated[index] = { ...updated[index], present: record.present };
-              hasChanges = true;
-            }
-          });
-          
-          return hasChanges ? updated : prev;
-        });
-        
-        // Clear saving indicators
-        setSavingById(prev => {
-          const updated = { ...prev };
-          let hasChanges = false;
-          
-          records.forEach((record: { individualId: number; present: boolean }) => {
-            if (updated[record.individualId] === true) {
-              updated[record.individualId] = false;
-              hasChanges = true;
-            }
-          });
-          
-          return hasChanges ? updated : prev;
-        });
-      });
-      
-      console.log('🔌 [WEBSOCKET] Applied all attendance updates in batch');
-      
-      // Debounced cache update to avoid excessive localStorage writes during batch updates
-      setTimeout(() => {
-        const cachedData = localStorage.getItem('attendance_cached_data');
-        if (cachedData) {
-          try {
-            const parsed = JSON.parse(cachedData);
-            if (parsed.gatheringId === selectedGathering?.id && parsed.date === selectedDate) {
-              // Update the cache with the new attendance state
-              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-              const updatedCache = {
-                ...parsed,
-                attendanceList: attendanceListRef.current.map(person => ({
-                  ...person,
-                  present: presentByIdRef.current[person.id] ?? person.present
-                })),
-                timestamp: Date.now(),
-                hasPendingChanges: currentPendingChanges.some((change: any) => 
-                  change.gatheringId === selectedGathering?.id && change.date === selectedDate
-                )
-              };
-              localStorage.setItem('attendance_cached_data', JSON.stringify(updatedCache));
-              console.log('💾 Updated cache with WebSocket changes');
-            }
-          } catch (err) {
-            console.error('Failed to update cache:', err);
-          }
         }
-      }, 100); // 100ms debounce
-    }, [startTransition, selectedGathering?.id, selectedDate]),
-    onVisitorChange: useCallback((visitors: Visitor[]) => {
-      console.log('🔌 [WEBSOCKET] Received visitor update:', visitors);
-      
-      // Update visitors state immediately
-      setVisitors(visitors);
-      
-      // Update visitor attendance state immediately
-      const newVisitorAttendance: { [key: number]: boolean } = {};
-      visitors.forEach((visitor: any) => {
-        if (visitor.id) {
-          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
+      }
+    };
+
+    const handleHeadcountUpdated = (data: any) => {
+      // Only process updates for the current gathering and date
+      if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
+        console.log('🔌 [WEBSOCKET] Received headcount update:', data);
+        // The HeadcountAttendanceInterface will handle the update
+      }
+    };
+
+    const handleVisitorUpdated = (data: any) => {
+      // Only process updates for the current gathering and date
+      if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
+        console.log('🔌 [WEBSOCKET] Received visitor update:', data);
+        // Handle visitor updates
+        if (data.visitors) {
+          setVisitors(data.visitors);
         }
-      });
-      setVisitorAttendance(newVisitorAttendance);
-      
-      // Debounced cache update to avoid excessive localStorage writes
-      setTimeout(() => {
-        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-        const cacheData = {
-          gatheringId: selectedGathering?.id,
-          date: selectedDate,
-          attendanceList: attendanceListRef.current,
-          visitors: visitors,
-          timestamp: Date.now(),
-          hasPendingChanges: currentPendingChanges.some((change: any) => 
-            change.gatheringId === selectedGathering?.id && change.date === selectedDate
-          )
-        };
-        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
-      }, 100); // 100ms debounce
-      
-      console.log('🔌 [WEBSOCKET] Updated visitor state immediately:', {
-        visitorCount: visitors.length,
-        visitorAttendance: newVisitorAttendance
-      });
-    }, [selectedGathering, selectedDate]),
-    onFullRefresh: useCallback((attendanceList: Individual[], visitors: Visitor[]) => {
-      console.log('🔌 [WEBSOCKET] Received full refresh');
-      // setLastWebSocketUpdate removed - no longer tracking for UI
-      setAttendanceList(attendanceList);
-      setVisitors(visitors);
-      
-      // Update visitor attendance state
-      const newVisitorAttendance: { [key: number]: boolean } = {};
-      visitors.forEach((visitor: any) => {
-        if (visitor.id) {
-          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-        }
-      });
-      setVisitorAttendance(newVisitorAttendance);
-    }, []),
-    onError: useCallback((error: string) => {
-      console.error('🔌 [WEBSOCKET] Error:', error);
-      setError(`WebSocket error: ${error}`);
-      // DEBUGGING: Don't fall back to polling, stay in WebSocket mode
-      console.log('🔌 [WEBSOCKET] Error occurred but staying in WebSocket mode for debugging');
-    }, [])
-  });
+      }
+    };
+
+    // Listen for all WebSocket events
+    socket?.on('attendance_updated', handleAttendanceUpdated);
+    socket?.on('headcount_updated', handleHeadcountUpdated);
+    socket?.on('visitor_updated', handleVisitorUpdated);
+
+    return () => {
+      socket?.off('attendance_updated', handleAttendanceUpdated);
+      socket?.off('headcount_updated', handleHeadcountUpdated);
+      socket?.off('visitor_updated', handleVisitorUpdated);
+    };
+  }, [socket, isWebSocketConnected, selectedGathering?.id, selectedDate]);
+
+  // WebSocket attendance updates (disabled - using direct socket access instead)
+  const attendanceWebSocket = {
+    isConnected: isWebSocketConnected,
+    isInRoom: false,
+    connectionStatus: connectionStatus,
+    roomName: null,
+    lastUpdate: null,
+    userActivity: activeUsers,
+    joinRoom: () => {},
+    leaveRoom: () => {},
+    forceReconnect: () => {}
+  };
 
   // Polling is permanently disabled in favor of WebSocket real-time updates
   useEffect(() => {
@@ -2501,8 +2507,8 @@ const AttendancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Attendance Summary */}
-      {selectedGathering && (
+      {/* Attendance Summary - Only show for standard gatherings */}
+      {selectedGathering && selectedGathering.attendanceType === 'standard' && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             {isAttendanceLocked && (
@@ -2727,44 +2733,48 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Search/Filter Bar */}
-            <div>
-              <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
-                Filter Families & Visitors
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="text"
-                  id="search"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search by family member or visitor name..."
-                  className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
-                />
-              </div>
-            </div>
-
-            {/* Group by Family Toggle */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <input
-                  id="groupByFamily"
-                  type="checkbox"
-                  checked={groupByFamily}
-                  onChange={(e) => handleGroupByFamilyChange(e.target.checked)}
-                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                />
-                <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900">
-                  Group people by family
+            {/* Search/Filter Bar - Only show for standard gatherings */}
+            {selectedGathering?.attendanceType === 'standard' && (
+              <div>
+                <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
+                  Filter Families & Visitors
                 </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+                  </div>
+                  <input
+                    type="text"
+                    id="search"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search by family member or visitor name..."
+                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
+                  />
+                </div>
               </div>
-              <div className="text-sm text-gray-500">
-                {groupByFamily ? 'Families grouped together' : 'Individuals listed separately'}
+            )}
+
+            {/* Group by Family Toggle - Only show for standard gatherings */}
+            {selectedGathering?.attendanceType === 'standard' && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <input
+                    id="groupByFamily"
+                    type="checkbox"
+                    checked={groupByFamily}
+                    onChange={(e) => handleGroupByFamilyChange(e.target.checked)}
+                    className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900">
+                    Group people by family
+                  </label>
+                </div>
+                <div className="text-sm text-gray-500">
+                  {groupByFamily ? 'Families grouped together' : 'Individuals listed separately'}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -2790,14 +2800,45 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* Attendance List */}
+      {/* Conditional Rendering based on Gathering Type */}
       {selectedGathering && validDates.length > 0 && (
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-gray-900">
-                Attendance List - {selectedGathering.name}
-              </h3>
+        <>
+          {selectedGathering.attendanceType === 'headcount' ? (
+            <div className="bg-white shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Headcount - {selectedGathering.name}
+                  </h3>
+                  <div className="flex items-center space-x-2">
+                    {/* Connection Status Indicator */}
+                    <div
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getConnectionStatusStyle().containerClass}`}
+                      title={getConnectionStatusStyle().tooltip}
+                    >
+                      <div className={`w-2 h-2 rounded-full mr-1.5 ${getConnectionStatusStyle().dotClass}`}></div>
+                      {getConnectionStatusStyle().label}
+                    </div>
+
+                    {/* Active Users Indicator */}
+                    <ActiveUsersIndicator activeUsers={activeUsers} />
+                  </div>
+                </div>
+                
+                <HeadcountAttendanceInterface
+                  gatheringTypeId={selectedGathering.id}
+                  date={selectedDate}
+                  gatheringName={selectedGathering.name}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Attendance List - {selectedGathering.name}
+                  </h3>
               <div className="flex items-center space-x-2">
                 {/* Connection Status Indicator */}
                 <div
@@ -2913,12 +2954,14 @@ const AttendancePage: React.FC = () => {
             )}
           </div>
         </div>
+          )}
+        </>
       )}
 
 
 
-      {/* Visitors Section */}
-      {filteredGroupedVisitors.length > 0 && (
+      {/* Visitors Section - Only for Standard Gatherings */}
+      {selectedGathering?.attendanceType === 'standard' && filteredGroupedVisitors.length > 0 && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
@@ -3081,108 +3124,112 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* Add People From Church (people not currently visible in this gathering) */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-medium text-gray-900">Add People From Church</h3>
-            <button
-              type="button"
-              onClick={() => setShowAllVisitorsSection(v => !v)}
-              className="text-sm font-medium text-primary-600 hover:text-primary-700"
-            >
-              {showAllVisitorsSection ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          {showAllVisitorsSection && (
-            <div className="mt-4">
-              {isLoadingAllVisitors ? (
-                <div className="text-center py-6 text-gray-500">Loading church people…</div>
-              ) : groupedAllChurchVisitors.length === 0 ? (
-                <div className="text-sm text-gray-500">No additional people available to add.</div>
-              ) : (
-                <div className="space-y-4">
-                  {groupedAllChurchVisitors.map((group: any) => (
-                    <div key={group.groupKey} className={groupByFamily && group.familyName ? 'border border-gray-200 rounded-lg p-4' : ''}>
-                      {groupByFamily && group.familyName && (
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center space-x-3">
-                            <h4 className="text-md font-medium text-gray-900">
-                              {(() => {
-                                const parts = group.familyName.split(', ');
-                                if (parts.length >= 2) { return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`; }
-                                return group.familyName;
-                              })()}
-                            </h4>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${group.members[0]?.visitorType === 'potential_regular' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                              {group.members[0]?.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                            </span>
-                          </div>
-                          {group.familyId && (
-                            <button
-                              type="button"
-                              disabled={isAttendanceLocked}
-                              onClick={() => addVisitorFamilyFromAll(group.familyId)}
-                              className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
-                            >
-                              Add family to this service
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-                        {group.members.map((person: any, idx: number) => {
-                          const parts = person.name.trim().split(' ');
-                          const firstName = parts[0];
-                          const lastName = parts.slice(1).join(' ');
-                          const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
-                          const displayName = getPersonDisplayName(person, group.familyName);
-                          const needsWideLayout = shouldUseWideLayout(displayName);
-                          
-                          return (
-                            <div 
-                              key={person.id || `all_${idx}`} 
-                              className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'} ${needsWideLayout ? 'col-span-2' : ''}`}
-                            >
-                              <div className="text-sm font-medium text-gray-900">{displayName}</div>
-                              {!groupByFamily && group.familyId && (
-                                <div className="mt-2">
-                                  <button
-                                    type="button"
-                                    disabled={isAttendanceLocked}
-                                    onClick={() => addVisitorFamilyFromAll(group.familyId)}
-                                    className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
-                                  >
-                                    Add family to this service
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+      {/* Add People From Church (people not currently visible in this gathering) - Only show for standard gatherings */}
+      {selectedGathering?.attendanceType === 'standard' && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-medium text-gray-900">Add People From Church</h3>
+              <button
+                type="button"
+                onClick={() => setShowAllVisitorsSection(v => !v)}
+                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+              >
+                {showAllVisitorsSection ? 'Hide' : 'Show'}
+              </button>
             </div>
-          )}
+            {showAllVisitorsSection && (
+              <div className="mt-4">
+                {isLoadingAllVisitors ? (
+                  <div className="text-center py-6 text-gray-500">Loading church people…</div>
+                ) : groupedAllChurchVisitors.length === 0 ? (
+                  <div className="text-sm text-gray-500">No additional people available to add.</div>
+                ) : (
+                  <div className="space-y-4">
+                    {groupedAllChurchVisitors.map((group: any) => (
+                      <div key={group.groupKey} className={groupByFamily && group.familyName ? 'border border-gray-200 rounded-lg p-4' : ''}>
+                        {groupByFamily && group.familyName && (
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-3">
+                              <h4 className="text-md font-medium text-gray-900">
+                                {(() => {
+                                  const parts = group.familyName.split(', ');
+                                  if (parts.length >= 2) { return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`; }
+                                  return group.familyName;
+                                })()}
+                              </h4>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${group.members[0]?.visitorType === 'potential_regular' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                {group.members[0]?.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                              </span>
+                            </div>
+                            {group.familyId && (
+                              <button
+                                type="button"
+                                disabled={isAttendanceLocked}
+                                onClick={() => addVisitorFamilyFromAll(group.familyId)}
+                                className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                              >
+                                Add family to this service
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                          {group.members.map((person: any, idx: number) => {
+                            const parts = person.name.trim().split(' ');
+                            const firstName = parts[0];
+                            const lastName = parts.slice(1).join(' ');
+                            const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
+                            const displayName = getPersonDisplayName(person, group.familyName);
+                            const needsWideLayout = shouldUseWideLayout(displayName);
+                            
+                            return (
+                              <div 
+                                key={person.id || `all_${idx}`} 
+                                className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'} ${needsWideLayout ? 'col-span-2' : ''}`}
+                              >
+                                <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                                {!groupByFamily && group.familyId && (
+                                  <div className="mt-2">
+                                    <button
+                                      type="button"
+                                      disabled={isAttendanceLocked}
+                                      onClick={() => addVisitorFamilyFromAll(group.familyId)}
+                                      className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                                    >
+                                      Add family to this service
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
 
 
-      {/* Floating Add Visitor Button */}
-      <button
-        onClick={handleAddVisitor}
-        disabled={isAttendanceLocked}
-        className={`fixed bottom-6 right-6 w-14 h-14 ${isAttendanceLocked ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700'} text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50`}
-      >
-        <PlusIcon className="h-6 w-6" />
-      </button>
+      {/* Floating Add Visitor Button - Only for Standard Gatherings */}
+      {selectedGathering?.attendanceType === 'standard' && (
+        <button
+          onClick={handleAddVisitor}
+          disabled={isAttendanceLocked}
+          className={`fixed bottom-6 right-6 w-14 h-14 ${isAttendanceLocked ? 'bg-gray-300 cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700'} text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50`}
+        >
+          <PlusIcon className="h-6 w-6" />
+        </button>
+      )}
 
-            {/* Add Visitor Modal */}
-      {showAddVisitorModal && createPortal(
+            {/* Add Visitor Modal - Only for Standard Gatherings */}
+      {selectedGathering?.attendanceType === 'standard' && showAddVisitorModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">

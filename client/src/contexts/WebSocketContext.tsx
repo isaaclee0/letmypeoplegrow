@@ -173,7 +173,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     setConnectionStatus('connecting');
 
-    // Simplified server URL resolution - use current origin
+    // Use relative URL for WebSocket connection to match API configuration
     const serverUrl = window.location.origin;
     
     console.log('🔌 WebSocket serverUrl resolution:', {

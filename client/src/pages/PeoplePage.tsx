@@ -90,7 +90,6 @@ const useAttendanceData = (personId: number | null) => {
     
     try {
       const response = await individualsAPI.getAttendanceHistory(personId);
-      console.log('Attendance API response:', response); // Debug log
       setAttendanceData(response.data || response); // Handle both response.data and direct response
     } catch (err: any) {
       console.error('Attendance API error:', err); // Debug log

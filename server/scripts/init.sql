@@ -87,15 +87,20 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   day_of_week ENUM('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'),
   start_time TIME,
   frequency ENUM('weekly', 'biweekly', 'monthly') DEFAULT 'weekly',
+  attendance_type ENUM('standard', 'headcount') DEFAULT 'standard',
+  custom_schedule JSON DEFAULT NULL,
   group_by_family BOOLEAN DEFAULT true,
   is_active BOOLEAN DEFAULT true,
   created_by INT,
+  church_id VARCHAR(36) NOT NULL DEFAULT 'default',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   INDEX idx_name (name),
   INDEX idx_active (is_active),
-  INDEX idx_day_of_week (day_of_week)
+  INDEX idx_day_of_week (day_of_week),
+  INDEX idx_attendance_type (attendance_type),
+  INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
 -- Create user gathering assignments table
@@ -199,6 +204,21 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   INDEX idx_individual (individual_id),
   INDEX idx_present (present),
   INDEX idx_church_id (church_id)
+) ENGINE=InnoDB;
+
+-- Create headcount records table for headcount-only gatherings
+CREATE TABLE IF NOT EXISTS headcount_records (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  session_id INT NOT NULL,
+  headcount INT NOT NULL DEFAULT 0,
+  updated_by INT NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  church_id VARCHAR(36) NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY unique_session_headcount (session_id),
+  INDEX idx_church_id (church_id),
+  INDEX idx_updated_by (updated_by)
 ) ENGINE=InnoDB;
 
 -- Create user invitations table
