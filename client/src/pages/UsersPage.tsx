@@ -109,6 +109,9 @@ const UsersPage: React.FC = () => {
     userName: string;
   }>({ userId: null, userName: '' });
 
+  // Selection state
+  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -323,6 +326,10 @@ const UsersPage: React.FC = () => {
       await usersAPI.assignGatherings(selectedUser.id, assignForm.gatheringIds);
       setSuccess('Gathering assignments updated successfully');
       setShowAssignGatherings(false);
+      
+      // Clear selection after successful assignment
+      setSelectedUsers([]);
+      
       loadData();
       
       // Clear success message after 5 seconds
@@ -347,6 +354,10 @@ const UsersPage: React.FC = () => {
     try {
       await usersAPI.delete(deactivateConfirmation.userId);
       setSuccess('User deactivated successfully');
+      
+      // Remove from selection if it was selected
+      setSelectedUsers(prev => prev.filter(id => id !== deactivateConfirmation.userId));
+      
       loadData();
       
       // Clear success message after 5 seconds
@@ -428,6 +439,10 @@ const UsersPage: React.FC = () => {
         primaryContactMethod: 'email',
         role: 'attendance_taker'
       });
+      
+      // Clear selection after successful edit
+      setSelectedUsers([]);
+      
       loadData();
       
       // Clear success message after 5 seconds
@@ -446,6 +461,60 @@ const UsersPage: React.FC = () => {
         response: err.response?.data,
         status: err.response?.status
       });
+    }
+  };
+
+  // Selection functions
+  const toggleUserSelection = (userId: number) => {
+    setSelectedUsers(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
+  };
+
+  const clearSelection = () => {
+    setSelectedUsers([]);
+  };
+
+  const selectAllUsers = () => {
+    setSelectedUsers(users.map(user => user.id));
+  };
+
+  const handleEditSelectedUser = () => {
+    if (selectedUsers.length === 1) {
+      const user = users.find(u => u.id === selectedUsers[0]);
+      if (user) {
+        handleEditUser(user);
+      }
+    }
+  };
+
+  const handleAssignSelectedUsers = () => {
+    if (selectedUsers.length === 1) {
+      const user = users.find(u => u.id === selectedUsers[0]);
+      if (user) {
+        handleAssignGatherings(user);
+      }
+    } else if (selectedUsers.length > 1) {
+      // For multiple users, we'll need to implement a bulk assignment modal
+      // For now, just show an error
+      setError('Bulk gathering assignment not yet implemented');
+      setTimeout(() => setError(''), 5000);
+    }
+  };
+
+  const handleDeleteSelectedUsers = () => {
+    if (selectedUsers.length === 1) {
+      const user = users.find(u => u.id === selectedUsers[0]);
+      if (user) {
+        showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`);
+      }
+    } else if (selectedUsers.length > 1) {
+      // For multiple users, we'll need to implement a bulk delete modal
+      // For now, just show an error
+      setError('Bulk user deletion not yet implemented');
+      setTimeout(() => setError(''), 5000);
     }
   };
 
@@ -531,64 +600,87 @@ const UsersPage: React.FC = () => {
       {/* Users Section */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-            Users ({users.length})
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">
+              Users ({users.length})
+            </h3>
+            <div className="flex items-center space-x-3">
+              {selectedUsers.length > 0 ? (
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <span>{selectedUsers.length} selected</span>
+                  <button
+                    onClick={clearSelection}
+                    className="text-primary-600 hover:text-primary-700"
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : users.length > 0 && (
+                <button
+                  onClick={selectAllUsers}
+                  className="text-sm text-primary-600 hover:text-primary-700"
+                >
+                  Select All
+                </button>
+              )}
+            </div>
+          </div>
           
           {/* Mobile Card Layout */}
           <div className="block md:hidden space-y-4">
             {users.map((user) => (
-              <div key={user.id} className="relative bg-gray-50 rounded-lg p-4 border">
-                <button
-                  onClick={() => handleEditUser(user)}
-                  className="absolute top-3 right-3 inline-flex items-center justify-center h-9 w-9 rounded-full text-gray-600 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  aria-label={`Edit ${user.firstName} ${user.lastName}`}
-                >
-                  <PencilIcon className="h-5 w-5" />
-                </button>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3 mb-2">
-                      <UserIcon className="h-8 w-8 text-gray-400 flex-shrink-0" />
-                      <div>
-                        <h4 className="text-base font-medium text-gray-900">
-                          {user.firstName} {user.lastName}
-                        </h4>
-                        <div className="text-sm text-gray-500">
-                          {user.primaryContactMethod === 'email' ? (
-                            <div className="flex items-center">
-                              <EnvelopeIcon className="h-4 w-4 mr-1" />
-                              <span className="truncate">{user.email}</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center">
-                              <PhoneIcon className="h-4 w-4 mr-1" />
-                              <span>{user.mobileNumber}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+              <div 
+                key={user.id} 
+                className={`relative rounded-lg p-4 border cursor-pointer transition-colors ${
+                  selectedUsers.includes(user.id)
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                }`}
+                onClick={() => toggleUserSelection(user.id)}
+              >
+                <div className="flex space-x-3">
+                  {/* Checkbox Column */}
+                  <div className="flex-shrink-0 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedUsers.includes(user.id)}
+                      onChange={() => toggleUserSelection(user.id)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  
+                  {/* User Info Column */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-base font-medium text-gray-900 truncate">
+                        {user.firstName} {user.lastName}
+                      </h4>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-2`}>
                         {user.role.replace('_', ' ')}
                       </span>
+                    </div>
+                    
+                    <div className="text-sm text-gray-500 mt-1">
+                      {user.primaryContactMethod === 'email' ? (
+                        <div className="flex items-center">
+                          <EnvelopeIcon className="h-4 w-4 mr-1" />
+                          <span className="truncate">{user.email}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center">
+                          <PhoneIcon className="h-4 w-4 mr-1" />
+                          <span className="truncate">{user.mobileNumber}</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {getStatusBadge(user)}
                     </div>
                     
-                    <div className="text-sm text-gray-600 mb-3">
+                    <div className="text-sm text-gray-600 mt-2">
                       {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
-                    </div>
-                    
-                    <div className="flex space-x-3">
-                      <button
-                        onClick={() => handleAssignGatherings(user)}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        <UserGroupIcon className="h-4 w-4 mr-2" />
-                        Assign Gatherings
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -596,100 +688,119 @@ const UsersPage: React.FC = () => {
             ))}
           </div>
 
-          {/* Desktop Table Layout */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    User
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Role
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Gatherings
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Last Logged In
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0 h-10 w-10">
-                          <UserIcon className="h-10 w-10 text-gray-400" />
-                        </div>
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">
-                            {user.firstName} {user.lastName}
-                          </div>
-                          <div className="text-sm text-gray-500">
-                          <div className="flex items-center space-x-4">
-                            <div className="flex items-center">
-                              <EnvelopeIcon className="h-4 w-4 mr-1" />
-                              {user.email || '—'}
-                            </div>
-                            <div className="flex items-center">
-                              <PhoneIcon className="h-4 w-4 mr-1" />
-                              {user.mobileNumber || '—'}
-                            </div>
-                          </div>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+          {/* Desktop Grid Layout */}
+          <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {users.map((user) => (
+              <div 
+                key={user.id} 
+                className={`border rounded-lg p-4 cursor-pointer transition-all ${
+                  selectedUsers.includes(user.id)
+                    ? 'border-primary-500 bg-primary-50 shadow-md'
+                    : 'bg-white border-gray-200 hover:shadow-md'
+                }`}
+                onClick={() => toggleUserSelection(user.id)}
+              >
+                <div className="flex space-x-3">
+                  {/* Checkbox Column */}
+                  <div className="flex-shrink-0 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedUsers.includes(user.id)}
+                      onChange={() => toggleUserSelection(user.id)}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  
+                  {/* User Info Column */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-medium text-gray-900 truncate">
+                        {user.firstName} {user.lastName}
+                      </h4>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-2`}>
                         {user.role.replace('_', ' ')}
                       </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatDateTime(user.lastLoginAt as any)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => handleEditUser(user)}
-                          className="inline-flex items-center justify-center h-9 w-9 rounded-full text-gray-600 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                          aria-label={`Edit ${user.firstName} ${user.lastName}`}
-                        >
-                          <PencilIcon className="h-5 w-5" />
-                        </button>
-                        <button
-                          onClick={() => handleAssignGatherings(user)}
-                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          <UserGroupIcon className="h-4 w-4 mr-2" />
-                          Assign
-                        </button>
+                    </div>
+                    
+                    <div className="space-y-1 mt-2">
+                      <div className="flex items-center text-xs text-gray-600">
+                        <EnvelopeIcon className="h-3 w-3 mr-1 flex-shrink-0" />
+                        <span className="truncate">{user.email || 'No email'}</span>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {user.mobileNumber && (
+                        <div className="flex items-center text-xs text-gray-600">
+                          <PhoneIcon className="h-3 w-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{user.mobileNumber}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center text-xs text-gray-600">
+                        <UserGroupIcon className="h-3 w-3 mr-1 flex-shrink-0" />
+                        <span>{user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-2">
+                      {getStatusBadge(user)}
+                      <div className="text-xs text-gray-500 mt-1">
+                        Last: {formatDateTime(user.lastLoginAt as any)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* Floating Add Button */}
-      <button
-        onClick={() => setShowInviteModal(true)}
-        className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-lg bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
-        aria-label="Invite User"
-      >
-        <PlusIcon className="h-7 w-7" />
-      </button>
+      {/* Floating Action Buttons */}
+      {selectedUsers.length > 0 ? (
+        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
+          <div className="flex items-center justify-end space-x-3">
+            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+              {selectedUsers.length === 1 ? 'Edit User' : `${selectedUsers.length} Users Selected`}
+            </div>
+            
+            {/* Edit User Button - only for single selection */}
+            {selectedUsers.length === 1 && (
+              <button
+                onClick={handleEditSelectedUser}
+                className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                title="Edit User"
+              >
+                <PencilIcon className="h-6 w-6" />
+              </button>
+            )}
+            
+            {/* Assign to Gathering Button */}
+            <button
+              onClick={handleAssignSelectedUsers}
+              className="w-14 h-14 bg-green-600 hover:bg-green-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+              title={selectedUsers.length === 1 ? "Assign to Gathering" : "Assign to Gatherings"}
+            >
+              <UserGroupIcon className="h-6 w-6" />
+            </button>
+            
+            {/* Delete User Button */}
+            <button
+              onClick={handleDeleteSelectedUsers}
+              className="w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+              title={selectedUsers.length === 1 ? "Delete User" : "Delete Users"}
+            >
+              <TrashIcon className="h-6 w-6" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowInviteModal(true)}
+          className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-lg bg-primary-600 text-white shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 flex items-center justify-center"
+          aria-label="Invite User"
+        >
+          <PlusIcon className="h-7 w-7" />
+        </button>
+      )}
 
       {/* Pending Invitations Section removed */}
 

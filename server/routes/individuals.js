@@ -479,4 +479,134 @@ router.delete('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator
   }
 });
 
+// Get attendance history for a specific individual
+router.get('/:id/attendance-history', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if individual exists and belongs to user's church
+    const individual = await Database.query(
+      'SELECT id, first_name, last_name, church_id FROM individuals WHERE id = ?',
+      [id]
+    );
+
+    if (individual.length === 0) {
+      return res.status(404).json({ error: 'Individual not found' });
+    }
+
+    if (individual[0].church_id !== req.user.church_id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Get last attendance record (any service)
+    const lastAttendance = await Database.query(`
+      SELECT 
+        ar.present,
+        ar.updated_at,
+        as_table.session_date,
+        gt.name as gathering_name,
+        gt.id as gathering_id
+      FROM attendance_records ar
+      JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
+      WHERE ar.individual_id = ? 
+        AND ar.church_id = ?
+        AND ar.present = true
+      ORDER BY as_table.session_date DESC, ar.updated_at DESC
+      LIMIT 1
+    `, [id, req.user.church_id]);
+
+    // Get attendance records for the last 12 months to calculate regularity
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const oneYearAgoStr = oneYearAgo.toISOString().split('T')[0];
+
+    // Get attendance records for the last 12 months to calculate regularity per gathering
+    const attendanceHistory = await Database.query(`
+      SELECT 
+        as_table.session_date,
+        gt.name as gathering_name,
+        gt.id as gathering_id,
+        gt.frequency as gathering_frequency
+      FROM attendance_records ar
+      JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
+      WHERE ar.individual_id = ? 
+        AND ar.church_id = ?
+        AND ar.present = true
+        AND as_table.session_date >= ?
+      ORDER BY as_table.session_date ASC
+    `, [id, req.user.church_id, oneYearAgoStr]);
+
+    // Calculate regularity per gathering
+    const gatheringRegularity = new Map();
+    const gatheringAttendanceCounts = new Map();
+    
+    if (attendanceHistory.length > 0) {
+      // Group attendance by gathering
+      attendanceHistory.forEach(record => {
+        const gatheringId = record.gathering_id;
+        if (!gatheringAttendanceCounts.has(gatheringId)) {
+          gatheringAttendanceCounts.set(gatheringId, {
+            name: record.gathering_name,
+            count: 0,
+            dates: []
+          });
+        }
+        const gathering = gatheringAttendanceCounts.get(gatheringId);
+        gathering.count++;
+        gathering.dates.push(record.session_date);
+      });
+
+      // Calculate regularity for each gathering
+      gatheringAttendanceCounts.forEach((gathering, gatheringId) => {
+        // Find the actual date range for this gathering's data
+        const dates = gathering.dates.sort();
+        const firstDate = new Date(dates[0]);
+        const lastDate = new Date(dates[dates.length - 1]);
+        
+        // Calculate average per month based on actual data range
+        const monthsDiff = (lastDate.getFullYear() - firstDate.getFullYear()) * 12 + 
+                          (lastDate.getMonth() - firstDate.getMonth()) + 1;
+        
+        // Ensure we have at least 1 month of data
+        const actualMonths = Math.max(monthsDiff, 1);
+        const averagePerMonth = gathering.count / actualMonths;
+        
+        let regularity = 'less than once a month';
+        if (averagePerMonth >= 3.5) {
+          regularity = 'every week';
+        } else if (averagePerMonth >= 2.5) {
+          regularity = 'three times a month';
+        } else if (averagePerMonth >= 1.5) {
+          regularity = 'twice a month';
+        } else if (averagePerMonth >= 0.5) {
+          regularity = 'once a month';
+        }
+        
+        gatheringRegularity.set(gatheringId, {
+          name: gathering.name,
+          regularity,
+          attendanceCount: gathering.count
+        });
+      });
+    }
+
+    const response = {
+      lastAttendance: lastAttendance.length > 0 ? {
+        date: lastAttendance[0].session_date,
+        gatheringName: lastAttendance[0].gathering_name,
+        gatheringId: lastAttendance[0].gathering_id,
+        recordedAt: lastAttendance[0].updated_at
+      } : null,
+      gatheringRegularity: Array.from(gatheringRegularity.values())
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error getting attendance history:', error);
+    res.status(500).json({ error: 'Failed to retrieve attendance history' });
+  }
+});
+
 module.exports = router; 

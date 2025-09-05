@@ -385,72 +385,136 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     
     console.log('Executing database query for export...');
     
-    // Query that works with the actual database schema
-    const exportData = await Database.query(`
-      SELECT 
-        as_table.session_date,
-        gt.name as gathering_name,
+    // Get all sessions in the date range to determine column headers
+    const sessionsQuery = `
+      SELECT DISTINCT as_table.session_date, gt.name as gathering_name
+      FROM attendance_sessions as_table
+      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
+      WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+      ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+      AND as_table.church_id = ?
+      ORDER BY as_table.session_date ASC
+    `;
+    
+    const sessions = await Database.query(
+      sessionsQuery, 
+      gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]
+    );
+    
+    console.log(`Found ${sessions.length} sessions in date range`);
+    
+    // Get all people who attended during the selected period, classified by their people_type
+    const allPeopleQuery = `
+      SELECT DISTINCT 
+        i.id,
         COALESCE(i.first_name, '') as first_name,
         COALESCE(i.last_name, '') as last_name,
         COALESCE(f.family_name, '') as family_name,
-        COALESCE(ar.present, 0) as present,
-        'Regular Member' as attendee_type
-      FROM attendance_sessions as_table
-      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-      LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
-      LEFT JOIN individuals i ON ar.individual_id = i.id
+        CASE 
+          WHEN i.people_type = 'local_visitor' THEN 'Local Visitor'
+          WHEN i.people_type = 'traveller_visitor' THEN 'Traveller Visitor'
+          ELSE 'Regular Attender'
+        END as people_type,
+        i.people_type as raw_people_type
+      FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
+      WHERE i.is_active = true 
+        AND i.church_id = ?
+        AND EXISTS (
+          SELECT 1 FROM attendance_records ar
+          JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+          WHERE ar.individual_id = i.id 
+            AND as_table.session_date >= ? 
+            AND as_table.session_date <= ?
+            ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+        )
+      ORDER BY 
+        CASE 
+          WHEN i.people_type NOT IN ('local_visitor', 'traveller_visitor') THEN 1
+          WHEN i.people_type = 'local_visitor' THEN 2
+          WHEN i.people_type = 'traveller_visitor' THEN 3
+          ELSE 4
+        END,
+        f.family_name, i.last_name, i.first_name
+    `;
+    
+    const allPeople = await Database.query(
+      allPeopleQuery,
+      gatheringTypeId ? [req.user.church_id, startDate, endDate, gatheringTypeId] : [req.user.church_id, startDate, endDate]
+    );
+    
+    console.log(`Found ${allPeople.length} people total`);
+    
+    // Get attendance data for all people and sessions
+    const attendanceQuery = `
+      SELECT 
+        ar.individual_id,
+        as_table.session_date,
+        ar.present
+      FROM attendance_records ar
+      JOIN attendance_sessions as_table ON ar.session_id = as_table.id
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
       ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-      ORDER BY as_table.session_date DESC, f.family_name, i.last_name, i.first_name
-    `, gatheringTypeId ? [startDate, endDate, gatheringTypeId] : [startDate, endDate]);
-
-    console.log(`Export query returned ${exportData.length} rows`);
-
-    // Helper function to format date as DD-MM-YYYY
-    const formatDate = (dateString) => {
+      AND as_table.church_id = ?
+    `;
+    
+    const attendanceData = await Database.query(
+      attendanceQuery,
+      gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]
+    );
+    
+    // Create a map for quick attendance lookup
+    const attendanceMap = new Map();
+    attendanceData.forEach(record => {
+      const key = `${record.individual_id}_${record.session_date}`;
+      attendanceMap.set(key, record.present === 1 || record.present === true);
+    });
+    
+    // Helper function to format date as YYYY-MM-DD for column headers
+    const formatDateHeader = (dateString) => {
       if (!dateString) return '';
       try {
         const date = new Date(dateString);
         if (isNaN(date.getTime())) return '';
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const year = date.getFullYear();
-        return `${day}-${month}-${year}`;
+        return date.toISOString().split('T')[0];
       } catch (error) {
         console.error('Date formatting error:', error);
         return '';
       }
     };
-
-    // Convert to CSV format with better error handling
-    const csvHeaders = ['Date', 'Gathering', 'First Name', 'Last Name', 'Family', 'Present', 'Attendee Type'];
-    const csvRows = exportData.map(row => {
-      try {
-        return [
-          formatDate(row.session_date),
-          row.gathering_name || '',
-          row.first_name || '',
-          row.last_name || '',
-          row.family_name || '',
-          row.present ? 'Yes' : 'No',
-          row.attendee_type || 'Regular Member'
-        ];
-      } catch (error) {
-        console.error('Error processing row:', error, row);
-        return ['', '', '', '', '', 'No', 'Error'];
-      }
+    
+    // Create TSV headers
+    const tsvHeaders = ['First Name', 'Last Name', 'Family Name', 'People Type', ...sessions.map(s => formatDateHeader(s.session_date))];
+    
+    // Create TSV rows
+    const tsvRows = allPeople.map(person => {
+      const row = [
+        person.first_name || '',
+        person.last_name || '',
+        person.family_name || '',
+        person.people_type || ''
+      ];
+      
+      // Add attendance data for each session
+      sessions.forEach(session => {
+        const key = `${person.id}_${session.session_date}`;
+        const attended = attendanceMap.get(key) || false;
+        row.push(attended ? 'TRUE' : 'FALSE');
+      });
+      
+      return row;
     });
-
-    const csvContent = [csvHeaders, ...csvRows]
-      .map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
+    
+    // Convert to TSV format
+    const tsvContent = [tsvHeaders, ...tsvRows]
+      .map(row => row.join('\t'))
       .join('\n');
 
-    console.log(`Generated CSV with ${csvRows.length} data rows`);
+    console.log(`Generated TSV with ${tsvRows.length} data rows and ${sessions.length} date columns`);
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.csv"');
-    res.send(csvContent);
+    res.setHeader('Content-Type', 'text/tab-separated-values');
+    res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.tsv"');
+    res.send(tsvContent);
     
     console.log('Export completed successfully');
     

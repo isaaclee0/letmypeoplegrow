@@ -434,8 +434,9 @@ export const familiesAPI = {
 export const individualsAPI = {
   getAll: () => 
     api.get('/individuals'),
-  getArchived: () =>
-    api.get('/individuals/archived'),
+    
+  get: (id: number) => 
+    api.get(`/individuals/${id}`),
     
   create: (data: {
     firstName: string;
@@ -471,6 +472,9 @@ export const individualsAPI = {
     mergeAssignments?: boolean;
   }) => 
     api.post('/individuals/deduplicate', data),
+    
+  getAttendanceHistory: (id: number) => 
+    api.get(`/individuals/${id}/attendance-history`),
 };
 
 // Reports API
@@ -573,6 +577,9 @@ export const csvImportAPI = {
     
   massUpdatePeopleType: (individualIds: number[], peopleType: 'regular' | 'local_visitor' | 'traveller_visitor') => 
     api.put('/csv-import/mass-update-people-type', { individualIds, peopleType }),
+    
+  updateExisting: (data: string) => 
+    api.post('/csv-import/update-existing', { data }),
 };
 
 export const notificationRulesAPI = {

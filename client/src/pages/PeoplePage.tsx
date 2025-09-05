@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,9 +17,13 @@ import {
   PencilIcon,
   XMarkIcon,
   ArrowPathIcon,
-  DocumentTextIcon
+  DocumentTextIcon,
+  InformationCircleIcon
 } from '@heroicons/react/24/outline';
+import { format } from 'date-fns';
+import { parseISO } from 'date-fns';
 
+// Type definitions
 interface Person {
   id: number;
   firstName: string;
@@ -27,7 +31,6 @@ interface Person {
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   familyId?: number;
   familyName?: string;
-  // Optional last attendance metadata if provided by API
   lastAttendanceDate?: string;
   createdAt?: string;
   gatheringAssignments?: Array<{
@@ -41,9 +44,187 @@ interface Family {
   familyName: string;
   memberCount: number;
   familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
-  // Optional last attended metadata if provided by API
   lastAttended?: string;
 }
+
+interface GatheringType {
+  id: number;
+  name: string;
+  description?: string;
+  dayOfWeek: string;
+  startTime: string;
+  frequency: string;
+}
+
+interface VisitorConfig {
+  localVisitorServiceLimit: number;
+  travellerVisitorServiceLimit: number;
+}
+
+// Custom hook for attendance data
+const useAttendanceData = (personId: number | null) => {
+  const [attendanceData, setAttendanceData] = useState<{
+    lastAttendance: {
+      date: string;
+      gatheringName: string;
+      gatheringId: number;
+      recordedAt: string;
+    } | null;
+    gatheringRegularity: Array<{
+      name: string;
+      regularity: string;
+      attendanceCount: number;
+    }>;
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchAttendanceData = useCallback(async () => {
+    if (!personId) {
+      setAttendanceData(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const response = await individualsAPI.getAttendanceHistory(personId);
+      console.log('Attendance API response:', response); // Debug log
+      setAttendanceData(response.data || response); // Handle both response.data and direct response
+    } catch (err: any) {
+      console.error('Attendance API error:', err); // Debug log
+      setError(err.response?.data?.error || 'Failed to fetch attendance data');
+      setAttendanceData(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [personId]);
+
+  useEffect(() => {
+    if (personId) {
+      fetchAttendanceData();
+    }
+  }, [personId, fetchAttendanceData]);
+
+    return { attendanceData, isLoading, error, refetch: fetchAttendanceData };
+};
+
+// Attendance Info Button Component
+const AttendanceInfoButton: React.FC<{
+  personId: number;
+  createdAt?: string;
+}> = ({ personId, createdAt }) => {
+  const { attendanceData, isLoading, error } = useAttendanceData(personId);
+  const [showModal, setShowModal] = useState(false);
+
+  const formatDate = (dateString: string) => {
+    try {
+      return format(parseISO(dateString), 'MMM d, yyyy');
+    } catch {
+      return dateString;
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setShowModal(true)}
+        className="ml-2 text-gray-400 hover:text-blue-500 transition-colors"
+        title="View attendance info"
+      >
+        <InformationCircleIcon className="h-4 w-4" />
+      </button>
+
+      {showModal ? createPortal(
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Attendance Information</h3>
+              <button
+                onClick={() => setShowModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            {isLoading ? (
+              <div className="text-center py-8">
+                <div className="text-gray-500">Loading attendance data...</div>
+              </div>
+            ) : attendanceData ? (
+              <div className="space-y-4">
+                {attendanceData.lastAttendance ? (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-1">Last Attendance</div>
+                    <div className="text-lg text-gray-900">
+                      {formatDate(attendanceData.lastAttendance.date)} at {attendanceData.lastAttendance.gatheringName}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-1">Last Attendance</div>
+                    <div className="text-lg text-gray-900 text-gray-500">No attendance records</div>
+                  </div>
+                )}
+                
+                {attendanceData.gatheringRegularity.length > 0 ? (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-2">Regularity by Gathering</div>
+                    <div className="space-y-3">
+                      {attendanceData.gatheringRegularity.map((gathering, index) => (
+                                                             <div key={index} className="bg-gray-50 rounded-lg p-3">
+                                       <div className="flex items-center justify-between mb-1">
+                                         <span className="font-medium text-gray-900">{gathering.name}</span>
+                                       </div>
+                                       <div className="flex items-center justify-between">
+                                         <span className="text-sm text-gray-600 capitalize">{gathering.regularity}</span>
+                                         <span className="text-sm text-gray-600">{gathering.attendanceCount} times</span>
+                                       </div>
+                                     </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-sm font-medium text-gray-700 mb-1">Regularity</div>
+                    <div className="text-lg text-gray-900 text-gray-500">No attendance data available</div>
+                  </div>
+                )}
+                
+                                           {createdAt && (
+                             <div>
+                               <div className="text-sm font-medium text-gray-700 mb-1">Added to System</div>
+                               <div className="text-lg text-gray-900">{formatDate(createdAt)}</div>
+                             </div>
+                           )}
+              </div>
+            ) : error ? (
+              <div className="text-center py-8">
+                <div className="text-red-500">Error loading attendance data: {error}</div>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <div className="text-gray-500">No attendance data found</div>
+              </div>
+            )}
+            
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setShowModal(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
+    </>
+  );
+};
 
 const PeoplePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -84,10 +265,32 @@ const PeoplePage: React.FC = () => {
   });
   const [dedupeKeepId, setDedupeKeepId] = useState<number | null>(null);
   
-  // Combined family/person modal state
-  const [familyMembers, setFamilyMembers] = useState<Array<{firstName: string, lastName: string}>>([{firstName: '', lastName: ''}]);
-  const [familyName, setFamilyName] = useState('');
-  const [useSameSurname, setUseSameSurname] = useState(false);
+  // Combined family/person modal state - updated to match visitor modal structure
+  interface PersonForm {
+    firstName: string;
+    lastName: string;
+    lastNameUnknown: boolean;
+    fillLastNameFromAbove: boolean;
+  }
+
+  interface AddPeopleFormState {
+    personType: 'regular' | 'local_visitor' | 'traveller_visitor';
+    notes: string;
+    persons: PersonForm[];
+    selectedGatherings: { [key: number]: boolean };
+  }
+
+  const [addPeopleForm, setAddPeopleForm] = useState<AddPeopleFormState>({
+    personType: 'regular',
+    notes: '',
+    persons: [{
+      firstName: '',
+      lastName: '',
+      lastNameUnknown: false,
+      fillLastNameFromAbove: false
+    }],
+    selectedGatherings: {}
+  });
 
   // Removed personForm state - no longer used
 
@@ -95,7 +298,15 @@ const PeoplePage: React.FC = () => {
 
   const [csvData, setCsvData] = useState('');
   const [copyPasteData, setCopyPasteData] = useState('');
+  const [uploadMode, setUploadMode] = useState<'new' | 'update'>('new');
   const [selectedPeople, setSelectedPeople] = useState<number[]>([]);
+  const [potentialDuplicates, setPotentialDuplicates] = useState<Array<{firstName: string, lastName: string, reason: string}>>([]);
+  const [tsvAnalysis, setTsvAnalysis] = useState<{
+    newPeople: number;
+    existingPeople: number;
+    unknownGatherings: string[];
+    totalRows: number;
+  } | null>(null);
   const [gatheringTypes, setGatheringTypes] = useState<Array<{id: number, name: string}>>([]);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
@@ -177,6 +388,195 @@ const PeoplePage: React.FC = () => {
     'bg-cyan-500'
   ];
 
+  // Helper function to analyze TSV data for potential duplicates
+  const analyzeTSVForDuplicates = useCallback((tsvData: string) => {
+    if (!tsvData || people.length === 0) {
+      setPotentialDuplicates([]);
+      return;
+    }
+
+    try {
+      const lines = tsvData.trim().split('\n');
+      const duplicates: Array<{firstName: string, lastName: string, reason: string}> = [];
+      
+      // Determine if this is an update operation (all or mostly existing people)
+      let existingCount = 0;
+      let totalCount = 0;
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        // Skip header row
+        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+          continue;
+        }
+        
+        // Split by tabs
+        const columns = line.split('\t');
+        if (columns.length < 2) continue;
+        
+        const firstName = columns[0].trim();
+        const lastName = columns[1].trim();
+        
+        if (!firstName || !lastName) continue;
+        
+        totalCount++;
+        
+        // Check for exact name matches
+        const exactMatch = people.find(p => 
+          p.firstName.toLowerCase() === firstName.toLowerCase() && 
+          p.lastName.toLowerCase() === lastName.toLowerCase()
+        );
+        
+        if (exactMatch) {
+          existingCount++;
+        }
+      }
+      
+      // If most people are existing, this is likely an update operation
+      const isUpdateOperation = totalCount > 0 && (existingCount / totalCount) >= 0.8;
+      
+      // Reset duplicates array for the actual analysis
+      const actualDuplicates: Array<{firstName: string, lastName: string, reason: string}> = [];
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        // Skip header row
+        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+          continue;
+        }
+        
+        // Split by tabs
+        const columns = line.split('\t');
+        if (columns.length < 2) continue;
+        
+        const firstName = columns[0].trim();
+        const lastName = columns[1].trim();
+        
+        if (!firstName || !lastName) continue;
+        
+        // Check for exact name matches
+        const exactMatch = people.find(p => 
+          p.firstName.toLowerCase() === firstName.toLowerCase() && 
+          p.lastName.toLowerCase() === lastName.toLowerCase()
+        );
+        
+        // Only flag exact matches as duplicates if this is NOT an update operation
+        if (exactMatch && !isUpdateOperation) {
+          actualDuplicates.push({
+            firstName,
+            lastName,
+            reason: 'Exact name match found'
+          });
+          continue;
+        }
+        
+        // Check for similar names (fuzzy matching) - but not exact matches
+        const similarMatches = people.filter(p => {
+          const firstNameSimilar = p.firstName.toLowerCase().includes(firstName.toLowerCase()) || 
+                                  firstName.toLowerCase().includes(p.firstName.toLowerCase());
+          const lastNameSimilar = p.lastName.toLowerCase().includes(lastName.toLowerCase()) || 
+                                lastName.toLowerCase().includes(p.lastName.toLowerCase());
+          
+          // Don't include exact matches in similar matches
+          const isExactMatch = p.firstName.toLowerCase() === firstName.toLowerCase() && 
+                              p.lastName.toLowerCase() === lastName.toLowerCase();
+          
+          return firstNameSimilar && lastNameSimilar && !isExactMatch;
+        });
+        
+        if (similarMatches.length > 0) {
+          actualDuplicates.push({
+            firstName,
+            lastName,
+            reason: `Similar names found: ${similarMatches.map(p => `${p.firstName} ${p.lastName}`).join(', ')}`
+          });
+        }
+      }
+      
+      setPotentialDuplicates(actualDuplicates);
+    } catch (error) {
+      console.error('Error analyzing TSV for duplicates:', error);
+      setPotentialDuplicates([]);
+    }
+  }, [people]);
+
+  // Helper function to analyze TSV data and determine what changes will be made
+  const analyzeTSVData = useCallback((tsvData: string) => {
+    if (!tsvData || people.length === 0 || gatheringTypes.length === 0) {
+      setTsvAnalysis(null);
+      return;
+    }
+
+    try {
+      const lines = tsvData.trim().split('\n');
+      let newPeople = 0;
+      let existingPeople = 0;
+      let totalRows = 0;
+      const unknownGatherings = new Set<string>();
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        // Skip header row
+        if (i === 0 && (line.toLowerCase().includes('first') || line.toLowerCase().includes('name'))) {
+          continue;
+        }
+        
+        // Split by tabs
+        const columns = line.split('\t');
+        if (columns.length < 2) continue;
+        
+        const firstName = columns[0].trim();
+        const lastName = columns[1].trim();
+        const gatherings = columns[3]?.trim() || '';
+        
+        if (!firstName || !lastName) continue;
+        
+        totalRows++;
+        
+        // Check if person exists
+        const existingPerson = people.find(p => 
+          p.firstName.toLowerCase() === firstName.toLowerCase() && 
+          p.lastName.toLowerCase() === lastName.toLowerCase()
+        );
+        
+        if (existingPerson) {
+          existingPeople++;
+        } else {
+          newPeople++;
+        }
+        
+        // Check for unknown gatherings
+        if (gatherings) {
+          const gatheringNames = gatherings.split(',').map(g => g.trim()).filter(g => g);
+          for (const gatheringName of gatheringNames) {
+            const gatheringExists = gatheringTypes.some(gt => 
+              gt.name.toLowerCase() === gatheringName.toLowerCase()
+            );
+            if (!gatheringExists) {
+              unknownGatherings.add(gatheringName);
+            }
+          }
+        }
+      }
+      
+      setTsvAnalysis({
+        newPeople,
+        existingPeople,
+        unknownGatherings: Array.from(unknownGatherings),
+        totalRows
+      });
+    } catch (error) {
+      console.error('Error analyzing TSV data:', error);
+      setTsvAnalysis(null);
+    }
+  }, [people, gatheringTypes]);
+
   // Helper function to get optimized display name
   const getPersonDisplayName = (person: Person, familyName?: string) => {
     // If person has a family and their last name matches the family surname, show only first name
@@ -191,6 +591,11 @@ const PeoplePage: React.FC = () => {
     }
     
     // Default to full name
+    return `${person.firstName} ${person.lastName}`;
+  };
+
+  // Helper function to get full display name (always shows surname)
+  const getFullPersonDisplayName = (person: Person) => {
     return `${person.firstName} ${person.lastName}`;
   };
 
@@ -242,6 +647,17 @@ const PeoplePage: React.FC = () => {
       setSelectedFamily(null);
     }
   }, [searchParams, families, people]); // Include families and people to ensure data is loaded
+
+  // Analyze TSV data for potential duplicates and changes when data changes
+  useEffect(() => {
+    if (csvData) {
+      analyzeTSVForDuplicates(csvData);
+      analyzeTSVData(csvData);
+    } else {
+      setPotentialDuplicates([]);
+      setTsvAnalysis(null);
+    }
+  }, [csvData, analyzeTSVForDuplicates, analyzeTSVData]);
 
   const loadPeople = async () => {
     try {
@@ -321,49 +737,74 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const handleCSVUpload = async () => {
+    const handleCSVUpload = async () => {
     try {
       setIsLoading(true);
       setError('');
       
-      // Convert CSV data string to a File object
-      const csvBlob = new Blob([csvData], { type: 'text/csv' });
-      const csvFile = new File([csvBlob], 'upload.csv', { type: 'text/csv' });
+      console.log('TSV data:', csvData);
+      console.log('TSV Analysis:', tsvAnalysis);
       
-      console.log('Uploading CSV file:', csvFile);
-      console.log('Selected gathering ID:', selectedGatheringId);
+      let response;
       
-      // Use the gathering ID if selected, otherwise upload without assignment
-      const response = selectedGatheringId 
-        ? await csvImportAPI.upload(selectedGatheringId, csvFile)
-        : await csvImportAPI.copyPaste(csvData);
+      // Automatically determine whether to add new people or update existing ones
+      // If there are existing people in the TSV, use update mode; otherwise use new mode
+      if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
+        // Handle updates to existing people
+        console.log('Processing TSV for updates - found existing people');
+        response = await csvImportAPI.updateExisting(csvData);
+      } else {
+        // Handle new people upload (existing logic)
+        const csvBlob = new Blob([csvData], { type: 'text/tsv' });
+        const csvFile = new File([csvBlob], 'upload.tsv', { type: 'text/tsv' });
+        
+        console.log('Uploading TSV file for new people:', csvFile);
+        
+        // Upload without assignment since we're handling gatherings in the TSV
+        response = await csvImportAPI.copyPaste(csvData);
+      }
       
       setShowAddModal(false);
       setCsvData('');
       setSelectedGatheringId(null);
+      setUploadMode('new');
       
       // Show success message
-      const successMessage = response.data.message || `Import completed! Imported: ${response.data.imported} people, Families: ${response.data.families}, Duplicates: ${response.data.duplicates}, Skipped: ${response.data.skipped}`;
+      let successMessage;
+      if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
+        successMessage = response.data.message || `Update completed! Updated: ${response.data.updated}, Not Found: ${response.data.notFound}, Skipped: ${response.data.skipped}`;
+      } else {
+        successMessage = response.data.message || `Import completed! Imported: ${response.data.imported} people, Families: ${response.data.families}, Duplicates: ${response.data.duplicates}, Skipped: ${response.data.skipped}`;
+      }
       showSuccess(successMessage);
       
       // Log detailed information for debugging
       if (response.data.details) {
         console.log('Import details:', response.data.details);
-        if (response.data.details.duplicates && response.data.details.duplicates.length > 0) {
-          console.log('Duplicates found:', response.data.details.duplicates);
-        }
-        if (response.data.details.imported && response.data.details.imported.length > 0) {
-          console.log('Successfully imported:', response.data.details.imported);
+        if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
+          if (response.data.details.filter(r => r.status === 'updated').length > 0) {
+            console.log('Successfully updated:', response.data.details.filter(r => r.status === 'updated'));
+          }
+          if (response.data.details.filter(r => r.status === 'not_found').length > 0) {
+            console.log('Not found:', response.data.details.filter(r => r.status === 'not_found'));
+          }
+        } else {
+          if (response.data.details.duplicates && response.data.details.duplicates.length > 0) {
+            console.log('Duplicates found:', response.data.details.duplicates);
+          }
+          if (response.data.details.imported && response.data.details.imported.length > 0) {
+            console.log('Successfully imported:', response.data.details.imported);
+          }
         }
       }
       
       // Reload people after upload
       await loadPeople();
     } catch (err: any) {
-      console.error('CSV upload error:', err);
+      console.error('TSV upload error:', err);
       console.error('Error response:', err.response?.data);
       
-      let errorMessage = 'Failed to upload CSV';
+      let errorMessage = 'Failed to upload TSV';
       if (err.response?.data?.error) {
         errorMessage = err.response.data.error;
       } else if (err.message) {
@@ -835,58 +1276,95 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const addFamilyMember = () => {
-    const newMember = {firstName: '', lastName: ''};
-    if (useSameSurname && familyMembers.length > 0) {
-      newMember.lastName = familyMembers[0].lastName;
-    }
-    const updatedMembers = [...familyMembers, newMember];
-    setFamilyMembers(updatedMembers);
-    updateFamilyNameFromMembers(updatedMembers);
-  };
-
-  const removeFamilyMember = (index: number) => {
-    if (familyMembers.length > 1) {
-      const updatedMembers = familyMembers.filter((_, i) => i !== index);
-      setFamilyMembers(updatedMembers);
-      updateFamilyNameFromMembers(updatedMembers);
-    }
-  };
-
-  const updateFamilyMember = (index: number, field: 'firstName' | 'lastName', value: string) => {
-    const updatedMembers = [...familyMembers];
-    updatedMembers[index][field] = value;
-    setFamilyMembers(updatedMembers);
-    
-    // Auto-generate family name
-    updateFamilyNameFromMembers(updatedMembers);
-    
-    // Apply same surname to all members if checkbox is checked
-    if (field === 'lastName' && useSameSurname && index === 0) {
-      updatedMembers.forEach((member, i) => {
-        if (i > 0) {
-          member.lastName = value;
+  const addPerson = () => {
+    setAddPeopleForm(prev => {
+      const newPerson = { 
+        firstName: '', 
+        lastName: '', 
+        lastNameUnknown: false, 
+        fillLastNameFromAbove: true // Default to checked for subsequent people
+      };
+      
+      // Auto-fill surname from first person if they have one
+      if (prev.persons.length > 0) {
+        const firstPerson = prev.persons[0];
+        if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
+          newPerson.lastName = firstPerson.lastName;
         }
-      });
-      setFamilyMembers(updatedMembers);
-      updateFamilyNameFromMembers(updatedMembers);
-    }
+      }
+      
+      return {
+        ...prev,
+        persons: [...prev.persons, newPerson]
+      };
+    });
+  };
+
+  const removePerson = (index: number) => {
+    setAddPeopleForm(prev => ({
+      ...prev,
+      persons: prev.persons.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updatePerson = (index: number, updates: Partial<PersonForm>) => {
+    setAddPeopleForm(prev => {
+      const newPersons = [...prev.persons];
+      newPersons[index] = { ...newPersons[index], ...updates };
+      
+      // Handle last name unknown checkbox
+      if (updates.lastNameUnknown !== undefined) {
+        newPersons[index].lastName = updates.lastNameUnknown ? '' : newPersons[index].lastName;
+        // If setting to unknown, also uncheck fill from above
+        if (updates.lastNameUnknown) {
+          newPersons[index].fillLastNameFromAbove = false;
+        }
+      }
+      
+      // Handle fill from above checkbox
+      if (updates.fillLastNameFromAbove !== undefined) {
+        if (updates.fillLastNameFromAbove && index > 0) {
+          // Fill from first person's last name
+          const firstPerson = newPersons[0];
+          if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
+            newPersons[index].lastName = firstPerson.lastName;
+            newPersons[index].lastNameUnknown = false;
+          }
+        }
+        // If unchecking fill from above, don't clear the name (let user decide)
+      }
+      
+      // If updating first person's last name, update all others who have fillLastNameFromAbove checked
+      if (index === 0 && updates.lastName !== undefined) {
+        for (let i = 1; i < newPersons.length; i++) {
+          if (newPersons[i].fillLastNameFromAbove && !newPersons[i].lastNameUnknown) {
+            newPersons[i].lastName = updates.lastName;
+          }
+        }
+      }
+      
+      return { ...prev, persons: newPersons };
+    });
   };
 
   // Memoized family name computation to avoid recomputes on frequent handler invocations
   const computedFamilyName = useMemo(() => {
-    const validMembers = familyMembers.filter(member => member.firstName.trim() && member.lastName.trim());
+    const validMembers = addPeopleForm.persons.filter(member => 
+      member.firstName.trim() && 
+      (member.lastName.trim() || member.lastNameUnknown)
+    );
     
     if (validMembers.length === 0) {
       return '';
     }
     
     if (validMembers.length === 1) {
-      return `${validMembers[0].lastName}, ${validMembers[0].firstName}`;
+      const lastName = validMembers[0].lastNameUnknown ? 'Unknown' : validMembers[0].lastName;
+      return `${lastName}, ${validMembers[0].firstName}`;
     }
     
     // Multiple members: "SURNAME, Person1 and Person2" (limit to first two people for consistency)
-    const surname = validMembers[0].lastName;
+    const surname = validMembers[0].lastNameUnknown ? 'Unknown' : validMembers[0].lastName;
     // Only include the first two people's first names for consistency
     const firstNames = validMembers.slice(0, 2).map(member => member.firstName);
     
@@ -903,64 +1381,132 @@ const PeoplePage: React.FC = () => {
         return `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
       }
     }
-  }, [familyMembers]);
+  }, [addPeopleForm.persons]);
 
-  // Use shared utility to generate family name and update local state
-  const updateFamilyNameFromMembers = useCallback((members: Array<{firstName: string, lastName: string}>) => {
-    const generated = generateFamilyName(members);
-    setFamilyName(generated);
-  }, []);
 
-  const handleCombinedFamilyPerson = async () => {
+  const handleAddPeople = async () => {
     try {
       setIsLoading(true);
       setError('');
       
-      // Validate that all members have names
-      const validMembers = familyMembers.filter(member => 
-        member.firstName.trim() && member.lastName.trim()
-      );
-      
-      if (validMembers.length === 0) {
-        setError('Please enter at least one family member');
+      // Validate form
+      for (const person of addPeopleForm.persons) {
+        if (!person.firstName.trim()) {
+          setError('First name is required for all persons');
         return;
       }
-      
-      if (!familyName.trim()) {
-        setError('Family name is required');
+        if (!person.lastName.trim() && !person.lastNameUnknown) {
+          setError('Last name is required for all persons (or check "Unknown")');
         return;
+        }
       }
-      
-      console.log('Creating family with name:', familyName);
-      console.log('Valid members:', validMembers);
-      
-      // Create family first
+
+      // Build people array
+      const people = addPeopleForm.persons.map(person => ({
+        firstName: person.firstName.trim(),
+        lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
+        firstUnknown: false,
+        lastUnknown: person.lastNameUnknown,
+        isChild: false // No distinction
+      }));
+
+      const notes = addPeopleForm.notes.trim();
+      const familyName = computedFamilyName;
+
+      let response;
+      // Choose endpoint based on person type
+      if (addPeopleForm.personType === 'regular') {
+        // Create regular family
       const familyResponse = await familiesAPI.create({
-        familyName: familyName.trim()
+          familyName: familyName
+        });
+        
+        // Create individuals and assign to family
+        const individualPromises = people.map(person => 
+          individualsAPI.create({
+            firstName: person.firstName,
+            lastName: person.lastName,
+            familyId: familyResponse.data.familyId
+          })
+        );
+        
+        await Promise.all(individualPromises);
+        
+        // Assign to selected gatherings
+        const selectedGatheringIds = Object.keys(addPeopleForm.selectedGatherings)
+          .filter(gatheringId => addPeopleForm.selectedGatherings[parseInt(gatheringId)])
+          .map(gatheringId => parseInt(gatheringId));
+        
+        if (selectedGatheringIds.length > 0) {
+          const individualIds = await Promise.all(
+            people.map(async (person) => {
+              const individualResponse = await individualsAPI.create({
+                firstName: person.firstName,
+                lastName: person.lastName,
+                familyId: familyResponse.data.familyId
+              });
+              return individualResponse.data.individualId;
+            })
+          );
+          
+          // Assign all individuals to selected gatherings
+          for (const gatheringId of selectedGatheringIds) {
+            await csvImportAPI.massAssign(gatheringId, individualIds);
+          }
+        }
+        
+        response = { data: { individuals: people.map((person, index) => ({ 
+          firstName: person.firstName, 
+          lastName: person.lastName,
+          id: index + 1 // Temporary ID for display
+        })) } };
+      } else {
+        // Create visitor family
+        const familyResponse = await familiesAPI.createVisitorFamily({
+          familyName,
+          peopleType: addPeopleForm.personType,
+          notes: notes ? notes : undefined,
+          people
+        });
+        
+        response = { data: { individuals: people.map((person, index) => ({ 
+          firstName: person.firstName, 
+          lastName: person.lastName,
+          id: index + 1 // Temporary ID for display
+        })) } };
+      }
+
+      // Show success toast
+      if (response.data.individuals && response.data.individuals.length > 0) {
+        const names = response.data.individuals.map((ind: { firstName: string; lastName: string }) => `${ind.firstName} ${ind.lastName}`).join(', ');
+        const personTypeText = addPeopleForm.personType === 'regular' ? 'Added regular family' : 'Added visitor family';
+        showSuccess(`${personTypeText}: ${names}`);
+      } else {
+        showSuccess('Added successfully');
+      }
+
+      // Reset form
+      setAddPeopleForm({
+        personType: 'regular',
+        notes: '',
+        persons: [{
+          firstName: '',
+          lastName: '',
+          lastNameUnknown: false,
+          fillLastNameFromAbove: false
+        }],
+        selectedGatherings: {}
       });
       
-      console.log('Family created successfully:', familyResponse.data);
-      
-      const familyId = familyResponse.data.id;
-      
-      // Add all family members
-      for (const member of validMembers) {
-        console.log('Creating individual:', member);
-        await individualsAPI.create({
-          firstName: member.firstName.trim(),
-          lastName: member.lastName.trim(),
-          familyId: familyId
-        });
-      }
-      
-      showSuccess(`Added ${validMembers.length} family member${validMembers.length > 1 ? 's' : ''} to ${familyName}`);
+      // Close modal
       setShowAddModal(false);
-      await loadPeople();
-      await loadFamilies();
+      
+      // Reload data
+      await loadData();
+      
     } catch (err: any) {
-      console.error('Error creating family:', err);
-      console.error('Error response:', err.response?.data);
-      setError(err.response?.data?.error || 'Failed to add family members');
+      console.error('Failed to add people:', err);
+      setError(err.response?.data?.error || 'Failed to add people');
     } finally {
       setIsLoading(false);
     }
@@ -1130,20 +1676,6 @@ const PeoplePage: React.FC = () => {
 
   // removed: updateMassEditData
 
-  const handleUseSameSurnameChange = useCallback((checked: boolean) => {
-    setUseSameSurname(checked);
-    if (checked && familyMembers[0].lastName.trim()) {
-      // Fill in all other surnames with the first person's surname
-      const updatedMembers = [...familyMembers];
-      updatedMembers.forEach((member, i) => {
-        if (i > 0) {
-          member.lastName = familyMembers[0].lastName;
-        }
-      });
-      setFamilyMembers(updatedMembers);
-      updateFamilyNameFromMembers(updatedMembers);
-    }
-  }, [familyMembers, updateFamilyNameFromMembers]);
 
   // removed: handleUpdatePeopleFamilies
 
@@ -1262,6 +1794,44 @@ const PeoplePage: React.FC = () => {
     setShowMergeModal(true);
   };
 
+  const downloadPeopleTSV = () => {
+    try {
+      // Create TSV content
+      const headers = ['First Name', 'Last Name', 'Family Name', 'Gatherings'];
+      const rows = people.map(person => {
+        const gatherings = person.gatheringAssignments?.map(g => g.name).join(', ') || '';
+        return [
+          person.firstName,
+          person.lastName,
+          person.familyName || '',
+          gatherings
+        ];
+      });
+
+      // Convert to TSV format
+      const tsvContent = [
+        headers.join('\t'),
+        ...rows.map(row => row.join('\t'))
+      ].join('\n');
+
+      // Create and download file
+      const blob = new Blob([tsvContent], { type: 'text/tab-separated-values' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `people-export-${new Date().toISOString().split('T')[0]}.tsv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showSuccess('People data exported successfully');
+    } catch (error) {
+      console.error('Error exporting people data:', error);
+      setError('Failed to export people data');
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -1284,7 +1854,15 @@ const PeoplePage: React.FC = () => {
                 Manage all people and families in your church
               </p>
             </div>
-
+            {people.length > 0 && (
+              <button
+                onClick={downloadPeopleTSV}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                <DocumentTextIcon className="h-4 w-4 mr-2" />
+                Export People
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1400,72 +1978,75 @@ const PeoplePage: React.FC = () => {
       />
 
       {/* Family Editor Modal */}
-      <FamilyEditorModal
-        isOpen={showFamilyEditorModal}
-        onClose={() => setShowFamilyEditorModal(false)}
-        familyEditor={familyEditor}
-        setFamilyEditor={setFamilyEditor}
-        people={people}
-        onSave={async () => {
-          try {
-            setIsLoading(true);
-            setError('');
+      {showFamilyEditorModal ? createPortal(
+        <FamilyEditorModal
+          isOpen={showFamilyEditorModal}
+          onClose={() => setShowFamilyEditorModal(false)}
+          familyEditor={familyEditor}
+          setFamilyEditor={setFamilyEditor}
+          people={people}
+          onSave={async () => {
+            try {
+              setIsLoading(true);
+              setError('');
 
-            // Update family name/type
-            await familiesAPI.update(familyEditor.familyId, {
-              familyName: familyEditor.familyName.trim() || undefined,
-              familyType: familyEditor.familyType,
-            });
+              // Update family name/type
+              await familiesAPI.update(familyEditor.familyId, {
+                familyName: familyEditor.familyName.trim() || undefined,
+                familyType: familyEditor.familyType,
+              });
 
-            // Determine current members of this family from people
-            const currentMembersArr = people.filter(p => p.familyId === familyEditor.familyId).map(p => p.id);
-            const desiredMembersArr = [...familyEditor.memberIds];
+              // Determine current members of this family from people
+              const currentMembersArr = people.filter(p => p.familyId === familyEditor.familyId).map(p => p.id);
+              const desiredMembersArr = [...familyEditor.memberIds];
 
-            const peopleMap = new Map(people.map(p => [p.id, p]));
+              const peopleMap = new Map(people.map(p => [p.id, p]));
 
-            // Add new members
-            for (const id of desiredMembersArr) {
-              if (currentMembersArr.indexOf(id) === -1) {
+              // Add new members
+              for (const id of desiredMembersArr) {
+                if (currentMembersArr.indexOf(id) === -1) {
+                  const p = peopleMap.get(id);
+                  if (!p) continue;
+                  await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
+                }
+              }
+
+              // Remove members not desired
+              for (const id of currentMembersArr) {
+                if (desiredMembersArr.indexOf(id) === -1) {
+                  const p = peopleMap.get(id);
+                  if (!p) continue;
+                  await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: undefined });
+                }
+              }
+
+              // Propagate family type to all desired members (enforce rule)
+              for (const id of desiredMembersArr) {
                 const p = peopleMap.get(id);
                 if (!p) continue;
                 await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
               }
-            }
 
-            // Remove members not desired
-            for (const id of currentMembersArr) {
-              if (desiredMembersArr.indexOf(id) === -1) {
-                const p = peopleMap.get(id);
-                if (!p) continue;
-                await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: undefined });
+              // If family became empty, delete it
+              if (desiredMembersArr.length === 0) {
+                await familiesAPI.delete(familyEditor.familyId);
               }
-            }
 
-            // Propagate family type to all desired members (enforce rule)
-            for (const id of desiredMembersArr) {
-              const p = peopleMap.get(id);
-              if (!p) continue;
-              await individualsAPI.update(id, { firstName: p.firstName, lastName: p.lastName, familyId: familyEditor.familyId, peopleType: familyEditor.familyType });
+              showSuccess('Family updated');
+              setShowFamilyEditorModal(false);
+              await loadPeople();
+              await loadFamilies();
+            } catch (err: any) {
+              setError(err.response?.data?.error || 'Failed to update family');
+            } finally {
+              setIsLoading(false);
             }
-
-            // If family became empty, delete it
-            if (desiredMembersArr.length === 0) {
-              await familiesAPI.delete(familyEditor.familyId);
-            }
-
-            showSuccess('Family updated');
-            setShowFamilyEditorModal(false);
-            await loadPeople();
-            await loadFamilies();
-          } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to update family');
-          } finally {
-            setIsLoading(false);
-          }
-        }}
-        error={error}
-        isLoading={isLoading}
-      />
+          }}
+          error={error}
+          isLoading={isLoading}
+        />,
+        document.body
+      ) : null}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-md p-4">
           <div className="flex">
@@ -1601,8 +2182,14 @@ const PeoplePage: React.FC = () => {
                        {(() => {
                          const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
                          const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
+                         const hasRegular = group.members.some((m: Person) => m.peopleType === 'regular');
                          return (
                            <>
+                             {hasRegular && (
+                               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                 Regular
+                               </span>
+                             )}
                              {hasLocalVisitor && (
                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                                  Local Visitor
@@ -1662,138 +2249,102 @@ const PeoplePage: React.FC = () => {
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                    {group.members.map((person: Person) => {
-                      const displayName = getPersonDisplayName(person, group.familyName);
-                      const needsWideLayout = shouldUseWideLayout(displayName);
-                      
-                      return (
-                        <div
-                          key={person.id}
-                          className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                            selectedPeople.includes(person.id)
-                              ? 'border-primary-500 bg-primary-50'
-                              : 'border-gray-200 hover:border-gray-300'
-                          } ${needsWideLayout ? 'col-span-2' : ''}`}
-                          onClick={() => togglePersonSelection(person.id)}
-                        >
-                        <div className="flex items-center space-x-3 flex-1 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={selectedPeople.includes(person.id)}
-                            onChange={() => togglePersonSelection(person.id)}
-                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium text-gray-900 truncate">
-                              {displayName}
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                            </div>
-                            {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                              <div className="flex items-center space-x-1 mt-1">
-                                {person.gatheringAssignments.map(gathering => (
-                                  <div
-                                    key={gathering.id}
-                                    className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                    title={gathering.name}
-                                  ></div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <ActionMenu
-                          items={[
-                            {
-                              label: 'Edit',
-                              icon: <PencilIcon className="h-4 w-4" />,
-                              onClick: () => handleEditPerson(person)
-                            },
-                            {
-                              label: 'Archive',
-                              icon: <TrashIcon className="h-4 w-4" />,
-                              onClick: () => archivePerson(person.id),
-                              className: 'text-red-600 hover:bg-red-50'
-                            }
-                          ]}
-                        />
-                      </div>
-                    );
-                    })}
+                                                 {group.members.map((person: Person) => {
+                               const displayName = getPersonDisplayName(person, group.familyName);
+                               const needsWideLayout = shouldUseWideLayout(displayName);
+
+                               return (
+                                 <div
+                                   key={person.id}
+                                   className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
+                                     selectedPeople.includes(person.id)
+                                       ? 'border-primary-500 bg-primary-50'
+                                       : 'border-gray-200 hover:border-gray-300'
+                                   } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                   onClick={() => togglePersonSelection(person.id)}
+                                 >
+                                   <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                     <input
+                                       type="checkbox"
+                                       checked={selectedPeople.includes(person.id)}
+                                       onChange={() => togglePersonSelection(person.id)}
+                                       className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                       onClick={(e) => e.stopPropagation()}
+                                     />
+                                     <div className="flex-1 min-w-0">
+                                       <div className="flex items-center space-x-2">
+                                         <span className="text-sm font-medium text-gray-900 truncate">
+                                           {displayName}
+                                         </span>
+                                         <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
+                                       </div>
+                                       <div className="text-xs text-gray-500">
+                                         {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
+                                       </div>
+                                       {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                         <div className="flex items-center space-x-1 mt-1">
+                                           {person.gatheringAssignments.map(gathering => (
+                                             <div
+                                               key={gathering.id}
+                                               className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                               title={gathering.name}
+                                             ></div>
+                                           ))}
+                                         </div>
+                                       )}
+                                     </div>
+                                   </div>
+
+                                 </div>
+                               );
+                             })}
                   </div>
                 </div>
               ))}
             </div>
           ) : (
             // Individual view (not grouped by family)
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {filteredIndividualPeople.map((person: Person) => {
-                const displayName = getPersonDisplayName(person); // No family context in individual view
-                const needsWideLayout = shouldUseWideLayout(displayName);
-                
-                return (
-                  <div
-                    key={person.id}
-                    className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                      selectedPeople.includes(person.id)
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    } ${needsWideLayout ? 'col-span-2' : ''}`}
-                    onClick={() => togglePersonSelection(person.id)}
-                  >
-                  <div className="flex items-center space-x-3 flex-1 min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={selectedPeople.includes(person.id)}
-                      onChange={() => togglePersonSelection(person.id)}
-                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">
-                        {displayName}
-                      </div>
-                      {person.familyName && (
-                        <div className="text-xs text-gray-500 truncate">
-                          Family: {person.familyName}
-                        </div>
-                      )}
-                      <div className="text-xs text-gray-500">
-                        {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                      </div>
-                      {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                        <div className="flex items-center space-x-1 mt-1">
-                          {person.gatheringAssignments.map(gathering => (
-                            <div
-                              key={gathering.id}
-                              className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                              title={gathering.name}
-                            ></div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <ActionMenu
-                    items={[
-                      {
-                        label: 'Edit',
-                        icon: <PencilIcon className="h-4 w-4" />,
-                        onClick: () => handleEditPerson(person)
-                      },
-                      {
-                        label: 'Archive',
-                        icon: <TrashIcon className="h-4 w-4" />,
-                        onClick: () => archivePerson(person.id),
-                        className: 'text-red-600 hover:bg-red-50'
-                      }
-                    ]}
-                  />
-                </div>
-              );
-              })}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                                     {filteredIndividualPeople.map((person: Person) => {
+                         const displayName = getPersonDisplayName(person); // No family context in individual view
+                         const needsWideLayout = shouldUseWideLayout(displayName);
+
+                         return (
+                           <div
+                             key={person.id}
+                             className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                               selectedPeople.includes(person.id)
+                                 ? 'border-primary-500 bg-primary-50'
+                                 : 'hover:bg-gray-50'
+                             } ${needsWideLayout ? 'col-span-2' : ''}`}
+                             onClick={() => togglePersonSelection(person.id)}
+                           >
+                             <div className="flex items-center space-x-3">
+                               <input
+                                 type="checkbox"
+                                 checked={selectedPeople.includes(person.id)}
+                                 onChange={() => togglePersonSelection(person.id)}
+                                 className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                 onClick={(e) => e.stopPropagation()}
+                               />
+                               <div className="flex items-center space-x-2">
+                                 <span className="text-sm font-medium text-gray-900">{displayName}</span>
+                                 {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                   <div className="flex items-center space-x-1">
+                                     {person.gatheringAssignments.map(gathering => (
+                                       <div
+                                         key={gathering.id}
+                                         className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                         title={gathering.name}
+                                       ></div>
+                                     ))}
+                                   </div>
+                                 )}
+                               </div>
+                             </div>
+                           </div>
+                         );
+                       })}
             </div>
           )}
         </div>
@@ -1805,7 +2356,7 @@ const PeoplePage: React.FC = () => {
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg leading-6 font-medium text-gray-900">
-                Visitors ({people.filter(p => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor').length})
+                Visitors ({recentVisitorGroups.flatMap(g => g.members).length + olderVisitorGroups.flatMap(g => g.members).length})
               </h3>
               <button
                 onClick={() => setShowVisitorConfig(!showVisitorConfig)}
@@ -1887,167 +2438,11 @@ const PeoplePage: React.FC = () => {
               {recentVisitorGroups.length > 0 && (
                 <>
                   <h4 className="text-md font-medium text-gray-800">Recent (based on configured service limits)</h4>
-                  {recentVisitorGroups
-                .map((group: any) => (
-                  <div key={`visitor-${group.familyId || 'individuals'}`} data-family-id={group.familyId} className="border border-gray-200 rounded-lg p-4">
-                    {group.familyName && (
-                      <div className="flex justify-between items-center mb-3">
-                        <div className="flex items-center space-x-2">
-                          <h4 className="text-md font-medium text-gray-900">
-                            {(() => {
-                              // Convert surname to uppercase: "SURNAME, firstname and firstname"
-                              const parts = group.familyName.split(', ');
-                              if (parts.length >= 2) {
-                                return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
-                              }
-                              return group.familyName;
-                            })()}
-                          </h4>
-                          {(() => {
-                            const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
-                            const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
-                            return (
-                              <>
-                                {hasLocalVisitor && (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                    Local Visitor
-                                  </span>
-                                )}
-                                {hasTravellerVisitor && (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 ml-2">
-                                    Traveller Visitor
-                                  </span>
-                                )}
-                              </>
-                            );
-                          })()}
-                          <button
-                            onClick={() => handleOpenNotes(group)}
-                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                            title="Family Notes"
-                          >
-                            <DocumentTextIcon className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              const fam = families.find(f => f.id === group.familyId);
-                              setFamilyEditor({
-                                familyId: group.familyId,
-                                familyName: group.familyName,
-                                familyType: fam?.familyType || 'regular',
-                                memberIds: group.members.map((m: Person) => m.id),
-                                addMemberQuery: ''
-                              });
-                              setShowFamilyEditorModal(true);
-                            }}
-                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                            title="Family Settings"
-                          >
-                            <PencilIcon className="h-4 w-4" />
-                          </button>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm text-gray-500">
-                            {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
-                          </span>
-                          <input
-                            type="checkbox"
-                            checked={group.members.every((person: Person) => selectedPeople.includes(person.id))}
-                            onChange={() => {
-                              const allSelected = group.members.every((person: Person) => selectedPeople.includes(person.id));
-                              if (allSelected) {
-                                setSelectedPeople(prev => prev.filter(id => !group.members.map((p: Person) => p.id).includes(id)));
-                              } else {
-                                setSelectedPeople(prev => [...prev, ...group.members.map((p: Person) => p.id)]);
-                              }
-                            }}
-                            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                          />
-                        </div>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                      {group.members.map((person: Person) => {
-                        const displayName = getPersonDisplayName(person, group.familyName);
-                        const needsWideLayout = shouldUseWideLayout(displayName);
-                        
-                        return (
-                          <div
-                            key={person.id}
-                            className={`flex items-center justify-between p-3 rounded-md border-2 ${
-                              selectedPeople.includes(person.id)
-                                ? 'border-primary-500 bg-primary-50'
-                                : 'border-gray-200 hover:border-gray-300'
-                            } ${needsWideLayout ? 'col-span-2' : ''}`}
-                          >
-                          <div className="flex items-center space-x-3 flex-1 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={selectedPeople.includes(person.id)}
-                              onChange={() => togglePersonSelection(person.id)}
-                              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium text-gray-900 truncate">
-                                {displayName}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                              </div>
-                              {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                <div className="flex items-center space-x-1 mt-1">
-                                  {person.gatheringAssignments.map(gathering => (
-                                    <div
-                                      key={gathering.id}
-                                      className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                      title={gathering.name}
-                                    ></div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          <ActionMenu
-                            items={[
-                              {
-                                label: 'Edit',
-                                icon: <PencilIcon className="h-4 w-4" />,
-                                onClick: () => handleEditPerson(person)
-                              },
-                                {
-                                  label: 'Archive',
-                                  icon: <TrashIcon className="h-4 w-4" />,
-                                  onClick: () => archivePerson(person.id),
-                                  className: 'text-red-600 hover:bg-red-50'
-                                }
-                            ]}
-                          />
-                        </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  ))}
-                </>
-              )}
-
-              {/* Less recently attended visitors (suggested word: Infrequent) */}
-              {olderVisitorGroups.length > 0 && (
-                <div className="mt-6">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-md font-medium text-gray-800">Infrequent</h4>
-                    <button
-                      type="button"
-                      onClick={() => setShowArchivedVisitors(v => !v)}
-                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
-                    >
-                      {showArchivedVisitors ? 'Hide' : `Show (${olderVisitorGroups.reduce((acc, g) => acc + g.members.length, 0)})`}
-                    </button>
-                  </div>
-                  {showArchivedVisitors && (
-                    <div className="space-y-4 mt-3">
-                      {olderVisitorGroups.map((group: any) => (
-                        <div key={`older-visitor-${group.familyId || 'individuals'}`} data-family-id={group.familyId} className="border border-gray-200 rounded-lg p-4">
+                  {groupByFamily ? (
+                    // Grouped by family view
+                    <div className="space-y-4">
+                      {recentVisitorGroups.map((group: any) => (
+                        <div key={`recent-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
                           {group.familyName && (
                             <div className="flex justify-between items-center mb-3">
                               <div className="flex items-center space-x-2">
@@ -2060,6 +2455,51 @@ const PeoplePage: React.FC = () => {
                                     return group.familyName;
                                   })()}
                                 </h4>
+                                {(() => {
+                                  const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
+                                  const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
+                                  return (
+                                    <>
+                                      {hasLocalVisitor && (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                          Local Visitor
+                                        </span>
+                                      )}
+                                      {hasTravellerVisitor && (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                          Traveller Visitor
+                                        </span>
+                                      )}
+                                    </>
+                                  );
+                                })()}
+                                <button
+                                  onClick={() => handleOpenNotes(group)}
+                                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                  title="Family Notes"
+                                >
+                                  <DocumentTextIcon className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const familyId = group.familyId;
+                                    if (familyId) {
+                                      setFamilyEditor({
+                                        familyId,
+                                        familyName: group.familyName || '',
+                                        familyType: group.members.some((m: Person) => m.peopleType === 'local_visitor') ? 'local_visitor' : 
+                                                   group.members.some((m: Person) => m.peopleType === 'traveller_visitor') ? 'traveller_visitor' : 'regular',
+                                        memberIds: group.members.map((m: Person) => m.id),
+                                        addMemberQuery: ''
+                                      });
+                                      setShowFamilyEditorModal(true);
+                                    }
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                  title="Family Settings"
+                                >
+                                  <PencilIcon className="h-4 w-4" />
+                                </button>
                               </div>
                               <div className="flex items-center space-x-2">
                                 <span className="text-sm text-gray-500">
@@ -2081,7 +2521,7 @@ const PeoplePage: React.FC = () => {
                               </div>
                             </div>
                           )}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                             {group.members.map((person: Person) => {
                               const displayName = getPersonDisplayName(person, group.familyName);
                               const needsWideLayout = shouldUseWideLayout(displayName);
@@ -2089,28 +2529,258 @@ const PeoplePage: React.FC = () => {
                               return (
                                 <div
                                   key={person.id}
-                                  className={`flex items-center justify-between p-3 rounded-md border-2 ${
+                                  className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
                                     selectedPeople.includes(person.id)
                                       ? 'border-primary-500 bg-primary-50'
-                                      : 'border-gray-200 hover:border-gray-300'
+                                      : 'hover:bg-gray-50'
                                   } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                  onClick={() => togglePersonSelection(person.id)}
                                 >
-                                <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                  <div className="flex items-center space-x-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedPeople.includes(person.id)}
+                                      onChange={() => togglePersonSelection(person.id)}
+                                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center space-x-2">
+                                        <span className="text-sm font-medium text-gray-900 truncate">
+                                          {displayName}
+                                        </span>
+                                        <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
+                                      </div>
+                                      {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                        <div className="flex items-center space-x-1 mt-1">
+                                          {person.gatheringAssignments.map(gathering => (
+                                            <div
+                                              key={gathering.id}
+                                              className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                              title={gathering.name}
+                                            ></div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    // Individual view
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                      {recentVisitorGroups.flatMap((group: any) => 
+                        group.members.map((person: Person) => {
+                          const displayName = getFullPersonDisplayName(person);
+                          const needsWideLayout = shouldUseWideLayout(displayName);
+                          
+                          return (
+                            <div
+                              key={person.id}
+                              className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                                selectedPeople.includes(person.id)
+                                  ? 'border-primary-500 bg-primary-50'
+                                  : 'hover:bg-gray-50'
+                              } ${needsWideLayout ? 'col-span-2' : ''}`}
+                              onClick={() => togglePersonSelection(person.id)}
+                            >
+                              <div className="flex items-center space-x-3">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedPeople.includes(person.id)}
+                                  onChange={() => togglePersonSelection(person.id)}
+                                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-sm font-medium text-gray-900">{displayName}</span>
+                                  {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                    <div className="flex items-center space-x-1">
+                                      {person.gatheringAssignments.map(gathering => (
+                                        <div
+                                          key={gathering.id}
+                                          className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                          title={gathering.name}
+                                        ></div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Less recently attended visitors (suggested word: Infrequent) */}
+              {olderVisitorGroups.length > 0 && (
+                <div className="mt-6">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-md font-medium text-gray-800">Infrequent</h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowArchivedVisitors(v => !v)}
+                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                    >
+                      {showArchivedVisitors ? 'Hide' : `Show (${olderVisitorGroups.reduce((acc, g) => acc + g.members.length, 0)})`}
+                    </button>
+                  </div>
+                  {showArchivedVisitors && (
+                    groupByFamily ? (
+                      // Grouped by family view
+                      <div className="space-y-4 mt-3">
+                        {olderVisitorGroups.map((group: any) => (
+                          <div key={`older-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
+                            {group.familyName && (
+                              <div className="flex justify-between items-center mb-3">
+                                <div className="flex items-center space-x-2">
+                                  <h4 className="text-md font-medium text-gray-900">
+                                    {(() => {
+                                      const parts = group.familyName.split(', ');
+                                      if (parts.length >= 2) {
+                                        return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
+                                      }
+                                      return group.familyName;
+                                    })()}
+                                  </h4>
+                                  <button
+                                    onClick={() => handleOpenNotes(group)}
+                                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="Family Notes"
+                                  >
+                                    <DocumentTextIcon className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const familyId = group.familyId;
+                                      if (familyId) {
+                                        setFamilyEditor({
+                                          familyId,
+                                          familyName: group.familyName || '',
+                                          familyType: group.members.some((m: Person) => m.peopleType === 'local_visitor') ? 'local_visitor' : 
+                                                     group.members.some((m: Person) => m.peopleType === 'traveller_visitor') ? 'traveller_visitor' : 'regular',
+                                          memberIds: group.members.map((m: Person) => m.id),
+                                          addMemberQuery: ''
+                                        });
+                                        setShowFamilyEditorModal(true);
+                                      }
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="Family Settings"
+                                  >
+                                    <PencilIcon className="h-4 w-4" />
+                                  </button>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-sm text-gray-500">
+                                    {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
+                                  </span>
+                                  <input
+                                    type="checkbox"
+                                    checked={group.members.every((person: Person) => selectedPeople.includes(person.id))}
+                                    onChange={() => {
+                                      const allSelected = group.members.every((person: Person) => selectedPeople.includes(person.id));
+                                      if (allSelected) {
+                                        setSelectedPeople(prev => prev.filter(id => !group.members.map((p: Person) => p.id).includes(id)));
+                                      } else {
+                                        setSelectedPeople(prev => [...prev, ...group.members.map((p: Person) => p.id)]);
+                                      }
+                                    }}
+                                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                              {group.members.map((person: Person) => {
+                                const displayName = getPersonDisplayName(person, group.familyName);
+                                const needsWideLayout = shouldUseWideLayout(displayName);
+                                
+                                return (
+                                  <div
+                                    key={person.id}
+                                    className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                                      selectedPeople.includes(person.id)
+                                        ? 'border-primary-500 bg-primary-50'
+                                        : 'hover:bg-gray-50'
+                                    } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                    onClick={() => togglePersonSelection(person.id)}
+                                  >
+                                    <div className="flex items-center space-x-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedPeople.includes(person.id)}
+                                        onChange={() => togglePersonSelection(person.id)}
+                                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center space-x-2">
+                                          <span className="text-sm font-medium text-gray-900 truncate">
+                                            {displayName}
+                                          </span>
+                                          <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
+                                        </div>
+                                        {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
+                                          <div className="flex items-center space-x-1 mt-1">
+                                            {person.gatheringAssignments.map(gathering => (
+                                              <div
+                                                key={gathering.id}
+                                                className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                                title={gathering.name}
+                                              ></div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      // Individual view
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mt-3">
+                        {olderVisitorGroups.flatMap((group: any) => 
+                          group.members.map((person: Person) => {
+                            const displayName = getFullPersonDisplayName(person);
+                            const needsWideLayout = shouldUseWideLayout(displayName);
+                            
+                            return (
+                              <div
+                                key={person.id}
+                                className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                                  selectedPeople.includes(person.id)
+                                    ? 'border-primary-500 bg-primary-50'
+                                    : 'hover:bg-gray-50'
+                                } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                onClick={() => togglePersonSelection(person.id)}
+                              >
+                                <div className="flex items-center space-x-3">
                                   <input
                                     type="checkbox"
                                     checked={selectedPeople.includes(person.id)}
                                     onChange={() => togglePersonSelection(person.id)}
                                     className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                    onClick={(e) => e.stopPropagation()}
                                   />
-                                  <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-medium text-gray-900 truncate">
-                                      {displayName}
-                                    </div>
-                                    <div className="text-xs text-gray-500">
-                                      {person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
-                                    </div>
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-sm font-medium text-gray-900">{displayName}</span>
                                     {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                      <div className="flex items-center space-x-1 mt-1">
+                                      <div className="flex items-center space-x-1">
                                         {person.gatheringAssignments.map(gathering => (
                                           <div
                                             key={gathering.id}
@@ -2120,30 +2790,15 @@ const PeoplePage: React.FC = () => {
                                         ))}
                                       </div>
                                     )}
+                                    <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                   </div>
                                 </div>
-                                <ActionMenu
-                                  items={[
-                                    {
-                                      label: 'Edit',
-                                      icon: <PencilIcon className="h-4 w-4" />,
-                                      onClick: () => handleEditPerson(person)
-                                    },
-                                    {
-                                      label: 'Archive',
-                                      icon: <TrashIcon className="h-4 w-4" />,
-                                      onClick: () => archivePerson(person.id),
-                                      className: 'text-red-600 hover:bg-red-50'
-                                    }
-                                  ]}
-                                />
                               </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )
                   )}
                 </div>
               )}
@@ -2182,7 +2837,7 @@ const PeoplePage: React.FC = () => {
                         {displayName}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {person.peopleType === 'regular' ? 'Regular' : person.peopleType === 'local_visitor' ? 'Local Visitor' : 'Traveller Visitor'}
+                        {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
                       </div>
                     </div>
                     <ActionMenu
@@ -2217,7 +2872,7 @@ const PeoplePage: React.FC = () => {
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
                   {addModalMode === 'person' && 'Add New People'}
-                  {addModalMode === 'csv' && 'Upload CSV File'}
+                  {addModalMode === 'csv' && 'Upload TSV File'}
                   {addModalMode === 'copy-paste' && 'Copy & Paste Data'}
                 </h3>
                 <button
@@ -2249,7 +2904,7 @@ const PeoplePage: React.FC = () => {
                         : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                     }`}
                   >
-                    CSV Upload
+                    TSV Upload
                   </button>
                   <button
                     onClick={() => setAddModalMode('copy-paste')}
@@ -2281,7 +2936,7 @@ const PeoplePage: React.FC = () => {
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                     }`}
                   >
-                    CSV Upload
+                    TSV Upload
                   </button>
                   <button
                     onClick={() => setAddModalMode('copy-paste')}
@@ -2302,94 +2957,200 @@ const PeoplePage: React.FC = () => {
                 </div>
               )}
 
-                            {/* Combined Family/Person Form */}
+                            {/* Add People Form */}
               {addModalMode === 'person' && (
-                <div className="space-y-6">
+                <form onSubmit={(e) => { e.preventDefault(); handleAddPeople(); }} className="space-y-4">
+                  {/* Person Type Selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Person Type
+                    </label>
+                    <div className="flex space-x-4">
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="personType"
+                          value="regular"
+                          checked={addPeopleForm.personType === 'regular'}
+                          onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-900">Regular Member</span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="personType"
+                          value="local_visitor"
+                          checked={addPeopleForm.personType === 'local_visitor'}
+                          onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="radio"
+                          name="personType"
+                          value="traveller_visitor"
+                          checked={addPeopleForm.personType === 'traveller_visitor'}
+                          onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                        />
+                        <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
+                      </label>
+                    </div>
+                  </div>
 
-                  {/* Individual Person Edit Form */}
-                  {/* Removed inline edit person form - now using MassEditModal for all edits */}
-
-                  {/* Family Members Form */}
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-medium text-gray-700">Family Members</h4>
-                  
-                  {familyMembers.map((member, index) => (
-                    <div key={index} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h5 className="text-sm font-medium text-gray-700">
-                          Person {index + 1}
-                        </h5>
-                        {familyMembers.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeFamilyMember(index)}
-                            className="text-red-600 hover:text-red-800 text-sm"
-                          >
-                            Remove
-                          </button>
-                        )}
+                  {/* Gathering Assignments - only for regular members */}
+                  {addPeopleForm.personType === 'regular' && gatheringTypes.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Assign to Gatherings (Optional)
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {gatheringTypes.map((gathering) => (
+                          <label key={gathering.id} className="flex items-center">
+                            <input
+                              type="checkbox"
+                              checked={addPeopleForm.selectedGatherings[gathering.id] || false}
+                              onChange={(e) => setAddPeopleForm({
+                                ...addPeopleForm,
+                                selectedGatherings: {
+                                  ...addPeopleForm.selectedGatherings,
+                                  [gathering.id]: e.target.checked
+                                }
+                              })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
+                          </label>
+                        ))}
                       </div>
+                    </div>
+                  )}
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Persons List */}
                         <div>
+                    <div className="flex items-center justify-between mb-2">
                           <label className="block text-sm font-medium text-gray-700">
-                            First Name *
+                        Family Members (up to 10)
+                      </label>
+                    </div>
+                    {addPeopleForm.persons.map((person, index) => (
+                      <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200' : ''}`}>
+                        <div>
+                          <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700">
+                            First Name {index + 1}
                           </label>
                           <input
+                            id={`personFirstName-${index}`}
                             type="text"
-                            value={member.firstName}
-                            onChange={(e) => updateFamilyMember(index, 'firstName', e.target.value)}
+                            value={person.firstName}
+                            onChange={(e) => updatePerson(index, { firstName: e.target.value })}
                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             placeholder="First name"
                             required
                           />
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">
-                            Last Name *
+                        <div className="relative">
+                          <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700">
+                            Last Name {index + 1}
                           </label>
                           <input
+                            id={`personLastName-${index}`}
                             type="text"
-                            value={member.lastName}
-                            onChange={(e) => updateFamilyMember(index, 'lastName', e.target.value)}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            value={person.lastName}
+                            onChange={(e) => updatePerson(index, { lastName: e.target.value })}
+                            disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
                             placeholder="Last name"
-                            required
                           />
+                          <div className="flex flex-col space-y-1 mt-1">
+                            {/* For person 1 or any person: Unknown checkbox */}
+                            <div className="flex items-center">
+                              <input
+                                id={`personLastNameUnknown-${index}`}
+                                type="checkbox"
+                                checked={person.lastNameUnknown}
+                                onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                                Unknown
+                              </label>
                         </div>
-                      </div>
-                    </div>
-                  ))}
-                  
-                  {/* Same Surname Checkbox */}
-                  {familyMembers.length > 1 && (
-                    <div className="flex items-center space-x-2">
+                            {/* For person 2+: Fill from above checkbox */}
+                            {index > 0 && (
+                              <div className="flex items-center">
                       <input
+                                  id={`personFillLastName-${index}`}
                         type="checkbox"
-                        checked={useSameSurname}
-                        onChange={(e) => handleUseSameSurnameChange(e.target.checked)}
-                        disabled={!familyMembers[0].lastName.trim()}
-                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
-                      />
-                      <span 
-                        className={`text-sm ${!familyMembers[0].lastName.trim() ? 'text-gray-400' : 'text-gray-700'}`}
-                        title={!familyMembers[0].lastName.trim() ? "Requires first member's last name to be set" : ""}
-                      >
-                        Use same surname for all family members
-                      </span>
+                                  checked={person.fillLastNameFromAbove}
+                                  onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
+                                  disabled={person.lastNameUnknown}
+                                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                                />
+                                <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                                  Fill from above
+                                </label>
                     </div>
                   )}
-                  
-                  {/* Add Another Family Member Button */}
+                          </div>
+                          {index > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => removePerson(index)}
+                              className="absolute top-0 right-0 text-sm text-red-600 hover:text-red-700"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Add Another Person button */}
+                  {addPeopleForm.persons.length < 10 && (
+                    <div>
                   <button
                     type="button"
-                    onClick={addFamilyMember}
-                    className="w-full py-2 px-4 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
+                        onClick={addPerson}
+                        className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200"
                   >
-                    + Add Another Family Member
+                        <PlusIcon className="h-4 w-4 mr-2" />
+                        Add Another Person
                   </button>
                 </div>
+                  )}
+
+                  {/* Help text for regular attendees */}
+                  {addPeopleForm.personType === 'regular' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                      <div className="text-sm text-blue-700">
+                        <strong>Adding Regular Members:</strong> This will add the people to your People list. 
+                        You can optionally assign them to specific gatherings.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Notes field - only for visitors */}
+                  {(addPeopleForm.personType === 'local_visitor' || addPeopleForm.personType === 'traveller_visitor') && (
+                    <div>
+                      <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                        Notes
+                      </label>
+                      <textarea
+                        id="notes"
+                        value={addPeopleForm.notes}
+                        onChange={(e) => setAddPeopleForm({ ...addPeopleForm, notes: e.target.value })}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        placeholder="Any additional notes (optional)"
+                        rows={3}
+                      />
+                    </div>
+                  )}
                   
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
@@ -2400,28 +3161,147 @@ const PeoplePage: React.FC = () => {
                       Cancel
                     </button>
                     <button
-                      onClick={handleCombinedFamilyPerson}
-                      className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                      type="submit"
+                      className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
                     >
                       Add People
                     </button>
                   </div>
-                </div>
+                </form>
               )}
 
               
 
-              {/* CSV Upload Form */}
+              {/* TSV Upload Form */}
               {addModalMode === 'csv' && (
                 <div className="space-y-4">
+                  {/* Automatic Change Detection */}
+                  {tsvAnalysis && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div className="ml-3">
+                          <h3 className="text-sm font-medium text-blue-800">
+                            Upload Analysis
+                          </h3>
+                          <div className="mt-2 text-sm text-blue-700">
+                            <p>Found {tsvAnalysis.totalRows} rows in your TSV file:</p>
+                            <ul className="mt-2 space-y-1">
+                              {tsvAnalysis.newPeople > 0 && (
+                                <li className="flex items-center">
+                                  <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                                  <span className="font-medium text-green-800">{tsvAnalysis.newPeople} new people</span> will be added
+                                </li>
+                              )}
+                              {tsvAnalysis.existingPeople > 0 && (
+                                <li className="flex items-center">
+                                  <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
+                                  <span className="font-medium text-blue-800">{tsvAnalysis.existingPeople} existing people</span> will be updated
+                                </li>
+                              )}
+                            </ul>
+                            {tsvAnalysis.unknownGatherings.length > 0 && (
+                              <div className="mt-3 p-2 bg-yellow-100 rounded border border-yellow-300">
+                                <p className="font-medium text-yellow-800">⚠️ Unknown gatherings found:</p>
+                                <p className="text-yellow-700 text-xs mt-1">
+                                  {tsvAnalysis.unknownGatherings.join(', ')} - these will be ignored
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* New People Warning */}
+                  {tsvAnalysis && tsvAnalysis.newPeople > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                    </div>
+                        <div className="ml-3">
+                          <h3 className="text-sm font-medium text-amber-800">
+                            Adding New People
+                          </h3>
+                          <div className="mt-2 text-sm text-amber-700">
+                            <p>
+                              <strong>{tsvAnalysis.newPeople} new people</strong> will be added to your system. 
+                              Make sure these are not duplicates of existing people.
+                            </p>
+                  </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Duplication Warning */}
+                  {potentialDuplicates.length > 0 && (
+                    <div className={`border rounded-md p-4 ${
+                      potentialDuplicates.length > 5 
+                        ? 'bg-red-50 border-red-200' 
+                        : 'bg-yellow-50 border-yellow-200'
+                    }`}>
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <svg className={`h-5 w-5 ${
+                            potentialDuplicates.length > 5 ? 'text-red-400' : 'text-yellow-400'
+                          }`} viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div className="ml-3">
+                          <h3 className={`text-sm font-medium ${
+                            potentialDuplicates.length > 5 ? 'text-red-800' : 'text-yellow-800'
+                          }`}>
+                            {potentialDuplicates.length > 5 ? 'High Risk of Duplication!' : 'Potential Duplication Warning'}
+                          </h3>
+                          <div className={`mt-2 text-sm ${
+                            potentialDuplicates.length > 5 ? 'text-red-700' : 'text-yellow-700'
+                          }`}>
+                                <p className={`font-medium mb-2 ${
+                                  potentialDuplicates.length > 5 ? 'text-red-800' : 'text-yellow-800'
+                                }`}>
+                                  ⚠️ Potential duplicates detected in your TSV:
+                                </p>
+                                <div className={`rounded p-2 max-h-32 overflow-y-auto ${
+                                  potentialDuplicates.length > 5 ? 'bg-red-100' : 'bg-yellow-100'
+                                }`}>
+                                  {potentialDuplicates.map((dup, index) => (
+                                    <div key={index} className={`text-xs mb-1 ${
+                                      potentialDuplicates.length > 5 ? 'text-red-800' : 'text-yellow-800'
+                                    }`}>
+                                      <strong>{dup.firstName} {dup.lastName}</strong>: {dup.reason}
+                                    </div>
+                                  ))}
+                                </div>
+                            
+                            {potentialDuplicates.length > 5 && (
+                              <p className="mt-2 font-bold text-red-800">
+                                🚨 HIGH RISK: {potentialDuplicates.length} potential duplicates detected!
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700">
-                      Select CSV File
+                      Select TSV File
                     </label>
                     <input
                       id="csvFile"
                       type="file"
-                      accept=".csv"
+                      accept=".tsv,.txt,.csv"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) {
@@ -2453,7 +3333,7 @@ const PeoplePage: React.FC = () => {
 
                   <div className="text-sm text-gray-500">
                     <div className="flex items-center justify-between flex-wrap gap-2">
-                      <p>Expected CSV format:</p>
+                      <p>Expected TSV format:</p>
                       <a
                         href="/api/csv-import/template"
                         className="ml-4 inline-flex items-center text-primary-600 hover:text-primary-700 font-medium"
@@ -2461,27 +3341,44 @@ const PeoplePage: React.FC = () => {
                         Download template
                       </a>
                     </div>
-                    <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200 whitespace-pre-wrap break-words overflow-x-auto">{`FIRST NAME,LAST NAME,FAMILY NAME
-John,Smith,"Smith, John and Sarah"
-Sarah,Smith,"Smith, John and Sarah"`}</pre>
+                    <div className="mt-1 bg-gray-50 p-3 rounded border border-gray-200 overflow-x-auto">
+                      <table className="w-full text-xs font-mono">
+                        <thead>
+                          <tr className="border-b border-gray-300">
+                            <th className="text-left py-1 px-2 font-semibold text-gray-700">FIRST NAME</th>
+                            <th className="text-left py-1 px-2 font-semibold text-gray-700">LAST NAME</th>
+                            <th className="text-left py-1 px-2 font-semibold text-gray-700">FAMILY NAME</th>
+                            <th className="text-left py-1 px-2 font-semibold text-gray-700">GATHERINGS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="py-1 px-2">John</td>
+                            <td className="py-1 px-2">Smith</td>
+                            <td className="py-1 px-2">Smith, John and Sarah</td>
+                            <td className="py-1 px-2">
+                              {gatheringTypes.length >= 2 
+                                ? `${gatheringTypes[0].name}, ${gatheringTypes[1].name}`
+                                : gatheringTypes.length === 1 
+                                  ? gatheringTypes[0].name
+                                  : 'Sunday Service, Bible Study'
+                              }
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="py-1 px-2">Sarah</td>
+                            <td className="py-1 px-2">Smith</td>
+                            <td className="py-1 px-2">Smith, John and Sarah</td>
+                            <td className="py-1 px-2">
+                              {gatheringTypes.length >= 1 
+                                ? gatheringTypes[0].name
+                                : 'Sunday Service'
+                              }
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                   </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Assign to Service (Optional)
-                    </label>
-                    <select
-                      value={selectedGatheringId || ''}
-                      onChange={(e) => setSelectedGatheringId(e.target.value ? parseInt(e.target.value) : null)}
-                      className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    >
-                      <option value="">Don't assign to any service</option>
-                      {gatheringTypes.map(gathering => (
-                        <option key={gathering.id} value={gathering.id}>
-                          {gathering.name}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                   
                   <div className="flex justify-end space-x-3 pt-4">
@@ -2521,30 +3418,56 @@ Sarah,Smith,"Smith, John and Sarah"`}</pre>
                   </div>
 
                  <div className="text-sm text-gray-500">
+                   <div className="flex items-center justify-between flex-wrap gap-2">
                    <p>Expected format (tab or comma separated):</p>
-                   <pre className="font-mono text-xs mt-1 bg-gray-50 p-2 rounded border border-gray-200 whitespace-pre-wrap break-words overflow-x-auto">FIRST NAME  LAST NAME  FAMILY NAME
-John        Smith      Smith, John and Sarah
-Sarah       Smith      Smith, John and Sarah</pre>
-                   <p className="mt-2 text-xs">Copy rows from Excel/Google Sheets with columns: FIRST NAME, LAST NAME, FAMILY NAME.</p>
+                     <a
+                       href="/api/csv-import/template"
+                       className="ml-4 inline-flex items-center text-primary-600 hover:text-primary-700 font-medium"
+                     >
+                       Download template
+                     </a>
+                   </div>
+                   <div className="mt-1 bg-gray-50 border border-gray-200 rounded overflow-hidden">
+                     <table className="w-full text-xs">
+                       <thead className="bg-gray-100">
+                         <tr>
+                           <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FIRST NAME</th>
+                           <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">LAST NAME</th>
+                           <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FAMILY NAME</th>
+                           <th className="px-2 py-1 text-left font-medium text-gray-700">GATHERINGS</th>
+                         </tr>
+                       </thead>
+                       <tbody className="font-mono">
+                         <tr>
+                           <td className="px-2 py-1 border-r border-gray-200">John</td>
+                           <td className="px-2 py-1 border-r border-gray-200">Smith</td>
+                           <td className="px-2 py-1 border-r border-gray-200">Smith, John and Sarah</td>
+                           <td className="px-2 py-1">
+                             {gatheringTypes.length >= 2 
+                               ? `${gatheringTypes[0].name}, ${gatheringTypes[1].name}`
+                               : gatheringTypes.length === 1 
+                                 ? gatheringTypes[0].name
+                                 : 'Sunday Service, Bible Study'
+                             }
+                           </td>
+                         </tr>
+                         <tr>
+                           <td className="px-2 py-1 border-r border-gray-200">Sarah</td>
+                           <td className="px-2 py-1 border-r border-gray-200">Smith</td>
+                           <td className="px-2 py-1 border-r border-gray-200">Smith, John and Sarah</td>
+                           <td className="px-2 py-1">
+                             {gatheringTypes.length >= 1 
+                               ? gatheringTypes[0].name
+                               : 'Sunday Service'
+                             }
+                           </td>
+                         </tr>
+                       </tbody>
+                     </table>
+                   </div>
+                   <p className="mt-2 text-xs">Copy rows from Excel/Google Sheets with columns: FIRST NAME, LAST NAME, FAMILY NAME, GATHERINGS.</p>
                  </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Assign to Service (Optional)
-                    </label>
-                    <select
-                      value={selectedGatheringId || ''}
-                      onChange={(e) => setSelectedGatheringId(e.target.value ? parseInt(e.target.value) : null)}
-                      className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    >
-                      <option value="">Don't assign to any service</option>
-                      {gatheringTypes.map(gathering => (
-                        <option key={gathering.id} value={gathering.id}>
-                          {gathering.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                   
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
@@ -2909,7 +3832,7 @@ Sarah       Smith      Smith, John and Sarah</pre>
                     familyInput, 
                     selectedFamilyId, 
                     newFamilyName: '', 
-                    firstName: '', // Always empty for multiple people
+                    firstName: selectedPeople.length === 1 ? selectedPeopleData[0].firstName : '', // Only show for single person
                     lastName, // Show if all have same last name
                     peopleType, // Show if all have same type
                     assignments,
@@ -2925,7 +3848,27 @@ Sarah       Smith      Smith, John and Sarah</pre>
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
-           {isAdmin && (
+           {/* Archive Button - Always shown when people are selected */}
+           <div className="flex items-center justify-end space-x-3">
+             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                Archive Selected
+             </div>
+             <button
+                onClick={() => {
+                  // Archive all selected people
+                  selectedPeople.forEach(personId => {
+                    archivePerson(personId);
+                  });
+                }}
+               className="w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                title="Archive Selected"
+             >
+               <TrashIcon className="h-6 w-6" />
+             </button>
+           </div>
+           
+           {/* Merge Button - Only shown for 2+ people and admin users */}
+           {isAdmin && selectedPeople.length >= 2 && (
                <div className="flex items-center justify-end space-x-3">
                  <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
                   Merge

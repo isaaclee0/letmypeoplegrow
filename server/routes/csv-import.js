@@ -213,19 +213,45 @@ router.post('/upload/:gatheringId',
   }
 );
 
-// Get CSV template
-router.get('/template', (req, res) => {
-  const templatePath = path.join(__dirname, '../../import_template.csv');
-  
-  if (fs.existsSync(templatePath)) {
-    res.download(templatePath, 'attendance_import_template.csv');
-  } else {
-    // Fallback: generate template content
-    const csvContent = '"FIRST NAME","LAST NAME","FAMILY NAME"\n"John","Smith","SMITH, John and Jane"\n"Jane","Smith","SMITH, John and Jane"\n"Michael","Johnson","JOHNSON, Michael"';
+// Get TSV template
+router.get('/template', verifyToken, async (req, res) => {
+  try {
+    // Get all gathering types for this church
+    const gatherings = await Database.query(`
+      SELECT name FROM gathering_types 
+      WHERE church_id = ? 
+      ORDER BY name
+    `, [req.user.church_id]);
     
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="attendance_import_template.csv"');
-    res.send(csvContent);
+    // Create gathering names list for examples
+    const gatheringNames = gatherings.map(g => g.name);
+    
+    // Generate template content with actual gatherings
+    let tsvContent = 'FIRST NAME\tLAST NAME\tFAMILY NAME\tGATHERINGS\n';
+    
+    if (gatheringNames.length > 0) {
+      // Create example rows with actual gathering names
+      const exampleGatherings1 = gatheringNames.slice(0, 2).join(', ');
+      const exampleGatherings2 = gatheringNames[0] || 'Sunday Service';
+      const exampleGatherings3 = gatheringNames.length > 1 ? gatheringNames[1] : gatheringNames[0] || 'Bible Study';
+      
+      tsvContent += `John\tSmith\tSmith, John and Jane\t${exampleGatherings1}\n`;
+      tsvContent += `Jane\tSmith\tSmith, John and Jane\t${exampleGatherings2}\n`;
+      tsvContent += `Michael\tJohnson\tJohnson, Michael\t${exampleGatherings3}`;
+    } else {
+      // Fallback if no gatherings exist
+      tsvContent += 'John\tSmith\tSmith, John and Jane\tSunday Service, Bible Study\n';
+      tsvContent += 'Jane\tSmith\tSmith, John and Jane\tSunday Service\n';
+      tsvContent += 'Michael\tJohnson\tJohnson, Michael\tBible Study';
+    }
+    
+    res.setHeader('Content-Type', 'text/tab-separated-values');
+    res.setHeader('Content-Disposition', 'attachment; filename="people_import_template.tsv"');
+    res.send(tsvContent);
+    
+  } catch (error) {
+    console.error('Error generating template:', error);
+    res.status(500).json({ error: 'Failed to generate template' });
   }
 });
 
@@ -316,21 +342,21 @@ router.post('/copy-paste/:gatheringId?',
         if (cleanColumns.length >= 2) {
           const firstName = cleanColumns[0];
           const lastName = cleanColumns[1];
-          // Join any remaining columns as family name if a naive split occurred (safety)
-          let familyName = cleanColumns.slice(2).join(delimiter === '\t' ? '\t' : delimiter).trim();
+          const familyName = cleanColumns[2] || '';
+          const gatherings = cleanColumns[3] || '';
           
-          // Ensure any remaining quotes in family name are stripped
-          if (familyName) {
-            familyName = familyName.replace(/^["']+|["']+$/g, '').trim();
-          }
+          // Ensure any remaining quotes are stripped
+          const cleanFamilyName = familyName.replace(/^["']+|["']+$/g, '').trim();
+          const cleanGatherings = gatherings.replace(/^["']+|["']+$/g, '').trim();
           
-          console.log('Parsed row:', { firstName, lastName, familyName });
+          console.log('Parsed row:', { firstName, lastName, familyName: cleanFamilyName, gatherings: cleanGatherings });
           
           if (firstName && lastName) {
             results.push({
               'FIRST NAME': firstName,
               'LAST NAME': lastName,
-              'FAMILY NAME': familyName
+              'FAMILY NAME': cleanFamilyName,
+              'GATHERINGS': cleanGatherings
             });
           } else {
             console.log('Skipping row - missing first or last name');
@@ -358,6 +384,8 @@ router.post('/copy-paste/:gatheringId?',
           const firstName = sanitizeString(row['FIRST NAME']);
           const lastName = sanitizeString(row['LAST NAME']);
           let familyName = sanitizeString(row['FAMILY NAME']);
+          const gatherings = sanitizeString(row['GATHERINGS'] || '');
+          
           if (familyName) {
             // Strip any remaining quotes from family name
             familyName = familyName.replace(/^["']+|["']+$/g, '').trim();
@@ -444,12 +472,53 @@ router.post('/copy-paste/:gatheringId?',
             VALUES (?, ?, ?, ?, ?)
           `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
 
-          // Add to gathering list if gatheringId provided
+          // Add to gathering list if gatheringId provided (legacy support)
           if (gatheringId) {
             await conn.query(`
               INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
               VALUES (?, ?, ?, ?)
             `, [gatheringId, Number(individualResult.insertId), req.user.id, req.user.church_id]);
+          }
+
+          // Handle gatherings from TSV data
+          if (gatherings && gatherings.trim()) {
+            const gatheringNames = gatherings.split(',').map(g => g.trim()).filter(g => g);
+            const gatheringIds = [];
+            const unknownGatherings = [];
+            
+            for (const gatheringName of gatheringNames) {
+              // Try exact match first
+              let gathering = await conn.query(`
+                SELECT id FROM gathering_types WHERE LOWER(name) = LOWER(?) AND church_id = ?
+              `, [gatheringName, req.user.church_id]);
+              
+              // If no exact match, try partial match (case-insensitive)
+              if (gathering.length === 0) {
+                gathering = await conn.query(`
+                  SELECT id FROM gathering_types WHERE LOWER(name) LIKE LOWER(?) AND church_id = ?
+                `, [`%${gatheringName}%`, req.user.church_id]);
+              }
+              
+              if (gathering.length > 0) {
+                gatheringIds.push(gathering[0].id);
+              } else {
+                console.log(`Gathering not found: ${gatheringName}`);
+                unknownGatherings.push(gatheringName);
+              }
+            }
+            
+            // Add to gathering lists
+            for (const gatheringId of gatheringIds) {
+              await conn.query(`
+                INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+                VALUES (?, ?, ?, ?)
+              `, [gatheringId, Number(individualResult.insertId), req.user.id, req.user.church_id]);
+            }
+            
+            // Log unknown gatherings
+            if (unknownGatherings.length > 0) {
+              console.log(`Unknown gatherings for ${firstName} ${lastName}:`, unknownGatherings);
+            }
           }
 
           individuals.push({
@@ -751,6 +820,243 @@ router.put('/mass-update-people-type',
     } catch (error) {
       console.error('Mass update people type error:', error);
       res.status(500).json({ error: 'Failed to update people type' });
+    }
+  }
+);
+
+// Update existing people's gathering assignments from TSV
+router.post('/update-existing',
+  requireRole(['admin', 'coordinator']),
+  createSecurityRateLimit(15 * 60 * 1000, 10), // 10 updates per 15 minutes
+  auditLog('UPDATE_EXISTING_PEOPLE'),
+  async (req, res) => {
+    const { data } = req.body;
+    
+    if (!data || typeof data !== 'string') {
+      return res.status(400).json({ error: 'Data is required' });
+    }
+
+    try {
+      console.log('Received update TSV data:', data);
+      
+      // Parse TSV data
+      const lines = data.trim().split('\n');
+      const results = [];
+      
+      console.log('Parsed lines:', lines.length);
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        console.log(`Processing line ${i + 1}:`, line);
+        
+        // Helper: split a line by delimiter while respecting quotes
+        const splitRespectingQuotes = (text, delimiter) => {
+          const cols = [];
+          let current = '';
+          let inQuotes = false;
+          for (let idx = 0; idx < text.length; idx++) {
+            const ch = text[idx];
+            if (ch === '"') {
+              // Toggle quotes unless escaped by double quote
+              if (inQuotes && text[idx + 1] === '"') {
+                current += '"';
+                idx++; // skip escaped quote
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (ch === delimiter && !inQuotes) {
+              cols.push(current);
+              current = '';
+            } else {
+              current += ch;
+            }
+          }
+          cols.push(current);
+          return cols;
+        };
+
+        // Split by tabs while respecting quotes
+        const columns = splitRespectingQuotes(line, '\t');
+        
+        console.log('Raw columns:', columns);
+        
+        // Clean up columns (remove wrapping quotes, trim whitespace)
+        const cleanColumns = columns.map(col => {
+          let v = col.trim();
+          if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith('\'') && v.endsWith('\''))) {
+            v = v.slice(1, -1);
+          }
+          return v.trim();
+        });
+        
+        console.log('Clean columns:', cleanColumns);
+        
+        // Skip header row if it looks like headers
+        if (i === 0 && (cleanColumns[0].toLowerCase().includes('first') || 
+                       cleanColumns[0].toLowerCase().includes('name'))) {
+          console.log('Skipping header row');
+          continue;
+        }
+        
+        // Expect: First Name, Last Name, Family Name, Gatherings
+        if (cleanColumns.length < 4) {
+          console.log(`Line ${i + 1} has insufficient columns:`, cleanColumns);
+          continue;
+        }
+        
+        const firstName = cleanColumns[0];
+        const lastName = cleanColumns[1];
+        const familyName = cleanColumns[2];
+        const gatherings = cleanColumns[3];
+        
+        if (!firstName || !lastName) {
+          console.log(`Line ${i + 1} missing first or last name:`, { firstName, lastName });
+          continue;
+        }
+        
+        // Find the existing individual
+        const existingIndividual = await Database.query(`
+          SELECT i.id, i.first_name, i.last_name, f.family_name
+          FROM individuals i
+          LEFT JOIN families f ON i.family_id = f.id
+          WHERE LOWER(i.first_name) = LOWER(?) AND LOWER(i.last_name) = LOWER(?) AND i.church_id = ?
+        `, [firstName, lastName, req.user.church_id]);
+        
+        if (existingIndividual.length === 0) {
+          console.log(`Individual not found: ${firstName} ${lastName}`);
+          results.push({
+            firstName,
+            lastName,
+            familyName,
+            gatherings,
+            status: 'not_found',
+            reason: 'Person not found in database'
+          });
+          continue;
+        }
+        
+        const individual = existingIndividual[0];
+        
+        // Parse gatherings (comma-separated, handle quoted values)
+        const gatheringNames = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let j = 0; j < gatherings.length; j++) {
+          const char = gatherings[j];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            const name = current.trim();
+            if (name) gatheringNames.push(name);
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        
+        // Add the last gathering name
+        const lastName = current.trim();
+        if (lastName) gatheringNames.push(lastName);
+        
+        if (gatheringNames.length === 0) {
+          console.log(`No gatherings specified for: ${firstName} ${lastName}`);
+          results.push({
+            firstName,
+            lastName,
+            familyName,
+            gatherings,
+            status: 'skipped',
+            reason: 'No gatherings specified'
+          });
+          continue;
+        }
+        
+        // Find gathering IDs by name (order-independent matching)
+        const gatheringIds = [];
+        const unknownGatherings = [];
+        
+        for (const gatheringName of gatheringNames) {
+          // Try exact match first
+          let gathering = await Database.query(`
+            SELECT id FROM gathering_types WHERE LOWER(name) = LOWER(?) AND church_id = ?
+          `, [gatheringName, req.user.church_id]);
+          
+          // If no exact match, try partial match (case-insensitive)
+          if (gathering.length === 0) {
+            gathering = await Database.query(`
+              SELECT id FROM gathering_types WHERE LOWER(name) LIKE LOWER(?) AND church_id = ?
+            `, [`%${gatheringName}%`, req.user.church_id]);
+          }
+          
+          if (gathering.length > 0) {
+            gatheringIds.push(gathering[0].id);
+          } else {
+            console.log(`Gathering not found: ${gatheringName}`);
+            unknownGatherings.push(gatheringName);
+          }
+        }
+        
+        if (gatheringIds.length === 0) {
+          console.log(`No valid gatherings found for: ${firstName} ${lastName}`);
+          results.push({
+            firstName,
+            lastName,
+            familyName,
+            gatherings,
+            status: 'skipped',
+            reason: 'No valid gatherings found',
+            unknownGatherings: unknownGatherings
+          });
+          continue;
+        }
+        
+        // Update gathering assignments
+        await Database.transaction(async (conn) => {
+          // Remove existing assignments
+          await conn.query(`
+            DELETE FROM gathering_lists 
+            WHERE individual_id = ? AND church_id = ?
+          `, [individual.id, req.user.church_id]);
+          
+          // Add new assignments
+          for (const gatheringId of gatheringIds) {
+            await conn.query(`
+              INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+              VALUES (?, ?, ?, ?)
+            `, [gatheringId, individual.id, req.user.id, req.user.church_id]);
+          }
+        });
+        
+        results.push({
+          firstName,
+          lastName,
+          familyName,
+          gatherings,
+          status: 'updated',
+          gatheringsAssigned: gatheringIds.length,
+          unknownGatherings: unknownGatherings.length > 0 ? unknownGatherings : undefined
+        });
+      }
+      
+      const summary = {
+        updated: results.filter(r => r.status === 'updated').length,
+        notFound: results.filter(r => r.status === 'not_found').length,
+        skipped: results.filter(r => r.status === 'skipped').length,
+        total: results.length
+      };
+      
+      res.json({
+        message: `Update completed: ${summary.updated} updated, ${summary.notFound} not found, ${summary.skipped} skipped`,
+        ...summary,
+        details: results
+      });
+      
+    } catch (error) {
+      console.error('Error updating existing people:', error);
+      res.status(500).json({ error: 'Failed to update existing people' });
     }
   }
 );

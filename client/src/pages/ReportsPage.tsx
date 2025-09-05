@@ -574,11 +574,11 @@ const ReportsPage: React.FC = () => {
       }
       
       // Create and download the file
-      const blob = new Blob([response.data], { type: 'text/csv' });
+      const blob = new Blob([response.data], { type: 'text/tab-separated-values' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `attendance-report-${selectedGathering.name}-${startDate}-to-${endDate}.csv`;
+      a.download = `attendance-report-${selectedGathering.name}-${startDate}-to-${endDate}.tsv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

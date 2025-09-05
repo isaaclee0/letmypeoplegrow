@@ -112,6 +112,35 @@ const AttendancePage: React.FC = () => {
     presentByIdRef.current = presentById;
   }, [presentById]);
 
+  // Critical: Clear presentById when date or gathering changes to prevent cross-date contamination
+  const prevDateRef = useRef<string | null>(null);
+  const prevGatheringRef = useRef<number | null>(null);
+  
+  useEffect(() => {
+    // Only clear if we're actually switching to a different date/gathering
+    const dateChanged = prevDateRef.current !== null && prevDateRef.current !== selectedDate;
+    const gatheringChanged = prevGatheringRef.current !== null && prevGatheringRef.current !== selectedGathering?.id;
+    
+    if (dateChanged || gatheringChanged) {
+      console.log('🧹 Date/gathering switched, clearing presentById state:', {
+        from: { date: prevDateRef.current, gathering: prevGatheringRef.current },
+        to: { date: selectedDate, gathering: selectedGathering?.id },
+        currentPresentByIdKeys: Object.keys(presentById).length
+      });
+      
+      // Clear presentById when switching to a different date/gathering
+      setPresentById({});
+      presentByIdRef.current = {};
+      
+      // Also clear visitor attendance for consistency
+      setVisitorAttendance({});
+    }
+    
+    // Update refs for next comparison
+    prevDateRef.current = selectedDate;
+    prevGatheringRef.current = selectedGathering?.id || null;
+  }, [selectedDate, selectedGathering?.id, presentById]); // Include presentById to ensure we have current keys for logging
+
   // Load cached data immediately on component mount for better UX during navigation
   useEffect(() => {
     console.log('🔍 AttendancePage mounted - checking for cached data...');
@@ -154,7 +183,7 @@ const AttendancePage: React.FC = () => {
         setAttendanceList(parsed.attendanceList || []);
         setVisitors(parsed.visitors || []);
         
-                      // Initialize presentById from cached data with merge logic
+                      // Initialize presentById from cached data directly (like visitors)
               const cachedPresentById: Record<number, boolean> = {};
               (parsed.attendanceList || []).forEach((person: any) => {
                 cachedPresentById[person.id] = Boolean(person.present);
@@ -168,23 +197,9 @@ const AttendancePage: React.FC = () => {
                 }
               });
               
-              // Merge with existing state: prefer 'present' from any source
-              const mergedPresentById: Record<number, boolean> = { ...presentById };
-              Object.keys(cachedPresentById).forEach(idStr => {
-                const id = parseInt(idStr);
-                const cachedPresent = cachedPresentById[id];
-                const currentPresent = presentById[id];
-                
-                // Merge rule: if either source says present, then present
-                if (cachedPresent || currentPresent) {
-                  mergedPresentById[id] = true;
-                } else {
-                  mergedPresentById[id] = false;
-                }
-              });
-              
-              setPresentById(mergedPresentById);
-              presentByIdRef.current = mergedPresentById;
+              // Use cached data directly to prevent cross-date contamination
+              setPresentById(cachedPresentById);
+              presentByIdRef.current = cachedPresentById;
         
         // Update visitor attendance state from cached data
         const newVisitorAttendance: { [key: number]: boolean } = {};
@@ -199,8 +214,8 @@ const AttendancePage: React.FC = () => {
         console.log('📊 Cache load summary:', {
           attendanceListLength: parsed.attendanceList?.length || 0,
           visitorsLength: parsed.visitors?.length || 0,
-          presentByIdKeys: Object.keys(newPresentById).length,
-          samplePresentById: Object.fromEntries(Object.entries(newPresentById).slice(0, 5))
+          presentByIdKeys: Object.keys(cachedPresentById).length,
+          samplePresentById: Object.fromEntries(Object.entries(cachedPresentById).slice(0, 5))
         });
         
         // Mark that we have loaded cached data to prevent immediate clearing
@@ -675,46 +690,37 @@ const AttendancePage: React.FC = () => {
       setAttendanceList(response.attendanceList || []);
       setVisitors(response.visitors || []);
       
-      // Initialize presentById from server data with smart merging
+      // Initialize presentById from server data directly (like visitors)
       const serverPresentById: Record<number, boolean> = {};
       (response.attendanceList || []).forEach((person: any) => {
         serverPresentById[person.id] = Boolean(person.present);
       });
       
-      // Apply merge logic: prefer 'present' over 'absent' from any source
-      const mergedPresentById: Record<number, boolean> = { ...presentById };
-      Object.keys(serverPresentById).forEach(idStr => {
-        const id = parseInt(idStr);
-        const serverPresent = serverPresentById[id];
-        const currentPresent = presentById[id];
-        
-        // Merge rule: if either source says present, then present
-        // Only set to absent if both sources agree on absent
-        if (serverPresent || currentPresent) {
-          mergedPresentById[id] = true;
-        } else {
-          mergedPresentById[id] = false;
+      // Apply any pending offline changes for this exact gathering/date
+      const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+      currentPendingChanges.forEach((change: any) => {
+        if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
+          serverPresentById[change.individualId] = change.present;
         }
       });
       
-      console.log('🔄 Merging presentById state:', {
+      console.log('🔄 Setting presentById from server data:', {
         serverKeys: Object.keys(serverPresentById).length,
-        currentKeys: Object.keys(presentById).length,
-        mergedKeys: Object.keys(mergedPresentById).length,
-        sampleMerged: Object.fromEntries(Object.entries(mergedPresentById).slice(0, 5))
+        sampleData: Object.fromEntries(Object.entries(serverPresentById).slice(0, 5)),
+        gatheringId: selectedGathering.id,
+        date: selectedDate
       });
       
-      // Update with merged data
-      console.log('📝 Updating presentById with merged server + cache data');
-      setPresentById(mergedPresentById);
-      presentByIdRef.current = mergedPresentById;
+      // Use server data directly to prevent cross-date contamination
+      setPresentById(serverPresentById);
+      presentByIdRef.current = serverPresentById;
       
-      // Cache the attendance data for offline use with merged state applied
-      const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
-        // Use the merged present state which includes cache + server + pending changes
-        const mergedPresent = mergedPresentById[person.id] ?? person.present;
-        return { ...person, present: mergedPresent };
-      });
+        // Cache the attendance data for offline use with server state applied
+        const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
+          // Use the server present state which includes pending changes
+          const finalPresent = serverPresentById[person.id] ?? person.present;
+          return { ...person, present: finalPresent };
+        });
       
       const cacheData = {
         gatheringId: selectedGathering.id,
@@ -762,37 +768,34 @@ const AttendancePage: React.FC = () => {
         setAttendanceList(apiResponse.data.attendanceList || []);
         setVisitors(apiResponse.data.visitors || []);
         
-        // Initialize presentById from server data with smart merging (API fallback)
+        // Initialize presentById from server data directly (API fallback)
         const serverPresentById: Record<number, boolean> = {};
         (apiResponse.data.attendanceList || []).forEach((person: any) => {
           serverPresentById[person.id] = Boolean(person.present);
         });
         
-        // Apply merge logic: prefer 'present' over 'absent' from any source
-        const mergedPresentById: Record<number, boolean> = { ...presentById };
-        Object.keys(serverPresentById).forEach(idStr => {
-          const id = parseInt(idStr);
-          const serverPresent = serverPresentById[id];
-          const currentPresent = presentById[id];
-          
-          // Merge rule: if either source says present, then present
-          // Only set to absent if both sources agree on absent
-          if (serverPresent || currentPresent) {
-            mergedPresentById[id] = true;
-          } else {
-            mergedPresentById[id] = false;
+        // Apply any pending offline changes for this exact gathering/date
+        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+        currentPendingChanges.forEach((change: any) => {
+          if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
+            serverPresentById[change.individualId] = change.present;
           }
         });
         
-        console.log('📝 Updating presentById with merged API data');
-        setPresentById(mergedPresentById);
-        presentByIdRef.current = mergedPresentById;
+        console.log('📝 Setting presentById from API data:', {
+          serverKeys: Object.keys(serverPresentById).length,
+          gatheringId: selectedGathering.id,
+          date: selectedDate
+        });
         
-        // Cache the attendance data for offline use with merged state applied
+        setPresentById(serverPresentById);
+        presentByIdRef.current = serverPresentById;
+        
+        // Cache the attendance data for offline use with server state applied
         const attendanceListForCache = (apiResponse.data.attendanceList || []).map((person: any) => {
-          // Use the merged present state which includes cache + server + pending changes
-          const mergedPresent = mergedPresentById[person.id] ?? person.present;
-          return { ...person, present: mergedPresent };
+          // Use the server present state which includes pending changes
+          const finalPresent = serverPresentById[person.id] ?? person.present;
+          return { ...person, present: finalPresent };
         });
         
         const cacheData = {
@@ -848,6 +851,10 @@ const AttendancePage: React.FC = () => {
     // This ensures we get fresh server data instead of preserving stale local changes
     lastUserModificationRef.current = {};
     
+    // Clear attendance state to prevent cross-gathering contamination
+    setPresentById({});
+    presentByIdRef.current = {};
+    
     // Set the new gathering - this will trigger loadAttendanceData via useEffect
     setSelectedGathering(gathering);
   }, []);
@@ -861,22 +868,45 @@ const AttendancePage: React.FC = () => {
         date: selectedDate
       });
       
-      // Only clear state if we don't have data already loaded (to preserve immediate cache loading)
-      const hasExistingData = attendanceList.length > 0 || visitors.length > 0;
-      const cacheWasLoaded = sessionStorage.getItem('attendance_cache_loaded') === 'true';
+      // Critical: Clear presentById state when switching dates to prevent cross-date contamination
+      // The presentById state should be date-specific, not persist across date changes
       
-      if (!hasExistingData && !cacheWasLoaded) {
-        console.log('🧹 Clearing state (no existing data, no cache loaded)');
+      // Check if we're loading a different date/gathering than what's currently in state
+      const cachedData = localStorage.getItem('attendance_cached_data');
+      let currentContextKey = `${selectedGathering.id}-${selectedDate}`;
+      let cachedContextKey = null;
+      
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          cachedContextKey = `${parsed.gatheringId}-${parsed.date}`;
+        } catch (err) {
+          console.error('Failed to parse cached data for context key:', err);
+        }
+      }
+      
+      // Always clear state when switching to a different date/gathering combination
+      // This ensures presentById doesn't carry over from previous dates
+      const contextChanged = !cachedContextKey || cachedContextKey !== currentContextKey;
+      
+      if (contextChanged) {
+        console.log('🧹 Clearing state for date/gathering change:', {
+          previous: cachedContextKey,
+          current: currentContextKey,
+          clearing: 'presentById, attendanceList, visitors, visitorAttendance'
+        });
+        
+        // Clear all state to prevent cross-date contamination
         setAttendanceList([]);
         setVisitors([]);
         setPresentById({});
         presentByIdRef.current = {};
+        setVisitorAttendance({});
       } else {
-        console.log('📋 Preserving existing data during main load (hasData:', hasExistingData, 'cacheLoaded:', cacheWasLoaded, ')');
+        console.log('📋 Same date/gathering context, preserving state for potential merging:', currentContextKey);
       }
       
       // First try to load cached data immediately (for faster UX)
-      const cachedData = localStorage.getItem('attendance_cached_data');
       if (cachedData) {
         try {
           const parsed = JSON.parse(cachedData);
@@ -896,7 +926,7 @@ const AttendancePage: React.FC = () => {
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
               
-              // Initialize presentById from cached data with merge logic
+              // Initialize presentById from cached data directly (no merge)
               const cachedPresentById: Record<number, boolean> = {};
               (parsed.attendanceList || []).forEach((person: any) => {
                 cachedPresentById[person.id] = Boolean(person.present);
@@ -910,23 +940,9 @@ const AttendancePage: React.FC = () => {
                 }
               });
               
-              // Merge with existing state: prefer 'present' from any source
-              const mergedPresentById: Record<number, boolean> = { ...presentById };
-              Object.keys(cachedPresentById).forEach(idStr => {
-                const id = parseInt(idStr);
-                const cachedPresent = cachedPresentById[id];
-                const currentPresent = presentById[id];
-                
-                // Merge rule: if either source says present, then present
-                if (cachedPresent || currentPresent) {
-                  mergedPresentById[id] = true;
-                } else {
-                  mergedPresentById[id] = false;
-                }
-              });
-              
-              setPresentById(mergedPresentById);
-              presentByIdRef.current = mergedPresentById;
+              // Use cached data directly to prevent cross-date contamination
+              setPresentById(cachedPresentById);
+              presentByIdRef.current = cachedPresentById;
             } else {
               console.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
             }
@@ -2693,6 +2709,7 @@ const AttendancePage: React.FC = () => {
                         <AttendanceDatePicker
                           selectedDate={selectedDate}
                           onDateChange={(date) => {
+                            console.log('📅 User selected new date via date picker:', { from: selectedDate, to: date });
                             setSelectedDate(date);
                             setShowDatePicker(false);
                           }}
@@ -2905,7 +2922,7 @@ const AttendancePage: React.FC = () => {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Visitors ({getVisitorPeopleCount})
+              Visitors
             </h3>
             <div className="space-y-4">
               {filteredGroupedVisitors.map((group: any) => (
