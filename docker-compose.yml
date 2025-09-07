@@ -70,6 +70,25 @@ services:
     networks:
       - app-network
 
+  # phpMyAdmin
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: church_attendance_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: church_user
+      PMA_PASSWORD: church_password
+      MYSQL_ROOT_PASSWORD: root_password
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
   # Nginx Reverse Proxy
   nginx:
     image: nginx:alpine
@@ -91,4 +110,4 @@ volumes:
 
 networks:
   app-network:
-    driver: bridge 
+    driver: bridge

@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 import { attendanceAPI } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
-import { useToast } from './ToastContainer';
 import { useAuth } from '../contexts/AuthContext';
 
 interface HeadcountAttendanceInterfaceProps {
@@ -13,9 +12,16 @@ interface HeadcountAttendanceInterfaceProps {
 
 interface HeadcountData {
   headcount: number;
+  userHeadcount?: number; // User's individual contribution
   lastUpdated?: string;
   lastUpdatedBy?: string;
   sessionId?: number;
+  otherUsers?: Array<{
+    userId: number;
+    name: string;
+    headcount: number;
+    lastUpdated: string;
+  }>;
 }
 
 const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> = ({
@@ -24,11 +30,18 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   gatheringName
 }) => {
   const [headcount, setHeadcount] = useState<number>(0);
+  const [userHeadcount, setUserHeadcount] = useState<number>(0); // User's individual contribution
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string | null>(new Date().toISOString());
   const [lastUpdatedBy, setLastUpdatedBy] = useState<string | null>('you');
-  const { socket, isConnected } = useWebSocket();
-  const { showError } = useToast();
+  const [otherUsers, setOtherUsers] = useState<Array<{
+    userId: number;
+    name: string;
+    headcount: number;
+    lastUpdated: string;
+    isCurrentUser?: boolean;
+  }>>([]);
+  const { socket, isConnected, sendHeadcountUpdate } = useWebSocket();
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   // Debug: Log when component mounts/unmounts
@@ -53,13 +66,15 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       date
     });
     setHeadcount(0);
+    setUserHeadcount(0);
     setIsLoading(true);
     setLastUpdated(new Date().toISOString());
     setLastUpdatedBy('you');
+    setOtherUsers([]);
   }, [gatheringTypeId, date]);
 
   // Load initial headcount data
-  const loadHeadcount = useCallback(async () => {
+  const loadHeadcount = useCallback(async (showLoading: boolean = true) => {
     // Don't load data if authentication is not ready
     if (authLoading || !isAuthenticated || !user) {
       console.log('🔒 Headcount: Waiting for authentication to be ready', {
@@ -73,14 +88,18 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     }
 
     try {
-      setIsLoading(true);
-      console.log('📊 Headcount: Loading data for gathering', gatheringTypeId, 'date', date);
-      const response = await attendanceAPI.getHeadcount(gatheringTypeId, date);
+      if (showLoading) {
+        setIsLoading(true);
+      }
+      console.log('📊 Headcount: Loading data for gathering', gatheringTypeId, 'date', date, 'mode', 'combined');
+      const response = await attendanceAPI.getHeadcount(gatheringTypeId, date, 'combined');
       const data: HeadcountData = response.data;
       
       setHeadcount(data.headcount || 0);
+      setUserHeadcount(data.userHeadcount || 0); // Set user's individual contribution
       setLastUpdated(data.lastUpdated || new Date().toISOString());
       setLastUpdatedBy(data.lastUpdatedBy || 'you');
+      setOtherUsers(data.otherUsers || []);
       console.log('✅ Headcount: Data loaded successfully', data);
     } catch (error: any) {
       console.error('❌ Headcount: Failed to load data:', error);
@@ -88,29 +107,40 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       // showError('Failed to load headcount data');
       // Reset to defaults on error to avoid showing stale data
       setHeadcount(0);
+      setUserHeadcount(0);
       setLastUpdated(null);
       setLastUpdatedBy(null);
+      setOtherUsers([]);
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
-  }, [gatheringTypeId, date, showError, authLoading, isAuthenticated, user]);
+  }, [gatheringTypeId, date, authLoading, isAuthenticated, user]);
 
-  // Update headcount via API (optimistic updates)
+  // Update headcount via WebSocket (optimistic updates)
   const updateHeadcount = useCallback(async (newCount: number) => {
-    // Update UI immediately for smooth experience
-    setHeadcount(newCount);
+    console.log('📤 Updating headcount via WebSocket:', {
+      newCount,
+      currentHeadcount: headcount,
+      currentUserHeadcount: userHeadcount
+    });
+    
+    // Update user's individual contribution immediately for smooth experience
+    setUserHeadcount(newCount);
     setLastUpdated(new Date().toISOString());
     setLastUpdatedBy('You');
     
     try {
-      await attendanceAPI.updateHeadcount(gatheringTypeId, date, newCount);
+      await sendHeadcountUpdate(gatheringTypeId, date, newCount, 'combined');
+      console.log('📥 WebSocket headcount update sent successfully');
     } catch (error: any) {
-      console.error('Failed to update headcount:', error);
-      showError('Failed to update headcount');
+      console.error('Failed to update headcount via WebSocket:', error);
       // Revert the optimistic update on error
-      // Note: We could reload from server here, but for simplicity we'll keep the optimistic value
+      setUserHeadcount(userHeadcount);
     }
-  }, [gatheringTypeId, date, showError]);
+  }, [gatheringTypeId, date, headcount, userHeadcount, sendHeadcountUpdate]);
+
 
   // WebSocket event handlers
   useEffect(() => {
@@ -122,10 +152,42 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       date
     });
 
-    // Listen for headcount updates from other users
+    // Listen for headcount updates from all users
     const handleHeadcountUpdated = (data: any) => {
       if (data.gatheringId === gatheringTypeId && data.date === date) {
+        console.log('🔔 WebSocket headcount update received:', {
+          headcount: data.headcount,
+          userHeadcount: data.userHeadcount,
+          updatedBy: data.updatedBy,
+          currentUser: user?.id,
+          isFromCurrentUser: data.updatedBy === user?.id
+        });
+        
+        // Process updates from all users (including current user)
+        console.log('📡 Processing headcount update');
+        
+        // Update the total headcount
         setHeadcount(data.headcount);
+        
+        // Update other users data with personalization
+        if (data.otherUsers) {
+          const personalizedOtherUsers = data.otherUsers
+            .map(userData => ({
+              ...userData,
+              name: userData.userId === user?.id ? 'You' : userData.name,
+              isCurrentUser: userData.userId === user?.id
+            }))
+            .sort((a, b) => {
+              // Put current user first, then sort others alphabetically
+              if (a.isCurrentUser && !b.isCurrentUser) return -1;
+              if (!a.isCurrentUser && b.isCurrentUser) return 1;
+              if (a.isCurrentUser && b.isCurrentUser) return 0;
+              return a.name.localeCompare(b.name);
+            });
+          
+          setOtherUsers(personalizedOtherUsers);
+        }
+        
         setLastUpdated(data.timestamp);
         setLastUpdatedBy(data.updatedByName);
       }
@@ -151,31 +213,13 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
 
   // Handle increment/decrement
   const handleIncrement = () => {
-    const newCount = headcount + 1;
-    updateHeadcount(newCount);
-    
-    // Also broadcast via WebSocket for real-time updates
-    if (socket && isConnected) {
-      socket.emit('update_headcount', {
-        gatheringId: gatheringTypeId,
-        date,
-        headcount: newCount
-      });
-    }
+    const newUserCount = userHeadcount + 1;
+    updateHeadcount(newUserCount);
   };
 
   const handleDecrement = () => {
-    const newCount = Math.max(0, headcount - 1);
-    updateHeadcount(newCount);
-    
-    // Also broadcast via WebSocket for real-time updates
-    if (socket && isConnected) {
-      socket.emit('update_headcount', {
-        gatheringId: gatheringTypeId,
-        date,
-        headcount: newCount
-      });
-    }
+    const newUserCount = Math.max(0, userHeadcount - 1);
+    updateHeadcount(newUserCount);
   };
 
   // Handle direct input
@@ -183,17 +227,22 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     const numValue = parseInt(value, 10);
     if (!isNaN(numValue) && numValue >= 0) {
       updateHeadcount(numValue);
-      
-      // Also broadcast via WebSocket for real-time updates
-      if (socket && isConnected) {
-        socket.emit('update_headcount', {
-          gatheringId: gatheringTypeId,
-          date,
-          headcount: numValue
-        });
-      }
     }
   };
+
+  // Check if we should show the total (only if there are other users with contributions > 0)
+  const shouldShowTotal = useMemo(() => {
+    if (!otherUsers || otherUsers.length <= 1) {
+      return false; // Only one user or no other users
+    }
+    
+    // Check if any other user (not current user) has a contribution > 0
+    const otherUsersWithContributions = otherUsers.filter(user => 
+      !user.isCurrentUser && user.headcount > 0
+    );
+    
+    return otherUsersWithContributions.length > 0;
+  }, [otherUsers]);
 
   if (isLoading) {
     return (
@@ -205,93 +254,109 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   }
 
   return (
-    <div className="text-center">
-      <p className="text-gray-600 mb-6">
-        {new Date(date).toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        })}
-      </p>
+    <div className="space-y-6 transition-all duration-300 ease-in-out">
+      {/* Main Headcount Interface */}
+      <div className="text-center">
+        {/* Headcount Interface */}
+        <div className="flex flex-col items-center space-y-6">
+          {/* Desktop Layout - Horizontal */}
+          <div className="hidden md:flex items-start justify-center space-x-6">
+            <button
+              onClick={handleDecrement}
+              disabled={headcount <= 0}
+              className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors mt-4"
+            >
+              <MinusIcon className="h-8 w-8 text-green-600" />
+            </button>
 
-      {/* Headcount Interface */}
-      <div className="flex flex-col items-center space-y-6">
-        {/* Desktop Layout - Horizontal */}
-        <div className="hidden md:flex items-center justify-center space-x-6">
-          <button
-            onClick={handleDecrement}
-            disabled={headcount <= 0}
-            className="flex items-center justify-center w-16 h-16 rounded-full bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
-          >
-            <MinusIcon className="h-8 w-8 text-red-600" />
-          </button>
+            <div className="flex flex-col items-center">
+              <input
+                type="number"
+                value={userHeadcount}
+                onChange={(e) => handleDirectInput(e.target.value)}
+                className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+                style={{ width: `${Math.max(userHeadcount.toString().length * 0.6, 2)}em` }}
+                min="0"
+              />
+              {shouldShowTotal && (
+                <div className="mt-2 p-2 bg-blue-50 rounded-lg transition-all duration-300 ease-in-out animate-in fade-in slide-in-from-top-2">
+                  <span className="text-lg font-semibold text-blue-800">
+                    Total: {headcount}
+                  </span>
+                </div>
+              )}
+            </div>
 
-          <div className="flex flex-col items-center">
-            <input
-              type="number"
-              value={headcount}
-              onChange={(e) => handleDirectInput(e.target.value)}
-              className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-              style={{ width: `${Math.max(headcount.toString().length * 0.6, 2)}em` }}
-              min="0"
-            />
-            <span className="text-sm text-gray-500 mt-1">Total Count</span>
+            <button
+              onClick={handleIncrement}
+              className="flex items-center justify-center w-16 h-16 rounded-full bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors mt-4"
+            >
+              <PlusIcon className="h-8 w-8 text-purple-600" />
+            </button>
           </div>
 
-          <button
-            onClick={handleIncrement}
-            className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
-          >
-            <PlusIcon className="h-8 w-8 text-green-600" />
-          </button>
-        </div>
+          {/* Mobile Layout - Vertical */}
+          <div className="md:hidden flex flex-col items-center space-y-6">
+            {/* Plus Button - Above */}
+            <button
+              onClick={handleIncrement}
+              className="flex items-center justify-center w-16 h-16 rounded-full bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
+            >
+              <PlusIcon className="h-8 w-8 text-purple-600" />
+            </button>
 
-        {/* Mobile Layout - Vertical */}
-        <div className="md:hidden flex flex-col items-center space-y-6">
-          {/* Plus Button - Above */}
-          <button
-            onClick={handleIncrement}
-            className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
-          >
-            <PlusIcon className="h-8 w-8 text-green-600" />
-          </button>
+            {/* Number Display - Tappable to Edit */}
+            <div className="flex flex-col items-center">
+              <input
+                type="number"
+                value={userHeadcount}
+                onChange={(e) => handleDirectInput(e.target.value)}
+                className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed focus:bg-gray-50 focus:rounded-lg focus:border-2 focus:border-primary-500 transition-all [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+                style={{ width: `${Math.max(userHeadcount.toString().length * 0.6, 2)}em` }}
+                min="0"
+                placeholder="0"
+              />
+              {shouldShowTotal && (
+                <div className="mt-2 p-2 bg-blue-50 rounded-lg transition-all duration-300 ease-in-out animate-in fade-in slide-in-from-top-2">
+                  <span className="text-lg font-semibold text-blue-800">
+                    Total: {headcount}
+                  </span>
+                </div>
+              )}
+            </div>
 
-          {/* Number Display - Tappable to Edit */}
-          <div className="flex flex-col items-center">
-            <input
-              type="number"
-              value={headcount}
-              onChange={(e) => handleDirectInput(e.target.value)}
-              className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed focus:bg-gray-50 focus:rounded-lg focus:border-2 focus:border-primary-500 transition-all [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-              style={{ width: `${Math.max(headcount.toString().length * 0.6, 2)}em` }}
-              min="0"
-              placeholder="0"
-            />
-            <span className="text-sm text-gray-500 mt-1">Tap to edit</span>
+            {/* Minus Button - Below */}
+            <button
+              onClick={handleDecrement}
+              disabled={headcount <= 0}
+              className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
+            >
+              <MinusIcon className="h-8 w-8 text-green-600" />
+            </button>
           </div>
 
-          {/* Minus Button - Below */}
-          <button
-            onClick={handleDecrement}
-            disabled={headcount <= 0}
-            className="flex items-center justify-center w-16 h-16 rounded-full bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
-          >
-            <MinusIcon className="h-8 w-8 text-red-600" />
-          </button>
-        </div>
-
-        {/* Status Information */}
-        <div className="text-center text-sm text-gray-500">
-          <p>
-            Last updated by {lastUpdatedBy || 'you'} at{' '}
-            {lastUpdated ? new Date(lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'just now'}
-          </p>
+          {/* Status Information */}
           {!isConnected && (
-            <p className="text-yellow-600">Offline - changes will sync when reconnected</p>
+            <div className="text-center text-sm text-yellow-600">
+              <p>Offline - changes will sync when reconnected</p>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Other Users Information */}
+      {otherUsers.length > 0 && (
+        <div className="text-center">
+          <div className="flex flex-wrap justify-center gap-2">
+            {otherUsers.map((user) => (
+              <div key={user.userId} className="bg-gray-100 rounded-md px-3 py-1 text-sm">
+                <span className="text-gray-700">{user.name.split(' ')[0]}</span>
+                <span className="font-medium text-gray-900 ml-1">{user.headcount}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

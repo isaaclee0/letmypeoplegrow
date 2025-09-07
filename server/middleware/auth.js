@@ -1,12 +1,13 @@
 const jwt = require('jsonwebtoken');
 const Database = require('../config/database');
+const logger = require('../config/logger');
 
 // Verify JWT token
 const verifyToken = async (req, res, next) => {
   try {
     // Only log auth verification for headcount endpoints to reduce noise
     if (req.path.includes('/headcount/')) {
-      console.log('🔍 AUTH: Verifying token for headcount', {
+      logger.debugLog('AUTH: Verifying token for headcount', {
         path: req.path,
         hasAuthHeader: !!req.header('Authorization'),
         hasCookie: !!req.cookies?.authToken
@@ -89,7 +90,7 @@ const requireRole = (allowedRoles) => {
 // Check if user can access specific gathering
 const requireGatheringAccess = async (req, res, next) => {
   try {
-    console.log('🔍 GATHERING ACCESS: Checking access', {
+    logger.accessLog('GATHERING ACCESS: Checking access', {
       path: req.path,
       gatheringTypeId: req.params.gatheringTypeId,
       userId: req.user?.id,

@@ -355,11 +355,14 @@ export const attendanceAPI = {
     api.post(`/attendance/${gatheringTypeId}/${date}/visitor-family/${familyId}`),
 
   // Headcount endpoints
-  getHeadcount: (gatheringTypeId: number, date: string) => 
-    api.get(`/attendance/headcount/${gatheringTypeId}/${date}`),
+  getHeadcount: (gatheringTypeId: number, date: string, mode: 'separate' | 'combined' | 'averaged' = 'separate') => 
+    api.get(`/attendance/headcount/${gatheringTypeId}/${date}?mode=${mode}`),
     
-  updateHeadcount: (gatheringTypeId: number, date: string, headcount: number) => 
-    api.post(`/attendance/headcount/${gatheringTypeId}/${date}`, { headcount }),
+  updateHeadcount: (gatheringTypeId: number, date: string, headcount: number, mode: 'separate' | 'combined' | 'averaged' = 'separate') => 
+    api.post(`/attendance/headcount/update/${gatheringTypeId}/${date}`, { headcount, mode }),
+    
+  updateHeadcountMode: (gatheringTypeId: number, date: string, mode: 'separate' | 'combined' | 'averaged') => 
+    api.put(`/attendance/headcount/mode/${gatheringTypeId}/${date}`, { mode }),
 };
 
 // Users API

@@ -45,7 +45,7 @@ interface VisitorFormState {
 
 const AttendancePage: React.FC = () => {
   const { user, updateUser } = useAuth();
-  const { showSuccess } = useToast();
+  const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
   // Initialize selectedDate from cache if available, otherwise use today
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -271,6 +271,7 @@ const AttendancePage: React.FC = () => {
     return status.type === 'past' && status.daysDiff >= 14;
   }, [user?.role, selectedDate]);
 
+
   const handleGroupByFamilyChange = useCallback((checked: boolean) => {
     setGroupByFamily(checked);
     // Save the setting for this gathering with improved localStorage handling
@@ -314,6 +315,42 @@ const AttendancePage: React.FC = () => {
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
+  
+  // Smart truncation function for gathering names
+  const getSmartTruncatedName = useCallback((name: string, allNames: string[], maxLength: number = 17) => {
+    if (name.length <= maxLength) return name;
+    
+    // Find other names that start similarly
+    const similarNames = allNames.filter(n => n !== name && n.toLowerCase().startsWith(name.toLowerCase().substring(0, Math.min(10, name.length))));
+    
+    if (similarNames.length === 0) {
+      // No similar names, use simple truncation
+      return `${name.substring(0, maxLength - 3)}...`;
+    }
+    
+    // Find the shortest common prefix
+    let commonPrefix = '';
+    const shortestSimilar = similarNames.reduce((shortest, current) => 
+      current.length < shortest.length ? current : shortest
+    );
+    
+    for (let i = 0; i < Math.min(name.length, shortestSimilar.length); i++) {
+      if (name[i].toLowerCase() === shortestSimilar[i].toLowerCase()) {
+        commonPrefix += name[i];
+      } else {
+        break;
+      }
+    }
+    
+    // If common prefix is long, show the end part instead
+    if (commonPrefix.length > 8) {
+      const endPart = name.substring(name.length - (maxLength - 3));
+      return `...${endPart}`;
+    }
+    
+    // Otherwise, show the beginning with ellipsis
+    return `${name.substring(0, maxLength - 3)}...`;
+  }, []);
   
   // WebSocket integration with environment-based configuration
   const { 
@@ -620,6 +657,42 @@ const AttendancePage: React.FC = () => {
     return dates.sort((a, b) => b.localeCompare(a)); // Sort newest first
   }, [selectedGathering]);
 
+  // Navigation functions for gathering dates
+  const navigateToNextDate = useCallback(() => {
+    if (!selectedDate || validDates.length === 0) return;
+    
+    const currentIndex = validDates.indexOf(selectedDate);
+    if (currentIndex > 0) {
+      const nextDate = validDates[currentIndex - 1]; // Next date is at lower index (newer dates first)
+      console.log('📅 Navigating to next date:', nextDate);
+      setSelectedDate(nextDate);
+    }
+  }, [selectedDate, validDates]);
+
+  const navigateToPreviousDate = useCallback(() => {
+    if (!selectedDate || validDates.length === 0) return;
+    
+    const currentIndex = validDates.indexOf(selectedDate);
+    if (currentIndex < validDates.length - 1) {
+      const prevDate = validDates[currentIndex + 1]; // Previous date is at higher index (older dates first)
+      console.log('📅 Navigating to previous date:', prevDate);
+      setSelectedDate(prevDate);
+    }
+  }, [selectedDate, validDates]);
+
+  // Check if navigation buttons should be enabled
+  const canNavigateNext = useMemo(() => {
+    if (!selectedDate || validDates.length === 0) return false;
+    const currentIndex = validDates.indexOf(selectedDate);
+    return currentIndex > 0; // Can go to next (newer) date if not at the newest
+  }, [selectedDate, validDates]);
+
+  const canNavigatePrevious = useMemo(() => {
+    if (!selectedDate || validDates.length === 0) return false;
+    const currentIndex = validDates.indexOf(selectedDate);
+    return currentIndex < validDates.length - 1; // Can go to previous (older) date if not at the oldest
+  }, [selectedDate, validDates]);
+
   // Load gatherings on component mount
   useEffect(() => {
     const loadGatherings = async () => {
@@ -762,8 +835,31 @@ const AttendancePage: React.FC = () => {
     }
   }, [validDates, selectedGathering, selectedDate]);
 
+  // Add request deduplication and cancellation
+  const loadAttendanceDataRef = useRef<AbortController | null>(null);
+  const currentRequestKey = useRef<string | null>(null);
+
   const loadAttendanceData = useCallback(async () => {
     if (!selectedGathering) return;
+
+    const requestKey = `${selectedGathering.id}-${selectedDate}`;
+    
+    // Prevent duplicate requests
+    if (currentRequestKey.current === requestKey) {
+      console.log(`⏭️ Skipping duplicate request for ${requestKey}`);
+      return;
+    }
+
+    // Cancel previous request if it exists
+    if (loadAttendanceDataRef.current) {
+      console.log(`❌ Cancelling previous request for ${currentRequestKey.current}`);
+      loadAttendanceDataRef.current.abort();
+    }
+
+    // Create new AbortController for this request
+    const abortController = new AbortController();
+    loadAttendanceDataRef.current = abortController;
+    currentRequestKey.current = requestKey;
 
     console.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
     setIsLoading(true);
@@ -861,10 +957,30 @@ const AttendancePage: React.FC = () => {
       setVisitorAttendance(newVisitorAttendance);
       
     } catch (err) {
+      // Don't process if request was cancelled
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log(`🚫 WebSocket request cancelled for ${requestKey}`);
+        return;
+      }
+      
       // Fall back to REST API if WebSocket failed or not connected
       try {
         console.log(`📡 Falling back to REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
+        
+        // Check if request was cancelled before making API call
+        if (abortController.signal.aborted) {
+          console.log(`❌ Request cancelled before API call for ${requestKey}`);
+          return;
+        }
+        
         const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
+        
+        // Check if request was cancelled after API call
+        if (abortController.signal.aborted) {
+          console.log(`❌ Request cancelled after API call for ${requestKey}`);
+          return;
+        }
+        
         console.log(`📊 Received attendance data via REST API:`, {
           attendeeCount: apiResponse.data.attendanceList?.length || 0,
           visitorCount: apiResponse.data.visitors?.length || 0,
@@ -931,6 +1047,12 @@ const AttendancePage: React.FC = () => {
         setError('');
         
       } catch (apiError) {
+        // Don't show error if request was cancelled
+        if (apiError instanceof Error && apiError.name === 'AbortError') {
+          console.log(`🚫 API request cancelled for ${requestKey}`);
+          return;
+        }
+        
         console.error(`❌ Both WebSocket and REST API failed for gathering ${selectedGathering.id} on ${selectedDate}:`, { 
           originalError: err, 
           apiError 
@@ -945,9 +1067,14 @@ const AttendancePage: React.FC = () => {
         }
       }
     } finally {
+      // Clear request tracking if this is still the current request
+      if (currentRequestKey.current === requestKey) {
+        loadAttendanceDataRef.current = null;
+        currentRequestKey.current = null;
+      }
       setIsLoading(false);
     }
-  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket]);
+  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, showToast]);
 
   // Manual refresh function removed - automatic syncing handles refreshes now
 
@@ -2554,21 +2681,28 @@ const AttendancePage: React.FC = () => {
           <div className="border-b border-gray-200 mb-6">
             {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
             <div className="block md:hidden">
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1 overflow-hidden">
                 {/* First 2 tabs */}
                 {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering, index) => (
-                  <div key={gathering.id} className="flex-1 relative">
+                  <div key={gathering.id} className="flex-1 min-w-0 relative">
                     <button
                       draggable={false}
                       onClick={() => handleGatheringChange(gathering)}
-                      className={`w-full whitespace-nowrap py-2 px-3 font-medium text-sm transition-all duration-300 rounded-t-lg ${
+                      className={`w-full whitespace-nowrap py-2 px-2 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                         selectedGathering?.id === gathering.id
                           ? 'bg-primary-500 text-white'
                           : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                       }`}
+                      title={gathering.name}
                     >
-                      <div className="flex items-center justify-center">
-                        <span className="truncate">{gathering.name}</span>
+                      <div className="flex items-center justify-center relative">
+                        <span className="truncate block w-full text-center">
+                          {getSmartTruncatedName(gathering.name, (orderedGatherings.length ? orderedGatherings : gatherings).map(g => g.name), 17)}
+                        </span>
+                        {/* Subtle indicator when text is truncated */}
+                        <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" 
+                             style={{ display: gathering.name.length > 17 ? 'block' : 'none' }} 
+                             title="Full name available on hover" />
                       </div>
                     </button>
 
@@ -2579,16 +2713,16 @@ const AttendancePage: React.FC = () => {
                 
                 {/* Dropdown for additional tabs */}
                 {(orderedGatherings.length ? orderedGatherings : gatherings).length > 2 && (
-                  <div className="relative" data-gathering-dropdown>
+                  <div className="relative flex-shrink-0" data-gathering-dropdown>
                     <button
                       onClick={() => setShowGatheringDropdown(!showGatheringDropdown)}
-                      className="py-2 px-3 font-medium text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-t-lg border border-gray-300"
+                      className="py-2 px-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-t-lg border border-gray-300"
                     >
-                      <EllipsisHorizontalIcon className="h-5 w-5" />
+                      <EllipsisHorizontalIcon className="h-4 w-4" />
                     </button>
                     
                     {showGatheringDropdown && (
-                      <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 z-50">
+                      <div className="absolute top-full right-0 mt-1 w-56 bg-white rounded-md shadow-lg border border-gray-200 z-50">
                         <div className="py-1">
                           {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering, index) => {
                             const actualIndex = index + 2; // Account for the first 2 tabs
@@ -2605,8 +2739,11 @@ const AttendancePage: React.FC = () => {
                                       ? 'bg-primary-50 text-primary-700 font-medium'
                                       : 'text-gray-700'
                                   }`}
+                                  title={gathering.name}
                                 >
-                                  {gathering.name}
+                                  <div className="truncate" title={gathering.name}>
+                                    {gathering.name}
+                                  </div>
                                 </button>
 
                               </div>
@@ -2636,14 +2773,21 @@ const AttendancePage: React.FC = () => {
                     key={gathering.id}
                     draggable={false}
                     onClick={() => handleGatheringChange(gathering)}
-                    className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
+                    className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg group ${
                       selectedGathering?.id === gathering.id
                         ? 'bg-primary-500 text-white'
                         : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                     }`}
+                    title={gathering.name}
                   >
-                    <div className="flex items-center space-x-2">
-                      <span>{gathering.name}</span>
+                    <div className="flex items-center space-x-2 relative">
+                      <span className="truncate max-w-32">
+                        {getSmartTruncatedName(gathering.name, (orderedGatherings.length ? orderedGatherings : gatherings).map(g => g.name), 20)}
+                      </span>
+                      {/* Subtle indicator when text is truncated */}
+                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" 
+                           style={{ display: gathering.name.length > 20 ? 'block' : 'none' }} 
+                           title="Full name available on hover" />
                     </div>
                   </button>
                 ))}
@@ -2806,10 +2950,49 @@ const AttendancePage: React.FC = () => {
           {selectedGathering.attendanceType === 'headcount' ? (
             <div className="bg-white shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
+                {/* Navigation Section - At the very top */}
+                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100 -mt-6 -mx-6 px-6 rounded-t-lg">
+                  <div className="flex items-center space-x-4">
+                    <button
+                      onClick={navigateToPreviousDate}
+                      disabled={!canNavigatePrevious}
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      title="Previous gathering"
+                    >
+                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                      <span className="text-sm text-gray-600">Previous</span>
+                    </button>
+                    
+                    <div className="text-sm font-medium text-gray-700 px-4">
+                      {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      }) : 'Select Date'}
+                    </div>
+                    
+                    <button
+                      onClick={navigateToNextDate}
+                      disabled={!canNavigateNext}
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      title="Next gathering"
+                    >
+                      <span className="text-sm text-gray-600">Next</span>
+                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium text-gray-900">
                     Headcount - {selectedGathering.name}
                   </h3>
+                  
                   <div className="flex items-center space-x-2">
                     {/* Connection Status Indicator */}
                     <div
@@ -2835,6 +3018,44 @@ const AttendancePage: React.FC = () => {
           ) : (
             <div className="bg-white shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
+                {/* Navigation Section - At the very top */}
+                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100 -mt-6 -mx-6 px-6 rounded-t-lg">
+                  <div className="flex items-center space-x-4">
+                    <button
+                      onClick={navigateToPreviousDate}
+                      disabled={!canNavigatePrevious}
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      title="Previous gathering"
+                    >
+                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                      <span className="text-sm text-gray-600">Previous</span>
+                    </button>
+                    
+                    <div className="text-sm font-medium text-gray-700 px-4">
+                      {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      }) : 'Select Date'}
+                    </div>
+                    
+                    <button
+                      onClick={navigateToNextDate}
+                      disabled={!canNavigateNext}
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      title="Next gathering"
+                    >
+                      <span className="text-sm text-gray-600">Next</span>
+                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium text-gray-900">
                     Attendance List - {selectedGathering.name}
@@ -3510,4 +3731,4 @@ const AttendancePage: React.FC = () => {
   );
 };
 
-export default AttendancePage; 
+export default AttendancePage;

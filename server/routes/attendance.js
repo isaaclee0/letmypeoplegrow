@@ -4,10 +4,25 @@ const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware
 const { requireLastAttendedColumn, columnExists } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 const websocketBroadcast = require('../utils/websocketBroadcast');
+const logger = require('../config/logger');
 
 const router = express.Router();
 
 router.use(verifyToken);
+
+// Debug middleware to log all requests
+router.use((req, res, next) => {
+  if (req.path.includes('headcount')) {
+    logger.debugLog('HEADCOUNT REQUEST', {
+      method: req.method,
+      path: req.path,
+      body: req.body,
+      params: req.params,
+      query: req.query
+    });
+  }
+  next();
+});
 
 // Middleware to disable caching for attendance endpoints
 const disableCache = (req, res, next) => {
@@ -24,24 +39,23 @@ const disableCache = (req, res, next) => {
 
 // Get headcount for a specific gathering and date
 router.get('/headcount/:gatheringTypeId/:date', (req, res, next) => {
-  console.log('🚨 HEADCOUNT ROUTE: Matched headcount route!', {
+  logger.debugLog('HEADCOUNT ROUTE: Matched headcount route', {
     path: req.path,
     params: req.params
   });
   next();
 }, disableCache, requireGatheringAccess, async (req, res) => {
-  console.log('🚨 HEADCOUNT ENDPOINT: Starting execution');
+  logger.debugLog('HEADCOUNT ENDPOINT: Starting execution');
   try {
-    console.log('🔍 HEADCOUNT GET: Request received', {
+    logger.debugLog('HEADCOUNT GET: Request received', {
       gatheringTypeId: req.params.gatheringTypeId,
       date: req.params.date,
       userId: req.user?.id,
       churchId: req.user?.church_id
     });
     
-    console.log('🔍 STEP 1: About to verify gathering type');
-    
     const { gatheringTypeId, date } = req.params;
+    const { mode = 'separate' } = req.query; // Default to separate mode
 
     // First, verify this is a headcount gathering
     const gathering = await Database.query(`
@@ -49,127 +63,172 @@ router.get('/headcount/:gatheringTypeId/:date', (req, res, next) => {
       WHERE id = ? AND church_id = ?
     `, [gatheringTypeId, req.user.church_id]);
 
-    console.log('🔍 STEP 2: Gathering query result:', gathering);
-
     if (gathering.length === 0) {
-      console.log('🔍 STEP 3: Gathering not found, returning 404');
       return res.status(404).json({ error: 'Gathering not found.' });
     }
 
     if (gathering[0].attendance_type !== 'headcount') {
-      console.log('🔍 STEP 4: Wrong attendance type, returning 400');
       return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
     }
 
-    console.log('🔍 STEP 5: Gathering validation passed');
-
     // Get or create attendance session (use transaction for consistency)
     let sessionId;
-    console.log('🔍 STEP 6: About to start transaction');
+    let sessionMode = 'separate';
     await Database.transaction(async (conn) => {
-      console.log('🔍 STEP 7: Inside transaction, querying for session');
-      console.log('🔍 STEP 7.1: Query parameters:', {
-        gatheringTypeId,
-        date,
-        churchId: req.user.church_id
-      });
       let sessionResult = await conn.query(`
-        SELECT id, session_date, created_by FROM attendance_sessions 
+        SELECT id, headcount_mode FROM attendance_sessions 
         WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
       `, [gatheringTypeId, date, req.user.church_id]);
 
-      console.log('🔍 STEP 8: Session query result:', sessionResult);
-      
-      // Also check if there are any other sessions for this gathering
-      let allSessions = await conn.query(`
-        SELECT id, session_date, created_by FROM attendance_sessions 
-        WHERE gathering_type_id = ? AND church_id = ?
-        ORDER BY session_date DESC LIMIT 5
-      `, [gatheringTypeId, req.user.church_id]);
-      console.log('🔍 STEP 8.1: All recent sessions for this gathering:', allSessions);
-
       if (sessionResult.length === 0) {
-        console.log('🔍 STEP 9: Creating new session');
-        // Create new session
+        // Create new session with default mode
         const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
+          VALUES (?, ?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
         sessionId = newSession.insertId;
-        console.log('🔍 STEP 10: New session created with ID:', sessionId);
+        sessionMode = mode;
       } else {
         sessionId = sessionResult[0].id;
-        console.log('🔍 STEP 11: Using existing session ID:', sessionId);
+        sessionMode = sessionResult[0].headcount_mode || 'separate';
       }
     });
-    console.log('🔍 STEP 12: Transaction completed, sessionId:', sessionId);
 
-    // Get headcount record
-    console.log('🔍 HEADCOUNT: Getting headcount record for sessionId:', sessionId);
-    const headcountResult = await Database.query(`
-      SELECT h.headcount, h.updated_at, h.session_id, u.first_name, u.last_name,
-             s.session_date, s.gathering_type_id
+    // Get headcount records based on mode
+    let headcountData;
+    let otherUsersData = [];
+    let userHeadcount = 0; // User's individual contribution
+
+    // Always get the current user's individual headcount
+    const userHeadcountResult = await Database.query(`
+      SELECT h.headcount, h.updated_at, u.first_name, u.last_name
       FROM headcount_records h
       LEFT JOIN users u ON h.updated_by = u.id
-      LEFT JOIN attendance_sessions s ON h.session_id = s.id
-      WHERE h.session_id = ?
-    `, [sessionId]);
+      WHERE h.session_id = ? AND h.updated_by = ?
+    `, [sessionId, req.user.id]);
 
-    console.log('🔍 HEADCOUNT: Detailed query result:', headcountResult);
-    
-    // Also check if there are headcount records for other sessions of this gathering
-    const allHeadcounts = await Database.query(`
-      SELECT h.headcount, h.session_id, s.session_date, s.gathering_type_id
-      FROM headcount_records h
-      JOIN attendance_sessions s ON h.session_id = s.id
-      WHERE s.gathering_type_id = ? AND s.church_id = ?
-      ORDER BY s.session_date DESC LIMIT 3
-    `, [gatheringTypeId, req.user.church_id]);
-    console.log('🔍 HEADCOUNT: All recent headcounts for this gathering:', allHeadcounts);
+    userHeadcount = userHeadcountResult.length > 0 ? userHeadcountResult[0].headcount : 0;
 
-    const headcount = headcountResult.length > 0 ? headcountResult[0].headcount : 0;
-    const lastUpdated = headcountResult.length > 0 ? headcountResult[0].updated_at : null;
-    const lastUpdatedBy = headcountResult.length > 0 ? 
-      `${headcountResult[0].first_name} ${headcountResult[0].last_name}` : null;
+    if (mode === 'separate') {
+      // In separate mode, the user's headcount is the display headcount
+      headcountData = userHeadcountResult.length > 0 ? userHeadcountResult[0] : null;
+
+      // Get other users' headcounts for display
+      const otherUsersResult = await Database.query(`
+        SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+        FROM headcount_records h
+        LEFT JOIN users u ON h.updated_by = u.id
+        WHERE h.session_id = ? AND h.updated_by != ?
+        ORDER BY h.updated_at DESC
+      `, [sessionId, req.user.id]);
+
+      otherUsersData = otherUsersResult;
+
+    } else if (mode === 'combined') {
+      // Get sum of all headcounts
+      const combinedResult = await Database.query(`
+        SELECT 
+          COALESCE(SUM(h.headcount), 0) as total_headcount,
+          MAX(h.updated_at) as last_updated,
+          COUNT(DISTINCT h.updated_by) as user_count
+        FROM headcount_records h
+        WHERE h.session_id = ?
+      `, [sessionId]);
+
+      // Get individual user contributions
+      const userContributions = await Database.query(`
+        SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+        FROM headcount_records h
+        LEFT JOIN users u ON h.updated_by = u.id
+        WHERE h.session_id = ?
+        ORDER BY h.updated_at DESC
+      `, [sessionId]);
+
+      headcountData = {
+        headcount: combinedResult[0].total_headcount,
+        updated_at: combinedResult[0].last_updated,
+        first_name: 'Combined',
+        last_name: `(${combinedResult[0].user_count} users)`
+      };
+      otherUsersData = userContributions;
+
+    } else if (mode === 'averaged') {
+      // Get average of all headcounts
+      const averagedResult = await Database.query(`
+        SELECT 
+          COALESCE(ROUND(AVG(h.headcount)), 0) as avg_headcount,
+          MAX(h.updated_at) as last_updated,
+          COUNT(DISTINCT h.updated_by) as user_count
+        FROM headcount_records h
+        WHERE h.session_id = ?
+      `, [sessionId]);
+
+      // Get individual user contributions
+      const userContributions = await Database.query(`
+        SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+        FROM headcount_records h
+        LEFT JOIN users u ON h.updated_by = u.id
+        WHERE h.session_id = ?
+        ORDER BY h.updated_at DESC
+      `, [sessionId]);
+
+      headcountData = {
+        headcount: averagedResult[0].avg_headcount,
+        updated_at: averagedResult[0].last_updated,
+        first_name: 'Averaged',
+        last_name: `(${averagedResult[0].user_count} users)`
+      };
+      otherUsersData = userContributions;
+    }
 
     const response = {
-      headcount,
-      lastUpdated,
-      lastUpdatedBy,
-      sessionId
+      headcount: headcountData ? headcountData.headcount : 0,
+      userHeadcount: userHeadcount, // User's individual contribution
+      lastUpdated: headcountData ? headcountData.updated_at : null,
+      lastUpdatedBy: headcountData ? 
+        `${headcountData.first_name} ${headcountData.last_name}` : null,
+      sessionId,
+      mode,
+      sessionMode,
+      otherUsers: otherUsersData
+        .map(user => ({
+          userId: user.id,
+          name: user.id === req.user.id ? 'You' : `${user.first_name} ${user.last_name}`,
+          headcount: user.headcount,
+          lastUpdated: user.updated_at,
+          isCurrentUser: user.id === req.user.id
+        }))
+        .sort((a, b) => {
+          // Put current user first, then sort others alphabetically
+          if (a.isCurrentUser && !b.isCurrentUser) return -1;
+          if (!a.isCurrentUser && b.isCurrentUser) return 1;
+          if (a.isCurrentUser && b.isCurrentUser) return 0;
+          return a.name.localeCompare(b.name);
+        })
     };
 
-    console.log('🔍 HEADCOUNT: Sending response:', response);
+    logger.debugLog('HEADCOUNT: Sending response', response);
     res.json(response);
 
   } catch (error) {
-    console.error('🚨 HEADCOUNT ERROR: Caught error in headcount route');
-    console.error('🔍 ERROR TYPE:', error.constructor.name);
-    console.error('🔍 ERROR MESSAGE:', error.message);
-    console.error('🔍 ERROR STACK:', error.stack);
-    console.error('🔍 ERROR CODE:', error.code);
-    console.error('🔍 ERROR ERRNO:', error.errno);
-    console.error('🔍 ERROR SQLSTATE:', error.sqlState);
-    console.error('🔍 ERROR SQLMESSAGE:', error.sqlMessage);
-    console.error('🔍 REQUEST DETAILS:', {
-      gatheringTypeId: req.params.gatheringTypeId,
-      date: req.params.date,
-      userId: req.user?.id,
-      churchId: req.user?.church_id,
-      path: req.path,
-      method: req.method,
-      url: req.url
-    });
-    console.error('🔍 FULL ERROR OBJECT:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    console.error('🚨 HEADCOUNT ERROR:', error);
     res.status(500).json({ error: 'Failed to retrieve headcount.' });
   }
 });
 
 // Update headcount for a specific gathering and date
-router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT'), async (req, res) => {
+router.post('/headcount/update/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT'), async (req, res) => {
   try {
     const { gatheringTypeId, date } = req.params;
-    const { headcount } = req.body;
+    const { headcount, mode = 'separate' } = req.body;
+    
+    logger.debugLog('POST /headcount received', {
+      gatheringTypeId,
+      date,
+      headcount,
+      mode,
+      userId: req.user.id
+    });
 
     if (typeof headcount !== 'number' || headcount < 0) {
       return res.status(400).json({ error: 'Valid headcount number is required.' });
@@ -189,26 +248,39 @@ router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringA
       return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
     }
 
+    let sessionId;
+    let sessionMode = 'separate';
     await Database.transaction(async (conn) => {
       // Get or create attendance session
       let sessionResult = await conn.query(`
-        SELECT id FROM attendance_sessions 
+        SELECT id, headcount_mode FROM attendance_sessions 
         WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
       `, [gatheringTypeId, date, req.user.church_id]);
 
-      let sessionId;
       if (sessionResult.length === 0) {
-        // Create new session
+        // Create new session with the specified mode
         const newSession = await conn.query(`
-          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
-          VALUES (?, ?, ?, ?)
-        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
+          VALUES (?, ?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
         sessionId = newSession.insertId;
+        sessionMode = mode;
       } else {
         sessionId = sessionResult[0].id;
+        sessionMode = sessionResult[0].headcount_mode || 'separate';
+        
+        // Update session mode if it's different
+        if (sessionMode !== mode) {
+          await conn.query(`
+            UPDATE attendance_sessions 
+            SET headcount_mode = ? 
+            WHERE id = ?
+          `, [mode, sessionId]);
+          sessionMode = mode;
+        }
       }
 
-      // Insert or update headcount record
+      // Insert or update headcount record (now supports per-user records)
       await conn.query(`
         INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
         VALUES (?, ?, ?, ?)
@@ -219,12 +291,173 @@ router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringA
       `, [sessionId, headcount, req.user.id, req.user.church_id]);
     });
 
+    // Calculate the display value based on mode
+    let displayHeadcount = headcount;
+    let displayMode = mode;
+    
+    if (mode === 'combined') {
+      const combinedResult = await Database.query(`
+        SELECT COALESCE(SUM(headcount), 0) as total_headcount
+        FROM headcount_records 
+        WHERE session_id = ?
+      `, [sessionId]);
+      displayHeadcount = combinedResult[0].total_headcount;
+      logger.debugLog('Combined calculation', {
+        userHeadcount: headcount,
+        displayHeadcount: displayHeadcount,
+        sessionId: sessionId
+      });
+    } else if (mode === 'averaged') {
+      const averagedResult = await Database.query(`
+        SELECT COALESCE(ROUND(AVG(headcount)), 0) as avg_headcount
+        FROM headcount_records 
+        WHERE session_id = ?
+      `, [sessionId]);
+      displayHeadcount = averagedResult[0].avg_headcount;
+      logger.debugLog('Averaged calculation', {
+        userHeadcount: headcount,
+        displayHeadcount: displayHeadcount,
+        sessionId: sessionId
+      });
+    }
+
+    // Get other users data for the broadcast
+    const otherUsersForBroadcast = await Database.query(`
+      SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+      FROM headcount_records h
+      LEFT JOIN users u ON h.updated_by = u.id
+      WHERE h.session_id = ?
+      ORDER BY h.updated_at DESC
+    `, [sessionId]);
+
     // Broadcast the update via WebSocket
     try {
-      websocketBroadcast('headcount_updated', {
+      const broadcastData = {
         gatheringId: parseInt(gatheringTypeId),
         date,
-        headcount,
+        headcount: displayHeadcount,
+        userHeadcount: headcount, // The user's individual headcount
+        mode: displayMode,
+        updatedBy: req.user.id,
+        updatedByName: `${req.user.first_name} ${req.user.last_name}`,
+        timestamp: new Date().toISOString(),
+        churchId: req.user.church_id,
+        otherUsers: otherUsersForBroadcast
+          .map(user => ({
+            userId: user.id,
+            name: user.id === req.user.id ? 'You' : `${user.first_name} ${user.last_name}`,
+            headcount: user.headcount,
+            lastUpdated: user.updated_at,
+            isCurrentUser: user.id === req.user.id
+          }))
+          .sort((a, b) => {
+            // Put current user first, then sort others alphabetically
+            if (a.isCurrentUser && !b.isCurrentUser) return -1;
+            if (!a.isCurrentUser && b.isCurrentUser) return 1;
+            if (a.isCurrentUser && b.isCurrentUser) return 0;
+            return a.name.localeCompare(b.name);
+          })
+      };
+      
+      logger.debugLog('WebSocket broadcast data', {
+        headcount: broadcastData.headcount,
+        userHeadcount: broadcastData.userHeadcount,
+        mode: broadcastData.mode,
+        displayHeadcount: displayHeadcount,
+        originalHeadcount: headcount
+      });
+      
+      websocketBroadcast('headcount_updated', broadcastData);
+    } catch (wsError) {
+      console.error('WebSocket broadcast error:', wsError);
+      // Don't fail the request if WebSocket fails
+    }
+
+    res.json({ 
+      message: 'Headcount updated successfully',
+      headcount: displayHeadcount,
+      userHeadcount: headcount,
+      mode: displayMode,
+      updatedBy: `${req.user.first_name} ${req.user.last_name}`,
+      otherUsers: otherUsersForBroadcast
+        .map(user => ({
+          userId: user.id,
+          name: user.id === req.user.id ? 'You' : `${user.first_name} ${user.last_name}`,
+          headcount: user.headcount,
+          lastUpdated: user.updated_at,
+          isCurrentUser: user.id === req.user.id
+        }))
+        .sort((a, b) => {
+          // Put current user first, then sort others alphabetically
+          if (a.isCurrentUser && !b.isCurrentUser) return -1;
+          if (!a.isCurrentUser && b.isCurrentUser) return 1;
+          if (a.isCurrentUser && b.isCurrentUser) return 0;
+          return a.name.localeCompare(b.name);
+        })
+    });
+
+  } catch (error) {
+    console.error('Update headcount error:', error);
+    res.status(500).json({ error: 'Failed to update headcount.' });
+  }
+});
+
+// Update headcount mode for a specific gathering and date
+router.put('/headcount/mode/:gatheringTypeId/:date', disableCache, requireGatheringAccess, auditLog('UPDATE_HEADCOUNT_MODE'), async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { mode } = req.body;
+
+    if (!['separate', 'combined', 'averaged'].includes(mode)) {
+      return res.status(400).json({ error: 'Invalid mode. Must be separate, combined, or averaged.' });
+    }
+
+    // First, verify this is a headcount gathering
+    const gathering = await Database.query(`
+      SELECT attendance_type FROM gathering_types 
+      WHERE id = ? AND church_id = ?
+    `, [gatheringTypeId, req.user.church_id]);
+
+    if (gathering.length === 0) {
+      return res.status(404).json({ error: 'Gathering not found.' });
+    }
+
+    if (gathering[0].attendance_type !== 'headcount') {
+      return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+    }
+
+    // Get or create attendance session
+    let sessionId;
+    await Database.transaction(async (conn) => {
+      let sessionResult = await conn.query(`
+        SELECT id FROM attendance_sessions 
+        WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      `, [gatheringTypeId, date, req.user.church_id]);
+
+      if (sessionResult.length === 0) {
+        // Create new session with the specified mode
+        const newSession = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
+          VALUES (?, ?, ?, ?, ?)
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id, mode]);
+        sessionId = newSession.insertId;
+      } else {
+        sessionId = sessionResult[0].id;
+        // Update existing session mode
+        await conn.query(`
+          UPDATE attendance_sessions 
+          SET headcount_mode = ? 
+          WHERE id = ?
+        `, [mode, sessionId]);
+      }
+    });
+
+    // Broadcast the mode change via WebSocket
+    try {
+      websocketBroadcast('headcount_mode_updated', {
+        gatheringId: parseInt(gatheringTypeId),
+        date,
+        mode,
         updatedBy: req.user.id,
         updatedByName: `${req.user.first_name} ${req.user.last_name}`,
         timestamp: new Date().toISOString(),
@@ -236,14 +469,14 @@ router.post('/headcount/:gatheringTypeId/:date', disableCache, requireGatheringA
     }
 
     res.json({ 
-      message: 'Headcount updated successfully',
-      headcount,
-      updatedBy: `${req.user.first_name} ${req.user.last_name}`
+      message: 'Headcount mode updated successfully',
+      mode,
+      sessionId
     });
 
   } catch (error) {
-    console.error('Update headcount error:', error);
-    res.status(500).json({ error: 'Failed to update headcount.' });
+    console.error('Update headcount mode error:', error);
+    res.status(500).json({ error: 'Failed to update headcount mode.' });
   }
 });
 
@@ -652,7 +885,14 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
     const { gatheringTypeId, date } = req.params;
     const { attendanceRecords, visitors } = req.body;
 
-    console.log('Recording attendance:', { gatheringTypeId, date, attendanceRecords, visitors });
+    logger.debugLog('GENERIC ROUTE MATCHED', {
+      path: req.path,
+      gatheringTypeId,
+      date,
+      body: req.body
+    });
+
+    logger.debugLog('Recording attendance', { gatheringTypeId, date, attendanceRecords, visitors });
 
     await Database.transaction(async (conn) => {
       const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
@@ -674,7 +914,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
         `, [gatheringTypeId, date, req.user.id]);
       }
 
-      console.log('Session result:', sessionResult);
+      logger.debugLog('Session result', sessionResult);
 
       let sessionId;
       if (sessionResult.insertId) {
@@ -696,7 +936,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
         sessionId = Number(sessions[0].id);
       }
 
-      console.log('Session ID:', sessionId);
+      logger.debugLog('Session ID', sessionId);
 
       // Update individual attendance records with better concurrency handling
       if (attendanceRecords && attendanceRecords.length > 0) {
@@ -731,9 +971,9 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
             }
           }
         }
-        console.log('Updated attendance records for session:', sessionId);
+        logger.debugLog('Updated attendance records for session', sessionId);
       } else {
-        console.log('No attendance records to update');
+        logger.debugLog('No attendance records to update');
       }
 
       // CRITICAL FIX: Do NOT manage visitors in the regular attendance endpoint
@@ -742,7 +982,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
       // - PUT /:gatheringTypeId/:date/visitors/:visitorId (update visitors)
       // This prevents accidental deletion of visitors when updating regular attendance
       
-      console.log('Regular attendance update - preserving existing visitors');
+      logger.debugLog('Regular attendance update - preserving existing visitors');
     });
 
     // Trigger notifications (moved outside transaction to avoid scope issues)
@@ -764,7 +1004,7 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
           attendanceRecords,
           { updatedBy: req.user.id, updatedAt: new Date().toISOString() }
         );
-        console.log('Broadcasted attendance update via WebSocket');
+        logger.debugLog('Broadcasted attendance update via WebSocket');
       }
     } catch (broadcastError) {
       console.error('Error broadcasting attendance update:', broadcastError);
@@ -1128,7 +1368,7 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
         { id: familyId, name: familyName },
         visitorsPayload
       );
-      console.log('Broadcasted visitor addition via WebSocket');
+      logger.debugLog('Broadcasted visitor addition via WebSocket');
     } catch (broadcastError) {
       console.error('Error broadcasting visitor addition:', broadcastError);
       // Don't fail the visitor save if broadcast fails
@@ -1264,7 +1504,7 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
         { name: familyName },
         updatedVisitors
       );
-      console.log('Broadcasted visitor update via WebSocket');
+      logger.debugLog('Broadcasted visitor update via WebSocket');
     } catch (broadcastError) {
       console.error('Error broadcasting visitor update:', broadcastError);
       // Don't fail the visitor save if broadcast fails
@@ -1588,7 +1828,7 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         { id: familyId },
         visitorsPayload
       );
-      console.log('Broadcasted visitor family addition via WebSocket');
+      logger.debugLog('Broadcasted visitor family addition via WebSocket');
     } catch (broadcastError) {
       console.error('Error broadcasting visitor family addition:', broadcastError);
       // Don't fail the operation if broadcast fails

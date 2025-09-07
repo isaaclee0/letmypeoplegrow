@@ -1,8 +1,23 @@
-import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
-import { io, Socket } from 'socket.io-client';
+import React, { createContext, useState, useEffect, useRef, useCallback, ReactNode, useContext } from 'react';
+import io from 'socket.io-client';
 import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { useSettings } from './SettingsContext';
+import { useNavigate } from 'react-router-dom';
+// Remove react-i18next import as it's causing issues
+// import { useTranslation } from 'react-i18next';
 
-// WebSocket event types
+// Create a placeholder for useTranslation until we properly set up i18next
+const useTranslation = () => {
+  return {
+    t: (key: string) => key,
+    i18n: {
+      changeLanguage: () => Promise.resolve(),
+    },
+  };
+};
+
+// Define event types for type safety
 export interface AttendanceUpdate {
   type: 'attendance_records' | 'full_refresh';
   gatheringId: number;
@@ -45,13 +60,14 @@ export interface RoomUsersUpdate {
 
 // WebSocket context type
 interface WebSocketContextType {
-  socket: Socket | null;
+  socket: ReturnType<typeof io> | null;
   isConnected: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   activeUsers: ActiveUser[];
   joinAttendanceRoom: (gatheringId: number, date: string) => void;
   leaveAttendanceRoom: (gatheringId: number, date: string) => void;
   sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
+  sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
   loadAttendanceData: (gatheringId: number, date: string) => Promise<{ attendanceList: any[]; visitors: any[] }>;
   onAttendanceUpdate: (callback: (update: AttendanceUpdate) => void) => () => void;
   onVisitorUpdate: (callback: (update: VisitorUpdate) => void) => () => void;
@@ -72,7 +88,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   console.log(`🔌 WebSocketProvider initialized for tab ${tabId.current}`);
   
   const { user, refreshTokenAndUserData } = useAuth();
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
@@ -144,14 +160,24 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       
       // Generate a temporary token for WebSocket auth using user data
       // The server will still validate the actual session via cookies
-      // If church_id is missing, we'll use a fallback (the user must have access to some church data 
-      // since they can use the REST API)
-      const churchId = userRef.current.church_id || '1'; // Fallback to '1' if missing
+      // If church_id is missing, we'll refresh the user data to get the latest church_id
+      // This prevents church ID mismatch errors
+      if (!userRef.current.church_id) {
+        console.log('🔌 No church_id found in user data, refreshing user data before WebSocket connection');
+        // Return null to prevent connection attempt until we have refreshed user data
+        refreshTokenAndUserData().then(() => {
+          // Connection will be retried on next user update
+          console.log('🔌 User data refreshed, WebSocket connection will be retried');
+          initializingRef.current = false;
+        });
+        return null;
+      }
+      
+      const churchId = userRef.current.church_id;
       
       console.log('🔌 Church ID resolution:', {
         userChurchId: userRef.current.church_id,
         resolvedChurchId: churchId,
-        usingFallback: !userRef.current.church_id,
         isPWA: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
         userAgent: navigator.userAgent.includes('PWA') ? 'PWA' : 'Browser'
       });
@@ -246,7 +272,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       console.log(`📨 [Tab ${tabId.current}] WebSocket welcome message:`, data);
     });
 
-    newSocket.on('disconnect', (reason) => {
+    newSocket.on('disconnect', (reason: string) => {
       console.log(`📴 [Tab ${tabId.current}] WebSocket disconnected:`, reason, {
         transport: newSocket.io?.engine?.transport?.name,
         upgraded: newSocket.io?.engine?.upgraded,
@@ -264,7 +290,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       }
     });
 
-    newSocket.on('connect_error', async (error: any) => {
+    newSocket.on('connect_error', async (error: Error) => {
       console.error(`❌ [Tab ${tabId.current}] WebSocket connection error:`, error.message);
       console.log(`🔍 [Tab ${tabId.current}] Connection details:`, {
         serverUrl,
@@ -302,12 +328,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       initializingRef.current = false; // Reset initialization flag on error
     });
 
-    newSocket.on('reconnect', (attemptNumber) => {
+    newSocket.on('reconnect', (attemptNumber: number) => {
       console.log(`🔄 [Tab ${tabId.current}] WebSocket reconnected after ${attemptNumber} attempts`);
       setConnectionStatus('connected');
     });
 
-    newSocket.on('reconnect_error', (error: any) => {
+    newSocket.on('reconnect_error', (error: Error) => {
       console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection error:`, error.message);
     });
 
@@ -355,41 +381,18 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       });
     });
 
-    // Room management handlers
+    // Room management handlers (DISABLED - server uses manual broadcasting)
+    // These handlers are kept for compatibility but the server doesn't send these events
     newSocket.on('joined_attendance', (data) => {
-      const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-      console.log(`✅ [${isPWA ? 'PWA' : 'Browser'}] Joined attendance room:`, {
-        ...data,
-        socketId: newSocket.id,
-        authChurchId: authData?.churchId,
-        isPWAMode: isPWA
-      });
-      setCurrentRoom(data.roomName);
-      
-      // Set initial active users from server
-      if (data.activeUsers) {
-        console.log(`👥 [${isPWA ? 'PWA' : 'Browser'}] Initial active users:`, data.activeUsers);
-        setActiveUsers(data.activeUsers);
-      }
+      console.log('📋 Room system disabled - ignoring joined_attendance event:', data);
     });
 
     newSocket.on('left_attendance', (data) => {
-      console.log('🚪 Left attendance room:', data);
-      setCurrentRoom(null);
-      setActiveUsers([]);
+      console.log('📋 Room system disabled - ignoring left_attendance event:', data);
     });
 
-    // Handle room users updates
     newSocket.on('room_users_updated', (update: RoomUsersUpdate) => {
-      console.log('👥 Room users updated:', update);
-      setActiveUsers(update.activeUsers);
-      roomUsersCallbacks.current.forEach(callback => {
-        try {
-          callback(update);
-        } catch (error) {
-          console.error('Error in room users callback:', error);
-        }
-      });
+      console.log('📋 Room system disabled - ignoring room_users_updated event:', update);
     });
 
     newSocket.on('error', (error) => {
@@ -417,26 +420,18 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
 
-  // Join attendance room
+  // Join attendance room (DISABLED - server uses manual broadcasting)
   const joinAttendanceRoom = (gatheringId: number, date: string) => {
-    if (!socket || !isConnected) {
-      console.warn('⚠️ Cannot join room: WebSocket not connected');
-      return;
-    }
-
-    console.log(`📋 Joining attendance room: gathering ${gatheringId}, date ${date}`);
-    socket.emit('join_attendance', { gatheringId, date });
+    // Room-based system is disabled on server - using manual broadcasting instead
+    // This function is kept for compatibility but does nothing
+    console.log(`📋 Room system disabled - using manual broadcasting for gathering ${gatheringId}, date ${date}`);
   };
 
-  // Leave attendance room
+  // Leave attendance room (DISABLED - server uses manual broadcasting)
   const leaveAttendanceRoom = (gatheringId: number, date: string) => {
-    if (!socket || !isConnected) {
-      console.warn('⚠️ Cannot leave room: WebSocket not connected');
-      return;
-    }
-
-    console.log(`🚪 Leaving attendance room: gathering ${gatheringId}, date ${date}`);
-    socket.emit('leave_attendance', { gatheringId, date });
+    // Room-based system is disabled on server - using manual broadcasting instead
+    // This function is kept for compatibility but does nothing
+    console.log(`🚪 Room system disabled - using manual broadcasting for gathering ${gatheringId}, date ${date}`);
   };
 
   // Send attendance update via WebSocket
@@ -455,7 +450,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         resolve();
       };
       
-      const handleError = (error: any) => {
+      const handleError = (error: { message?: string }) => {
         socket.off('attendance_update_success', handleSuccess);
         reject(new Error(error.message || 'Failed to update attendance'));
       };
@@ -479,6 +474,47 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
   };
 
+  // Send headcount update via WebSocket
+  const sendHeadcountUpdate = async (gatheringId: number, date: string, headcount: number, mode: string = 'combined'): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!socket || !isConnected) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      console.log(`📤 Sending headcount update via WebSocket: gathering ${gatheringId}, date ${date}, headcount ${headcount}, mode ${mode}`);
+      
+      // Set up one-time listeners for response
+      const handleSuccess = () => {
+        socket.off('headcount_update_error', handleError);
+        resolve();
+      };
+      
+      const handleError = (error: { message?: string }) => {
+        socket.off('headcount_update_success', handleSuccess);
+        reject(new Error(error.message || 'Failed to update headcount'));
+      };
+
+      socket.once('headcount_update_success', handleSuccess);
+      socket.once('headcount_update_error', handleError);
+
+      // Send the update
+      socket.emit('update_headcount', {
+        gatheringId,
+        date,
+        headcount,
+        mode
+      });
+
+      // Add timeout to prevent hanging
+      setTimeout(() => {
+        socket.off('headcount_update_success', handleSuccess);
+        socket.off('headcount_update_error', handleError);
+        reject(new Error('WebSocket headcount update timeout'));
+      }, 10000); // 10 second timeout
+    });
+  };
+
   // Load attendance data via WebSocket
   const loadAttendanceData = async (gatheringId: number, date: string): Promise<{ attendanceList: any[]; visitors: any[] }> => {
     return new Promise((resolve, reject) => {
@@ -490,7 +526,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       console.log(`📤 Loading attendance data via WebSocket: gathering ${gatheringId}, date ${date}`);
       
       // Set up one-time listeners for response
-      const handleSuccess = (data: any) => {
+      const handleSuccess = (data: { attendanceList?: any[], visitors?: any[] }) => {
         socket.off('load_attendance_error', handleError);
         resolve({
           attendanceList: data.attendanceList || [],
@@ -498,7 +534,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         });
       };
       
-      const handleError = (error: any) => {
+      const handleError = (error: { message?: string }) => {
         socket.off('load_attendance_success', handleSuccess);
         reject(new Error(error.message || 'Failed to load attendance data'));
       };
@@ -522,44 +558,44 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   };
 
   // Subscribe to attendance updates
-  const onAttendanceUpdate = (callback: (update: AttendanceUpdate) => void): (() => void) => {
+  const onAttendanceUpdate = useCallback((callback: (update: AttendanceUpdate) => void): (() => void) => {
     attendanceCallbacks.current.add(callback);
     
     // Return unsubscribe function
     return () => {
       attendanceCallbacks.current.delete(callback);
     };
-  };
+  }, []);
 
   // Subscribe to visitor updates
-  const onVisitorUpdate = (callback: (update: VisitorUpdate) => void): (() => void) => {
+  const onVisitorUpdate = useCallback((callback: (update: VisitorUpdate) => void): (() => void) => {
     visitorCallbacks.current.add(callback);
     
     // Return unsubscribe function
     return () => {
       visitorCallbacks.current.delete(callback);
     };
-  };
+  }, []);
 
   // Subscribe to user activity
-  const onUserActivity = (callback: (activity: UserActivity) => void): (() => void) => {
+  const onUserActivity = useCallback((callback: (activity: UserActivity) => void): (() => void) => {
     userActivityCallbacks.current.add(callback);
     
     // Return unsubscribe function
     return () => {
       userActivityCallbacks.current.delete(callback);
     };
-  };
+  }, []);
 
   // Subscribe to room users updates
-  const onRoomUsersUpdate = (callback: (update: RoomUsersUpdate) => void): (() => void) => {
+  const onRoomUsersUpdate = useCallback((callback: (update: RoomUsersUpdate) => void): (() => void) => {
     roomUsersCallbacks.current.add(callback);
     
     // Return unsubscribe function
     return () => {
       roomUsersCallbacks.current.delete(callback);
     };
-  };
+  }, []);
 
   // Get current room
   const getCurrentRoom = (): string | null => {
@@ -583,6 +619,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     joinAttendanceRoom,
     leaveAttendanceRoom,
     sendAttendanceUpdate,
+    sendHeadcountUpdate,
     loadAttendanceData,
     onAttendanceUpdate,
     onVisitorUpdate,

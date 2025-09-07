@@ -12,7 +12,7 @@ ARG VERSION
 ENV REACT_APP_VERSION=$VERSION
 
 # Install dependencies
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Copy client source code
 COPY client/ ./
@@ -21,4 +21,4 @@ COPY client/ ./
 EXPOSE 3000
 
 # Start development server
-CMD ["npm", "start"] 
+CMD ["npm", "start"]

@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { SettingsProvider } from './contexts/SettingsContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -104,10 +106,11 @@ const PWAUpdateWrapper: React.FC = () => {
 function App() {
   return (
     <AuthProvider>
-      <WebSocketProvider>
-        <PWAUpdateProvider>
-          <ToastContainer>
-            <Router>
+      <SettingsProvider>
+        <WebSocketProvider>
+          <PWAUpdateProvider>
+            <ToastContainer>
+              <Router>
             <div className="min-h-screen bg-gray-50">
               <Routes>
                 <Route
@@ -182,11 +185,12 @@ function App() {
               </Routes>
             </div>
             <PWAUpdateWrapper />
-          </Router>
-        </ToastContainer>
-      </PWAUpdateProvider>
-    </WebSocketProvider>
-  </AuthProvider>
+              </Router>
+            </ToastContainer>
+          </PWAUpdateProvider>
+        </WebSocketProvider>
+      </SettingsProvider>
+    </AuthProvider>
   );
 }
 

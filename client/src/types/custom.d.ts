@@ -1,6 +1,5 @@
-/// <reference types="react-scripts" />
-
 // Type declarations for modules without type definitions
+
 declare module 'socket.io-client' {
   const io: any;
   export default io;
@@ -17,13 +16,6 @@ declare module './SettingsContext' {
   export const useSettings: () => {
     settings: any;
     updateSettings: (settings: any) => void;
-  };
-}
-
-declare module './AuthContext' {
-  export const useAuth: () => {
-    user: any;
-    refreshTokenAndUserData: () => Promise<void>;
   };
 }
 

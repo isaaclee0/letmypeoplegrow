@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-client",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.5",
@@ -13,8 +13,6 @@
     "@testing-library/user-event": "^13.5.0",
     "@types/jest": "^27.5.2",
     "@types/node": "^18.19.31",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
     "autoprefixer": "^10.4.21",
     "axios": "^1.11.0",
     "chart.js": "^4.5.0",
@@ -35,6 +33,9 @@
     "yup": "^1.6.1"
   },
   "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@types/socket.io-client": "^1.4.36",
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.8"
   },

@@ -4,6 +4,7 @@
  * without directly coupling them to the WebSocket service
  */
 
+const logger = require('../config/logger');
 let webSocketService = null;
 
 /**
@@ -122,11 +123,20 @@ function broadcastFullRefresh(gatheringId, date, churchId, attendanceList, visit
  * @param {string} roomName - Room name (optional, for room-based broadcasting)
  */
 function websocketBroadcast(event, data, roomName) {
+  logger.debugLog('websocketBroadcast called', {
+    event,
+    hasWebSocketService: !!webSocketService,
+    churchId: data.churchId,
+    dataKeys: Object.keys(data)
+  });
+  
   if (!webSocketService) {
+    logger.warn('WebSocket service not available, skipping broadcast');
     return; // WebSocket not available, skip broadcast
   }
 
   // Use the WebSocket service's broadcast method
+  logger.debugLog('Calling webSocketService.broadcastToChurch');
   webSocketService.broadcastToChurch(data.churchId || 'default', event, data);
 }
 

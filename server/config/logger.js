@@ -195,6 +195,7 @@ try {
 const LOG_HTTP_START = process.env.LOG_HTTP_START === 'true'; // default off
 const HTTP_LOG_MIN_STATUS = parseInt(process.env.HTTP_LOG_MIN_STATUS || '400', 10); // log responses >= this status
 const HTTP_LOG_SLOW_MS = parseInt(process.env.HTTP_LOG_SLOW_MS || '1500', 10); // log 2xx if slower than this
+const LOG_DEBUG_MESSAGES = process.env.LOG_DEBUG_MESSAGES === 'true'; // default off - controls debug console.log messages
 
 logger.createRequestLogger = () => {
   return (req, res, next) => {
@@ -239,6 +240,20 @@ logger.createRequestLogger = () => {
     
     next();
   };
+};
+
+// Helper function for debug messages (only logs if LOG_DEBUG_MESSAGES is true)
+logger.debugLog = (message, meta = {}) => {
+  if (LOG_DEBUG_MESSAGES) {
+    logger.debug(message, meta);
+  }
+};
+
+// Helper function for access control logging (reduces noise)
+logger.accessLog = (message, meta = {}) => {
+  if (LOG_DEBUG_MESSAGES) {
+    logger.debug(message, meta);
+  }
 };
 
 module.exports = logger; 

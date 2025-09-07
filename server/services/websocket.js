@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
+const Database = require('../config/database');
 
 class WebSocketService {
   constructor() {
@@ -37,7 +38,7 @@ class WebSocketService {
         this.cleanupRecentUpdates();
       }, 30000); // Clean up every 30 seconds
       
-      console.log('🔌 WebSocket service initialized successfully');
+      logger.info('WebSocket service initialized successfully');
       return this.io;
     } catch (error) {
       console.error('❌ Failed to initialize WebSocket service:', error);
@@ -71,7 +72,7 @@ class WebSocketService {
         // Also check auth data as fallback (but verify it)
         const authData = socket.handshake.auth;
         
-        console.log('🔌 WebSocket auth attempt:', {
+        logger.debugLog('WebSocket auth attempt', {
           hasToken: !!token,
           hasAuthData: !!authData,
           authDataKeys: authData ? Object.keys(authData) : 'none',
@@ -79,7 +80,7 @@ class WebSocketService {
         });
         
         if (!token) {
-          console.log('❌ WebSocket auth failed: no token found', {
+          logger.warn('WebSocket auth failed: no token found', {
             socketId: socket.id,
             cookieHeader: cookieHeader ? 'present but no authToken' : 'missing'
           });
@@ -96,7 +97,7 @@ class WebSocketService {
         );
 
         if (users.length === 0) {
-          console.log('❌ WebSocket auth failed: user not found or inactive', {
+          logger.warn('WebSocket auth failed: user not found or inactive', {
             socketId: socket.id,
             userId: decoded.userId
           });
@@ -109,7 +110,7 @@ class WebSocketService {
         // Verify auth data matches token if provided
         if (authData) {
           if (authData.userId && authData.userId !== decoded.userId) {
-            console.log('❌ WebSocket auth failed: user ID mismatch', {
+            logger.warn('WebSocket auth failed: user ID mismatch', {
               socketId: socket.id,
               tokenUserId: decoded.userId,
               authDataUserId: authData.userId
@@ -118,7 +119,7 @@ class WebSocketService {
           }
           
           if (authData.churchId && authData.churchId !== churchId) {
-            console.log('❌ WebSocket auth failed: church ID mismatch', {
+            logger.warn('WebSocket auth failed: church ID mismatch', {
               socketId: socket.id,
               tokenChurchId: churchId,
               authDataChurchId: authData.churchId
@@ -169,7 +170,7 @@ class WebSocketService {
   setupConnectionHandling() {
     this.io.on('connection', (socket) => {
       const userKey = `${socket.churchId}:${socket.userId}`;
-      console.log('🔌 New connection attempt:', {
+      logger.debugLog('New connection attempt', {
         socketId: socket.id,
         userId: socket.userId,
         churchId: socket.churchId,
@@ -201,7 +202,7 @@ class WebSocketService {
     }
     this.churchSockets.get(socket.churchId).add(socket.id);
 
-    console.log('🔌 WebSocket client connected:', {
+    logger.debugLog('WebSocket client connected', {
       socketId: socket.id,
       userId: socket.userId,
       churchId: socket.churchId,
@@ -247,6 +248,11 @@ class WebSocketService {
       this.handleUpdateHeadcount(socket, data);
     });
 
+    // Handle headcount mode updates via WebSocket
+    socket.on('update_headcount_mode', (data) => {
+      this.handleUpdateHeadcountMode(socket, data);
+    });
+
     // Handle loading headcount data via WebSocket
     socket.on('load_headcount', (data) => {
       this.handleLoadHeadcount(socket, data);
@@ -259,7 +265,7 @@ class WebSocketService {
 
     // Handle test messages for debugging
     socket.on('test_message', (data) => {
-      console.log('📨 WebSocket Test - Message received:', {
+      logger.debugLog('WebSocket Test - Message received', {
         socketId: socket.id,
         userId: socket.userId,
         churchId: socket.churchId,
@@ -282,7 +288,7 @@ class WebSocketService {
         fromSocketId: socket.id
       };
       
-      console.log('📤 Broadcasting test message to church', socket.churchId);
+      logger.debugLog('Broadcasting test message to church', socket.churchId);
       
       // Get sockets for this church only (optimized broadcasting)
       const churchSocketIds = this.churchSockets.get(socket.churchId);
@@ -294,7 +300,7 @@ class WebSocketService {
           if (socketId !== socket.id) {
             const clientSocket = this.io.sockets.sockets.get(socketId);
             if (clientSocket) {
-              console.log(`📡 Sending to socket ${socketId} (user ${clientSocket.userId})`);
+              logger.debugLog(`Sending to socket ${socketId} (user ${clientSocket.userId})`);
               clientSocket.emit('test_message', broadcastData);
               broadcastCount++;
             }
@@ -302,7 +308,7 @@ class WebSocketService {
         });
       }
       
-      console.log(`📡 Broadcasted to ${broadcastCount} other clients in church ${socket.churchId}`);
+      logger.debugLog(`Broadcasted to ${broadcastCount} other clients in church ${socket.churchId}`);
     });
 
     // Handle test room functionality
@@ -547,7 +553,7 @@ class WebSocketService {
         timestamp: new Date().toISOString()
       };
       
-      console.log('📤 Broadcasting attendance update to church', socket.churchId);
+      logger.debugLog('Broadcasting attendance update to church', socket.churchId);
       
       // Get sockets for this church only (O(church_sockets) instead of O(all_sockets))
       const churchSocketIds = this.churchSockets.get(socket.churchId);
@@ -557,14 +563,14 @@ class WebSocketService {
         churchSocketIds.forEach((socketId) => {
           const clientSocket = this.io.sockets.sockets.get(socketId);
           if (clientSocket) {
-            console.log(`📡 Sending attendance update to socket ${socketId} (user ${clientSocket.userId})`);
+            logger.debugLog(`Sending attendance update to socket ${socketId} (user ${clientSocket.userId})`);
             clientSocket.emit('attendance_update', broadcastData);
             broadcastCount++;
           }
         });
       }
       
-      console.log(`📡 Attendance update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
+      logger.debugLog(`Attendance update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
 
       // Send success confirmation to sender
       socket.emit('attendance_update_success');
@@ -864,7 +870,7 @@ class WebSocketService {
       }
     });
 
-    console.log('🔌 WebSocket client disconnected:', {
+    logger.info('WebSocket client disconnected', {
       socketId: socket.id,
       userId: socket.userId,
       churchId: socket.churchId,
@@ -1085,7 +1091,7 @@ class WebSocketService {
         return;
       }
 
-      console.log(`🧪 User ${socket.userId} joining test room: ${roomName}`);
+      logger.debugLog(`User ${socket.userId} joining test room: ${roomName}`);
       
       // Join the Socket.IO room
       socket.join(roomName);
@@ -1098,7 +1104,7 @@ class WebSocketService {
 
       const roomSize = this.attendanceRooms.get(roomName).size;
 
-      console.log(`🧪 User ${socket.userId} joined test room ${roomName} (${roomSize} members)`);
+      logger.debugLog(`User ${socket.userId} joined test room ${roomName} (${roomSize} members)`);
 
       // Emit confirmation to the user who joined
       socket.emit('joined_test_room', {
@@ -1127,7 +1133,7 @@ class WebSocketService {
         return;
       }
 
-      console.log(`🧪 User ${socket.userId} leaving test room: ${roomName}`);
+      logger.debugLog(`User ${socket.userId} leaving test room: ${roomName}`);
       
       // Leave the Socket.IO room
       socket.leave(roomName);
@@ -1142,7 +1148,7 @@ class WebSocketService {
         }
       }
 
-      console.log(`🧪 User ${socket.userId} left test room ${roomName}`);
+      logger.debugLog(`User ${socket.userId} left test room ${roomName}`);
 
       // Emit confirmation
       socket.emit('left_test_room', {
@@ -1170,7 +1176,7 @@ class WebSocketService {
         return;
       }
 
-      console.log(`🧪 Room message from user ${socket.userId} to room ${roomName}: ${message}`);
+      logger.debugLog(`Room message from user ${socket.userId} to room ${roomName}: ${message}`);
       
       // Broadcast to all clients in the room using Socket.IO rooms
       socket.to(roomName).emit('test_room_message', {
@@ -1179,7 +1185,7 @@ class WebSocketService {
         serverTimestamp: new Date().toISOString()
       });
 
-      console.log(`🧪 Broadcasted room message to room ${roomName}`);
+      logger.debugLog(`Broadcasted room message to room ${roomName}`);
 
     } catch (error) {
       console.error('Error handling test room message:', error);
@@ -1310,10 +1316,10 @@ class WebSocketService {
    * @param {Object} data - Headcount data {gatheringId, date, headcount}
    */
   async handleUpdateHeadcount(socket, data) {
-    let gatheringId, date, headcount;
+    let gatheringId, date, headcount, mode;
     
     try {
-      ({ gatheringId, date, headcount } = data);
+      ({ gatheringId, date, headcount, mode = 'separate' } = data);
       
       if (!gatheringId || !date || typeof headcount !== 'number') {
         socket.emit('headcount_update_error', { message: 'Invalid headcount data' });
@@ -1354,34 +1360,119 @@ class WebSocketService {
         headcount
       });
 
-      // Broadcast to all clients in the same church (same approach as standard attendance)
+      // Save the headcount to database first, then calculate combined total
+      let displayHeadcount = headcount;
+      let otherUsers = [];
+      let sessionId;
+      
+      try {
+        // Get or create attendance session (same logic as API)
+        let sessionResult = await Database.query(`
+          SELECT id, headcount_mode FROM attendance_sessions 
+          WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+        `, [gatheringId, date, socket.churchId]);
+
+        if (sessionResult.length === 0) {
+          // Create new session with the specified mode
+          const newSession = await Database.query(`
+            INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
+            VALUES (?, ?, ?, ?, ?)
+          `, [gatheringId, date, socket.userId, socket.churchId, mode]);
+          sessionId = newSession.insertId;
+        } else {
+          sessionId = sessionResult[0].id;
+          const sessionMode = sessionResult[0].headcount_mode || 'separate';
+          
+          // Update session mode if it's different
+          if (sessionMode !== mode) {
+            await Database.query(`
+              UPDATE attendance_sessions 
+              SET headcount_mode = ? 
+              WHERE id = ?
+            `, [mode, sessionId]);
+          }
+        }
+
+        // Insert or update headcount record (same logic as API)
+        await Database.query(`
+          INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+          VALUES (?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+          headcount = VALUES(headcount),
+          updated_by = VALUES(updated_by),
+          updated_at = CURRENT_TIMESTAMP
+        `, [sessionId, headcount, socket.userId, socket.churchId]);
+
+        // Now calculate the display value based on mode (same logic as API)
+        if (mode === 'combined') {
+          const combinedResult = await Database.query(`
+            SELECT COALESCE(SUM(headcount), 0) as total_headcount
+            FROM headcount_records 
+            WHERE session_id = ?
+          `, [sessionId]);
+          displayHeadcount = combinedResult[0].total_headcount;
+          
+          logger.debugLog('WebSocket combined calculation', {
+            userHeadcount: headcount,
+            displayHeadcount: displayHeadcount,
+            sessionId: sessionId
+          });
+        } else if (mode === 'averaged') {
+          const averagedResult = await Database.query(`
+            SELECT COALESCE(ROUND(AVG(headcount)), 0) as avg_headcount
+            FROM headcount_records 
+            WHERE session_id = ?
+          `, [sessionId]);
+          displayHeadcount = averagedResult[0].avg_headcount;
+        }
+
+        // Get other users data
+        const otherUsersResult = await Database.query(`
+          SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+          FROM headcount_records h
+          LEFT JOIN users u ON h.updated_by = u.id
+          WHERE h.session_id = ?
+          ORDER BY h.updated_at DESC
+        `, [sessionId]);
+        
+        // Map users with raw data (no personalization yet)
+        otherUsers = otherUsersResult
+          .map(user => ({
+            userId: user.id,
+            name: `${user.first_name} ${user.last_name}`, // Always use real name, no "You" yet
+            headcount: user.headcount,
+            lastUpdated: user.updated_at
+          }));
+        
+      } catch (dbError) {
+        logger.error('Database error in WebSocket headcount update:', dbError);
+        // Fall back to original headcount if database query fails
+      }
+
+      logger.debugLog('Broadcasting headcount update via websocketBroadcast', {
+        churchId: socket.churchId,
+        headcount: displayHeadcount,
+        userHeadcount: headcount,
+        churchSocketsSize: this.churchSockets.size,
+        churchSocketIds: this.churchSockets.get(socket.churchId)?.size || 0
+      });
+      
+      // Use the same broadcasting method as the API
       const broadcastData = {
         gatheringId: parseInt(gatheringId),
         date,
-        headcount,
+        headcount: displayHeadcount,
+        userHeadcount: headcount, // The user's individual headcount
+        mode,
         updatedBy: socket.userId,
         updatedByName: socket.userName,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        churchId: socket.churchId,
+        otherUsers
       };
       
-      console.log('📤 Broadcasting headcount update to church', socket.churchId);
-      
-      // Get sockets for this church only (same as standard attendance)
-      const churchSocketIds = this.churchSockets.get(socket.churchId);
-      let broadcastCount = 0;
-      
-      if (churchSocketIds) {
-        churchSocketIds.forEach((socketId) => {
-          const clientSocket = this.io.sockets.sockets.get(socketId);
-          if (clientSocket) {
-            console.log(`📡 Sending headcount update to socket ${socketId} (user ${clientSocket.userId})`);
-            clientSocket.emit('headcount_updated', broadcastData);
-            broadcastCount++;
-          }
-        });
-      }
-      
-      console.log(`📡 Headcount update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
+      // Use the same broadcast method as the API
+      this.broadcastToChurch(socket.churchId, 'headcount_updated', broadcastData);
 
       // Send success response to sender
       socket.emit('headcount_update_success');
@@ -1389,9 +1480,9 @@ class WebSocketService {
       logger.info('Headcount update broadcasted via WebSocket', {
         gatheringId,
         date,
-        headcount,
-        updatedBy: socket.userId,
-        broadcastCount
+        headcount: displayHeadcount,
+        userHeadcount: headcount,
+        updatedBy: socket.userId
       });
 
     } catch (error) {
@@ -1451,6 +1542,79 @@ class WebSocketService {
     }
   }
 
+  /**
+   * Handle headcount mode updates via WebSocket
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Mode data {gatheringId, date, mode}
+   */
+  async handleUpdateHeadcountMode(socket, data) {
+    try {
+      const { gatheringId, date, mode } = data;
+      
+      if (!gatheringId || !date || !['separate', 'combined', 'averaged'].includes(mode)) {
+        socket.emit('headcount_mode_update_error', { message: 'Invalid mode data' });
+        return;
+      }
+
+      logger.info('WebSocket headcount mode update received', {
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        mode
+      });
+
+      // Broadcast mode change to all clients in the same church
+      const broadcastData = {
+        gatheringId: parseInt(gatheringId),
+        date,
+        mode,
+        updatedBy: socket.userId,
+        updatedByName: socket.userName,
+        timestamp: new Date().toISOString()
+      };
+      
+      logger.debugLog('Broadcasting headcount mode update to church', socket.churchId);
+      
+      // Get sockets for this church only
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
+      let broadcastCount = 0;
+      
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            logger.debugLog(`Sending headcount mode update to socket ${socketId} (user ${clientSocket.userId})`);
+            clientSocket.emit('headcount_mode_updated', broadcastData);
+            broadcastCount++;
+          }
+        });
+      }
+      
+      logger.debugLog(`Headcount mode update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
+
+      // Send success response to sender
+      socket.emit('headcount_mode_update_success');
+
+      logger.info('Headcount mode update broadcasted via WebSocket', {
+        gatheringId,
+        date,
+        mode,
+        updatedBy: socket.userId,
+        broadcastCount
+      });
+
+    } catch (error) {
+      logger.error('WebSocket headcount mode update error:', {
+        error: error.message,
+        userId: socket.userId,
+        churchId: socket.churchId,
+        data
+      });
+      socket.emit('headcount_mode_update_error', { message: 'Failed to update headcount mode' });
+    }
+  }
+
   shutdown() {
     if (this.io) {
       logger.info('Shutting down WebSocket service');
@@ -1465,6 +1629,68 @@ class WebSocketService {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
+    }
+  }
+
+  /**
+   * Broadcast to all clients in a church
+   * @param {string} churchId - Church ID
+   * @param {string} event - Event name
+   * @param {Object} data - Data to broadcast
+   */
+  broadcastToChurch(churchId, event, data) {
+    try {
+      if (!this.io) {
+        logger.warn('WebSocket not initialized, skipping broadcast');
+        return;
+      }
+
+      // Get all sockets for this church
+      const churchSocketIds = this.churchSockets.get(churchId);
+      let broadcastCount = 0;
+      
+      logger.debugLog(`Broadcasting ${event} to church ${churchId}`, {
+        churchSocketIdsSize: churchSocketIds?.size || 0,
+        totalChurches: this.churchSockets.size,
+        churchIds: Array.from(this.churchSockets.keys())
+      });
+      
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            logger.debugLog(`Broadcasting ${event} to socket ${socketId} (user ${clientSocket.userId})`);
+            logger.debugLog(`Data being sent`, {
+              headcount: data.headcount,
+              userHeadcount: data.userHeadcount,
+              mode: data.mode
+            });
+            clientSocket.emit(event, data);
+            broadcastCount++;
+          } else {
+            logger.debugLog(`Socket ${socketId} not found in io.sockets.sockets`);
+          }
+        });
+      } else {
+        logger.debugLog(`No sockets found for church ${churchId}`);
+      }
+      
+      logger.debugLog(`${event} broadcasted to ${broadcastCount} clients in church ${churchId}`);
+      
+      logger.info(`Broadcasted ${event} to church`, {
+        churchId,
+        event,
+        broadcastCount,
+        data
+      });
+
+    } catch (error) {
+      logger.error(`Error broadcasting ${event} to church`, {
+        error: error.message,
+        churchId,
+        event,
+        data
+      });
     }
   }
 }
