@@ -309,10 +309,18 @@ const AttendancePage: React.FC = () => {
 
   const [groupByFamily, setGroupByFamily] = useState(true);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showGatheringDropdown, setShowGatheringDropdown] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
+  
+  // Tab slider drag state
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [showRightFade, setShowRightFade] = useState(true);
+  const [showDesktopRightFade, setShowDesktopRightFade] = useState(true);
+  const tabSliderRef = useRef<HTMLDivElement>(null);
+  const desktopTabSliderRef = useRef<HTMLDivElement>(null);
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   
@@ -477,18 +485,76 @@ const AttendancePage: React.FC = () => {
       if (datePickerRef.current && !datePickerRef.current.contains(event.target as Node)) {
         setShowDatePicker(false);
       }
-      // Close gathering dropdown when clicking outside
-      const target = event.target as Element;
-      if (!target.closest('[data-gathering-dropdown]')) {
-        setShowGatheringDropdown(false);
-      }
     };
 
-    if (showDatePicker || showGatheringDropdown) {
+    if (showDatePicker) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDatePicker, showGatheringDropdown]);
+  }, [showDatePicker]);
+
+
+  // Tab slider drag handlers
+  const handleMouseDown = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!sliderRef.current) return;
+    setIsDragging(true);
+    setStartX(e.pageX - sliderRef.current.offsetLeft);
+    setScrollLeft(sliderRef.current.scrollLeft);
+    sliderRef.current.style.cursor = 'grabbing';
+  };
+
+  const handleMouseLeave = (sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!sliderRef.current) return;
+    setIsDragging(false);
+    sliderRef.current.style.cursor = 'grab';
+  };
+
+  const handleMouseUp = (sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!sliderRef.current) return;
+    setIsDragging(false);
+    sliderRef.current.style.cursor = 'grab';
+  };
+
+  const handleMouseMove = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!isDragging || !sliderRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - sliderRef.current.offsetLeft;
+    const walk = (x - startX) * 2; // Scroll speed multiplier
+    sliderRef.current.scrollLeft = scrollLeft - walk;
+  };
+
+  // Touch handlers for mobile
+  const handleTouchStart = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!sliderRef.current) return;
+    setIsDragging(true);
+    setStartX(e.touches[0].pageX - sliderRef.current.offsetLeft);
+    setScrollLeft(sliderRef.current.scrollLeft);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!isDragging || !sliderRef.current) return;
+    e.preventDefault();
+    const x = e.touches[0].pageX - sliderRef.current.offsetLeft;
+    const walk = (x - startX) * 2;
+    sliderRef.current.scrollLeft = scrollLeft - walk;
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+  // Check scroll position and update fade indicators
+  const checkScrollPosition = (sliderRef: React.RefObject<HTMLDivElement>, isMobile: boolean) => {
+    if (!sliderRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = sliderRef.current;
+    const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5; // 5px tolerance
+    
+    if (isMobile) {
+      setShowRightFade(!isAtEnd);
+    } else {
+      setShowDesktopRightFade(!isAtEnd);
+    }
+  };
 
   // Calculate valid dates for the selected gathering
   const validDates = useMemo(() => {
@@ -2316,6 +2382,36 @@ const AttendancePage: React.FC = () => {
   const [reorderList, setReorderList] = useState<GatheringType[]>([]);
   const dragIndexRef = useRef<number | null>(null);
 
+  // Add scroll event listeners for fade indicators
+  useEffect(() => {
+    const handleScroll = () => {
+      checkScrollPosition(tabSliderRef, true);
+      checkScrollPosition(desktopTabSliderRef, false);
+    };
+
+    const mobileSlider = tabSliderRef.current;
+    const desktopSlider = desktopTabSliderRef.current;
+
+    if (mobileSlider) {
+      mobileSlider.addEventListener('scroll', handleScroll);
+    }
+    if (desktopSlider) {
+      desktopSlider.addEventListener('scroll', handleScroll);
+    }
+
+    // Initial check
+    handleScroll();
+
+    return () => {
+      if (mobileSlider) {
+        mobileSlider.removeEventListener('scroll', handleScroll);
+      }
+      if (desktopSlider) {
+        desktopSlider.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, [gatherings, orderedGatherings]);
+
   // Helper functions for responsive grid layout
   const getPersonDisplayName = (person: any, familyName?: string) => {
     // For visitors with .name property
@@ -2679,128 +2775,140 @@ const AttendancePage: React.FC = () => {
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="border-b border-gray-200 mb-6">
-            {/* Mobile: Show first 2 tabs + dropdown (uses saved order) */}
+            {/* Mobile: Horizontal scrollable tabs with fade indicators */}
             <div className="block md:hidden">
-              <div className="flex items-center space-x-1 overflow-hidden">
-                {/* First 2 tabs */}
-                {(orderedGatherings.length ? orderedGatherings : gatherings).slice(0, 2).map((gathering, index) => (
-                  <div key={gathering.id} className="flex-1 min-w-0 relative">
+              <div className="relative w-full overflow-hidden">
+                <div 
+                  ref={tabSliderRef}
+                  className="flex items-center space-x-1 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider" 
+                  style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
+                  onMouseDown={(e) => handleMouseDown(e, tabSliderRef)}
+                  onMouseLeave={() => handleMouseLeave(tabSliderRef)}
+                  onMouseUp={() => handleMouseUp(tabSliderRef)}
+                  onMouseMove={(e) => handleMouseMove(e, tabSliderRef)}
+                  onTouchStart={(e) => handleTouchStart(e, tabSliderRef)}
+                  onTouchMove={(e) => handleTouchMove(e, tabSliderRef)}
+                  onTouchEnd={handleTouchEnd}
+                >
+                  {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering, index) => (
+                    <div key={gathering.id} className="flex-shrink-0 min-w-0">
+                      <button
+                        draggable={false}
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            handleGatheringChange(gathering);
+                          }
+                        }}
+                        className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
+                          selectedGathering?.id === gathering.id
+                            ? 'bg-primary-500 text-white'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                        title={gathering.name}
+                      >
+                        <div className="flex items-center justify-center h-full">
+                          <span className="text-center leading-tight whitespace-nowrap">
+                            {gathering.name}
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                  
+                  {/* Edit Tab */}
+                  <div className="flex-shrink-0 min-w-0">
                     <button
                       draggable={false}
-                      onClick={() => handleGatheringChange(gathering)}
-                      className={`w-full whitespace-nowrap py-2 px-2 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                        selectedGathering?.id === gathering.id
-                          ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                      }`}
-                      title={gathering.name}
+                      onClick={(e) => {
+                        if (!isDragging) {
+                          openReorderModal();
+                        }
+                      }}
+                      className="h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                      title="Edit gathering order"
                     >
-                      <div className="flex items-center justify-center relative">
-                        <span className="truncate block w-full text-center">
-                          {getSmartTruncatedName(gathering.name, (orderedGatherings.length ? orderedGatherings : gatherings).map(g => g.name), 17)}
+                      <div className="flex items-center justify-center h-full">
+                        <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
+                          <PencilIcon className="h-3 w-3" />
+                          <span>Edit</span>
                         </span>
-                        {/* Subtle indicator when text is truncated */}
-                        <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" 
-                             style={{ display: gathering.name.length > 17 ? 'block' : 'none' }} 
-                             title="Full name available on hover" />
                       </div>
                     </button>
-
                   </div>
-                ))}
+                </div>
                 
-
-                
-                {/* Dropdown for additional tabs */}
-                {(orderedGatherings.length ? orderedGatherings : gatherings).length > 2 && (
-                  <div className="relative flex-shrink-0" data-gathering-dropdown>
-                    <button
-                      onClick={() => setShowGatheringDropdown(!showGatheringDropdown)}
-                      className="py-2 px-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-t-lg border border-gray-300"
-                    >
-                      <EllipsisHorizontalIcon className="h-4 w-4" />
-                    </button>
-                    
-                    {showGatheringDropdown && (
-                      <div className="absolute top-full right-0 mt-1 w-56 bg-white rounded-md shadow-lg border border-gray-200 z-50">
-                        <div className="py-1">
-                          {(orderedGatherings.length ? orderedGatherings : gatherings).slice(2).map((gathering, index) => {
-                            const actualIndex = index + 2; // Account for the first 2 tabs
-                            return (
-                              <div key={gathering.id} className="flex items-center justify-between px-4 py-2 text-sm hover:bg-gray-100">
-                                <button
-                                  draggable={false}
-                                  onClick={() => {
-                                    handleGatheringChange(gathering);
-                                    setShowGatheringDropdown(false);
-                                  }}
-                                  className={`text-left flex-1 ${
-                                    selectedGathering?.id === gathering.id
-                                      ? 'bg-primary-50 text-primary-700 font-medium'
-                                      : 'text-gray-700'
-                                  }`}
-                                  title={gathering.name}
-                                >
-                                  <div className="truncate" title={gathering.name}>
-                                    {gathering.name}
-                                  </div>
-                                </button>
-
-                              </div>
-                            );
-                          })}
-                          <div className="my-1 border-t border-gray-200" />
-                          <button
-                            onClick={() => { setShowGatheringDropdown(false); openReorderModal(); }}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
-                          >
-                            <PencilIcon className="h-4 w-4 text-gray-500" />
-                            <span>Edit order</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                {/* Fade indicators */}
+                <div className="absolute top-0 left-0 w-4 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                {showRightFade && (
+                  <div className="absolute top-0 right-0 w-4 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
                 )}
               </div>
             </div>
             
-            {/* Desktop: Show all tabs; edit button on the right */}
-            <nav className="hidden md:flex -mb-px items-center w-full space-x-2" aria-label="Tabs">
-              <div className="flex items-center space-x-2 overflow-x-auto">
-                {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
-                  <button
-                    key={gathering.id}
-                    draggable={false}
-                    onClick={() => handleGatheringChange(gathering)}
-                    className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg group ${
-                      selectedGathering?.id === gathering.id
-                        ? 'bg-primary-500 text-white'
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                    }`}
-                    title={gathering.name}
-                  >
-                    <div className="flex items-center space-x-2 relative">
-                      <span className="truncate max-w-32">
-                        {getSmartTruncatedName(gathering.name, (orderedGatherings.length ? orderedGatherings : gatherings).map(g => g.name), 20)}
-                      </span>
-                      {/* Subtle indicator when text is truncated */}
-                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" 
-                           style={{ display: gathering.name.length > 20 ? 'block' : 'none' }} 
-                           title="Full name available on hover" />
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="ml-auto">
-                <button
-                  type="button"
-                  onClick={openReorderModal}
-                  className="py-1 px-2 text-xs rounded border text-gray-500 hover:bg-gray-100"
-                  title="Edit order"
+            {/* Desktop: Horizontal scrollable tabs with fade indicators */}
+            <nav className="hidden md:flex -mb-px items-center w-full" aria-label="Tabs">
+              <div className="relative flex-1 overflow-hidden">
+                <div 
+                  ref={desktopTabSliderRef}
+                  className="flex items-center space-x-2 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider" 
+                  style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
+                  onMouseDown={(e) => handleMouseDown(e, desktopTabSliderRef)}
+                  onMouseLeave={() => handleMouseLeave(desktopTabSliderRef)}
+                  onMouseUp={() => handleMouseUp(desktopTabSliderRef)}
+                  onMouseMove={(e) => handleMouseMove(e, desktopTabSliderRef)}
                 >
-                  <PencilIcon className="h-4 w-4" />
-                </button>
+                  {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
+                    <div key={gathering.id} className="flex-shrink-0">
+                      <button
+                        draggable={false}
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            handleGatheringChange(gathering);
+                          }
+                        }}
+                        className={`h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
+                          selectedGathering?.id === gathering.id
+                            ? 'bg-primary-500 text-white'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                        title={gathering.name}
+                      >
+                        <div className="flex items-center justify-center h-full">
+                          <span className="text-center leading-tight whitespace-nowrap">
+                            {gathering.name}
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                  
+                  {/* Edit Tab */}
+                  <div className="flex-shrink-0">
+                    <button
+                      draggable={false}
+                      onClick={(e) => {
+                        if (!isDragging) {
+                          openReorderModal();
+                        }
+                      }}
+                      className="h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                      title="Edit gathering order"
+                    >
+                      <div className="flex items-center justify-center h-full">
+                        <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
+                          <PencilIcon className="h-3 w-3" />
+                          <span>Edit</span>
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Fade indicators */}
+                <div className="absolute top-0 left-0 w-6 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                {showDesktopRightFade && (
+                  <div className="absolute top-0 right-0 w-6 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
+                )}
               </div>
             </nav>
           </div>

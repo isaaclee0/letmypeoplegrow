@@ -67,9 +67,14 @@ router.get('/test', requireRole(['admin', 'coordinator']), async (req, res) => {
 // Get dashboard metrics
 router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
-    const { gatheringTypeId, startDate, endDate } = req.query;
+    const { gatheringTypeId, gatheringTypeIds, startDate, endDate } = req.query;
     
-    console.log('Getting dashboard metrics:', { gatheringTypeId, startDate, endDate });
+    // Handle both single gatheringTypeId and multiple gatheringTypeIds
+    const gatheringIds = gatheringTypeIds ? 
+      (Array.isArray(gatheringTypeIds) ? gatheringTypeIds : [gatheringTypeIds]) :
+      (gatheringTypeId ? [gatheringTypeId] : []);
+    
+    console.log('Getting dashboard metrics:', { gatheringTypeId, gatheringTypeIds, gatheringIds, startDate, endDate });
     
     // Validate date parameters
     if (!startDate || !endDate) {
@@ -103,54 +108,154 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       }
     };
     
+    // Check gathering types for all selected gatherings
+    let gatheringTypes = [];
+    let isHeadcountGathering = false;
+    let hasMixedGatheringTypes = false;
+    
+    if (gatheringIds.length > 0) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        const gatheringTypeResults = await Database.query(`
+          SELECT id, attendance_type FROM gathering_types 
+          WHERE id IN (${placeholders}) AND church_id = ?
+        `, [...gatheringIds, req.user.church_id]);
+        
+        gatheringTypes = gatheringTypeResults;
+        const headcountGatherings = gatheringTypes.filter(g => g.attendance_type === 'headcount');
+        const standardGatherings = gatheringTypes.filter(g => g.attendance_type === 'standard');
+        
+        isHeadcountGathering = headcountGatherings.length > 0 && standardGatherings.length === 0;
+        hasMixedGatheringTypes = headcountGatherings.length > 0 && standardGatherings.length > 0;
+      } catch (err) {
+        console.error('Error checking gathering types:', err);
+      }
+    }
+
     // Get attendance sessions and records for the specified period
     let attendanceData = [];
     try {
-      attendanceData = await Database.query(`
-        SELECT 
-          as_table.session_date,
-          as_table.gathering_type_id,
-          COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as present_individuals,
-          COUNT(DISTINCT gl.individual_id) - COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as absent_individuals,
-          COUNT(DISTINCT gl.individual_id) as total_individuals
-        FROM attendance_sessions as_table
-        LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
-        LEFT JOIN gathering_lists gl ON as_table.gathering_type_id = gl.gathering_type_id
-        LEFT JOIN individuals i ON gl.individual_id = i.id
-        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-         AND (i.is_active = true OR ar.present = true)
-        AND as_table.church_id = ?
-        ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-        GROUP BY as_table.session_date, as_table.gathering_type_id
-        ORDER BY as_table.session_date DESC
-      `, gatheringTypeId ? [startDate, endDate, req.user.church_id, gatheringTypeId] : [startDate, endDate, req.user.church_id]);
+      if (isHeadcountGathering && !hasMixedGatheringTypes) {
+        // For headcount-only gatherings, get data from headcount_records table
+        // Respect the headcount_mode (separate, combined, averaged) for each session
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        attendanceData = await Database.query(`
+          SELECT 
+            as_table.session_date,
+            as_table.gathering_type_id,
+            CASE 
+              WHEN as_table.headcount_mode = 'combined' THEN COALESCE(SUM(h.headcount), 0)
+              WHEN as_table.headcount_mode = 'averaged' THEN COALESCE(ROUND(AVG(h.headcount)), 0)
+              ELSE COALESCE(MAX(h.headcount), 0) -- 'separate' mode or default: use the latest/max headcount
+            END as present_individuals,
+            0 as absent_individuals,
+            CASE 
+              WHEN as_table.headcount_mode = 'combined' THEN COALESCE(SUM(h.headcount), 0)
+              WHEN as_table.headcount_mode = 'averaged' THEN COALESCE(ROUND(AVG(h.headcount)), 0)
+              ELSE COALESCE(MAX(h.headcount), 0) -- 'separate' mode or default: use the latest/max headcount
+            END as total_individuals
+          FROM attendance_sessions as_table
+          LEFT JOIN headcount_records h ON as_table.id = h.session_id
+          WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+            AND as_table.gathering_type_id IN (${placeholders})
+            AND as_table.church_id = ?
+          GROUP BY as_table.session_date, as_table.gathering_type_id, as_table.headcount_mode
+          ORDER BY as_table.session_date DESC
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+      } else {
+        // For standard gatherings or mixed gathering types, use the existing query
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        attendanceData = await Database.query(`
+          SELECT 
+            as_table.session_date,
+            as_table.gathering_type_id,
+            COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as present_individuals,
+            COUNT(DISTINCT gl.individual_id) - COUNT(DISTINCT CASE WHEN ar.present = true THEN ar.individual_id END) as absent_individuals,
+            COUNT(DISTINCT gl.individual_id) as total_individuals
+          FROM attendance_sessions as_table
+          LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
+          LEFT JOIN gathering_lists gl ON as_table.gathering_type_id = gl.gathering_type_id
+          LEFT JOIN individuals i ON gl.individual_id = i.id
+          WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+           AND (i.is_active = true OR ar.present = true)
+          AND as_table.church_id = ?
+          AND as_table.gathering_type_id IN (${placeholders})
+          GROUP BY as_table.session_date, as_table.gathering_type_id
+          ORDER BY as_table.session_date DESC
+        `, [startDate, endDate, req.user.church_id, ...gatheringIds]);
+      }
+      
+      // If we have mixed gathering types, also get headcount data and combine it
+      if (hasMixedGatheringTypes) {
+        const headcountGatheringIds = gatheringTypes.filter(g => g.attendance_type === 'headcount').map(g => g.id);
+        if (headcountGatheringIds.length > 0) {
+          const placeholders = headcountGatheringIds.map(() => '?').join(',');
+          const headcountData = await Database.query(`
+            SELECT 
+              as_table.session_date,
+              as_table.gathering_type_id,
+              CASE 
+                WHEN as_table.headcount_mode = 'combined' THEN COALESCE(SUM(h.headcount), 0)
+                WHEN as_table.headcount_mode = 'averaged' THEN COALESCE(ROUND(AVG(h.headcount)), 0)
+                ELSE COALESCE(MAX(h.headcount), 0)
+              END as present_individuals,
+              0 as absent_individuals,
+              CASE 
+                WHEN as_table.headcount_mode = 'combined' THEN COALESCE(SUM(h.headcount), 0)
+                WHEN as_table.headcount_mode = 'averaged' THEN COALESCE(ROUND(AVG(h.headcount)), 0)
+                ELSE COALESCE(MAX(h.headcount), 0)
+              END as total_individuals
+            FROM attendance_sessions as_table
+            LEFT JOIN headcount_records h ON as_table.id = h.session_id
+            WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+              AND as_table.gathering_type_id IN (${placeholders})
+              AND as_table.church_id = ?
+            GROUP BY as_table.session_date, as_table.gathering_type_id, as_table.headcount_mode
+            ORDER BY as_table.session_date DESC
+          `, [startDate, endDate, ...headcountGatheringIds, req.user.church_id]);
+          
+          // Combine the data
+          attendanceData = [...attendanceData, ...headcountData];
+        }
+      }
     } catch (err) {
       console.error('Error querying attendance data:', err);
       throw new Error(`Failed to query attendance data: ${err.message}`);
     }
 
     console.log('Attendance data query completed. Found', attendanceData.length, 'sessions');
+    if (isHeadcountGathering && attendanceData.length > 0) {
+      console.log('Headcount data sample:', attendanceData.slice(0, 3).map(s => ({
+        date: s.session_date,
+        present: s.present_individuals,
+        total: s.total_individuals
+      })));
+    }
 
     // Prepare visitor breakdown per session first (used to decide which sessions to include in charts)
+    // Skip visitor data for headcount-only gatherings since they don't track individual visitors
     console.log('Querying visitor breakdown per session...');
     let visitorsBySession = [];
-    try {
-      visitorsBySession = await Database.query(`
-        SELECT 
-          as_table.session_date,
-          SUM(CASE WHEN i.people_type = 'local_visitor' AND ar.present = true THEN 1 ELSE 0 END) as local_visitors_present,
-          SUM(CASE WHEN i.people_type = 'traveller_visitor' AND ar.present = true THEN 1 ELSE 0 END) as traveller_visitors_present
-        FROM attendance_sessions as_table
-        LEFT JOIN attendance_records ar ON ar.session_id = as_table.id
-        LEFT JOIN individuals i ON i.id = ar.individual_id
-        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-          ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-          AND as_table.church_id = ?
-        GROUP BY as_table.session_date
-        ORDER BY as_table.session_date DESC
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
-    } catch (err) {
-      console.error('Error querying visitors by session (attendance_records):', err);
+    if (!isHeadcountGathering || hasMixedGatheringTypes) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        visitorsBySession = await Database.query(`
+          SELECT 
+            as_table.session_date,
+            SUM(CASE WHEN i.people_type = 'local_visitor' AND ar.present = true THEN 1 ELSE 0 END) as local_visitors_present,
+            SUM(CASE WHEN i.people_type = 'traveller_visitor' AND ar.present = true THEN 1 ELSE 0 END) as traveller_visitors_present
+          FROM attendance_sessions as_table
+          LEFT JOIN attendance_records ar ON ar.session_id = as_table.id
+          LEFT JOIN individuals i ON i.id = ar.individual_id
+          WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+            AND as_table.gathering_type_id IN (${placeholders})
+            AND as_table.church_id = ?
+          GROUP BY as_table.session_date
+          ORDER BY as_table.session_date DESC
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+      } catch (err) {
+        console.error('Error querying visitors by session (attendance_records):', err);
+      }
     }
 
     // Legacy visitors table removed - visitors are now tracked via attendance_records with is_visitor flag
@@ -168,11 +273,16 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     // For stats purposes ignore sessions with zero attendance (no one present)
     // BUT include sessions that have visitor counts > 0 so the visitor chart is populated
+    // For headcount-only gatherings, only filter by headcount > 0
     const attendanceDataFiltered = attendanceData.filter((s) => {
-      const present = (s.present_individuals || 0) > 0;
-      const vc = visitorCountsByDate.get(normalizeDateKey(s.session_date)) || { local: 0, traveller: 0 };
-      const visitorsPresent = (vc.local + vc.traveller) > 0;
-      return present || visitorsPresent;
+      const present = parseInt(s.present_individuals || 0, 10) > 0;
+      if (isHeadcountGathering && !hasMixedGatheringTypes) {
+        return present; // For headcount-only gatherings, only check if headcount > 0
+      } else {
+        const vc = visitorCountsByDate.get(normalizeDateKey(s.session_date)) || { local: 0, traveller: 0 };
+        const visitorsPresent = (vc.local + vc.traveller) > 0;
+        return present || visitorsPresent;
+      }
     });
     console.log('After filtering sessions (present>0 OR visitors>0):', attendanceDataFiltered.length);
 
@@ -231,11 +341,21 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     // Calculate basic metrics
     const totalSessions = attendanceDataFiltered.length;
-    const totalPresent = attendanceDataFiltered.reduce((sum, session) => sum + (session.present_individuals || 0), 0);
-    const totalAbsent = attendanceDataFiltered.reduce((sum, session) => sum + (session.absent_individuals || 0), 0);
+    const totalPresent = attendanceDataFiltered.reduce((sum, session) => sum + parseInt(session.present_individuals || 0, 10), 0);
+    const totalAbsent = attendanceDataFiltered.reduce((sum, session) => sum + parseInt(session.absent_individuals || 0, 10), 0);
     const averageAttendance = totalSessions > 0 ? Math.round(totalPresent / totalSessions) : 0;
     
     console.log('Calculated basic metrics:', { totalSessions, totalPresent, totalAbsent, averageAttendance });
+    if (isHeadcountGathering) {
+      console.log('Headcount metrics debug:', {
+        filteredSessions: attendanceDataFiltered.length,
+        totalSessions: attendanceData.length,
+        sampleData: attendanceDataFiltered.slice(0, 3).map(s => ({
+          date: s.session_date,
+          present: s.present_individuals
+        }))
+      });
+    }
     
     // Calculate growth rate with weekly aggregation
     const weeklyData = {};
@@ -249,7 +369,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       if (!weeklyData[weekKey]) {
         weeklyData[weekKey] = { totalPresent: 0, sessionCount: 0 };
       }
-      weeklyData[weekKey].totalPresent += session.present_individuals || 0;
+      weeklyData[weekKey].totalPresent += parseInt(session.present_individuals || 0, 10);
       weeklyData[weekKey].sessionCount += 1;
     });
 
@@ -267,64 +387,73 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 
     console.log('Calculated growth rate:', growthRate);
 
-    // Get total regular individuals for context
+    // Get total regular individuals for context (skip for headcount-only gatherings)
     console.log('Querying total regular individuals...');
     let totalRegularIndividuals = [{ total: 0 }];
-    try {
-      totalRegularIndividuals = await Database.query(`
-        SELECT COUNT(DISTINCT i.id) as total
-        FROM individuals i
-        JOIN gathering_lists gl ON i.id = gl.individual_id
-        WHERE i.is_active = true
-          AND i.people_type = 'regular'
-          AND i.church_id = ?
-          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
-      `, gatheringTypeId ? [req.user.church_id, gatheringTypeId] : [req.user.church_id]);
-    } catch (err) {
-      console.error('Error querying total regular individuals:', err);
-      // Don't throw error, just use default value
+    if (!isHeadcountGathering || hasMixedGatheringTypes) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        totalRegularIndividuals = await Database.query(`
+          SELECT COUNT(DISTINCT i.id) as total
+          FROM individuals i
+          JOIN gathering_lists gl ON i.id = gl.individual_id
+          WHERE i.is_active = true
+            AND i.people_type = 'regular'
+            AND i.church_id = ?
+            AND gl.gathering_type_id IN (${placeholders})
+        `, [req.user.church_id, ...gatheringIds]);
+      } catch (err) {
+        console.error('Error querying total regular individuals:', err);
+        // Don't throw error, just use default value
+      }
     }
 
     console.log('Total regular individuals:', totalRegularIndividuals[0]?.total || 0);
 
-    // Count regular individuals added in the selected period
+    // Count regular individuals added in the selected period (skip for headcount-only gatherings)
     console.log('Querying regular individuals added in period...');
     let addedRegularsInPeriod = [{ total: 0 }];
-    try {
-      addedRegularsInPeriod = await Database.query(`
-        SELECT COUNT(DISTINCT gl.individual_id) as total
-        FROM gathering_lists gl
-        JOIN individuals i ON i.id = gl.individual_id
-        WHERE gl.added_at >= ? AND gl.added_at <= ?
-          ${gatheringTypeId ? 'AND gl.gathering_type_id = ?' : ''}
-          AND i.people_type = 'regular'
-          AND i.is_active = true
-          AND i.church_id = ?
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
-    } catch (err) {
-      console.error('Error querying added regulars in period:', err);
+    if (!isHeadcountGathering || hasMixedGatheringTypes) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        addedRegularsInPeriod = await Database.query(`
+          SELECT COUNT(DISTINCT gl.individual_id) as total
+          FROM gathering_lists gl
+          JOIN individuals i ON i.id = gl.individual_id
+          WHERE gl.added_at >= ? AND gl.added_at <= ?
+            AND gl.gathering_type_id IN (${placeholders})
+            AND i.people_type = 'regular'
+            AND i.is_active = true
+            AND i.church_id = ?
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+      } catch (err) {
+        console.error('Error querying added regulars in period:', err);
+      }
     }
 
-    // Get total visitors for the period from both systems
+    // Get total visitors for the period from both systems (skip for headcount-only gatherings)
     console.log('Querying total visitors...');
     let totalVisitors = [{ total: 0 }];
-    try {
-      totalVisitors = await Database.query(`
-        SELECT COUNT(DISTINCT ar.individual_id) as total
-        FROM attendance_records ar
-        JOIN attendance_sessions as_table ON ar.session_id = as_table.id
-        JOIN individuals i ON ar.individual_id = i.id
-        WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-         AND i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND ar.present = true
-        ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
-        AND as_table.church_id = ?
-      `, gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]);
-      
-      console.log(`Total visitors (attendance_records) found: ${totalVisitors[0]?.total || 0}`);
-    } catch (err) {
-      console.error('Error querying total visitors (attendance_records):', err);
-      // Don't throw error, just use default value
+    if (!isHeadcountGathering || hasMixedGatheringTypes) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        totalVisitors = await Database.query(`
+          SELECT COUNT(DISTINCT ar.individual_id) as total
+          FROM attendance_records ar
+          JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+          JOIN individuals i ON ar.individual_id = i.id
+          WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+           AND i.people_type IN ('local_visitor', 'traveller_visitor')
+          AND ar.present = true
+          AND as_table.gathering_type_id IN (${placeholders})
+          AND as_table.church_id = ?
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+        
+        console.log(`Total visitors (attendance_records) found: ${totalVisitors[0]?.total || 0}`);
+      } catch (err) {
+        console.error('Error querying total visitors (attendance_records):', err);
+        // Don't throw error, just use default value
+      }
     }
 
     // Legacy visitors table removed - all visitor counts come from attendance_records now
@@ -348,6 +477,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
         const vc = visitorCountsByDate.get(key) || { local: 0, traveller: 0 };
         return {
           date: key,
+          gatheringId: session.gathering_type_id,
           present: session.present_individuals || 0,
           absent: session.absent_individuals || 0,
           total: (session.present_individuals || 0) + (session.absent_individuals || 0),
@@ -357,9 +487,26 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       })
     };
 
-    console.log('Final metrics calculated successfully');
+    // Get gathering names for the response
+    let gatheringNames = {};
+    if (gatheringIds.length > 0) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        const gatheringInfo = await Database.query(`
+          SELECT id, name FROM gathering_types 
+          WHERE id IN (${placeholders}) AND church_id = ?
+        `, [...gatheringIds, req.user.church_id]);
+        
+        gatheringInfo.forEach(g => {
+          gatheringNames[g.id] = g.name;
+        });
+      } catch (err) {
+        console.error('Error getting gathering names:', err);
+      }
+    }
 
-    res.json({ metrics });
+    console.log('Final metrics calculated successfully');
+    res.json({ metrics, gatheringNames });
   } catch (error) {
     console.error('Get dashboard error:', error);
     console.error('Error stack:', error.stack);
@@ -373,9 +520,14 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 // Export data endpoint
 router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
-    const { gatheringTypeId, startDate, endDate } = req.query;
+    const { gatheringTypeId, gatheringTypeIds, startDate, endDate } = req.query;
     
-    console.log('Exporting data:', { gatheringTypeId, startDate, endDate });
+    // Handle both single gatheringTypeId and multiple gatheringTypeIds
+    const gatheringIds = gatheringTypeIds ? 
+      (Array.isArray(gatheringTypeIds) ? gatheringTypeIds : [gatheringTypeIds]) :
+      (gatheringTypeId ? [gatheringTypeId] : []);
+    
+    console.log('Exporting data:', { gatheringTypeId, gatheringTypeIds, gatheringIds, startDate, endDate });
     
     // Validate date parameters
     if (!startDate || !endDate) {
@@ -386,19 +538,20 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     console.log('Executing database query for export...');
     
     // Get all sessions in the date range to determine column headers
+    const placeholders = gatheringIds.map(() => '?').join(',');
     const sessionsQuery = `
       SELECT DISTINCT as_table.session_date, gt.name as gathering_name
       FROM attendance_sessions as_table
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-      ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+      AND as_table.gathering_type_id IN (${placeholders})
       AND as_table.church_id = ?
       ORDER BY as_table.session_date ASC
     `;
     
     const sessions = await Database.query(
       sessionsQuery, 
-      gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]
+      [startDate, endDate, ...gatheringIds, req.user.church_id]
     );
     
     console.log(`Found ${sessions.length} sessions in date range`);
@@ -426,7 +579,7 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
           WHERE ar.individual_id = i.id 
             AND as_table.session_date >= ? 
             AND as_table.session_date <= ?
-            ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+            AND as_table.gathering_type_id IN (${placeholders})
         )
       ORDER BY 
         CASE 
@@ -440,7 +593,7 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     
     const allPeople = await Database.query(
       allPeopleQuery,
-      gatheringTypeId ? [req.user.church_id, startDate, endDate, gatheringTypeId] : [req.user.church_id, startDate, endDate]
+      [req.user.church_id, startDate, endDate, ...gatheringIds]
     );
     
     console.log(`Found ${allPeople.length} people total`);
@@ -454,13 +607,13 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
       FROM attendance_records ar
       JOIN attendance_sessions as_table ON ar.session_id = as_table.id
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
-      ${gatheringTypeId ? 'AND as_table.gathering_type_id = ?' : ''}
+      AND as_table.gathering_type_id IN (${placeholders})
       AND as_table.church_id = ?
     `;
     
     const attendanceData = await Database.query(
       attendanceQuery,
-      gatheringTypeId ? [startDate, endDate, gatheringTypeId, req.user.church_id] : [startDate, endDate, req.user.church_id]
+      [startDate, endDate, ...gatheringIds, req.user.church_id]
     );
     
     // Create a map for quick attendance lookup

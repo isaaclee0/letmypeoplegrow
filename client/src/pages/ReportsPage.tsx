@@ -14,9 +14,11 @@ const ReportsPage: React.FC = () => {
   const { user } = useAuth();
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
+  const [selectedGatherings, setSelectedGatherings] = useState<GatheringType[]>([]);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [metrics, setMetrics] = useState<any>(null);
+  const [gatheringNames, setGatheringNames] = useState<Record<number, string>>({});
   // Removed YoY and monthly visitors; charts now reflect selected period only
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -51,6 +53,22 @@ const ReportsPage: React.FC = () => {
 
   // Check if user has access to reports
   const hasReportsAccess = user?.role === 'admin' || user?.role === 'coordinator';
+
+  // Check if the selected gathering is a headcount gathering
+  const isHeadcountGathering = selectedGathering?.attendanceType === 'headcount';
+  
+  // Check if we have multiple gatherings selected
+  const hasMultipleGatherings = selectedGatherings.length > 1;
+  
+  // Check if we have mixed gathering types (both headcount and standard)
+  const hasMixedGatheringTypes = selectedGatherings.length > 0 && 
+    selectedGatherings.some(g => g.attendanceType === 'headcount') && 
+    selectedGatherings.some(g => g.attendanceType === 'standard');
+  
+  // Determine if we should show visitor information
+  const shouldShowVisitorInfo = hasMixedGatheringTypes || 
+    (selectedGatherings.length === 1 && selectedGatherings[0].attendanceType === 'standard') ||
+    (!hasMultipleGatherings && selectedGathering?.attendanceType === 'standard');
 
   // Initialize default date range (last 4 weeks)
   useEffect(() => {
@@ -95,6 +113,12 @@ const ReportsPage: React.FC = () => {
           setSelectedGathering(ordered[0]);
         }
       }
+      
+      // Initialize selectedGatherings with the default gathering
+      if (ordered.length > 0 && selectedGatherings.length === 0) {
+        const defaultGathering = selectedGathering || ordered[0];
+        setSelectedGatherings([defaultGathering]);
+      }
     } catch (err) {
       setError('Failed to load gatherings');
     }
@@ -112,27 +136,28 @@ const ReportsPage: React.FC = () => {
   // }, []);
 
   const loadMetrics = useCallback(async () => {
-    if (!selectedGathering || !startDate || !endDate) return;
+    if (selectedGatherings.length === 0 || !startDate || !endDate) return;
     
     setIsLoading(true);
     try {
       const params = {
-        gatheringTypeId: selectedGathering.id,
+        gatheringTypeIds: selectedGatherings.map(g => g.id),
         startDate,
         endDate
       };
       const response = await reportsAPI.getDashboard(params);
       setMetrics(response.data.metrics);
+      setGatheringNames(response.data.gatheringNames || {});
     } catch (err) {
       setError('Failed to load metrics');
     } finally {
       setIsLoading(false);
     }
-  }, [selectedGathering?.id, startDate, endDate]);
+  }, [selectedGatherings, startDate, endDate]);
 
   // Load recent session details to derive absence streaks and recent visitors
   const loadAbsenceAndVisitorDetails = useCallback(async () => {
-    if (!selectedGathering || !metrics?.attendanceData) return;
+    if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
     setIsLoadingDetails(true);
     try {
       const sessionDatesDesc: string[] = [...metrics.attendanceData]
@@ -142,7 +167,9 @@ const ReportsPage: React.FC = () => {
       const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
 
       const responses = await Promise.all(
-        limitedDates.map((d: string) => attendanceAPI.get(selectedGathering.id, d))
+        limitedDates.flatMap((d: string) => 
+          selectedGatherings.map(g => attendanceAPI.get(g.id, d))
+        )
       );
 
       type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; statuses: boolean[] };
@@ -261,7 +288,7 @@ const ReportsPage: React.FC = () => {
     } finally {
       setIsLoadingDetails(false);
     }
-  }, [selectedGathering?.id, metrics?.attendanceData]);
+  }, [selectedGatherings, metrics?.attendanceData]);
 
   // Removed YoY metrics logic
 
@@ -314,14 +341,14 @@ const ReportsPage: React.FC = () => {
   }, [hasReportsAccess, loadGatherings]); // Removed loadDataAccessSettings from dependency array
 
   useEffect(() => {
-    if (!hasReportsAccess || !selectedGathering || !startDate || !endDate) return;
+    if (!hasReportsAccess || selectedGatherings.length === 0 || !startDate || !endDate) return;
     loadMetrics();
-  }, [selectedGathering, startDate, endDate, hasReportsAccess, loadMetrics]);
+  }, [selectedGatherings, startDate, endDate, hasReportsAccess, loadMetrics]);
 
   useEffect(() => {
-    if (!hasReportsAccess || !selectedGathering || !metrics?.attendanceData?.length) return;
+    if (!hasReportsAccess || selectedGatherings.length === 0 || !metrics?.attendanceData?.length) return;
     loadAbsenceAndVisitorDetails();
-  }, [hasReportsAccess, selectedGathering, metrics?.attendanceData, loadAbsenceAndVisitorDetails]);
+  }, [hasReportsAccess, selectedGatherings, metrics?.attendanceData, loadAbsenceAndVisitorDetails]);
 
   // Attendance chart based on selected period sessions
   const formatShortDate = (isoDate: string) => {
@@ -345,35 +372,75 @@ const ReportsPage: React.FC = () => {
 
   const attendanceChartData = useMemo(() => {
     if (!metrics?.attendanceData) return { labels: [], datasets: [] };
-    const byDate: Record<string, number> = {};
+    
+    // Group data by date and gathering
+    const byDate: Record<string, Record<number, number>> = {};
     metrics.attendanceData.forEach((s: any) => {
-      byDate[formatShortDate(s.date)] = s.present || 0;
+      const dateKey = formatShortDate(s.date);
+      const value = s.present_individuals || s.present || 0;
+      const numericValue = typeof value === 'string' ? parseInt(value, 10) : value;
+      
+      if (!byDate[dateKey]) {
+        byDate[dateKey] = {};
+      }
+      byDate[dateKey][s.gatheringId] = numericValue;
     });
-    const bars = attendanceChartLabels.map((d) => byDate[d] ?? 0);
-    const trend = movingAverage(bars, Math.min(3, Math.max(2, Math.floor(bars.length / 4) || 2)));
+
+    // Generate datasets for each gathering
+    const datasets: any[] = [];
+    const gatheringIds = Array.from(new Set(metrics.attendanceData.map((s: any) => s.gatheringId)));
+    
+    // Define colors for different gatherings - blue for first, orange for second
+    const colors = [
+      'rgba(37, 99, 235, 0.6)',   // Blue (first gathering - bottom of stack)
+      'rgba(249, 115, 22, 0.6)',  // Orange-500 (second gathering - on top)
+      'rgba(16, 185, 129, 0.6)',  // Green
+      'rgba(139, 92, 246, 0.6)',  // Purple
+      'rgba(236, 72, 153, 0.6)',  // Pink
+      'rgba(6, 182, 212, 0.6)',   // Cyan
+      'rgba(34, 197, 94, 0.6)',   // Emerald
+      'rgba(245, 158, 11, 0.6)',  // Yellow
+    ];
+
+    gatheringIds.forEach((gatheringId, index) => {
+      const gatheringName = gatheringNames[gatheringId] || `Gathering ${gatheringId}`;
+      const data = attendanceChartLabels.map((dateKey) => {
+        return byDate[dateKey]?.[gatheringId] || 0;
+      });
+      
+      datasets.push({
+        type: 'bar' as const,
+        label: gatheringName,
+        data: data,
+        backgroundColor: colors[index % colors.length],
+        borderColor: colors[index % colors.length].replace('0.6', '1'),
+        borderWidth: 1
+      });
+    });
+
+    // Calculate trend line from total values
+    const totalBars = attendanceChartLabels.map((dateKey) => {
+      return Object.values(byDate[dateKey] || {}).reduce((sum, val) => sum + val, 0);
+    });
+    const trend = movingAverage(totalBars, Math.min(3, Math.max(2, Math.floor(totalBars.length / 4) || 2)));
+    
+    datasets.push({
+      type: 'line' as const,
+      label: 'Trend',
+      data: trend,
+      borderColor: 'rgba(16, 185, 129, 1)',
+      backgroundColor: 'rgba(16, 185, 129, 0.1)',
+      tension: 0.3,
+      fill: false,
+      pointRadius: 0,
+      borderWidth: 2,
+    });
+
     return {
       labels: attendanceChartLabels,
-      datasets: [
-        {
-          type: 'bar' as const,
-          label: 'Attendance',
-          data: bars,
-          backgroundColor: 'rgba(37, 99, 235, 0.6)'
-        },
-        {
-          type: 'line' as const,
-          label: 'Trend',
-          data: trend,
-          borderColor: 'rgba(16, 185, 129, 1)',
-          backgroundColor: 'rgba(16, 185, 129, 0.1)',
-          tension: 0.3,
-          fill: false,
-          pointRadius: 0,
-          borderWidth: 2,
-        }
-      ]
+      datasets: datasets
     };
-  }, [metrics?.attendanceData, attendanceChartLabels]);
+  }, [metrics?.attendanceData, attendanceChartLabels, gatheringNames]);
 
   // Visitors stacked bars (local vs traveller) over selected period
   const visitorsChartLabels = useMemo(() => attendanceChartLabels, [attendanceChartLabels]);
@@ -408,7 +475,7 @@ const ReportsPage: React.FC = () => {
   }, [metrics?.attendanceData, visitorsChartLabels]);
 
   const loadAttendanceDetails = useCallback(async () => {
-    if (!selectedGathering || !metrics?.attendanceData) return;
+    if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
     setIsLoadingDetails(true);
     try {
       const sessionDatesDesc: string[] = [...metrics.attendanceData]
@@ -418,7 +485,9 @@ const ReportsPage: React.FC = () => {
       const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
 
       const responses = await Promise.all(
-        limitedDates.map((d: string) => attendanceAPI.get(selectedGathering.id, d))
+        limitedDates.flatMap((d: string) => 
+          selectedGatherings.map(g => attendanceAPI.get(g.id, d))
+        )
       );
 
       type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
@@ -476,7 +545,7 @@ const ReportsPage: React.FC = () => {
     } finally {
       setIsLoadingDetails(false);
     }
-  }, [selectedGathering?.id, metrics?.attendanceData]);
+  }, [selectedGatherings, metrics?.attendanceData]);
 
   const quickDateOptions = [
     { 
@@ -547,8 +616,8 @@ const ReportsPage: React.FC = () => {
   };
 
   const handleExportData = async () => {
-    if (!selectedGathering || !startDate || !endDate) {
-      setError('Please select a gathering and date range before exporting');
+    if (selectedGatherings.length === 0 || !startDate || !endDate) {
+      setError('Please select at least one gathering and date range before exporting');
       return;
     }
 
@@ -557,7 +626,7 @@ const ReportsPage: React.FC = () => {
       setError('');
       
       const params = {
-        gatheringTypeId: selectedGathering.id,
+        gatheringTypeIds: selectedGatherings.map(g => g.id),
         startDate,
         endDate
       };
@@ -578,7 +647,8 @@ const ReportsPage: React.FC = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `attendance-report-${selectedGathering.name}-${startDate}-to-${endDate}.tsv`;
+      const gatheringNames = selectedGatherings.map(g => g.name).join('-');
+      a.download = `attendance-report-${gatheringNames}-${startDate}-to-${endDate}.tsv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -708,24 +778,40 @@ const ReportsPage: React.FC = () => {
 
             {/* Gathering Selection */}
             <div>
-              <label htmlFor="gathering" className="block text-sm font-medium text-gray-700">
-                Gathering Type
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Gathering Types
               </label>
-              <select
-                id="gathering"
-                value={selectedGathering?.id || ''}
-                onChange={(e) => {
-                  const gathering = gatherings.find((g: GatheringType) => g.id === parseInt(e.target.value));
-                  setSelectedGathering(gathering || null);
-                }}
-                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md"
-              >
+              <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
                 {gatherings.map((gathering) => (
-                  <option key={gathering.id} value={gathering.id}>
-                    {gathering.name}
-                  </option>
+                  <label key={gathering.id} className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedGatherings.some(g => g.id === gathering.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedGatherings([...selectedGatherings, gathering]);
+                        } else {
+                          setSelectedGatherings(selectedGatherings.filter(g => g.id !== gathering.id));
+                        }
+                      }}
+                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                    />
+                    <span className="ml-2 text-sm text-gray-700">
+                      {gathering.name}
+                      <span className={`ml-1 text-xs px-2 py-1 rounded-full ${
+                        gathering.attendanceType === 'headcount' 
+                          ? 'bg-blue-100 text-blue-800' 
+                          : 'bg-green-100 text-green-800'
+                      }`}>
+                        {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
+                      </span>
+                    </span>
+                  </label>
                 ))}
-              </select>
+              </div>
+              {selectedGatherings.length === 0 && (
+                <p className="mt-1 text-sm text-red-600">Please select at least one gathering</p>
+              )}
             </div>
           </div>
         </div>
@@ -748,7 +834,10 @@ const ReportsPage: React.FC = () => {
               <div className="ml-5 w-0 flex-1">
                 <dl>
                   <dt className="text-sm font-medium text-gray-500 truncate">
-                    Average Attendance
+                    {hasMultipleGatherings 
+                      ? (hasMixedGatheringTypes ? 'Average Combined' : isHeadcountGathering ? 'Average Headcount' : 'Average Attendance')
+                      : (isHeadcountGathering ? 'Average Headcount' : 'Average Attendance')
+                    }
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
                     {isLoading ? '...' : (metrics?.averageAttendance || 0)}
@@ -781,58 +870,67 @@ const ReportsPage: React.FC = () => {
 
         {/* Removed Total Sessions tile */}
 
-        <div className="bg-white overflow-hidden shadow rounded-lg">
-          <div className="p-5">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <UsersIcon className="h-6 w-6 text-gray-400" />
-              </div>
-              <div className="ml-5 w-0 flex-1">
-                <dl>
-                  <dt className="text-sm font-medium text-gray-500 truncate">
-                    Total Regular Attenders
-                  </dt>
-                  <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : (metrics?.totalRegulars ?? metrics?.totalIndividuals ?? 0)}
-                  </dd>
-                  <dt className="mt-1 text-xs font-medium text-gray-500 truncate">
-                    Added in selected period
-                  </dt>
-                  <dd className="text-sm text-gray-700">
-                    {isLoading ? '...' : (metrics?.addedRegularsInPeriod || 0)}
-                  </dd>
-                </dl>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white overflow-hidden shadow rounded-lg">
-          <div className="p-5">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <UsersIcon className="h-6 w-6 text-gray-400" />
-              </div>
-              <div className="ml-5 w-0 flex-1">
-                <dl>
-                  <dt className="text-sm font-medium text-gray-500 truncate">
-                    Total Absences
-                  </dt>
-                  <dd className="text-lg font-medium text-gray-900">
-                    {isLoading ? '...' : (metrics?.totalAbsent || 0)}
-                  </dd>
-                </dl>
+        {shouldShowVisitorInfo && (
+          <>
+            <div className="bg-white overflow-hidden shadow rounded-lg">
+              <div className="p-5">
+                <div className="flex items-center">
+                  <div className="flex-shrink-0">
+                    <UsersIcon className="h-6 w-6 text-gray-400" />
+                  </div>
+                  <div className="ml-5 w-0 flex-1">
+                    <dl>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Total Regular Attenders
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {isLoading ? '...' : (metrics?.totalRegulars ?? metrics?.totalIndividuals ?? 0)}
+                      </dd>
+                      <dt className="mt-1 text-xs font-medium text-gray-500 truncate">
+                        Added in selected period
+                      </dt>
+                      <dd className="text-sm text-gray-700">
+                        {isLoading ? '...' : (metrics?.addedRegularsInPeriod || 0)}
+                      </dd>
+                    </dl>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+            <div className="bg-white overflow-hidden shadow rounded-lg">
+              <div className="p-5">
+                <div className="flex items-center">
+                  <div className="flex-shrink-0">
+                    <UsersIcon className="h-6 w-6 text-gray-400" />
+                  </div>
+                  <div className="ml-5 w-0 flex-1">
+                    <dl>
+                      <dt className="text-sm font-medium text-gray-500 truncate">
+                        Total Absences
+                      </dt>
+                      <dd className="text-lg font-medium text-gray-900">
+                        {isLoading ? '...' : (metrics?.totalAbsent || 0)}
+                      </dd>
+                    </dl>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className={`grid grid-cols-1 gap-6 ${!shouldShowVisitorInfo ? 'lg:grid-cols-1' : 'lg:grid-cols-2'}`}>
         {/* Attendance over selected period (per session) with trend line */}
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Attendance Over Selected Period</h3>
+            <h3 className="text-lg leading-6 font-medium text-gray-900">
+              {hasMultipleGatherings 
+                ? `${hasMixedGatheringTypes ? 'Combined Attendance & Headcount' : isHeadcountGathering ? 'Combined Headcount' : 'Combined Attendance'} Over Selected Period`
+                : isHeadcountGathering ? 'Headcount Over Selected Period' : 'Attendance Over Selected Period'
+              }
+            </h3>
             <div className="mt-6">
               {isLoading ? (
                 <div className="flex justify-center items-center h-64">
@@ -845,12 +943,22 @@ const ReportsPage: React.FC = () => {
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                      x: { stacked: false, grid: { display: false } },
-                      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+                      x: { stacked: hasMultipleGatherings, grid: { display: false } },
+                      y: { 
+                        stacked: hasMultipleGatherings,
+                        beginAtZero: true, 
+                        grid: { color: 'rgba(0,0,0,0.05)' } 
+                      }
                     },
                     plugins: {
-                      legend: { position: 'top' as const },
-                      tooltip: { mode: 'index' as const, intersect: false }
+                      legend: { 
+                        position: 'top' as const,
+                        display: hasMultipleGatherings
+                      },
+                      tooltip: { 
+                        mode: hasMultipleGatherings ? 'index' as const : 'nearest' as const, 
+                        intersect: false 
+                      }
                     }
                   }}
                   height={300}
@@ -867,129 +975,133 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Visitors over selected period (stacked local vs traveller) */}
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Visitors Over Selected Period</h3>
-            <div className="mt-6">
-              {visitorsChartLabels.length > 0 ? (
-                <Bar
-                  data={visitorsChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                      x: { stacked: true, grid: { display: false } },
-                      y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
-                    },
-                    plugins: {
-                      legend: { position: 'top' as const },
-                      tooltip: { mode: 'index' as const, intersect: false }
-                    }
-                  }}
-                  height={300}
-                />
-              ) : (
-                <div className="flex justify-center items-center h-64">
-                  <div className="text-gray-500">
-                    <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
-                    <p className="text-sm">No visitor data available for the selected period</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Absence and Recent Visitors Panels */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Regulars Absent Panel */}
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Regulars With Recent Absences</h3>
-            <p className="mt-1 text-sm text-gray-500">Based on consecutive absences in the latest sessions for this gathering.</p>
-            <div className="mt-4">
-               {isLoadingDetails ? (
-                <div className="flex justify-center items-center h-40">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-                </div>
-               ) : groupedAbsences.length === 0 ? (
-                <div className="text-sm text-gray-500">No concerning absences right now.</div>
-              ) : (
-                <>
-                <ul className="divide-y divide-gray-200">
-                  {(showAllAbsences ? groupedAbsences : groupedAbsences.slice(0, 5)).map((g) => {
-                    const base = 'px-3 py-2 flex items-center justify-between';
-                    const color = g.streak >= 3 ? 'bg-orange-200' : 'bg-orange-100';
-                    return (
-                      <li key={g.key} className={`${base} ${color} rounded`}>
-                        <span className="font-medium text-gray-900">{g.name}</span>
-                        <span className="text-sm text-gray-700">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-                 {groupedAbsences.length > 5 && (
-                  <div className="mt-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllAbsences((v) => !v)}
-                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
-                    >
-                       {showAllAbsences ? 'Show less' : `Show all (${groupedAbsences.length})`}
-                    </button>
+        {/* Visitors over selected period (stacked local vs traveller) - Hidden for headcount-only gatherings */}
+        {shouldShowVisitorInfo && (
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <h3 className="text-lg leading-6 font-medium text-gray-900">Visitors Over Selected Period</h3>
+              <div className="mt-6">
+                {visitorsChartLabels.length > 0 ? (
+                  <Bar
+                    data={visitorsChartData}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      scales: {
+                        x: { stacked: true, grid: { display: false } },
+                        y: { stacked: true, beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+                      },
+                      plugins: {
+                        legend: { position: 'top' as const },
+                        tooltip: { mode: 'index' as const, intersect: false }
+                      }
+                    }}
+                    height={300}
+                  />
+                ) : (
+                  <div className="flex justify-center items-center h-64">
+                    <div className="text-gray-500">
+                      <ChartBarIcon className="h-12 w-12 mx-auto mb-4" />
+                      <p className="text-sm">No visitor data available for the selected period</p>
+                    </div>
                   </div>
                 )}
-                </>
-              )}
+              </div>
             </div>
           </div>
-        </div>
-
-        {/* Recent Visitors Panel */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Recent Visitors (last 6 weeks)</h3>
-            <p className="mt-1 text-sm text-gray-500">Shows how many times a visitor has attended this gathering.</p>
-            <div className="mt-4">
-              {isLoadingDetails ? (
-                <div className="flex justify-center items-center h-40">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-                </div>
-              ) : recentVisitors.length === 0 ? (
-                <div className="text-sm text-gray-500">No recent visitors yet.</div>
-              ) : (
-                <>
-                <ul className="divide-y divide-gray-200">
-                  {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
-                    const base = 'px-3 py-2 flex items-center justify-between';
-                    const color = v.count >= 3 ? 'bg-green-200' : 'bg-green-100';
-                    return (
-                      <li key={v.key} className={`${base} ${color} rounded`}>
-                        <span className="font-medium text-gray-900">{v.name}</span>
-                        <span className="text-sm text-gray-700">Attended {v.count} {v.count === 1 ? 'time' : 'times'}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {recentVisitors.length > 5 && (
-                  <div className="mt-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllVisitors((v) => !v)}
-                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
-                    >
-                      {showAllVisitors ? 'Show less' : `Show all (${recentVisitors.length})`}
-              </button>
-                  </div>
-                )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
+
+      {/* Absence and Recent Visitors Panels - Hidden for headcount-only gatherings */}
+      {shouldShowVisitorInfo && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Regulars Absent Panel */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <h3 className="text-lg leading-6 font-medium text-gray-900">Regulars With Recent Absences</h3>
+              <p className="mt-1 text-sm text-gray-500">Based on consecutive absences in the latest sessions for this gathering.</p>
+              <div className="mt-4">
+                 {isLoadingDetails ? (
+                  <div className="flex justify-center items-center h-40">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                  </div>
+                 ) : groupedAbsences.length === 0 ? (
+                  <div className="text-sm text-gray-500">No concerning absences right now.</div>
+                ) : (
+                  <>
+                  <ul className="divide-y divide-gray-200">
+                    {(showAllAbsences ? groupedAbsences : groupedAbsences.slice(0, 5)).map((g) => {
+                      const base = 'px-3 py-2 flex items-center justify-between';
+                      const color = g.streak >= 3 ? 'bg-orange-200' : 'bg-orange-100';
+                      return (
+                        <li key={g.key} className={`${base} ${color} rounded`}>
+                          <span className="font-medium text-gray-900">{g.name}</span>
+                          <span className="text-sm text-gray-700">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                   {groupedAbsences.length > 5 && (
+                    <div className="mt-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllAbsences((v) => !v)}
+                        className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                      >
+                         {showAllAbsences ? 'Show less' : `Show all (${groupedAbsences.length})`}
+                      </button>
+                    </div>
+                  )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Visitors Panel */}
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+              <h3 className="text-lg leading-6 font-medium text-gray-900">Recent Visitors (last 6 weeks)</h3>
+              <p className="mt-1 text-sm text-gray-500">Shows how many times a visitor has attended this gathering.</p>
+              <div className="mt-4">
+                {isLoadingDetails ? (
+                  <div className="flex justify-center items-center h-40">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+                  </div>
+                ) : recentVisitors.length === 0 ? (
+                  <div className="text-sm text-gray-500">No recent visitors yet.</div>
+                ) : (
+                  <>
+                  <ul className="divide-y divide-gray-200">
+                    {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
+                      const base = 'px-3 py-2 flex items-center justify-between';
+                      const color = v.count >= 3 ? 'bg-green-200' : 'bg-green-100';
+                      return (
+                        <li key={v.key} className={`${base} ${color} rounded`}>
+                          <span className="font-medium text-gray-900">{v.name}</span>
+                          <span className="text-sm text-gray-700">Attended {v.count} {v.count === 1 ? 'time' : 'times'}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {recentVisitors.length > 5 && (
+                    <div className="mt-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllVisitors((v) => !v)}
+                        className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                      >
+                        {showAllVisitors ? 'Show less' : `Show all (${recentVisitors.length})`}
+                </button>
+                    </div>
+                  )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Commented out Spreadsheet Instructions Modal for now - CSV export is sufficient */}
     </div>

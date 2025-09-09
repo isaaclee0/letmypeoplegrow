@@ -274,8 +274,11 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
                 type="number"
                 value={userHeadcount}
                 onChange={(e) => handleDirectInput(e.target.value)}
-                className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-                style={{ width: `${Math.max(userHeadcount.toString().length * 0.6, 2)}em` }}
+                className="font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-80 px-2 disabled:cursor-not-allowed [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+                style={{ 
+                  width: `${Math.max(userHeadcount.toString().length * 0.8, 2)}em`,
+                  fontSize: userHeadcount.toString().length > 4 ? '2.5rem' : userHeadcount.toString().length > 3 ? '3rem' : '4rem'
+                }}
                 min="0"
               />
               {shouldShowTotal && (
@@ -311,8 +314,11 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
                 type="number"
                 value={userHeadcount}
                 onChange={(e) => handleDirectInput(e.target.value)}
-                className="text-6xl font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-48 px-2 disabled:cursor-not-allowed focus:bg-gray-50 focus:rounded-lg focus:border-2 focus:border-primary-500 transition-all [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
-                style={{ width: `${Math.max(userHeadcount.toString().length * 0.6, 2)}em` }}
+                className="font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-80 px-2 disabled:cursor-not-allowed focus:bg-gray-50 focus:rounded-lg focus:border-2 focus:border-primary-500 transition-all [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+                style={{ 
+                  width: `${Math.max(userHeadcount.toString().length * 0.8, 2)}em`,
+                  fontSize: userHeadcount.toString().length > 4 ? '2.5rem' : userHeadcount.toString().length > 3 ? '3rem' : '4rem'
+                }}
                 min="0"
                 placeholder="0"
               />
