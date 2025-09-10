@@ -8,6 +8,7 @@ interface HeadcountAttendanceInterfaceProps {
   gatheringTypeId: number;
   date: string;
   gatheringName: string;
+  onHeadcountChange?: (headcount: number) => void;
 }
 
 interface HeadcountData {
@@ -27,7 +28,8 @@ interface HeadcountData {
 const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> = ({
   gatheringTypeId,
   date,
-  gatheringName
+  gatheringName,
+  onHeadcountChange
 }) => {
   const [headcount, setHeadcount] = useState<number>(0);
   const [userHeadcount, setUserHeadcount] = useState<number>(0); // User's individual contribution
@@ -72,6 +74,13 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     setLastUpdatedBy('you');
     setOtherUsers([]);
   }, [gatheringTypeId, date]);
+
+  // Notify parent component when headcount changes
+  useEffect(() => {
+    if (onHeadcountChange) {
+      onHeadcountChange(headcount);
+    }
+  }, [headcount, onHeadcountChange]);
 
   // Load initial headcount data
   const loadHeadcount = useCallback(async (showLoading: boolean = true) => {

@@ -119,16 +119,18 @@ const ReportsPage: React.FC = () => {
       // Apply saved order preference
       let ordered = userGatherings;
       try {
-        const saved = localStorage.getItem(`user_${user?.id}_gathering_order`);
-        if (saved) {
-          const orderIds: number[] = JSON.parse(saved);
+        const savedOrder = await userPreferences.getGatheringOrder();
+        if (savedOrder?.order) {
+          const orderIds: number[] = savedOrder.order;
           const idToItem = new Map<number, GatheringType>(userGatherings.map((i: GatheringType) => [i.id, i] as const));
           const temp: GatheringType[] = [];
           orderIds.forEach((id: number) => { const it = idToItem.get(id); if (it) temp.push(it); });
           userGatherings.forEach((i: GatheringType) => { if (!orderIds.includes(i.id)) temp.push(i); });
           ordered = temp;
         }
-      } catch {}
+      } catch (e) {
+        console.warn('Failed to load gathering order for reports:', e);
+      }
       setGatherings(ordered);
       
       // Default to first gathering if available

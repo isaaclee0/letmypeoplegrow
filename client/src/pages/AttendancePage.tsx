@@ -73,6 +73,7 @@ const AttendancePage: React.FC = () => {
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
   const [attendanceList, setAttendanceList] = useState<Individual[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
+  const [headcountValue, setHeadcountValue] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -824,16 +825,18 @@ const AttendancePage: React.FC = () => {
           // Apply saved order
           let ordered = userGatherings;
           try {
-            const saved = localStorage.getItem(`user_${user?.id}_gathering_order`);
-            if (saved) {
-              const orderIds: number[] = JSON.parse(saved);
+            const savedOrder = await userPreferences.getGatheringOrder();
+            if (savedOrder?.order) {
+              const orderIds: number[] = savedOrder.order;
               const idToItem = new Map<number, GatheringType>(userGatherings.map((i: GatheringType) => [i.id, i] as const));
               const temp: GatheringType[] = [];
               orderIds.forEach((id: number) => { const it = idToItem.get(id); if (it) temp.push(it); });
               userGatherings.forEach((i: GatheringType) => { if (!orderIds.includes(i.id)) temp.push(i); });
               ordered = temp;
             }
-          } catch {}
+          } catch (e) {
+            console.warn('Failed to load gathering order in loadGatherings:', e);
+          }
 
           // Saved default id overrides if available
           if (!gatheringToSelect && user?.id) {
@@ -1200,6 +1203,7 @@ const AttendancePage: React.FC = () => {
     // Clear attendance state to prevent cross-gathering contamination
     setPresentById({});
     presentByIdRef.current = {};
+    setHeadcountValue(0); // Reset headcount value when switching gatherings
     
     // Set the new gathering - this will trigger loadAttendanceData via useEffect
     setSelectedGathering(gathering);
@@ -1234,6 +1238,11 @@ const AttendancePage: React.FC = () => {
       // Always clear state when switching to a different date/gathering combination
       // This ensures presentById doesn't carry over from previous dates
       const contextChanged = !cachedContextKey || cachedContextKey !== currentContextKey;
+      
+      // Reset headcount value when context changes
+      if (contextChanged) {
+        setHeadcountValue(0);
+      }
       
       if (contextChanged) {
         console.log('🧹 Clearing state for date/gathering change:', {
@@ -2680,12 +2689,13 @@ const AttendancePage: React.FC = () => {
     }
   }, [isWebSocketConnected, pendingChanges.length, syncOfflineChanges]);
 
-  const loadSavedOrder = useCallback((items: GatheringType[]) => {
+  const loadSavedOrder = useCallback(async (items: GatheringType[]) => {
     if (!user?.id) return items;
     try {
-      const saved = localStorage.getItem(`user_${user.id}_gathering_order`);
-      if (!saved) return items;
-      const orderIds: number[] = JSON.parse(saved);
+      const savedOrder = await userPreferences.getGatheringOrder();
+      if (!savedOrder?.order) return items;
+      
+      const orderIds: number[] = savedOrder.order;
       const idToItem = new Map(items.map(i => [i.id, i]));
       const ordered: GatheringType[] = [];
       orderIds.forEach(id => {
@@ -2695,19 +2705,27 @@ const AttendancePage: React.FC = () => {
       items.forEach(i => { if (!orderIds.includes(i.id)) ordered.push(i); });
       return ordered;
     } catch (e) {
-      console.warn('Failed to parse saved gathering order', e);
+      console.warn('Failed to load saved gathering order', e);
       return items;
     }
   }, [user?.id]);
 
   useEffect(() => {
-    setOrderedGatherings(loadSavedOrder(gatherings));
+    const loadOrder = async () => {
+      const ordered = await loadSavedOrder(gatherings);
+      setOrderedGatherings(ordered);
+    };
+    loadOrder();
   }, [gatherings, loadSavedOrder]);
 
-  const saveOrder = useCallback((items: GatheringType[]) => {
+  const saveOrder = useCallback(async (items: GatheringType[]) => {
     if (!user?.id) return;
     const ids = items.map(i => i.id);
-    localStorage.setItem(`user_${user.id}_gathering_order`, JSON.stringify(ids));
+    try {
+      await userPreferences.setGatheringOrder(ids);
+    } catch (e) {
+      console.warn('Failed to save gathering order', e);
+    }
   }, [user?.id]);
 
   const onDragStart = (id: number) => { draggingGatheringId.current = id; };
@@ -2749,9 +2767,9 @@ const AttendancePage: React.FC = () => {
     });
   };
   
-  const saveReorder = () => {
+  const saveReorder = async () => {
     setOrderedGatherings(reorderList);
-    saveOrder(reorderList);
+    await saveOrder(reorderList);
     // Persist default gathering as first item for cross-page defaults
     if (user?.id && reorderList.length > 0) {
       localStorage.setItem(`user_${user.id}_default_gathering_id`, String(reorderList[0].id));
@@ -3058,8 +3076,8 @@ const AttendancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Attendance Summary Bar - Show for all gathering types */}
-      {selectedGathering && validDates.length > 0 && (
+      {/* Attendance Summary Bar - Show only for standard gatherings */}
+      {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             {isAttendanceLocked && selectedGathering.attendanceType === 'standard' && (
@@ -3070,36 +3088,25 @@ const AttendancePage: React.FC = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-900">
-                  {selectedGathering.attendanceType === 'headcount' 
-                    ? (headcountValue || 0)
-                    : attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount
-                  }
+                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
                 </div>
                 <div className="text-sm text-gray-500">Total Present</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-primary-600">
-                  {selectedGathering.attendanceType === 'headcount' 
-                    ? (headcountValue || 0)
-                    : attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)
-                  }
+                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                 </div>
-                <div className="text-sm text-gray-500">
-                  {selectedGathering.attendanceType === 'headcount' ? 'Headcount' : 'Regular Attendees'}
-                </div>
+                <div className="text-sm text-gray-500">Regular Attendees</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-green-600">
-                  {selectedGathering.attendanceType === 'headcount' ? 0 : getVisitorPeopleCount}
+                  {getVisitorPeopleCount}
                 </div>
                 <div className="text-sm text-gray-500">Visitors</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-gray-400">
-                  {selectedGathering.attendanceType === 'headcount' 
-                    ? 0
-                    : attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)
-                  }
+                  {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                 </div>
                 <div className="text-sm text-gray-500">Absent</div>
               </div>
@@ -3197,6 +3204,7 @@ const AttendancePage: React.FC = () => {
                   gatheringTypeId={selectedGathering.id}
                   date={selectedDate}
                   gatheringName={selectedGathering.name}
+                  onHeadcountChange={setHeadcountValue}
                 />
               </div>
             </div>

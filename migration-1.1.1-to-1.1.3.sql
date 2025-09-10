@@ -29,19 +29,69 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 -- 2. HEADCOUNT MODES SUPPORT
 -- =====================================================
 
--- Step 1: Drop the existing unique constraint on headcount_records
--- This allows multiple users to have separate headcounts for the same session
-ALTER TABLE headcount_records DROP INDEX unique_session_headcount;
+-- Step 1: Handle the unique constraint change on headcount_records (MariaDB compatible)
+-- The current unique constraint on session_id prevents multiple users from having separate headcounts
+-- We need to change it to allow multiple records per session (one per user)
 
--- Step 2: Add a new unique constraint that allows multiple records per session (one per user)
-ALTER TABLE headcount_records ADD UNIQUE KEY unique_session_user (session_id, updated_by);
+-- Check current state
+SET @has_old_constraint = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE TABLE_SCHEMA = DATABASE() 
+  AND TABLE_NAME = 'headcount_records' 
+  AND INDEX_NAME = 'unique_session_headcount');
+
+SET @has_new_constraint = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE TABLE_SCHEMA = DATABASE() 
+  AND TABLE_NAME = 'headcount_records' 
+  AND INDEX_NAME = 'unique_session_user');
+
+-- Add the new unique constraint if it doesn't exist
+SET @sql = (SELECT IF(
+  @has_new_constraint = 0,
+  'ALTER TABLE headcount_records ADD UNIQUE KEY unique_session_user (session_id, updated_by)',
+  'SELECT "New unique constraint already exists" as message'
+));
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- For MariaDB, we'll use a more direct approach to handle the old constraint
+-- MariaDB allows us to use IGNORE to suppress errors
+SET @sql = (SELECT IF(
+  @has_old_constraint > 0,
+  'ALTER IGNORE TABLE headcount_records DROP INDEX unique_session_headcount',
+  'SELECT "Old unique constraint does not exist" as message'
+));
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- Step 3: Add a mode column to attendance_sessions to track the headcount mode for each session
-ALTER TABLE attendance_sessions 
-ADD COLUMN headcount_mode ENUM('separate', 'combined', 'averaged') DEFAULT 'separate' AFTER notes;
+-- Check if the column already exists before adding it
+SET @sql = (SELECT IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+   WHERE TABLE_SCHEMA = DATABASE() 
+   AND TABLE_NAME = 'attendance_sessions' 
+   AND COLUMN_NAME = 'headcount_mode') > 0,
+  'SELECT "Column headcount_mode already exists" as message',
+  'ALTER TABLE attendance_sessions ADD COLUMN headcount_mode ENUM(\'separate\', \'combined\', \'averaged\') DEFAULT \'separate\' AFTER notes'
+));
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- Step 4: Add an index for the new mode column
-ALTER TABLE attendance_sessions ADD INDEX idx_headcount_mode (headcount_mode);
+-- Check if the index already exists before adding it
+SET @sql = (SELECT IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS 
+   WHERE TABLE_SCHEMA = DATABASE() 
+   AND TABLE_NAME = 'attendance_sessions' 
+   AND INDEX_NAME = 'idx_headcount_mode') > 0,
+  'SELECT "Index idx_headcount_mode already exists" as message',
+  'ALTER TABLE attendance_sessions ADD INDEX idx_headcount_mode (headcount_mode)'
+));
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
 -- Step 5: Update existing sessions to use 'separate' mode (which is the new default)
 UPDATE attendance_sessions SET headcount_mode = 'separate' WHERE headcount_mode IS NULL;

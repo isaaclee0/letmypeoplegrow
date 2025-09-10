@@ -6,6 +6,7 @@ export const PREFERENCE_KEYS = {
   ATTENDANCE_GATHERING_DATES: 'attendance_gathering_dates',
   REPORTS_LAST_VIEWED: 'reports_last_viewed', 
   PEOPLE_LAST_VIEWED: 'people_last_viewed',
+  GATHERING_ORDER: 'gathering_order',
 } as const;
 
 // Types for preference values
@@ -30,6 +31,11 @@ export interface ReportsLastViewed {
 export interface PeopleLastViewed {
   selectedGathering: number | null;
   searchTerm: string;
+  timestamp: number;
+}
+
+export interface GatheringOrder {
+  order: number[];
   timestamp: number;
 }
 
@@ -256,6 +262,19 @@ class UserPreferencesService {
   async getLastViewedDateForGathering(gatheringId: number): Promise<string | null> {
     const gatheringDates = await this.getAttendanceGatheringDates();
     return gatheringDates?.[gatheringId] || null;
+  }
+
+  // Gathering order management
+  async getGatheringOrder(): Promise<GatheringOrder | null> {
+    return this.getPreference<GatheringOrder>(PREFERENCE_KEYS.GATHERING_ORDER);
+  }
+
+  async setGatheringOrder(order: number[]): Promise<void> {
+    const value: GatheringOrder = {
+      order,
+      timestamp: Date.now()
+    };
+    return this.setPreference(PREFERENCE_KEYS.GATHERING_ORDER, value);
   }
 }
 
