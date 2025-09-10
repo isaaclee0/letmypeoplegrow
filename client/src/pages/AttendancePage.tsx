@@ -2791,44 +2791,6 @@ const AttendancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Attendance Summary - Only show for standard gatherings */}
-      {selectedGathering && selectedGathering.attendanceType === 'standard' && (
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            {isAttendanceLocked && (
-              <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
-                Editing is locked for attendance takers for services older than 2 weeks.
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-gray-900">
-                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
-                </div>
-                <div className="text-sm text-gray-500">Total Present</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-primary-600">
-                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                </div>
-                <div className="text-sm text-gray-500">Regular Attendees</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">
-                  {getVisitorPeopleCount}
-                </div>
-                <div className="text-sm text-gray-500">Visitors</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-gray-400">
-                  {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                </div>
-                <div className="text-sm text-gray-500">Absent</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
 
 
@@ -3095,6 +3057,56 @@ const AttendancePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Attendance Summary Bar - Show for all gathering types */}
+      {selectedGathering && validDates.length > 0 && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            {isAttendanceLocked && selectedGathering.attendanceType === 'standard' && (
+              <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
+                Editing is locked for attendance takers for services older than 2 weeks.
+              </div>
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-gray-900">
+                  {selectedGathering.attendanceType === 'headcount' 
+                    ? (headcountValue || 0)
+                    : attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount
+                  }
+                </div>
+                <div className="text-sm text-gray-500">Total Present</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-primary-600">
+                  {selectedGathering.attendanceType === 'headcount' 
+                    ? (headcountValue || 0)
+                    : attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)
+                  }
+                </div>
+                <div className="text-sm text-gray-500">
+                  {selectedGathering.attendanceType === 'headcount' ? 'Headcount' : 'Regular Attendees'}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">
+                  {selectedGathering.attendanceType === 'headcount' ? 0 : getVisitorPeopleCount}
+                </div>
+                <div className="text-sm text-gray-500">Visitors</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-gray-400">
+                  {selectedGathering.attendanceType === 'headcount' 
+                    ? 0
+                    : attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)
+                  }
+                </div>
+                <div className="text-sm text-gray-500">Absent</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md bg-red-50 p-4">
