@@ -22,6 +22,7 @@ const ReportsPage: React.FC = () => {
   const [gatheringNames, setGatheringNames] = useState<Record<number, string>>({});
   // Removed YoY and monthly visitors; charts now reflect selected period only
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingGatherings, setIsLoadingGatherings] = useState(true);
   const [error, setError] = useState('');
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }>>([]);
@@ -112,6 +113,7 @@ const ReportsPage: React.FC = () => {
 
   const loadGatherings = useCallback(async () => {
     try {
+      setIsLoadingGatherings(true);
       const response = await gatheringsAPI.getAll();
       const userGatherings: GatheringType[] = response.data.gatherings.filter((g: GatheringType) => 
         user?.gatheringAssignments?.some((assignment: any) => assignment.id === g.id)
@@ -171,6 +173,8 @@ const ReportsPage: React.FC = () => {
       }
     } catch (err) {
       setError('Failed to load gatherings');
+    } finally {
+      setIsLoadingGatherings(false);
     }
   }, [user?.gatheringAssignments, selectedGathering]);
 
@@ -866,9 +870,14 @@ const ReportsPage: React.FC = () => {
                   </label>
                 ))}
               </div>
-              {selectedGatherings.length === 0 && (
+              {isLoadingGatherings ? (
+                <div className="mt-1 flex items-center text-sm text-gray-500">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"></div>
+                  Loading gatherings...
+                </div>
+              ) : selectedGatherings.length === 0 ? (
                 <p className="mt-1 text-sm text-red-600">Please select at least one gathering</p>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
