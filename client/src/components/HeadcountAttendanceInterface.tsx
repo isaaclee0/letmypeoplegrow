@@ -239,19 +239,10 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     }
   };
 
-  // Check if we should show the total (only if there are other users with contributions > 0)
+  // Check if we should show the total (always show unless total is 0)
   const shouldShowTotal = useMemo(() => {
-    if (!otherUsers || otherUsers.length <= 1) {
-      return false; // Only one user or no other users
-    }
-    
-    // Check if any other user (not current user) has a contribution > 0
-    const otherUsersWithContributions = otherUsers.filter(user => 
-      !user.isCurrentUser && user.headcount > 0
-    );
-    
-    return otherUsersWithContributions.length > 0;
-  }, [otherUsers]);
+    return headcount > 0;
+  }, [headcount]);
 
   if (isLoading) {
     return (

@@ -2270,8 +2270,8 @@ const AttendancePage: React.FC = () => {
         { individualId: visitorId, present: newPresent }
       ]);
       
-      // Also update attendanceList present
-      setAttendanceList(prev => prev.map(p => p.id === visitorId ? { ...p, present: newPresent } : p));
+      // Update visitors array present status
+      setVisitors(prev => prev.map(v => v.id === visitorId ? { ...v, present: newPresent } : v));
     } catch (err) {
       console.error('Failed to save visitor attendance change:', err);
       setError(err instanceof Error ? err.message : 'Failed to save change');
@@ -2342,8 +2342,8 @@ const AttendancePage: React.FC = () => {
       
       await sendAttendanceChange(selectedGathering.id, selectedDate, familyAttendanceRecords);
       
-      // Reflect in attendanceList
-      setAttendanceList(prev => prev.map(p => familyVisitorIds.includes(p.id) ? { ...p, present: shouldCheckAll } : p));
+      // Update visitors array present status
+      setVisitors(prev => prev.map(v => familyVisitorIds.includes(v.id) ? { ...v, present: shouldCheckAll } : v));
     } catch (err) {
       console.error('Failed to save visitor family attendance change:', err);
       setError(err instanceof Error ? err.message : 'Failed to save family changes');
