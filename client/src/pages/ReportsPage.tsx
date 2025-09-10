@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI } from '../services/api';
+import { userPreferences } from '../services/userPreferences';
 import { 
   ChartBarIcon, 
   UsersIcon, 
@@ -70,15 +71,44 @@ const ReportsPage: React.FC = () => {
     (selectedGatherings.length === 1 && selectedGatherings[0].attendanceType === 'standard') ||
     (!hasMultipleGatherings && selectedGathering?.attendanceType === 'standard');
 
-  // Initialize default date range (last 4 weeks)
+  // Initialize default date range (last 4 weeks) and load from preferences
   useEffect(() => {
-    const today = new Date();
-    const fourWeeksAgo = new Date(today);
-    fourWeeksAgo.setDate(today.getDate() - 28);
+    const initializeReportsData = async () => {
+      // Try to load from preferences first
+      const lastViewed = await userPreferences.getReportsLastViewed();
+      
+      if (lastViewed) {
+        setStartDate(lastViewed.startDate);
+        setEndDate(lastViewed.endDate);
+        // selectedGatherings will be set after gatherings are loaded
+      } else {
+        // Default to last 4 weeks
+        const today = new Date();
+        const fourWeeksAgo = new Date(today);
+        fourWeeksAgo.setDate(today.getDate() - 28);
+        
+        setEndDate(today.toISOString().split('T')[0]);
+        setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
+      }
+    };
     
-    setEndDate(today.toISOString().split('T')[0]);
-    setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
+    initializeReportsData();
   }, []);
+
+  // Save current reports state to preferences
+  const saveReportsPreferences = useCallback(async () => {
+    if (selectedGatherings.length > 0 && startDate && endDate) {
+      try {
+        await userPreferences.setReportsLastViewed(
+          selectedGatherings.map(g => g.id),
+          startDate,
+          endDate
+        );
+      } catch (error) {
+        console.warn('Failed to save reports preferences:', error);
+      }
+    }
+  }, [selectedGatherings, startDate, endDate]);
 
   const loadGatherings = useCallback(async () => {
     try {
@@ -114,8 +144,26 @@ const ReportsPage: React.FC = () => {
         }
       }
       
-      // Initialize selectedGatherings with the default gathering
+      // Initialize selectedGatherings with the default gathering or from preferences
       if (ordered.length > 0 && selectedGatherings.length === 0) {
+        // Try to restore from preferences first
+        const lastViewed = await userPreferences.getReportsLastViewed();
+        
+        if (lastViewed && lastViewed.selectedGatherings.length > 0) {
+          // Restore selected gatherings from preferences
+          const restoredGatherings = lastViewed.selectedGatherings
+            .map(id => ordered.find(g => g.id === id))
+            .filter(Boolean) as GatheringType[];
+          
+          if (restoredGatherings.length > 0) {
+            setSelectedGatherings(restoredGatherings);
+            // Also set the first one as selectedGathering for single gathering logic
+            setSelectedGathering(restoredGatherings[0]);
+            return;
+          }
+        }
+        
+        // Fallback to default gathering
         const defaultGathering = selectedGathering || ordered[0];
         setSelectedGatherings([defaultGathering]);
       }
@@ -350,6 +398,13 @@ const ReportsPage: React.FC = () => {
     loadAbsenceAndVisitorDetails();
   }, [hasReportsAccess, selectedGatherings, metrics?.attendanceData, loadAbsenceAndVisitorDetails]);
 
+  // Save preferences when selections change
+  useEffect(() => {
+    if (selectedGatherings.length > 0 && startDate && endDate) {
+      saveReportsPreferences();
+    }
+  }, [selectedGatherings, startDate, endDate, saveReportsPreferences]);
+
   // Attendance chart based on selected period sessions
   const formatShortDate = (isoDate: string) => {
     try {
@@ -403,9 +458,9 @@ const ReportsPage: React.FC = () => {
     ];
 
     gatheringIds.forEach((gatheringId, index) => {
-      const gatheringName = gatheringNames[gatheringId] || `Gathering ${gatheringId}`;
+      const gatheringName = gatheringNames[gatheringId as number] || `Gathering ${gatheringId}`;
       const data = attendanceChartLabels.map((dateKey) => {
-        return byDate[dateKey]?.[gatheringId] || 0;
+        return byDate[dateKey]?.[gatheringId as number] || 0;
       });
       
       datasets.push({
@@ -953,7 +1008,7 @@ const ReportsPage: React.FC = () => {
                     plugins: {
                       legend: { 
                         position: 'top' as const,
-                        display: hasMultipleGatherings
+                        display: true
                       },
                       tooltip: { 
                         mode: hasMultipleGatherings ? 'index' as const : 'nearest' as const, 

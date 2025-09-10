@@ -710,61 +710,73 @@ const UsersPage: React.FC = () => {
           </div>
 
           {/* Desktop Grid Layout */}
-          <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {users.map((user) => (
               <div 
                 key={user.id} 
-                className={`border rounded-lg p-4 cursor-pointer transition-all ${
+                className={`border rounded-lg p-6 cursor-pointer transition-all ${
                   selectedUsers.includes(user.id)
                     ? 'border-primary-500 bg-primary-50 shadow-md'
                     : 'bg-white border-gray-200 hover:shadow-md'
                 }`}
                 onClick={() => toggleUserSelection(user.id)}
               >
-                <div className="flex space-x-3">
+                <div className="flex space-x-4">
                   {/* Checkbox Column */}
                   <div className="flex-shrink-0 pt-1">
                     <input
                       type="checkbox"
                       checked={selectedUsers.includes(user.id)}
                       onChange={() => toggleUserSelection(user.id)}
-                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
                       onClick={(e) => e.stopPropagation()}
                     />
                   </div>
                   
                   {/* User Info Column */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-medium text-gray-900 truncate">
+                    <div className="flex items-start justify-between mb-3">
+                      <h4 className="text-lg font-semibold text-gray-900 truncate">
                         {user.firstName} {user.lastName}
                       </h4>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-2`}>
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-3`}>
                         {user.role.replace('_', ' ')}
                       </span>
                     </div>
                     
-                    <div className="space-y-1 mt-2">
-                      <div className="flex items-center text-xs text-gray-600">
-                        <EnvelopeIcon className="h-3 w-3 mr-1 flex-shrink-0" />
-                        <span className="truncate">{user.email || 'No email'}</span>
-                      </div>
-                      {user.mobileNumber && (
-                        <div className="flex items-center text-xs text-gray-600">
-                          <PhoneIcon className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{user.mobileNumber}</span>
+                    <div className="space-y-3">
+                      <div className="text-sm text-gray-700">
+                        <div className="font-medium text-gray-900">Contact Information</div>
+                        <div className="space-y-1 mt-1">
+                          <div className="flex items-center text-sm text-gray-600">
+                            <EnvelopeIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                            <span className="truncate">{user.email || 'No email'}</span>
+                          </div>
+                          {user.mobileNumber && (
+                            <div className="flex items-center text-sm text-gray-600">
+                              <PhoneIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                              <span className="truncate">{user.mobileNumber}</span>
+                            </div>
+                          )}
                         </div>
-                      )}
-                      <div className="flex items-center text-xs text-gray-600">
-                        <UserGroupIcon className="h-3 w-3 mr-1 flex-shrink-0" />
-                        <span>{user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}</span>
                       </div>
-                    </div>
-                    
-                    <div className="mt-2">
-                      {getStatusBadge(user)}
-                      <div className="text-xs text-gray-500 mt-1">
-                        Last: {formatDateTime(user.lastLoginAt as any)}
+                      
+                      <div className="text-sm text-gray-700">
+                        <div className="font-medium text-gray-900">Gathering Access</div>
+                        <div className="flex items-center text-sm text-gray-600 mt-1">
+                          <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                          <span>{user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''} assigned</span>
+                        </div>
+                      </div>
+                      
+                      <div className="text-sm text-gray-700">
+                        <div className="font-medium text-gray-900">Account Status</div>
+                        <div className="mt-1">
+                          {getStatusBadge(user)}
+                          <div className="text-xs text-gray-500 mt-1">
+                            Last login: {formatDateTime(user.lastLoginAt as any)}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

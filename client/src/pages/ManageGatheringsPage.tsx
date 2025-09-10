@@ -3,16 +3,15 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { gatheringsAPI } from '../services/api';
-import ActionMenu from '../components/ActionMenu';
 import {
   PlusIcon,
   UserGroupIcon,
   CalendarIcon,
   TrashIcon,
-  PencilIcon,
   CheckIcon,
   XMarkIcon,
-  DocumentDuplicateIcon
+  DocumentDuplicateIcon,
+  PencilIcon
 } from '@heroicons/react/24/outline';
 
 interface Gathering {
@@ -121,6 +120,9 @@ const ManageGatheringsPage: React.FC = () => {
   
   // People prompt states - now just for tracking if we should show the animated arrow
   const [showArrowPrompt, setShowArrowPrompt] = useState(false);
+
+  // Selection state
+  const [selectedGatherings, setSelectedGatherings] = useState<number[]>([]);
 
   useEffect(() => {
     loadGatherings();
@@ -306,6 +308,12 @@ const ManageGatheringsPage: React.FC = () => {
       setShowEditForm(false);
       setEditingGathering(null);
       setError('');
+      
+      // Clear selection after successful edit
+      setSelectedGatherings([]);
+      
+      setSuccess('Gathering updated successfully');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to update gathering');
     }
@@ -331,6 +339,12 @@ const ManageGatheringsPage: React.FC = () => {
       if (selectedGathering?.id === deleteConfirmation.gatheringId) {
         setSelectedGathering(null);
       }
+      
+      // Remove from selection if it was selected
+      setSelectedGatherings(prev => prev.filter(id => id !== deleteConfirmation.gatheringId));
+      
+      setSuccess('Gathering deleted successfully');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to delete gathering');
     }
@@ -351,6 +365,9 @@ const ManageGatheringsPage: React.FC = () => {
       setShowDuplicateModal(false);
       setDuplicateGathering(null);
       setDuplicateName('');
+      
+      // Clear selection after successful duplication
+      setSelectedGatherings([]);
       
       setSuccess(`Gathering "${newGathering.name}" created successfully!`);
       setTimeout(() => setSuccess(''), 5000);
@@ -466,6 +483,66 @@ const ManageGatheringsPage: React.FC = () => {
     }
   };
 
+  // Selection functions
+  const toggleGatheringSelection = (gatheringId: number) => {
+    setSelectedGatherings(prev => 
+      prev.includes(gatheringId) 
+        ? prev.filter(id => id !== gatheringId)
+        : [...prev, gatheringId]
+    );
+  };
+
+  const clearSelection = () => {
+    setSelectedGatherings([]);
+  };
+
+  const selectAllGatherings = () => {
+    setSelectedGatherings(gatherings.map(gathering => gathering.id));
+  };
+
+  const handleEditSelectedGathering = () => {
+    if (selectedGatherings.length === 1) {
+      const gathering = gatherings.find(g => g.id === selectedGatherings[0]);
+      if (gathering) {
+        handleEditGathering(gathering);
+      }
+    }
+  };
+
+  const handleDuplicateSelectedGathering = () => {
+    if (selectedGatherings.length === 1) {
+      const gathering = gatherings.find(g => g.id === selectedGatherings[0]);
+      if (gathering) {
+        setDuplicateGathering(gathering);
+        setDuplicateName(`${gathering.name} (Copy)`);
+        setShowDuplicateModal(true);
+      }
+    }
+  };
+
+  const handleManageOccurrencesSelectedGathering = () => {
+    if (selectedGatherings.length === 1) {
+      const gathering = gatherings.find(g => g.id === selectedGatherings[0]);
+      if (gathering) {
+        handleManageOccurrences(gathering);
+      }
+    }
+  };
+
+  const handleDeleteSelectedGatherings = () => {
+    if (selectedGatherings.length === 1) {
+      const gathering = gatherings.find(g => g.id === selectedGatherings[0]);
+      if (gathering) {
+        showDeleteConfirmation(gathering.id, gathering.name);
+      }
+    } else if (selectedGatherings.length > 1) {
+      // For multiple gatherings, we'll need to implement a bulk delete modal
+      // For now, just show an error
+      setError('Bulk gathering deletion not yet implemented');
+      setTimeout(() => setError(''), 5000);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -511,9 +588,31 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Gatherings List */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-            Your Gatherings
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">
+              Your Gatherings ({gatherings.length})
+            </h3>
+            <div className="flex items-center space-x-3">
+              {selectedGatherings.length > 0 ? (
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <span>{selectedGatherings.length} selected</span>
+                  <button
+                    onClick={clearSelection}
+                    className="text-primary-600 hover:text-primary-700"
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : gatherings.length > 0 && (
+                <button
+                  onClick={selectAllGatherings}
+                  className="text-sm text-primary-600 hover:text-primary-700"
+                >
+                  Select All
+                </button>
+              )}
+            </div>
+          </div>
           
           {gatherings.length === 0 ? (
             <div className="relative text-center py-12">
@@ -540,122 +639,131 @@ const ManageGatheringsPage: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3">
               {gatherings.map((gathering) => (
-                                  <div key={gathering.id} className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h4 className="text-lg font-medium text-gray-900">
-                            {gathering.name}
-                          </h4>
-                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            gathering.attendanceType === 'headcount' 
-                              ? 'bg-blue-100 text-blue-800' 
-                              : 'bg-green-100 text-green-800'
-                          }`}>
-                            {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
-                          </span>
-                        </div>
-                        <p className="text-sm text-gray-500">
+                <div 
+                  key={gathering.id} 
+                  className={`border rounded-lg p-6 cursor-pointer transition-all ${
+                    selectedGatherings.includes(gathering.id)
+                      ? 'border-primary-500 bg-primary-50 shadow-md'
+                      : 'bg-white border-gray-200 hover:shadow-md'
+                  }`}
+                  onClick={() => toggleGatheringSelection(gathering.id)}
+                >
+                  <div className="flex space-x-4">
+                    {/* Checkbox Column */}
+                    <div className="flex-shrink-0 pt-1">
+                      <input
+                        type="checkbox"
+                        checked={selectedGatherings.includes(gathering.id)}
+                        onChange={() => toggleGatheringSelection(gathering.id)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    
+                    {/* Gathering Info Column */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between mb-3">
+                        <h4 className="text-lg font-semibold text-gray-900 truncate">
+                          {gathering.name}
+                        </h4>
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                          gathering.attendanceType === 'headcount' 
+                            ? 'bg-blue-100 text-blue-800' 
+                            : 'bg-green-100 text-green-800'
+                        } flex-shrink-0 ml-3`}>
+                          {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
+                        </span>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div className="text-sm text-gray-700">
                           {gathering.attendanceType === 'headcount' && gathering.customSchedule ? (
                             // Show custom schedule info for headcount gatherings
                             gathering.customSchedule.type === 'one_off' ? (
-                              `One-off event on ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}`
+                              <div>
+                                <div className="font-medium text-gray-900">One-off Event</div>
+                                <div className="text-gray-600">{new Date(gathering.customSchedule.startDate).toLocaleDateString('en-US', { 
+                                  weekday: 'long',
+                                  year: 'numeric',
+                                  month: 'long',
+                                  day: 'numeric'
+                                })}</div>
+                              </div>
                             ) : (
-                              `Custom schedule: ${gathering.customSchedule.pattern?.frequency || 'recurring'} from ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}`
+                              <div>
+                                <div className="font-medium text-gray-900">Custom Schedule</div>
+                                <div className="text-gray-600">
+                                  {gathering.customSchedule.pattern?.frequency || 'recurring'} from {new Date(gathering.customSchedule.startDate).toLocaleDateString()}
+                                  {gathering.customSchedule.endDate && ` to ${new Date(gathering.customSchedule.endDate).toLocaleDateString()}`}
+                                </div>
+                              </div>
                             )
                           ) : (
-                            // Show regular schedule for standard gatherings or headcount without custom schedule
-                            `${gathering.dayOfWeek}s at ${gathering.startTime}`
-                          )}
-                        </p>
-                        {gathering.description && (
-                          <p className="text-sm text-gray-600 mt-1">
-                            {gathering.description}
-                          </p>
-                        )}
-                        <div className="flex items-center mt-2 text-sm text-gray-500">
-                          {gathering.attendanceType === 'standard' && (
-                            <>
-                              <UserGroupIcon className="h-4 w-4 mr-1" />
-                              {gathering.memberCount || 0} regular attendees
-                              {(gathering.recentVisitorCount || 0) > 0 && (
-                                <span className="ml-2 text-green-600">
-                                  • {gathering.recentVisitorCount} recent visitors
-                                </span>
-                              )}
-                              {(gathering.memberCount || 0) === 0 && (
-                                <button 
-                                  className="ml-2 text-purple-600 font-medium relative hover:text-purple-700 hover:underline transition-colors underline decoration-dotted"
-                                  onClick={() => {
-                                    localStorage.setItem('people_prompt_dismissed', 'true');
-                                    setShowArrowPrompt(false);
-                                    navigate('/app/people');
-                                  }}
-                                >
-                                  • Click here to add people to this gathering
-                                  {showArrowPrompt && (
-                                    <div className="absolute -right-32 top-1/2 transform -translate-y-1/2 flex items-center animate-bounce z-10">
-                                      <svg width="80" height="20" viewBox="0 0 80 20" className="text-purple-500">
-                                        <defs>
-                                          <marker id="arrowhead-purple" markerWidth="8" markerHeight="8" refX="0" refY="3" orient="auto">
-                                            <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
-                                          </marker>
-                                        </defs>
-                                        <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
-                                      </svg>
-                                      <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
-                                        Click here!
-                                      </span>
-                                    </div>
-                                  )}
-                                </button>
-                              )}
-                            </>
-                          )}
-                          {gathering.attendanceType === 'headcount' && (
-                            <span className="text-gray-500">
-                              Headcount tracking only
-                            </span>
+                            <div>
+                              <div className="font-medium text-gray-900">Regular Schedule</div>
+                              <div className="text-gray-600">
+                                {gathering.dayOfWeek}s at {gathering.startTime}
+                                {gathering.frequency && gathering.frequency !== 'weekly' && ` (${gathering.frequency})`}
+                              </div>
+                            </div>
                           )}
                         </div>
+                        
+                        {gathering.description && (
+                          <div className="text-sm text-gray-700">
+                            <div className="font-medium text-gray-900">Description</div>
+                            <div className="text-gray-600">{gathering.description}</div>
+                          </div>
+                        )}
+                        
+                        {gathering.attendanceType === 'standard' && (
+                          <div className="flex items-center text-sm text-gray-700 bg-gray-50 p-3 rounded-md">
+                            <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                            <div>
+                              <div className="font-medium text-gray-900">
+                                {gathering.memberCount || 0} regular attendees
+                              </div>
+                              {(gathering.recentVisitorCount || 0) > 0 && (
+                                <div className="text-green-600 text-sm">
+                                  {gathering.recentVisitorCount} recent visitors
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {gathering.attendanceType === 'standard' && (gathering.memberCount || 0) === 0 && (
+                          <button 
+                            className="w-full text-sm text-purple-600 font-medium relative hover:text-purple-700 hover:underline transition-colors underline decoration-dotted bg-purple-50 p-3 rounded-md hover:bg-purple-100"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              localStorage.setItem('people_prompt_dismissed', 'true');
+                              setShowArrowPrompt(false);
+                              navigate('/app/people');
+                            }}
+                          >
+                            <div className="font-medium">Add people to this gathering</div>
+                            <div className="text-xs text-purple-500 mt-1">Click to manage members</div>
+                            {showArrowPrompt && (
+                              <div className="absolute -right-32 top-1/2 transform -translate-y-1/2 flex items-center animate-bounce z-10">
+                                <svg width="80" height="20" viewBox="0 0 80 20" className="text-purple-500">
+                                  <defs>
+                                    <marker id="arrowhead-purple" markerWidth="8" markerHeight="8" refX="0" refY="3" orient="auto">
+                                      <polygon points="0 0, 6 3, 0 6" fill="currentColor" />
+                                    </marker>
+                                  </defs>
+                                  <path d="M5 10 L70 10" stroke="currentColor" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-purple)" />
+                                </svg>
+                                <span className="ml-2 text-sm text-purple-600 font-medium whitespace-nowrap bg-white/90 px-2 py-1 rounded shadow">
+                                  Click here!
+                                </span>
+                              </div>
+                            )}
+                          </button>
+                        )}
                       </div>
-                    <div className="flex space-x-2">
-                      <ActionMenu 
-                        items={[
-                          {
-                            label: (gathering.memberCount || 0) === 0 ? 'Add People' : 'Manage Members',
-                            onClick: handleManageMembers,
-                            icon: <UserGroupIcon className="h-4 w-4" />
-                          },
-                          {
-                            label: 'Edit Gathering',
-                            onClick: () => handleEditGathering(gathering),
-                            icon: <PencilIcon className="h-4 w-4" />
-                          },
-                          {
-                            label: 'Duplicate Gathering',
-                            onClick: () => {
-                              setDuplicateGathering(gathering);
-                              setDuplicateName(`${gathering.name} (Copy)`);
-                              setShowDuplicateModal(true);
-                            },
-                            icon: <DocumentDuplicateIcon className="h-4 w-4" />
-                          },
-                          ...(gathering.attendanceType === 'headcount' ? [{
-                            label: 'Manage Occurrences',
-                            onClick: () => handleManageOccurrences(gathering),
-                            icon: <CalendarIcon className="h-4 w-4" />
-                          }] : []),
-                          {
-                            label: 'Delete Gathering',
-                            onClick: () => showDeleteConfirmation(gathering.id, gathering.name),
-                            icon: <TrashIcon className="h-4 w-4" />,
-                            className: 'text-red-600 hover:bg-red-50'
-                          }
-                        ]}
-                      />
                     </div>
                   </div>
                 </div>
@@ -1706,13 +1814,87 @@ const ManageGatheringsPage: React.FC = () => {
         document.body
       ) : null}
 
-      {/* Floating Add Gathering Button */}
-      <button
-        onClick={openAddModal}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-50"
-      >
-        <PlusIcon className="h-6 w-6" />
-      </button>
+      {/* Floating Action Buttons */}
+      {selectedGatherings.length > 0 ? (
+        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
+          {/* Show all options for single selection */}
+          {selectedGatherings.length === 1 ? (
+            <>
+              {/* Edit Gathering Button */}
+              <div className="flex items-center justify-end space-x-3">
+                <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                  Edit Gathering
+                </div>
+                <button
+                  onClick={handleEditSelectedGathering}
+                  className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                  title="Edit Gathering"
+                >
+                  <PencilIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              {/* Duplicate Gathering Button */}
+              <div className="flex items-center justify-end space-x-3">
+                <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                  Duplicate Gathering
+                </div>
+                <button
+                  onClick={handleDuplicateSelectedGathering}
+                  className="w-14 h-14 bg-purple-600 hover:bg-purple-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                  title="Duplicate Gathering"
+                >
+                  <DocumentDuplicateIcon className="h-6 w-6" />
+                </button>
+              </div>
+              
+              {/* Manage Occurrences Button - only for headcount gatherings */}
+              {(() => {
+                const gathering = gatherings.find(g => g.id === selectedGatherings[0]);
+                if (gathering?.attendanceType === 'headcount') {
+                  return (
+                    <div className="flex items-center justify-end space-x-3">
+                      <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                        Manage Occurrences
+                      </div>
+                      <button
+                        onClick={handleManageOccurrencesSelectedGathering}
+                        className="w-14 h-14 bg-orange-600 hover:bg-orange-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                        title="Manage Occurrences"
+                      >
+                        <CalendarIcon className="h-6 w-6" />
+                      </button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+            </>
+          ) : null}
+          
+          {/* Delete Gathering Button - always shown when selections exist */}
+          <div className="flex items-center justify-end space-x-3">
+            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+              {selectedGatherings.length === 1 ? "Delete Gathering" : "Delete Gatherings"}
+            </div>
+            <button
+              onClick={handleDeleteSelectedGatherings}
+              className="w-14 h-14 bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+              title={selectedGatherings.length === 1 ? "Delete Gathering" : "Delete Gatherings"}
+            >
+              <TrashIcon className="h-6 w-6" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={openAddModal}
+          className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-[9999]"
+          aria-label="Add Gathering"
+        >
+          <PlusIcon className="h-6 w-6" />
+        </button>
+      )}
     </div>
   );
 };

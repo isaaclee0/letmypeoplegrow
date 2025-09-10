@@ -54,6 +54,7 @@ interface GatheringType {
   dayOfWeek: string;
   startTime: string;
   frequency: string;
+  attendanceType?: 'standard' | 'headcount';
 }
 
 interface VisitorConfig {
@@ -306,7 +307,7 @@ const PeoplePage: React.FC = () => {
     unknownGatherings: string[];
     totalRows: number;
   } | null>(null);
-  const [gatheringTypes, setGatheringTypes] = useState<Array<{id: number, name: string}>>([]);
+  const [gatheringTypes, setGatheringTypes] = useState<GatheringType[]>([]);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
   // Removed individual person editor - using mass edit modal for all edits
@@ -606,6 +607,15 @@ const PeoplePage: React.FC = () => {
   // Get color for a gathering
   const getGatheringColor = (gatheringId: number) => {
     return gatheringColors[gatheringId % gatheringColors.length];
+  };
+
+  // Filter out headcount gatherings from gathering assignments (they don't need colored dots)
+  const getStandardGatheringAssignments = (gatheringAssignments: Array<{id: number; name: string}> | undefined) => {
+    if (!gatheringAssignments) return [];
+    return gatheringAssignments.filter(gathering => {
+      const gatheringType = gatheringTypes.find(gt => gt.id === gathering.id);
+      return gatheringType?.attendanceType !== 'headcount';
+    });
   };
 
   useEffect(() => {
@@ -1526,10 +1536,12 @@ const PeoplePage: React.FC = () => {
       });
     });
     
-    // Initialize all gatherings as unchecked
-    gatheringTypes.forEach(gathering => {
-      assignments[gathering.id] = false;
-    });
+    // Initialize all standard gatherings as unchecked
+    gatheringTypes
+      .filter(gathering => gathering.attendanceType !== 'headcount')
+      .forEach(gathering => {
+        assignments[gathering.id] = false;
+      });
     
     // Check gatherings that ALL selected people are assigned to
     const commonGatherings = Array.from(allGatheringIds).filter(gatheringId => {
@@ -1632,10 +1644,12 @@ const PeoplePage: React.FC = () => {
     
     const gatheringAssignments: { [key: number]: boolean } = {};
     
-    gatheringTypes.forEach(g => {
-      const hasAssignment = person.gatheringAssignments?.some(ga => ga.id === g.id) || false;
-      gatheringAssignments[g.id] = hasAssignment;
-    });
+    gatheringTypes
+      .filter(g => g.attendanceType !== 'headcount')
+      .forEach(g => {
+        const hasAssignment = person.gatheringAssignments?.some(ga => ga.id === g.id) || false;
+        gatheringAssignments[g.id] = hasAssignment;
+      });
     
     const originalAssignments: { [key: number]: Set<number> } = {};
     originalAssignments[person.id] = new Set(
@@ -1872,12 +1886,14 @@ const PeoplePage: React.FC = () => {
           <div className="px-4 py-3 sm:px-6">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Gathering Assignments</h3>
             <div className="flex flex-wrap gap-3">
-              {gatheringTypes.map((gathering) => (
-                <div key={gathering.id} className="flex items-center space-x-2">
-                  <div className={`w-3 h-3 rounded-full ${getGatheringColor(gathering.id)}`}></div>
-                  <span className="text-sm text-gray-600">{gathering.name}</span>
-                </div>
-              ))}
+              {gatheringTypes
+                .filter(gathering => gathering.attendanceType !== 'headcount')
+                .map((gathering) => (
+                  <div key={gathering.id} className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${getGatheringColor(gathering.id)}`}></div>
+                    <span className="text-sm text-gray-600">{gathering.name}</span>
+                  </div>
+                ))}
             </div>
           </div>
         </div>
@@ -2090,11 +2106,13 @@ const PeoplePage: React.FC = () => {
                 className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
               >
                 <option value="">All Gatherings</option>
-                {gatheringTypes.map((gathering) => (
-                  <option key={gathering.id} value={gathering.id}>
-                    {gathering.name}
-                  </option>
-                ))}
+                {gatheringTypes
+                  .filter(gathering => gathering.attendanceType !== 'headcount')
+                  .map((gathering) => (
+                    <option key={gathering.id} value={gathering.id}>
+                      {gathering.name}
+                    </option>
+                  ))}
               </select>
             </div>
           </div>
@@ -2280,17 +2298,20 @@ const PeoplePage: React.FC = () => {
                                        <div className="text-xs text-gray-500">
                                          {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
                                        </div>
-                                       {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                         <div className="flex items-center space-x-1 mt-1">
-                                           {person.gatheringAssignments.map(gathering => (
-                                             <div
-                                               key={gathering.id}
-                                               className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                               title={gathering.name}
-                                             ></div>
-                                           ))}
-                                         </div>
-                                       )}
+                                       {(() => {
+                                         const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                         return standardGatherings.length > 0 && (
+                                           <div className="flex items-center space-x-1 mt-1">
+                                             {standardGatherings.map(gathering => (
+                                               <div
+                                                 key={gathering.id}
+                                                 className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                                 title={gathering.name}
+                                               ></div>
+                                             ))}
+                                           </div>
+                                         );
+                                       })()}
                                      </div>
                                    </div>
 
@@ -2328,17 +2349,20 @@ const PeoplePage: React.FC = () => {
                                />
                                <div className="flex items-center space-x-2">
                                  <span className="text-sm font-medium text-gray-900">{displayName}</span>
-                                 {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                   <div className="flex items-center space-x-1">
-                                     {person.gatheringAssignments.map(gathering => (
-                                       <div
-                                         key={gathering.id}
-                                         className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                         title={gathering.name}
-                                       ></div>
-                                     ))}
-                                   </div>
-                                 )}
+                                 {(() => {
+                                   const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                   return standardGatherings.length > 0 && (
+                                     <div className="flex items-center space-x-1">
+                                       {standardGatherings.map(gathering => (
+                                         <div
+                                           key={gathering.id}
+                                           className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                           title={gathering.name}
+                                         ></div>
+                                       ))}
+                                     </div>
+                                   );
+                                 })()}
                                </div>
                              </div>
                            </div>
@@ -2550,17 +2574,20 @@ const PeoplePage: React.FC = () => {
                                         </span>
                                         <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                       </div>
-                                      {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                        <div className="flex items-center space-x-1 mt-1">
-                                          {person.gatheringAssignments.map(gathering => (
-                                            <div
-                                              key={gathering.id}
-                                              className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                              title={gathering.name}
-                                            ></div>
-                                          ))}
-                                        </div>
-                                      )}
+                                      {(() => {
+                                        const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                        return standardGatherings.length > 0 && (
+                                          <div className="flex items-center space-x-1 mt-1">
+                                            {standardGatherings.map(gathering => (
+                                              <div
+                                                key={gathering.id}
+                                                className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                                title={gathering.name}
+                                              ></div>
+                                            ))}
+                                          </div>
+                                        );
+                                      })()}
                                     </div>
                                   </div>
                                 </div>
@@ -2598,17 +2625,20 @@ const PeoplePage: React.FC = () => {
                                 />
                                 <div className="flex items-center space-x-2">
                                   <span className="text-sm font-medium text-gray-900">{displayName}</span>
-                                  {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                    <div className="flex items-center space-x-1">
-                                      {person.gatheringAssignments.map(gathering => (
-                                        <div
-                                          key={gathering.id}
-                                          className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                          title={gathering.name}
-                                        ></div>
-                                      ))}
-                                    </div>
-                                  )}
+                                  {(() => {
+                                    const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                    return standardGatherings.length > 0 && (
+                                      <div className="flex items-center space-x-1">
+                                        {standardGatherings.map(gathering => (
+                                          <div
+                                            key={gathering.id}
+                                            className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                            title={gathering.name}
+                                          ></div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()}
                                   <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                 </div>
                               </div>
@@ -2730,17 +2760,20 @@ const PeoplePage: React.FC = () => {
                                           </span>
                                           <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                         </div>
-                                        {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                          <div className="flex items-center space-x-1 mt-1">
-                                            {person.gatheringAssignments.map(gathering => (
-                                              <div
-                                                key={gathering.id}
-                                                className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                                title={gathering.name}
-                                              ></div>
-                                            ))}
-                                          </div>
-                                        )}
+                                        {(() => {
+                                          const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                          return standardGatherings.length > 0 && (
+                                            <div className="flex items-center space-x-1 mt-1">
+                                              {standardGatherings.map(gathering => (
+                                                <div
+                                                  key={gathering.id}
+                                                  className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                                  title={gathering.name}
+                                                ></div>
+                                              ))}
+                                            </div>
+                                          );
+                                        })()}
                                       </div>
                                     </div>
                                   </div>
@@ -2778,17 +2811,20 @@ const PeoplePage: React.FC = () => {
                                   />
                                   <div className="flex items-center space-x-2">
                                     <span className="text-sm font-medium text-gray-900">{displayName}</span>
-                                    {person.gatheringAssignments && person.gatheringAssignments.length > 0 && (
-                                      <div className="flex items-center space-x-1">
-                                        {person.gatheringAssignments.map(gathering => (
-                                          <div
-                                            key={gathering.id}
-                                            className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                            title={gathering.name}
-                                          ></div>
-                                        ))}
-                                      </div>
-                                    )}
+                                    {(() => {
+                                      const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
+                                      return standardGatherings.length > 0 && (
+                                        <div className="flex items-center space-x-1">
+                                          {standardGatherings.map(gathering => (
+                                            <div
+                                              key={gathering.id}
+                                              className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
+                                              title={gathering.name}
+                                            ></div>
+                                          ))}
+                                        </div>
+                                      );
+                                    })()}
                                     <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                   </div>
                                 </div>
@@ -3008,23 +3044,25 @@ const PeoplePage: React.FC = () => {
                         Assign to Gatherings (Optional)
                       </label>
                       <div className="grid grid-cols-2 gap-2">
-                        {gatheringTypes.map((gathering) => (
-                          <label key={gathering.id} className="flex items-center">
-                            <input
-                              type="checkbox"
-                              checked={addPeopleForm.selectedGatherings[gathering.id] || false}
-                              onChange={(e) => setAddPeopleForm({
-                                ...addPeopleForm,
-                                selectedGatherings: {
-                                  ...addPeopleForm.selectedGatherings,
-                                  [gathering.id]: e.target.checked
-                                }
-                              })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                            />
-                            <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
-                          </label>
-                        ))}
+                        {gatheringTypes
+                          .filter(gathering => gathering.attendanceType !== 'headcount')
+                          .map((gathering) => (
+                            <label key={gathering.id} className="flex items-center">
+                              <input
+                                type="checkbox"
+                                checked={addPeopleForm.selectedGatherings[gathering.id] || false}
+                                onChange={(e) => setAddPeopleForm({
+                                  ...addPeopleForm,
+                                  selectedGatherings: {
+                                    ...addPeopleForm.selectedGatherings,
+                                    [gathering.id]: e.target.checked
+                                  }
+                                })}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
+                            </label>
+                          ))}
                       </div>
                     </div>
                   )}
@@ -3783,13 +3821,15 @@ const PeoplePage: React.FC = () => {
                     });
                   });
                   
-                  // Initialize assignments based on common gatherings
-                  gatheringTypes.forEach(g => {
-                    const hasGathering = selectedPeopleData.every(person => 
-                      person.gatheringAssignments?.some(ga => ga.id === g.id)
-                    );
-                    assignments[g.id] = hasGathering;
-                  });
+                  // Initialize assignments based on common standard gatherings
+                  gatheringTypes
+                    .filter(g => g.attendanceType !== 'headcount')
+                    .forEach(g => {
+                      const hasGathering = selectedPeopleData.every(person => 
+                        person.gatheringAssignments?.some(ga => ga.id === g.id)
+                      );
+                      assignments[g.id] = hasGathering;
+                    });
                   
                   // Store original assignments for each person
                   selectedPeopleData.forEach(person => {

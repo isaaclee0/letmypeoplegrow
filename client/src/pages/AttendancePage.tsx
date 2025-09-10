@@ -12,6 +12,7 @@ import { validatePerson, validateMultiplePeople } from '../utils/validationUtils
 import { getWebSocketMode } from '../utils/constants';
 // import { useAttendanceWebSocket } from '../hooks/useAttendanceWebSocket'; // Disabled - using direct socket access
 import { useWebSocket } from '../contexts/WebSocketContext';
+import { userPreferences } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import { 
   CalendarIcon, 
@@ -54,7 +55,7 @@ const AttendancePage: React.FC = () => {
       if (cachedData) {
         const parsed = JSON.parse(cachedData);
         const cacheAge = Date.now() - (parsed.timestamp || 0);
-        const isStale = cacheAge > 300000; // 5 minutes
+        const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
         
         if (!isStale && parsed.date && parsed.attendanceList?.length > 0) {
           console.log('📅 Initializing selectedDate from cache:', parsed.date);
@@ -113,6 +114,42 @@ const AttendancePage: React.FC = () => {
     presentByIdRef.current = presentById;
   }, [presentById]);
 
+  // Helper function to sync presentById with attendanceList (similar to visitor system)
+  // This ensures consistent state management between regular attenders and visitors
+  const syncPresentByIdWithAttendanceList = useCallback((attendanceData: any[]) => {
+    if (!attendanceData || attendanceData.length === 0) return {};
+    
+    const newPresentById: Record<number, boolean> = {};
+    attendanceData.forEach((person: any) => {
+      if (person.id) {
+        newPresentById[person.id] = Boolean(person.present);
+      }
+    });
+    return newPresentById;
+  }, []);
+
+  // Keep presentById in sync with attendanceList changes (similar to visitor system)
+  useEffect(() => {
+    if (attendanceList.length > 0) {
+      const newPresentById = syncPresentByIdWithAttendanceList(attendanceList);
+      
+      // Only update if there are actual changes to prevent infinite loops
+      const hasChanges = Object.keys(newPresentById).some(id => 
+        newPresentById[Number(id)] !== presentById[Number(id)]
+      ) || Object.keys(presentById).length !== Object.keys(newPresentById).length;
+      
+      if (hasChanges) {
+        console.log('🔄 Syncing presentById with attendanceList:', {
+          attendanceListLength: attendanceList.length,
+          presentByIdKeys: Object.keys(presentById).length,
+          newPresentByIdKeys: Object.keys(newPresentById).length
+        });
+        setPresentById(newPresentById);
+        presentByIdRef.current = newPresentById;
+      }
+    }
+  }, [attendanceList, syncPresentByIdWithAttendanceList]); // Only depend on attendanceList, not presentById to avoid loops
+
   // Critical: Clear presentById when date or gathering changes to prevent cross-date contamination
   const prevDateRef = useRef<string | null>(null);
   const prevGatheringRef = useRef<number | null>(null);
@@ -165,7 +202,7 @@ const AttendancePage: React.FC = () => {
     try {
       const parsed = JSON.parse(cachedData);
       const cacheAge = Date.now() - (parsed.timestamp || 0);
-      const isStale = cacheAge > 300000; // 5 minutes instead of 15 seconds
+      const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
       
       console.log('📦 Found cached data:', {
         gatheringId: parsed.gatheringId,
@@ -185,10 +222,7 @@ const AttendancePage: React.FC = () => {
         setVisitors(parsed.visitors || []);
         
                       // Initialize presentById from cached data directly (like visitors)
-              const cachedPresentById: Record<number, boolean> = {};
-              (parsed.attendanceList || []).forEach((person: any) => {
-                cachedPresentById[person.id] = Boolean(person.present);
-              });
+              const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
               
               // Apply any pending offline changes to cached data
               const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
@@ -319,6 +353,8 @@ const AttendancePage: React.FC = () => {
   const [scrollLeft, setScrollLeft] = useState(0);
   const [showRightFade, setShowRightFade] = useState(true);
   const [showDesktopRightFade, setShowDesktopRightFade] = useState(true);
+  const [showLeftFade, setShowLeftFade] = useState(false);
+  const [showDesktopLeftFade, setShowDesktopLeftFade] = useState(false);
   const tabSliderRef = useRef<HTMLDivElement>(null);
   const desktopTabSliderRef = useRef<HTMLDivElement>(null);
 
@@ -548,11 +584,14 @@ const AttendancePage: React.FC = () => {
     if (!sliderRef.current) return;
     const { scrollLeft, scrollWidth, clientWidth } = sliderRef.current;
     const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5; // 5px tolerance
+    const isAtStart = scrollLeft <= 5; // 5px tolerance
     
     if (isMobile) {
       setShowRightFade(!isAtEnd);
+      setShowLeftFade(!isAtStart);
     } else {
       setShowDesktopRightFade(!isAtEnd);
+      setShowDesktopLeftFade(!isAtStart);
     }
   };
 
@@ -813,7 +852,7 @@ const AttendancePage: React.FC = () => {
             try {
               const parsed = JSON.parse(cachedData);
               const cacheAge = Date.now() - (parsed.timestamp || 0);
-              const isStale = cacheAge > 300000; // 5 minutes
+              const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
               
               if (!isStale && parsed.gatheringId && parsed.attendanceList?.length > 0) {
                 const cachedGathering = userGatherings.find((g: GatheringType) => g.id === parsed.gatheringId);
@@ -844,49 +883,58 @@ const AttendancePage: React.FC = () => {
 
   // Set date when gathering changes (use cached, last viewed, or nearest date)
   useEffect(() => {
-    if (validDates.length > 0) {
-      let dateToSelect = null;
-      let shouldUpdate = false;
-      
-      // First, check if current selectedDate is valid for this gathering
-      if (validDates.includes(selectedDate)) {
-        console.log('📅 Current selectedDate is valid, keeping it:', selectedDate);
-        return; // Don't change date if current one is valid
-      }
-      
-      // If current date is not valid, find a replacement
-      console.log('📅 Current selectedDate not valid for gathering, finding replacement');
-      
-      // First, check if we have cached data for this gathering
-      const cachedData = localStorage.getItem('attendance_cached_data');
-      if (cachedData && selectedGathering) {
-        try {
-          const parsed = JSON.parse(cachedData);
-          const cacheAge = Date.now() - (parsed.timestamp || 0);
-          const isStale = cacheAge > 300000; // 5 minutes
-          
-          if (!isStale && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
-            console.log('📅 Using date from cache for gathering change:', {
-              gatheringId: parsed.gatheringId,
-              date: parsed.date
-            });
-            dateToSelect = parsed.date;
-            shouldUpdate = true;
+    const setDateForGathering = async () => {
+      if (validDates.length > 0) {
+        let dateToSelect = null;
+        let shouldUpdate = false;
+        
+        // First, check if current selectedDate is valid for this gathering
+        if (validDates.includes(selectedDate)) {
+          console.log('📅 Current selectedDate is valid, keeping it:', selectedDate);
+          return; // Don't change date if current one is valid
+        }
+        
+        // If current date is not valid, find a replacement
+        console.log('📅 Current selectedDate not valid for gathering, finding replacement');
+        
+        // First, check if we have cached data for this gathering
+        const cachedData = localStorage.getItem('attendance_cached_data');
+        if (cachedData && selectedGathering) {
+          try {
+            const parsed = JSON.parse(cachedData);
+            const cacheAge = Date.now() - (parsed.timestamp || 0);
+            const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
+            
+            if (!isStale && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
+              console.log('📅 Using date from cache for gathering change:', {
+                gatheringId: parsed.gatheringId,
+                date: parsed.date
+              });
+              dateToSelect = parsed.date;
+              shouldUpdate = true;
+            }
+          } catch (err) {
+            console.error('Failed to parse cached data for date selection:', err);
           }
-        } catch (err) {
-          console.error('Failed to parse cached data for date selection:', err);
         }
-      }
-      
-      // Fallback to last viewed if no cached data was used
-      if (!shouldUpdate) {
-        const lastViewed = getLastViewed();
-        if (lastViewed && validDates.includes(lastViewed.date)) {
-          console.log('📅 Using date from last viewed:', lastViewed.date);
-          dateToSelect = lastViewed.date;
-          shouldUpdate = true;
+        
+        // Fallback to last viewed date for this specific gathering
+        if (!shouldUpdate) {
+          const lastViewedDate = await userPreferences.getLastViewedDateForGathering(selectedGathering.id);
+          if (lastViewedDate && validDates.includes(lastViewedDate)) {
+            console.log('📅 Using date from last viewed for gathering:', lastViewedDate);
+            dateToSelect = lastViewedDate;
+            shouldUpdate = true;
+          } else {
+            // Fallback to general last viewed
+            const lastViewed = getLastViewed();
+            if (lastViewed && validDates.includes(lastViewed.date)) {
+              console.log('📅 Using date from general last viewed:', lastViewed.date);
+              dateToSelect = lastViewed.date;
+              shouldUpdate = true;
+            }
+          }
         }
-      }
       
       // Final fallback to nearest date
       if (!shouldUpdate) {
@@ -895,10 +943,13 @@ const AttendancePage: React.FC = () => {
         shouldUpdate = true;
       }
       
-      if (shouldUpdate && dateToSelect) {
-        setSelectedDate(dateToSelect);
+        if (shouldUpdate && dateToSelect) {
+          setSelectedDate(dateToSelect);
+        }
       }
-    }
+    };
+    
+    setDateForGathering();
   }, [validDates, selectedGathering, selectedDate]);
 
   // Add request deduplication and cancellation
@@ -961,10 +1012,7 @@ const AttendancePage: React.FC = () => {
       setVisitors(response.visitors || []);
       
       // Initialize presentById from server data directly (like visitors)
-      const serverPresentById: Record<number, boolean> = {};
-      (response.attendanceList || []).forEach((person: any) => {
-        serverPresentById[person.id] = Boolean(person.present);
-      });
+      const serverPresentById = syncPresentByIdWithAttendanceList(response.attendanceList || []);
       
       // Apply any pending offline changes for this exact gathering/date
       const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
@@ -1059,10 +1107,7 @@ const AttendancePage: React.FC = () => {
         setVisitors(apiResponse.data.visitors || []);
         
         // Initialize presentById from server data directly (API fallback)
-        const serverPresentById: Record<number, boolean> = {};
-        (apiResponse.data.attendanceList || []).forEach((person: any) => {
-          serverPresentById[person.id] = Boolean(person.present);
-        });
+        const serverPresentById = syncPresentByIdWithAttendanceList(apiResponse.data.attendanceList || []);
         
         // Apply any pending offline changes for this exact gathering/date
         const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
@@ -1214,7 +1259,7 @@ const AttendancePage: React.FC = () => {
           if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
             // Check if cache is fresh (less than 5 minutes old) to avoid showing stale data
             const cacheAge = Date.now() - (parsed.timestamp || 0);
-            const isStale = cacheAge > 300000; // 5 minutes - same as mount effect
+            const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
             
             console.log('📱 Loading cached attendance data:', {
               attendees: parsed.attendanceList?.length || 0,
@@ -1228,10 +1273,7 @@ const AttendancePage: React.FC = () => {
               setVisitors(parsed.visitors || []);
               
               // Initialize presentById from cached data directly (no merge)
-              const cachedPresentById: Record<number, boolean> = {};
-              (parsed.attendanceList || []).forEach((person: any) => {
-                cachedPresentById[person.id] = Boolean(person.present);
-              });
+              const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
               
               // Apply any pending offline changes to cached data
               const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
@@ -1273,8 +1315,9 @@ const AttendancePage: React.FC = () => {
         setGroupByFamily(true); // Default to true
       }
       
-      // Save as last viewed
+      // Save as last viewed (both general and gathering-specific)
       saveLastViewed(selectedGathering.id, selectedDate);
+      userPreferences.setAttendanceGatheringDate(selectedGathering.id, selectedDate);
     }
   }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Removed pendingChanges dependency
 
@@ -1738,7 +1781,25 @@ const AttendancePage: React.FC = () => {
         console.log('🔌 [WEBSOCKET] Received attendance update:', data);
         // Handle standard attendance updates
         if (data.records) {
-          // Update attendance records
+          // Update attendance records and presentById state (like visitor system)
+          setAttendanceList(prev => prev.map(person => {
+            const matchingRecord = data.records.find((record: any) => record.individualId === person.id);
+            if (matchingRecord) {
+              return { ...person, present: matchingRecord.present };
+            }
+            return person;
+          }));
+          
+          // Update presentById state to match attendanceList (similar to visitor system)
+          setPresentById(prev => {
+            const updated = { ...prev };
+            data.records.forEach((record: any) => {
+              updated[record.individualId] = record.present;
+            });
+            return updated;
+          });
+          
+          // Clear pending changes for these records
           setPendingChanges(prev => {
             const filtered = prev.filter(pendingChange => {
               const hasMatchingRecord = data.records.some((record: any) =>
@@ -2830,7 +2891,7 @@ const AttendancePage: React.FC = () => {
                       <div className="flex items-center justify-center h-full">
                         <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
                           <PencilIcon className="h-3 w-3" />
-                          <span>Edit</span>
+                          <span>Edit Order</span>
                         </span>
                       </div>
                     </button>
@@ -2838,7 +2899,9 @@ const AttendancePage: React.FC = () => {
                 </div>
                 
                 {/* Fade indicators */}
-                <div className="absolute top-0 left-0 w-4 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                {showLeftFade && (
+                  <div className="absolute top-0 left-0 w-4 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                )}
                 {showRightFade && (
                   <div className="absolute top-0 right-0 w-4 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
                 )}
@@ -2897,7 +2960,7 @@ const AttendancePage: React.FC = () => {
                       <div className="flex items-center justify-center h-full">
                         <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
                           <PencilIcon className="h-3 w-3" />
-                          <span>Edit</span>
+                          <span>Edit Order</span>
                         </span>
                       </div>
                     </button>
@@ -2905,7 +2968,9 @@ const AttendancePage: React.FC = () => {
                 </div>
                 
                 {/* Fade indicators */}
-                <div className="absolute top-0 left-0 w-6 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                {showDesktopLeftFade && (
+                  <div className="absolute top-0 left-0 w-6 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                )}
                 {showDesktopRightFade && (
                   <div className="absolute top-0 right-0 w-6 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
                 )}
@@ -3231,7 +3296,8 @@ const AttendancePage: React.FC = () => {
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                       {group.members.map((person: Individual) => {
-                        const isPresent = (presentById[person.id] ?? person.present) as boolean;
+                        // Use presentById first (like visitor system), fallback to person.present
+                        const isPresent = presentById[person.id] !== undefined ? presentById[person.id] : Boolean(person.present);
                         const isSaving = Boolean(savingById[person.id] || person.isSaving);
                         const displayName = getPersonDisplayName(person, group.familyName);
                         const needsWideLayout = shouldUseWideLayout(displayName);

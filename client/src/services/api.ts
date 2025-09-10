@@ -402,6 +402,16 @@ export const usersAPI = {
     mobileNumber?: string | null;
     primaryContactMethod?: 'email' | 'sms';
   }) => api.put('/users/me', data),
+  
+  // User preferences
+  getPreferences: () => 
+    api.get('/users/me/preferences'),
+    
+  savePreference: (key: string, value: any) => 
+    api.post('/users/me/preferences', { key, value }),
+    
+  savePreferences: (preferences: Record<string, any>) => 
+    api.post('/users/me/preferences/batch', { preferences }),
 };
 
 // Advanced Migrations API is now in advancedMigrationsAPI.ts

@@ -767,4 +767,113 @@ router.get('/:userId/gatherings',
   }
 );
 
+// User preferences endpoints
+// Get user preferences
+router.get('/me/preferences', verifyToken, async (req, res) => {
+  try {
+    const preferences = await Database.query(`
+      SELECT preference_key, preference_value, updated_at
+      FROM user_preferences 
+      WHERE user_id = ? AND church_id = ?
+      ORDER BY updated_at DESC
+    `, [req.user.id, req.user.church_id]);
+
+    // Convert to object format for easier frontend consumption
+    const preferencesObj = {};
+    preferences.forEach(pref => {
+      try {
+        preferencesObj[pref.preference_key] = JSON.parse(pref.preference_value);
+      } catch (e) {
+        console.warn(`Failed to parse preference ${pref.preference_key}:`, e);
+      }
+    });
+
+    res.json({ preferences: preferencesObj });
+  } catch (error) {
+    console.error('Get user preferences error:', error);
+    res.status(500).json({ error: 'Failed to get user preferences' });
+  }
+});
+
+// Save user preference
+router.post('/me/preferences', 
+  verifyToken,
+  [
+    body('key').trim().isLength({ min: 1, max: 100 }).withMessage('Preference key is required and must be 1-100 characters'),
+    body('value').isObject().withMessage('Preference value must be an object'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { key, value } = req.body;
+      const userId = req.user.id;
+      const churchId = req.user.church_id;
+
+      // Insert or update preference
+      await Database.query(`
+        INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+          preference_value = VALUES(preference_value),
+          updated_at = CURRENT_TIMESTAMP
+      `, [userId, key, JSON.stringify(value), churchId]);
+
+      res.json({ message: 'Preference saved successfully' });
+    } catch (error) {
+      console.error('Save user preference error:', error);
+      res.status(500).json({ error: 'Failed to save user preference' });
+    }
+  }
+);
+
+// Save multiple user preferences
+router.post('/me/preferences/batch', 
+  verifyToken,
+  [
+    body('preferences').isObject().withMessage('Preferences must be an object'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { preferences } = req.body;
+      const userId = req.user.id;
+      const churchId = req.user.church_id;
+
+      // Validate each preference
+      for (const [key, value] of Object.entries(preferences)) {
+        if (typeof key !== 'string' || key.length === 0 || key.length > 100) {
+          return res.status(400).json({ error: `Invalid preference key: ${key}` });
+        }
+        if (typeof value !== 'object' || value === null) {
+          return res.status(400).json({ error: `Preference value for ${key} must be an object` });
+        }
+      }
+
+      // Insert or update all preferences
+      for (const [key, value] of Object.entries(preferences)) {
+        await Database.query(`
+          INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
+          VALUES (?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+            preference_value = VALUES(preference_value),
+            updated_at = CURRENT_TIMESTAMP
+        `, [userId, key, JSON.stringify(value), churchId]);
+      }
+
+      res.json({ message: 'Preferences saved successfully' });
+    } catch (error) {
+      console.error('Save user preferences batch error:', error);
+      res.status(500).json({ error: 'Failed to save user preferences' });
+    }
+  }
+);
+
 module.exports = router; 
