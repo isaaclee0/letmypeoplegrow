@@ -685,7 +685,7 @@ const PeoplePage: React.FC = () => {
           }
           nameMap.get(key)!.push(person);
         });
-        const potentialDuplicates = Array.from(nameMap.entries()).filter(([_, persons]) => persons.length > 1);
+        const potentialDuplicates = Array.from(nameMap.entries()).filter(([name, persons]) => persons.length > 1);
         if (potentialDuplicates.length > 0) {
           console.log('Potential duplicates found based on name:', potentialDuplicates);
         }

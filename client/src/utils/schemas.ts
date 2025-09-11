@@ -70,7 +70,7 @@ export const multiplePeopleSchema = yup.object({
         }
       });
       
-      const duplicates = Array.from(nameMap.entries()).filter(([_, indices]) => indices.length > 1);
+      const duplicates = Array.from(nameMap.entries()).filter(([name, indices]) => indices.length > 1);
       if (duplicates.length > 0) {
         const duplicateDetails = duplicates.map(([name, indices]) => 
           `"${name}" at positions: ${indices.join(', ')}`
