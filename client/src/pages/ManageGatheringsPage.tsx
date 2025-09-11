@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { gatheringsAPI } from '../services/api';
+import logger from '../utils/logger';
 import {
   PlusIcon,
   UserGroupIcon,
@@ -226,7 +227,7 @@ const ManageGatheringsPage: React.FC = () => {
         customSchedule: createGatheringData.customSchedule
       };
       
-      console.log('Creating gathering with data:', gatheringData);
+      logger.log('Creating gathering with data:', gatheringData);
       
       const gatheringResponse = await gatheringsAPI.create(gatheringData);
 

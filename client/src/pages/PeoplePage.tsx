@@ -9,6 +9,7 @@ import MassEditModal from '../components/people/MassEditModal';
 import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
+import logger from '../utils/logger';
 import {
   UserGroupIcon,
   MagnifyingGlassIcon,
@@ -687,7 +688,7 @@ const PeoplePage: React.FC = () => {
         });
         const potentialDuplicates = Array.from(nameMap.entries()).filter(([name, persons]) => persons.length > 1);
         if (potentialDuplicates.length > 0) {
-          console.log('Potential duplicates found based on name:', potentialDuplicates);
+          logger.log('Potential duplicates found based on name:', potentialDuplicates);
         }
       }
       setPeople(uniquePeople);
@@ -751,8 +752,8 @@ const PeoplePage: React.FC = () => {
       setIsLoading(true);
       setError('');
       
-      console.log('TSV data:', csvData);
-      console.log('TSV Analysis:', tsvAnalysis);
+      logger.log('TSV data:', csvData);
+      logger.log('TSV Analysis:', tsvAnalysis);
       
       let response;
       
@@ -760,14 +761,14 @@ const PeoplePage: React.FC = () => {
       // If there are existing people in the TSV, use update mode; otherwise use new mode
       if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
         // Handle updates to existing people
-        console.log('Processing TSV for updates - found existing people');
+        logger.log('Processing TSV for updates - found existing people');
         response = await csvImportAPI.updateExisting(csvData);
       } else {
         // Handle new people upload (existing logic)
         const csvBlob = new Blob([csvData], { type: 'text/tsv' });
         const csvFile = new File([csvBlob], 'upload.tsv', { type: 'text/tsv' });
         
-        console.log('Uploading TSV file for new people:', csvFile);
+        logger.log('Uploading TSV file for new people:', csvFile);
         
         // Upload without assignment since we're handling gatherings in the TSV
         response = await csvImportAPI.copyPaste(csvData);
@@ -789,20 +790,20 @@ const PeoplePage: React.FC = () => {
       
       // Log detailed information for debugging
       if (response.data.details) {
-        console.log('Import details:', response.data.details);
+        logger.log('Import details:', response.data.details);
         if (tsvAnalysis && tsvAnalysis.existingPeople > 0) {
           if (response.data.details.filter(r => r.status === 'updated').length > 0) {
-            console.log('Successfully updated:', response.data.details.filter(r => r.status === 'updated'));
+            logger.log('Successfully updated:', response.data.details.filter(r => r.status === 'updated'));
           }
           if (response.data.details.filter(r => r.status === 'not_found').length > 0) {
-            console.log('Not found:', response.data.details.filter(r => r.status === 'not_found'));
+            logger.log('Not found:', response.data.details.filter(r => r.status === 'not_found'));
           }
         } else {
           if (response.data.details.duplicates && response.data.details.duplicates.length > 0) {
-            console.log('Duplicates found:', response.data.details.duplicates);
+            logger.log('Duplicates found:', response.data.details.duplicates);
           }
           if (response.data.details.imported && response.data.details.imported.length > 0) {
-            console.log('Successfully imported:', response.data.details.imported);
+            logger.log('Successfully imported:', response.data.details.imported);
           }
         }
       }
@@ -831,8 +832,8 @@ const PeoplePage: React.FC = () => {
       setIsLoading(true);
       setError('');
       
-      console.log('Sending copy-paste data:', copyPasteData);
-      console.log('Selected gathering ID:', selectedGatheringId);
+      logger.log('Sending copy-paste data:', copyPasteData);
+      logger.log('Selected gathering ID:', selectedGatheringId);
       
       const response = await csvImportAPI.copyPaste(copyPasteData, selectedGatheringId || undefined);
       
@@ -846,12 +847,12 @@ const PeoplePage: React.FC = () => {
       
       // Log detailed information for debugging
       if (response.data.details) {
-        console.log('Import details:', response.data.details);
+        logger.log('Import details:', response.data.details);
         if (response.data.details.duplicates && response.data.details.duplicates.length > 0) {
-          console.log('Duplicates found:', response.data.details.duplicates);
+          logger.log('Duplicates found:', response.data.details.duplicates);
         }
         if (response.data.details.imported && response.data.details.imported.length > 0) {
-          console.log('Successfully imported:', response.data.details.imported);
+          logger.log('Successfully imported:', response.data.details.imported);
         }
       }
       
@@ -1640,7 +1641,7 @@ const PeoplePage: React.FC = () => {
 
   const handleEditPerson = (person: Person) => {
     // Use mass edit modal for single person editing
-    console.log('handleEditPerson called with:', person);
+    logger.log('handleEditPerson called with:', person);
     
     const gatheringAssignments: { [key: number]: boolean } = {};
     
@@ -1668,9 +1669,9 @@ const PeoplePage: React.FC = () => {
       applyToWholeFamily: false
     };
     
-    console.log('Person data:', person);
-    console.log('Setting massEdit data:', massEditData);
-    console.log('Setting selectedPeople to:', [person.id]);
+    logger.log('Person data:', person);
+    logger.log('Setting massEdit data:', massEditData);
+    logger.log('Setting selectedPeople to:', [person.id]);
     
     // Pre-populate mass edit modal with person's data
     setMassEdit(massEditData);

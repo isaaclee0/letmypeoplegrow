@@ -14,6 +14,7 @@ import { getWebSocketMode } from '../utils/constants';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { userPreferences } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
+import logger from '../utils/logger';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -58,7 +59,7 @@ const AttendancePage: React.FC = () => {
         const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
         
         if (!isStale && parsed.date && parsed.attendanceList?.length > 0) {
-          console.log('📅 Initializing selectedDate from cache:', parsed.date);
+          logger.log('📅 Initializing selectedDate from cache:', parsed.date);
           return parsed.date;
         }
       }
@@ -66,7 +67,7 @@ const AttendancePage: React.FC = () => {
       console.error('Failed to initialize date from cache:', err);
     }
     
-    console.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
+    logger.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
     return format(new Date(), 'yyyy-MM-dd');
   });
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
@@ -113,7 +114,7 @@ const AttendancePage: React.FC = () => {
     try {
       userPreferences.setAttendanceLastViewed(gatheringId, date);
     } catch (e) {
-      console.warn('Failed to save last viewed to user preferences:', e);
+      logger.warn('Failed to save last viewed to user preferences:', e);
     }
   };
 
@@ -147,7 +148,7 @@ const AttendancePage: React.FC = () => {
       ) || Object.keys(presentById).length !== Object.keys(newPresentById).length;
       
       if (hasChanges) {
-        console.log('🔄 Syncing presentById with attendanceList:', {
+        logger.log('🔄 Syncing presentById with attendanceList:', {
           attendanceListLength: attendanceList.length,
           presentByIdKeys: Object.keys(presentById).length,
           newPresentByIdKeys: Object.keys(newPresentById).length
@@ -168,7 +169,7 @@ const AttendancePage: React.FC = () => {
     const gatheringChanged = prevGatheringRef.current !== null && prevGatheringRef.current !== selectedGathering?.id;
     
     if (dateChanged || gatheringChanged) {
-      console.log('🧹 Date/gathering switched, clearing presentById state:', {
+      logger.log('🧹 Date/gathering switched, clearing presentById state:', {
         from: { date: prevDateRef.current, gathering: prevGatheringRef.current },
         to: { date: selectedDate, gathering: selectedGathering?.id },
         currentPresentByIdKeys: Object.keys(presentById).length
@@ -189,21 +190,21 @@ const AttendancePage: React.FC = () => {
 
   // Load cached data immediately on component mount for better UX during navigation
   useEffect(() => {
-    console.log('🔍 AttendancePage mounted - checking for cached data...');
+    logger.log('🔍 AttendancePage mounted - checking for cached data...');
     
     // Debug: List all localStorage keys
-    console.log('🔑 All localStorage keys:', Object.keys(localStorage));
-    console.log('📋 LocalStorage content:');
+    logger.log('🔑 All localStorage keys:', Object.keys(localStorage));
+    logger.log('📋 LocalStorage content:');
     for (const key of Object.keys(localStorage)) {
       if (key.includes('attendance') || key.includes('gathering')) {
-        console.log(`  ${key}:`, localStorage.getItem(key)?.substring(0, 100) + '...');
+        logger.log(`  ${key}:`, localStorage.getItem(key)?.substring(0, 100) + '...');
       }
     }
     
     const cachedData = localStorage.getItem('attendance_cached_data');
     
     if (!cachedData) {
-      console.log('❌ No cached attendance data found in localStorage');
+      logger.log('❌ No cached attendance data found in localStorage');
       return;
     }
     
@@ -212,7 +213,7 @@ const AttendancePage: React.FC = () => {
       const cacheAge = Date.now() - (parsed.timestamp || 0);
       const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
       
-      console.log('📦 Found cached data:', {
+      logger.log('📦 Found cached data:', {
         gatheringId: parsed.gatheringId,
         date: parsed.date,
         attendees: parsed.attendanceList?.length || 0,
@@ -223,7 +224,7 @@ const AttendancePage: React.FC = () => {
       });
       
       if (!isStale && parsed.attendanceList?.length > 0) {
-        console.log('🚀 Loading cached data immediately on navigation');
+        logger.log('🚀 Loading cached data immediately on navigation');
         
         // Load cached attendance data immediately
         setAttendanceList(parsed.attendanceList || []);
@@ -253,8 +254,8 @@ const AttendancePage: React.FC = () => {
         });
         setVisitorAttendance(newVisitorAttendance);
         
-        console.log('✅ Cached data loaded successfully');
-        console.log('📊 Cache load summary:', {
+        logger.log('✅ Cached data loaded successfully');
+        logger.log('📊 Cache load summary:', {
           attendanceListLength: parsed.attendanceList?.length || 0,
           visitorsLength: parsed.visitors?.length || 0,
           presentByIdKeys: Object.keys(cachedPresentById).length,
@@ -264,9 +265,9 @@ const AttendancePage: React.FC = () => {
         // Mark that we have loaded cached data to prevent immediate clearing
         sessionStorage.setItem('attendance_cache_loaded', 'true');
       } else if (isStale) {
-        console.log('⏰ Cache is stale, will load fresh data');
+        logger.log('⏰ Cache is stale, will load fresh data');
       } else if (!parsed.attendanceList?.length) {
-        console.log('📭 Cache exists but no attendance data');
+        logger.log('📭 Cache exists but no attendance data');
       }
     } catch (err) {
       console.error('❌ Failed to parse cached attendance data on mount:', err);
@@ -278,13 +279,13 @@ const AttendancePage: React.FC = () => {
       const saved = localStorage.getItem('attendance_last_viewed');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Only use if less than 30 days old
-        if (Date.now() - parsed.timestamp < 30 * 24 * 60 * 60 * 1000) {
+        // Only use if less than 24 hours old
+        if (Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000) {
           return { gatheringId: parsed.gatheringId, date: parsed.date };
         }
       }
     } catch (e) {
-      console.warn('Failed to parse last viewed data:', e);
+      logger.warn('Failed to parse last viewed data:', e);
     }
     return null;
   };
@@ -322,7 +323,7 @@ const AttendancePage: React.FC = () => {
     try {
       localStorage.setItem(`gathering_${selectedGathering.id}_groupByFamily`, JSON.stringify(checked));
     } catch (error) {
-      console.warn('Failed to save groupByFamily setting to localStorage:', error);
+      logger.warn('Failed to save groupByFamily setting to localStorage:', error);
     }
   }, [selectedGathering]);
 
@@ -423,7 +424,7 @@ const AttendancePage: React.FC = () => {
 
   // Add connection debugging
   useEffect(() => {
-    console.log('🔌 WebSocket Connection Status:', {
+    logger.log('🔌 WebSocket Connection Status:', {
       isConnected: isWebSocketConnected,
       connectionStatus,
       webSocketMode,
@@ -822,7 +823,7 @@ const AttendancePage: React.FC = () => {
     const currentIndex = validDates.indexOf(selectedDate);
     if (currentIndex > 0) {
       const nextDate = validDates[currentIndex - 1]; // Next date is at lower index (newer dates first)
-      console.log('📅 Navigating to next date:', nextDate);
+      logger.log('📅 Navigating to next date:', nextDate);
       setSelectedDate(nextDate);
     }
   }, [selectedDate, validDates]);
@@ -833,7 +834,7 @@ const AttendancePage: React.FC = () => {
     const currentIndex = validDates.indexOf(selectedDate);
     if (currentIndex < validDates.length - 1) {
       const prevDate = validDates[currentIndex + 1]; // Previous date is at higher index (older dates first)
-      console.log('📅 Navigating to previous date:', prevDate);
+      logger.log('📅 Navigating to previous date:', prevDate);
       setSelectedDate(prevDate);
     }
   }, [selectedDate, validDates]);
@@ -871,7 +872,7 @@ const AttendancePage: React.FC = () => {
           try {
             lastViewed = await userPreferences.getAttendanceLastViewed();
           } catch (e) {
-            console.warn('Failed to get last viewed from user preferences, falling back to localStorage:', e);
+            logger.warn('Failed to get last viewed from user preferences, falling back to localStorage:', e);
             lastViewed = getLastViewed();
           }
           
@@ -879,12 +880,12 @@ const AttendancePage: React.FC = () => {
 
           // Try last viewed first
           if (lastViewed) {
-            console.log('🔍 Looking for last viewed gathering:', lastViewed.gatheringId);
+            logger.log('🔍 Looking for last viewed gathering:', lastViewed.gatheringId);
             gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId) || null;
             if (gatheringToSelect) {
-              console.log('✅ Found last viewed gathering:', gatheringToSelect.name);
+              logger.log('✅ Found last viewed gathering:', gatheringToSelect.name);
             } else {
-              console.log('❌ Last viewed gathering not found in current gatherings');
+              logger.log('❌ Last viewed gathering not found in current gatherings');
             }
           }
 
@@ -901,7 +902,7 @@ const AttendancePage: React.FC = () => {
               ordered = temp;
             }
           } catch (e) {
-            console.warn('Failed to load gathering order in loadGatherings:', e);
+            logger.warn('Failed to load gathering order in loadGatherings:', e);
           }
 
           // Saved default id overrides if available
@@ -917,7 +918,7 @@ const AttendancePage: React.FC = () => {
           const cachedData = localStorage.getItem('attendance_cached_data');
           let finalGatheringToSelect = gatheringToSelect || ordered[0] || userGatherings[0];
           
-          console.log('🎯 Final gathering selection:', {
+          logger.log('🎯 Final gathering selection:', {
             gatheringToSelect: gatheringToSelect?.name || 'none',
             finalGatheringToSelect: finalGatheringToSelect?.name || 'none',
             orderedFirst: ordered[0]?.name || 'none',
@@ -933,7 +934,7 @@ const AttendancePage: React.FC = () => {
               if (!isStale && parsed.gatheringId && parsed.attendanceList?.length > 0) {
                 const cachedGathering = userGatherings.find((g: GatheringType) => g.id === parsed.gatheringId);
                 if (cachedGathering) {
-                  console.log('🎯 Using gathering from cache for consistency:', {
+                  logger.log('🎯 Using gathering from cache for consistency:', {
                     gatheringId: parsed.gatheringId,
                     gatheringName: cachedGathering.name,
                     date: parsed.date
@@ -964,27 +965,21 @@ const AttendancePage: React.FC = () => {
         let dateToSelect = null;
         let shouldUpdate = false;
         
-        // First, check if current selectedDate is valid for this gathering
-        if (validDates.includes(selectedDate)) {
-          console.log('📅 Current selectedDate is valid, keeping it:', selectedDate);
-          return; // Don't change date if current one is valid
-        }
+        logger.log('📅 Setting date for gathering:', selectedGathering?.name, 'with valid dates:', validDates);
         
-        // If current date is not valid, find a replacement
-        console.log('📅 Current selectedDate not valid for gathering, finding replacement');
-        
-        // First, check if we have cached data for this gathering
+        // First, check if we have cached data for this gathering (within 24 hours)
         const cachedData = localStorage.getItem('attendance_cached_data');
         if (cachedData && selectedGathering) {
           try {
             const parsed = JSON.parse(cachedData);
             const cacheAge = Date.now() - (parsed.timestamp || 0);
-            const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
+            const isWithin24Hours = cacheAge < 24 * 60 * 60 * 1000; // 24 hours
             
-            if (!isStale && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
-              console.log('📅 Using date from cache for gathering change:', {
+            if (isWithin24Hours && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
+              logger.log('📅 Using date from cache for gathering change (within 24 hours):', {
                 gatheringId: parsed.gatheringId,
-                date: parsed.date
+                date: parsed.date,
+                ageHours: Math.round(cacheAge / (60 * 60 * 1000))
               });
               dateToSelect = parsed.date;
               shouldUpdate = true;
@@ -994,48 +989,16 @@ const AttendancePage: React.FC = () => {
           }
         }
         
-        // Fallback to last viewed date for this specific gathering
+        // If no cached data within 24 hours, find the most recent date for this gathering
         if (!shouldUpdate) {
-          const lastViewedDate = await userPreferences.getLastViewedDateForGathering(selectedGathering.id);
-          if (lastViewedDate && validDates.includes(lastViewedDate)) {
-            console.log('📅 Using date from last viewed for gathering:', lastViewedDate);
-            dateToSelect = lastViewedDate;
-            shouldUpdate = true;
-          } else {
-            // Fallback to general last viewed from user preferences
-            try {
-              const lastViewed = await userPreferences.getAttendanceLastViewed();
-              if (lastViewed && validDates.includes(lastViewed.date)) {
-                console.log('📅 Using date from general last viewed (user preferences):', lastViewed.date);
-                dateToSelect = lastViewed.date;
-                shouldUpdate = true;
-              } else {
-                // Final fallback to localStorage
-                const localStorageLastViewed = getLastViewed();
-                if (localStorageLastViewed && validDates.includes(localStorageLastViewed.date)) {
-                  console.log('📅 Using date from general last viewed (localStorage):', localStorageLastViewed.date);
-                  dateToSelect = localStorageLastViewed.date;
-                  shouldUpdate = true;
-                }
-              }
-            } catch (e) {
-              console.warn('Failed to get last viewed from user preferences, trying localStorage:', e);
-              const localStorageLastViewed = getLastViewed();
-              if (localStorageLastViewed && validDates.includes(localStorageLastViewed.date)) {
-                console.log('📅 Using date from general last viewed (localStorage fallback):', localStorageLastViewed.date);
-                dateToSelect = localStorageLastViewed.date;
-                shouldUpdate = true;
-              }
-            }
-          }
+          // Sort dates in descending order (most recent first)
+          const sortedDates = [...validDates].sort((a, b) => b.localeCompare(a));
+          const mostRecentDate = sortedDates[0];
+          
+          logger.log('📅 No recent cache found, using most recent date for gathering:', mostRecentDate);
+          dateToSelect = mostRecentDate;
+          shouldUpdate = true;
         }
-      
-      // Final fallback to nearest date
-      if (!shouldUpdate) {
-        dateToSelect = findNearestDate(validDates);
-        console.log('📅 Using nearest date as final fallback:', dateToSelect);
-        shouldUpdate = true;
-      }
       
         if (shouldUpdate && dateToSelect) {
           setSelectedDate(dateToSelect);
@@ -1044,7 +1007,7 @@ const AttendancePage: React.FC = () => {
     };
     
     setDateForGathering();
-  }, [validDates, selectedGathering, selectedDate]);
+  }, [validDates, selectedGathering]);
 
   // Add request deduplication and cancellation
   const loadAttendanceDataRef = useRef<AbortController | null>(null);
@@ -1057,13 +1020,13 @@ const AttendancePage: React.FC = () => {
     
     // Prevent duplicate requests
     if (currentRequestKey.current === requestKey) {
-      console.log(`⏭️ Skipping duplicate request for ${requestKey}`);
+      logger.log(`⏭️ Skipping duplicate request for ${requestKey}`);
       return;
     }
 
     // Cancel previous request if it exists
     if (loadAttendanceDataRef.current) {
-      console.log(`❌ Cancelling previous request for ${currentRequestKey.current}`);
+      logger.log(`❌ Cancelling previous request for ${currentRequestKey.current}`);
       loadAttendanceDataRef.current.abort();
     }
 
@@ -1072,7 +1035,7 @@ const AttendancePage: React.FC = () => {
     loadAttendanceDataRef.current = abortController;
     currentRequestKey.current = requestKey;
 
-    console.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
+    logger.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
     setIsLoading(true);
     
     // Store current data in case we need to preserve it on error
@@ -1085,9 +1048,9 @@ const AttendancePage: React.FC = () => {
       // Try WebSocket first if connected, fall back to REST API
       if (isWebSocketConnected) {
         try {
-          console.log(`📡 Loading via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
+          logger.log(`📡 Loading via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
           response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
-          console.log(`📊 Received fresh attendance data via WebSocket:`, {
+          logger.log(`📊 Received fresh attendance data via WebSocket:`, {
             attendeeCount: response.attendanceList?.length || 0,
             visitorCount: response.visitors?.length || 0,
             gatheringId: selectedGathering.id,
@@ -1095,7 +1058,7 @@ const AttendancePage: React.FC = () => {
             timestamp: new Date().toISOString()
           });
         } catch (wsError) {
-          console.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
+          logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
           throw wsError; // Re-throw to trigger REST API fallback
         }
       } else {
@@ -1116,7 +1079,7 @@ const AttendancePage: React.FC = () => {
         }
       });
       
-      console.log('🔄 Setting presentById from server data:', {
+      logger.log('🔄 Setting presentById from server data:', {
         serverKeys: Object.keys(serverPresentById).length,
         sampleData: Object.fromEntries(Object.entries(serverPresentById).slice(0, 5)),
         gatheringId: selectedGathering.id,
@@ -1145,7 +1108,7 @@ const AttendancePage: React.FC = () => {
         )
       };
       localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
-      console.log('💾 Cached attendance data for offline use:', {
+      logger.log('💾 Cached attendance data for offline use:', {
         gatheringId: selectedGathering.id,
         date: selectedDate,
         attendees: attendanceListForCache.length,
@@ -1161,23 +1124,23 @@ const AttendancePage: React.FC = () => {
           newVisitorAttendance[visitor.id] = Boolean(visitor.present);
         }
       });
-      console.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
+      logger.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
       setVisitorAttendance(newVisitorAttendance);
       
     } catch (err) {
       // Don't process if request was cancelled
       if (err instanceof Error && err.name === 'AbortError') {
-        console.log(`🚫 WebSocket request cancelled for ${requestKey}`);
+        logger.log(`🚫 WebSocket request cancelled for ${requestKey}`);
         return;
       }
       
       // Fall back to REST API if WebSocket failed or not connected
       try {
-        console.log(`📡 Falling back to REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
+        logger.log(`📡 Falling back to REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
         
         // Check if request was cancelled before making API call
         if (abortController.signal.aborted) {
-          console.log(`❌ Request cancelled before API call for ${requestKey}`);
+          logger.log(`❌ Request cancelled before API call for ${requestKey}`);
           return;
         }
         
@@ -1185,11 +1148,11 @@ const AttendancePage: React.FC = () => {
         
         // Check if request was cancelled after API call
         if (abortController.signal.aborted) {
-          console.log(`❌ Request cancelled after API call for ${requestKey}`);
+          logger.log(`❌ Request cancelled after API call for ${requestKey}`);
           return;
         }
         
-        console.log(`📊 Received attendance data via REST API:`, {
+        logger.log(`📊 Received attendance data via REST API:`, {
           attendeeCount: apiResponse.data.attendanceList?.length || 0,
           visitorCount: apiResponse.data.visitors?.length || 0,
           gatheringId: selectedGathering.id,
@@ -1211,7 +1174,7 @@ const AttendancePage: React.FC = () => {
           }
         });
         
-        console.log('📝 Setting presentById from API data:', {
+        logger.log('📝 Setting presentById from API data:', {
           serverKeys: Object.keys(serverPresentById).length,
           gatheringId: selectedGathering.id,
           date: selectedDate
@@ -1254,7 +1217,7 @@ const AttendancePage: React.FC = () => {
       } catch (apiError) {
         // Don't show error if request was cancelled
         if (apiError instanceof Error && apiError.name === 'AbortError') {
-          console.log(`🚫 API request cancelled for ${requestKey}`);
+          logger.log(`🚫 API request cancelled for ${requestKey}`);
           return;
         }
         
@@ -1266,7 +1229,7 @@ const AttendancePage: React.FC = () => {
         
         // Preserve existing data instead of clearing it on connection failure
         if (currentAttendanceList.length > 0 || currentVisitors.length > 0) {
-          console.log('📱 Preserving existing attendance data due to connection failure');
+          logger.log('📱 Preserving existing attendance data due to connection failure');
           setAttendanceList(currentAttendanceList);
           setVisitors(currentVisitors);
         }
@@ -1285,7 +1248,7 @@ const AttendancePage: React.FC = () => {
 
   // Handle gathering changes with fresh data loading
   const handleGatheringChange = useCallback((gathering: GatheringType) => {
-    console.log(`🏛️ Switching to gathering: ${gathering.name} (ID: ${gathering.id})`);
+    logger.log(`🏛️ Switching to gathering: ${gathering.name} (ID: ${gathering.id})`);
     
     // Clear user modification timestamps when switching gatherings
     // This ensures we get fresh server data instead of preserving stale local changes
@@ -1305,7 +1268,7 @@ const AttendancePage: React.FC = () => {
   // Load attendance data when date or gathering changes
   useEffect(() => {
     if (selectedGathering && selectedDate) {
-      console.log('📅 Main data loading effect triggered:', {
+      logger.log('📅 Main data loading effect triggered:', {
         gatheringId: selectedGathering.id,
         gatheringName: selectedGathering.name,
         date: selectedDate
@@ -1332,7 +1295,7 @@ const AttendancePage: React.FC = () => {
       // This ensures presentById doesn't carry over from previous dates
       const contextChanged = !cachedContextKey || cachedContextKey !== currentContextKey;
       
-      console.log('🔄 [CONTEXT] Checking context change:', {
+      logger.log('🔄 [CONTEXT] Checking context change:', {
         cachedContextKey,
         currentContextKey,
         contextChanged,
@@ -1342,12 +1305,12 @@ const AttendancePage: React.FC = () => {
       
       // Reset headcount value when context changes
       if (contextChanged) {
-        console.log('🔄 [CONTEXT] Context changed, resetting headcount value');
+        logger.log('🔄 [CONTEXT] Context changed, resetting headcount value');
         setHeadcountValue(0);
       }
       
       if (contextChanged) {
-        console.log('🧹 Clearing state for date/gathering change:', {
+        logger.log('🧹 Clearing state for date/gathering change:', {
           previous: cachedContextKey,
           current: currentContextKey,
           clearing: 'presentById, attendanceList, visitors, visitorAttendance'
@@ -1360,7 +1323,7 @@ const AttendancePage: React.FC = () => {
         presentByIdRef.current = {};
         setVisitorAttendance({});
       } else {
-        console.log('📋 Same date/gathering context, preserving state for potential merging:', currentContextKey);
+        logger.log('📋 Same date/gathering context, preserving state for potential merging:', currentContextKey);
       }
       
       // First try to load cached data immediately (for faster UX)
@@ -1372,7 +1335,7 @@ const AttendancePage: React.FC = () => {
             const cacheAge = Date.now() - (parsed.timestamp || 0);
             const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
             
-            console.log('📱 Loading cached attendance data:', {
+            logger.log('📱 Loading cached attendance data:', {
               attendees: parsed.attendanceList?.length || 0,
               visitors: parsed.visitors?.length || 0,
               cacheAge: Math.round(cacheAge / 1000) + 's',
@@ -1398,7 +1361,7 @@ const AttendancePage: React.FC = () => {
               setPresentById(cachedPresentById);
               presentByIdRef.current = cachedPresentById;
             } else {
-              console.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
+              logger.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
             }
           }
         } catch (err) {
@@ -1408,12 +1371,12 @@ const AttendancePage: React.FC = () => {
       
       // Always load fresh data on page load to ensure accuracy
       // Cache is only used for immediate UX while fresh data loads
-      console.log('🔄 Loading fresh attendance data (cache used for immediate UX only)');
+      logger.log('🔄 Loading fresh attendance data (cache used for immediate UX only)');
       
       if (isWebSocketConnected) {
-        console.log('🔌 WebSocket connected - loading fresh data via WebSocket');
+        logger.log('🔌 WebSocket connected - loading fresh data via WebSocket');
       } else {
-        console.log('📡 WebSocket not connected - loading fresh data via REST API');
+        logger.log('📡 WebSocket not connected - loading fresh data via REST API');
       }
       
       loadAttendanceData();
@@ -1571,9 +1534,9 @@ const AttendancePage: React.FC = () => {
           const allPeopleResponse = await attendanceAPI.getAllPeople();
           setAllChurchVisitors(allPeopleResponse.data.visitors || []);
           
-          console.log('✅ Refreshed all visitor data after adding recent visitor');
+          logger.log('✅ Refreshed all visitor data after adding recent visitor');
         } catch (refreshErr) {
-          console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+          logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
           // Don't throw error since the main operation succeeded
         }
       }
@@ -1592,7 +1555,7 @@ const AttendancePage: React.FC = () => {
     date: string, 
     records: Array<{ individualId: number; present: boolean }>
   ) => {
-    console.log('🔍 sendAttendanceChange called:', {
+    logger.log('🔍 sendAttendanceChange called:', {
       webSocketModeEnabled: webSocketMode.enabled,
       webSocketMode,
       isWebSocketConnected,
@@ -1602,7 +1565,7 @@ const AttendancePage: React.FC = () => {
     });
     
     if (!webSocketMode.enabled) {
-      console.log('📡 Using REST API (WebSocket disabled)');
+      logger.log('📡 Using REST API (WebSocket disabled)');
       // WebSocket disabled - use API directly
       await attendanceAPI.record(gatheringId, date, {
         attendanceRecords: records,
@@ -1615,7 +1578,7 @@ const AttendancePage: React.FC = () => {
     const shouldUseWebSocket = isWebSocketConnected && connectionStatus === 'connected';
     
     if (!shouldUseWebSocket && webSocketMode.fallbackAllowed) {
-      console.log('📡 WebSocket not available, using REST API fallback');
+      logger.log('📡 WebSocket not available, using REST API fallback');
       await attendanceAPI.record(gatheringId, date, {
         attendanceRecords: records,
         visitors: []
@@ -1626,7 +1589,7 @@ const AttendancePage: React.FC = () => {
     // WebSocket enabled and connected - try WebSocket first
     try {
       const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-      console.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Attempting to send attendance via WebSocket:`, {
+      logger.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Attempting to send attendance via WebSocket:`, {
         gatheringId,
         date,
         recordsCount: records.length,
@@ -1634,15 +1597,15 @@ const AttendancePage: React.FC = () => {
         connectionStatus
       });
       await sendAttendanceUpdate(gatheringId, date, records);
-      console.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Successfully sent attendance via WebSocket`);
+      logger.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Successfully sent attendance via WebSocket`);
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
-        console.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
+        logger.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
         await attendanceAPI.record(gatheringId, date, {
           attendanceRecords: records,
           visitors: []
         });
-        console.log(`✅ Successfully saved attendance via API fallback`);
+        logger.log(`✅ Successfully saved attendance via API fallback`);
       } else {
         // Pure WebSocket mode - no fallback allowed
         console.error(`❌ WebSocket failed in pure mode:`, wsError);
@@ -1656,12 +1619,12 @@ const AttendancePage: React.FC = () => {
     
     // Prevent rapid double-clicks
     if (savingById[individualId]) {
-      console.log(`⚠️ Already saving attendance for ${individualId}, ignoring duplicate click`);
+      logger.log(`⚠️ Already saving attendance for ${individualId}, ignoring duplicate click`);
       return;
     }
 
     // Add additional debug logging to track duplicate calls
-    console.log(`🔄 Toggling attendance for individual ${individualId} at ${Date.now()}`);
+    logger.log(`🔄 Toggling attendance for individual ${individualId} at ${Date.now()}`);
     
     // Track recent toggle calls to prevent duplicates
     const recentToggles = (window as any)._recentToggles || new Map();
@@ -1669,7 +1632,7 @@ const AttendancePage: React.FC = () => {
     const lastToggle = recentToggles.get(individualId) || 0;
     
     if (now - lastToggle < 500) { // Prevent toggles within 500ms
-      console.log(`⚠️ Duplicate toggle detected for ${individualId}, ignoring (${now - lastToggle}ms ago)`);
+      logger.log(`⚠️ Duplicate toggle detected for ${individualId}, ignoring (${now - lastToggle}ms ago)`);
       console.trace('Duplicate toggle call stack:');
       return;
     }
@@ -1684,14 +1647,14 @@ const AttendancePage: React.FC = () => {
     (window as any)._recentToggles = recentToggles;
     
     const person = attendanceListRef.current.find(p => p.id === individualId);
-    console.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
+    logger.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
     
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
     // Compute new present using refs to avoid stale state reads
     const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
     const newPresent = !currentPresent;
 
-    console.log(`📊 Attendance change: ${currentPresent} → ${newPresent} for gathering ${selectedGathering?.id} on ${selectedDate}`);
+    logger.log(`📊 Attendance change: ${currentPresent} → ${newPresent} for gathering ${selectedGathering?.id} on ${selectedDate}`);
 
     // Batch optimistic updates to prevent race conditions
     startTransition(() => {
@@ -1708,7 +1671,7 @@ const AttendancePage: React.FC = () => {
     // Check if we're online or offline
     if (!isWebSocketConnected) {
       // Offline mode - save to local storage
-      console.log('📱 Offline mode - saving to local storage');
+      logger.log('📱 Offline mode - saving to local storage');
       saveToOfflineStorage({
         individualId,
         present: newPresent,
@@ -1722,7 +1685,7 @@ const AttendancePage: React.FC = () => {
     // Online mode - send via configured method (WebSocket, API, or WebSocket with fallback)
     const run = async () => {
       try {
-        console.log(`💾 Saving attendance record:`, {
+        logger.log(`💾 Saving attendance record:`, {
           gatheringId: selectedGathering.id,
           date: selectedDate,
           individualId,
@@ -1751,9 +1714,9 @@ const AttendancePage: React.FC = () => {
 
   const toggleAllFamily = async (familyId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    console.log('=== TOGGLE ALL FAMILY DEBUG ===');
-    console.log('Toggling all family attendance for family:', familyId);
-    console.log('Total attendance list length:', attendanceList.length);
+    logger.log('=== TOGGLE ALL FAMILY DEBUG ===');
+    logger.log('Toggling all family attendance for family:', familyId);
+    logger.log('Total attendance list length:', attendanceList.length);
     
     // Debug: Show all families in the attendance list
     const allFamilies = attendanceList.reduce((acc, person) => {
@@ -1766,7 +1729,7 @@ const AttendancePage: React.FC = () => {
       return acc;
     }, {} as Record<number, Individual[]>);
     
-    console.log('All families in attendance list:', Object.keys(allFamilies).map(familyId => ({
+    logger.log('All families in attendance list:', Object.keys(allFamilies).map(familyId => ({
       familyId: parseInt(familyId),
       memberCount: allFamilies[parseInt(familyId)].length,
       members: allFamilies[parseInt(familyId)].map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, present: p.present }))
@@ -1778,30 +1741,30 @@ const AttendancePage: React.FC = () => {
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
     const familyMemberIds = familyMembers.map(person => person.id);
     
-    console.log('Family members found:', familyMembers.length);
-    console.log('Family member IDs:', familyMemberIds);
-    console.log('Family members details:', familyMembers.map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
+    logger.log('Family members found:', familyMembers.length);
+    logger.log('Family member IDs:', familyMemberIds);
+    logger.log('Family members details:', familyMembers.map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
     
     // Count how many family members are currently present using current state
     // Use presentById state first, fallback to attendanceList.present if not in presentById
     const presentCount = familyMemberIds.filter(id => {
       const presentInState = presentById[id];
       if (presentInState !== undefined) {
-        console.log(`Person ${id}: present in state = ${presentInState}`);
+        logger.log(`Person ${id}: present in state = ${presentInState}`);
         return presentInState;
       }
       // Fallback to attendanceList if not in presentById
       const person = familyMembers.find(p => p.id === id);
       const fallbackPresent = person ? Boolean(person.present) : false;
-      console.log(`Person ${id}: fallback present = ${fallbackPresent} (from attendanceList)`);
+      logger.log(`Person ${id}: fallback present = ${fallbackPresent} (from attendanceList)`);
       return fallbackPresent;
     }).length;
     
     // If any are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount === 0;
-    console.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
-    console.log('Current presentById state:', presentById);
-    console.log('=== END TOGGLE ALL FAMILY DEBUG ===');
+    logger.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
+    logger.log('Current presentById state:', presentById);
+    logger.log('=== END TOGGLE ALL FAMILY DEBUG ===');
     
     if (!selectedGathering || !selectedDate) {
       // Family operation flag clearing removed - no longer needed
@@ -1842,7 +1805,7 @@ const AttendancePage: React.FC = () => {
         present: shouldCheckAll
       }));
 
-      console.log('Sending attendance records:', familyAttendanceRecords);
+      logger.log('Sending attendance records:', familyAttendanceRecords);
 
       await sendAttendanceChange(selectedGathering.id, selectedDate, familyAttendanceRecords);
 
@@ -1889,7 +1852,7 @@ const AttendancePage: React.FC = () => {
     const handleAttendanceUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        console.log('🔌 [WEBSOCKET] Received attendance update:', data);
+        logger.log('🔌 [WEBSOCKET] Received attendance update:', data);
         // Handle standard attendance updates
         if (data.records) {
           // Update attendance records and presentById state (like visitor system)
@@ -1927,7 +1890,7 @@ const AttendancePage: React.FC = () => {
     const handleHeadcountUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        console.log('🔌 [WEBSOCKET] Received headcount update:', {
+        logger.log('🔌 [WEBSOCKET] Received headcount update:', {
           data,
           currentGathering: selectedGathering.id,
           currentDate: selectedDate,
@@ -1935,7 +1898,7 @@ const AttendancePage: React.FC = () => {
         });
         // The HeadcountAttendanceInterface will handle the update
       } else {
-        console.log('🔌 [WEBSOCKET] Ignored headcount update (wrong context):', {
+        logger.log('🔌 [WEBSOCKET] Ignored headcount update (wrong context):', {
           received: { gatheringId: data.gatheringId, date: data.date },
           expected: { gatheringId: selectedGathering.id, date: selectedDate }
         });
@@ -1945,7 +1908,7 @@ const AttendancePage: React.FC = () => {
     const handleVisitorUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        console.log('🔌 [WEBSOCKET] Received visitor update:', data);
+        logger.log('🔌 [WEBSOCKET] Received visitor update:', data);
         // Handle visitor updates
         if (data.visitors) {
           setVisitors(data.visitors);
@@ -2185,9 +2148,9 @@ const AttendancePage: React.FC = () => {
           const allPeopleResponse = await attendanceAPI.getAllPeople();
           setAllChurchVisitors(allPeopleResponse.data.visitors || []);
           
-          console.log('✅ Refreshed all visitor data after adding new visitor');
+          logger.log('✅ Refreshed all visitor data after adding new visitor');
         } catch (refreshErr) {
-          console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+          logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
           // Don't throw error since the main operation succeeded
         }
       }
@@ -2366,7 +2329,7 @@ const AttendancePage: React.FC = () => {
     // Check if we're online or offline (same logic as regular attendance)
     if (!isWebSocketConnected) {
       // Offline mode - save to local storage
-      console.log('📱 Offline mode - saving visitor change to local storage');
+      logger.log('📱 Offline mode - saving visitor change to local storage');
       saveToOfflineStorage({
         individualId: visitorId,
         present: newPresent,
@@ -2436,7 +2399,7 @@ const AttendancePage: React.FC = () => {
     // Check if we're online or offline
     if (!isWebSocketConnected) {
       // Offline mode - save each family member change to local storage
-      console.log('📱 Offline mode - saving visitor family changes to local storage');
+      logger.log('📱 Offline mode - saving visitor family changes to local storage');
       familyVisitorIds.forEach(visitorId => {
         saveToOfflineStorage({
           individualId: visitorId,
@@ -2492,9 +2455,9 @@ const AttendancePage: React.FC = () => {
         const allPeopleResponse = await attendanceAPI.getAllPeople();
         setAllChurchVisitors(allPeopleResponse.data.visitors || []);
         
-        console.log('✅ Refreshed all visitor data after adding visitor family from all church people');
+        logger.log('✅ Refreshed all visitor data after adding visitor family from all church people');
       } catch (refreshErr) {
-        console.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+        logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
         // Don't throw error since the main operation succeeded
       }
     } catch (err: any) {
@@ -2654,14 +2617,14 @@ const AttendancePage: React.FC = () => {
     localStorage.setItem('attendance_offline_changes', JSON.stringify(updatedChanges));
     setPendingChanges(updatedChanges);
     
-    console.log('💾 Saved to offline storage:', newChange);
+    logger.log('💾 Saved to offline storage:', newChange);
   }, []);
 
   const syncOfflineChanges = useCallback(async () => {
     if (!isWebSocketConnected || pendingChanges.length === 0) return;
     
     setIsSyncing(true);
-    console.log('🔄 Syncing offline changes:', pendingChanges.length, 'changes');
+    logger.log('🔄 Syncing offline changes:', pendingChanges.length, 'changes');
     
     try {
       // Group changes by gathering and date
@@ -2682,11 +2645,11 @@ const AttendancePage: React.FC = () => {
       for (const [key, changes] of Object.entries(changesByGathering)) {
         const [gatheringId, date] = key.split('|');
         
-        console.log(`🔄 Syncing ${changes.length} changes for gathering ${gatheringId} on ${date}:`, changes);
+        logger.log(`🔄 Syncing ${changes.length} changes for gathering ${gatheringId} on ${date}:`, changes);
         
         try {
           await sendAttendanceChange(parseInt(gatheringId), date, changes);
-          console.log(`✅ Successfully synced ${changes.length} changes for gathering ${gatheringId} on ${date}`);
+          logger.log(`✅ Successfully synced ${changes.length} changes for gathering ${gatheringId} on ${date}`);
         } catch (syncError) {
           console.error(`❌ Failed to sync changes for gathering ${gatheringId} on ${date}:`, syncError);
           throw syncError; // Re-throw to trigger the outer catch block
@@ -2697,7 +2660,7 @@ const AttendancePage: React.FC = () => {
       localStorage.removeItem('attendance_offline_changes');
       setPendingChanges([]);
       setError(''); // Clear any lingering error messages
-      console.log('✅ All offline changes synced successfully');
+      logger.log('✅ All offline changes synced successfully');
       
     } catch (error) {
       console.error('❌ Failed to sync offline changes:', error);
@@ -2710,7 +2673,7 @@ const AttendancePage: React.FC = () => {
       });
       
       if (oldChanges.length > 0) {
-        console.log('🧹 Clearing old failed changes:', oldChanges.length);
+        logger.log('🧹 Clearing old failed changes:', oldChanges.length);
         localStorage.removeItem('attendance_offline_changes');
         setPendingChanges([]);
         setError(''); // Clear error since we're giving up on old changes
@@ -2735,14 +2698,14 @@ const AttendancePage: React.FC = () => {
     const validChanges = offlineChanges.filter((change: any) => {
       // Check if the date format is valid (should be YYYY-MM-DD)
       if (!change.date || !/^\d{4}-\d{2}-\d{2}$/.test(change.date)) {
-        console.log('🧹 Clearing invalid date format:', change.date);
+        logger.log('🧹 Clearing invalid date format:', change.date);
         return false;
       }
       
       // Check age (keep changes less than 24 hours old)
       const ageInHours = (now - change.timestamp) / (1000 * 60 * 60);
       if (ageInHours >= 24) {
-        console.log('🧹 Clearing old change:', change);
+        logger.log('🧹 Clearing old change:', change);
         return false;
       }
       
@@ -2750,26 +2713,26 @@ const AttendancePage: React.FC = () => {
     });
     
     if (validChanges.length !== offlineChanges.length) {
-      console.log('🧹 Cleared stale offline changes:', offlineChanges.length - validChanges.length);
+      logger.log('🧹 Cleared stale offline changes:', offlineChanges.length - validChanges.length);
       localStorage.setItem('attendance_offline_changes', JSON.stringify(validChanges));
     }
     
     setPendingChanges(validChanges);
-    console.log('📱 Loaded offline changes:', validChanges.length);
+    logger.log('📱 Loaded offline changes:', validChanges.length);
     
     // Load cached attendance data if available
     const cachedData = localStorage.getItem('attendance_cached_data');
     if (cachedData && selectedGathering?.id && selectedDate) {
       try {
         const parsed = JSON.parse(cachedData);
-        console.log('📱 Checking cached data:', {
+        logger.log('📱 Checking cached data:', {
           cached: { gatheringId: parsed.gatheringId, date: parsed.date },
           current: { gatheringId: selectedGathering.id, date: selectedDate },
           match: parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate
         });
         
         if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-          console.log('📱 Loading cached attendance data:', {
+          logger.log('📱 Loading cached attendance data:', {
             attendees: parsed.attendanceList?.length || 0,
             visitors: parsed.visitors?.length || 0
           });
@@ -2817,7 +2780,7 @@ const AttendancePage: React.FC = () => {
       items.forEach(i => { if (!orderIds.includes(i.id)) ordered.push(i); });
       return ordered;
     } catch (e) {
-      console.warn('Failed to load saved gathering order', e);
+      logger.warn('Failed to load saved gathering order', e);
       return items;
     }
   }, [user?.id]);
@@ -2836,7 +2799,7 @@ const AttendancePage: React.FC = () => {
     try {
       await userPreferences.setGatheringOrder(ids);
     } catch (e) {
-      console.warn('Failed to save gathering order', e);
+      logger.warn('Failed to save gathering order', e);
     }
   }, [user?.id]);
 
@@ -2992,10 +2955,22 @@ const AttendancePage: React.FC = () => {
                 
                 {/* Fade indicators */}
                 {showLeftFade && (
-                  <div className="absolute top-0 left-0 w-4 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                      <svg viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                  </div>
                 )}
                 {showRightFade && (
-                  <div className="absolute top-0 right-0 w-4 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
+                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                      <svg viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -3061,10 +3036,22 @@ const AttendancePage: React.FC = () => {
                 
                 {/* Fade indicators */}
                 {showDesktopLeftFade && (
-                  <div className="absolute top-0 left-0 w-6 h-12 bg-gradient-to-r from-white to-transparent pointer-events-none"></div>
+                  <div className="absolute top-0 left-0 w-10 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 left-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                      <svg viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M12.5 5L7.5 10L12.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                  </div>
                 )}
                 {showDesktopRightFade && (
-                  <div className="absolute top-0 right-0 w-6 h-12 bg-gradient-to-l from-white to-transparent pointer-events-none"></div>
+                  <div className="absolute top-0 right-0 w-10 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 right-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                      <svg viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M7.5 5L12.5 10L7.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </div>
+                  </div>
                 )}
               </div>
             </nav>
@@ -3124,7 +3111,7 @@ const AttendancePage: React.FC = () => {
                         <AttendanceDatePicker
                           selectedDate={selectedDate}
                           onDateChange={(date) => {
-                            console.log('📅 User selected new date via date picker:', { from: selectedDate, to: date });
+                            logger.log('📅 User selected new date via date picker:', { from: selectedDate, to: date });
                             setSelectedDate(date);
                             setShowDatePicker(false);
                           }}

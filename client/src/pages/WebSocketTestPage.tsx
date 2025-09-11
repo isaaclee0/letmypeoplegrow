@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAuth } from '../contexts/AuthContext';
+import logger from '../utils/logger';
 
 const WebSocketTestPage: React.FC = () => {
-  console.log('🧪 WebSocketTestPage - Component rendered');
+  logger.log('🧪 WebSocketTestPage - Component rendered');
   
   const { socket, isConnected, connectionStatus } = useWebSocket();
   const { user } = useAuth();
@@ -13,7 +14,7 @@ const WebSocketTestPage: React.FC = () => {
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
   const [roomToJoin, setRoomToJoin] = useState('test-room-1');
 
-  console.log('🧪 WebSocketTestPage - State:', {
+  logger.log('🧪 WebSocketTestPage - State:', {
     socket: !!socket,
     isConnected,
     connectionStatus,
@@ -33,13 +34,13 @@ const WebSocketTestPage: React.FC = () => {
       timestamp: new Date().toISOString()
     };
     setConnectionDetails(details);
-    console.log('🔌 WebSocket Test - Connection Details:', details);
+    logger.log('🔌 WebSocket Test - Connection Details:', details);
 
     // Listen for test messages
     const handleTestMessage = (data: any) => {
       const message = `[${new Date().toLocaleTimeString()}] Received: ${JSON.stringify(data)}`;
-      console.log('📨 WebSocket Test - Message received:', data);
-      console.log('📨 Current browser/tab info:', {
+      logger.log('📨 WebSocket Test - Message received:', data);
+      logger.log('📨 Current browser/tab info:', {
         userAgent: navigator.userAgent.substr(0, 50),
         socketId: socket?.id,
         connected: socket?.connected
@@ -53,21 +54,21 @@ const WebSocketTestPage: React.FC = () => {
     // Listen for room events
     const handleJoinedRoom = (data: any) => {
       const msg = `[${new Date().toLocaleTimeString()}] 🚪 Joined room: ${data.roomName} (${data.roomSize} members)`;
-      console.log('🚪 Joined room:', data);
+      logger.log('🚪 Joined room:', data);
       setMessages(prev => [...prev, msg]);
       setCurrentRoom(data.roomName);
     };
 
     const handleLeftRoom = (data: any) => {
       const msg = `[${new Date().toLocaleTimeString()}] 🚪 Left room: ${data.roomName}`;
-      console.log('🚪 Left room:', data);
+      logger.log('🚪 Left room:', data);
       setMessages(prev => [...prev, msg]);
       setCurrentRoom(null);
     };
 
     const handleRoomMessage = (data: any) => {
       const msg = `[${new Date().toLocaleTimeString()}] 📨 Room message: ${data.message} (from ${data.userEmail})`;
-      console.log('📨 Room message received:', data);
+      logger.log('📨 Room message received:', data);
       setMessages(prev => [...prev, msg]);
     };
 
@@ -78,13 +79,13 @@ const WebSocketTestPage: React.FC = () => {
     // Listen for connection events
     const handleConnect = () => {
       const msg = `[${new Date().toLocaleTimeString()}] ✅ Connected with socket ID: ${socket.id}`;
-      console.log('🔌 WebSocket Test - Connected:', socket.id);
+      logger.log('🔌 WebSocket Test - Connected:', socket.id);
       setMessages(prev => [...prev, msg]);
     };
 
     const handleDisconnect = (reason: string) => {
       const msg = `[${new Date().toLocaleTimeString()}] ❌ Disconnected: ${reason}`;
-      console.log('🔌 WebSocket Test - Disconnected:', reason);
+      logger.log('🔌 WebSocket Test - Disconnected:', reason);
       setMessages(prev => [...prev, msg]);
     };
 
@@ -113,7 +114,7 @@ const WebSocketTestPage: React.FC = () => {
       socketId: socket.id
     };
 
-    console.log('📤 WebSocket Test - Sending message:', messageData);
+    logger.log('📤 WebSocket Test - Sending message:', messageData);
     socket.emit('test_message', messageData);
     
     const sentMsg = `[${new Date().toLocaleTimeString()}] 📤 Sent: ${testMessage}`;
@@ -128,7 +129,7 @@ const WebSocketTestPage: React.FC = () => {
   const joinRoom = () => {
     if (!socket || !roomToJoin.trim()) return;
 
-    console.log('🚪 Joining room:', roomToJoin);
+    logger.log('🚪 Joining room:', roomToJoin);
     socket.emit('join_test_room', { roomName: roomToJoin });
     
     const msg = `[${new Date().toLocaleTimeString()}] 📤 Requesting to join room: ${roomToJoin}`;
@@ -138,7 +139,7 @@ const WebSocketTestPage: React.FC = () => {
   const leaveRoom = () => {
     if (!socket || !currentRoom) return;
 
-    console.log('🚪 Leaving room:', currentRoom);
+    logger.log('🚪 Leaving room:', currentRoom);
     socket.emit('leave_test_room', { roomName: currentRoom });
     
     const msg = `[${new Date().toLocaleTimeString()}] 📤 Requesting to leave room: ${currentRoom}`;
@@ -157,7 +158,7 @@ const WebSocketTestPage: React.FC = () => {
       roomName: currentRoom
     };
 
-    console.log('📤 Sending room message:', messageData);
+    logger.log('📤 Sending room message:', messageData);
     socket.emit('test_room_message', messageData);
     
     const sentMsg = `[${new Date().toLocaleTimeString()}] 📤 Sent to room: ${testMessage}`;

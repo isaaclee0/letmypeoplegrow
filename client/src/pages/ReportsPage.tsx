@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI } from '../services/api';
 import { userPreferences } from '../services/userPreferences';
+import logger from '../utils/logger';
 import { 
   ChartBarIcon, 
   UsersIcon, 
@@ -106,7 +107,7 @@ const ReportsPage: React.FC = () => {
           endDate
         );
       } catch (error) {
-        console.warn('Failed to save reports preferences:', error);
+        logger.warn('Failed to save reports preferences:', error);
       }
     }
   }, [selectedGatherings, startDate, endDate]);
@@ -131,7 +132,7 @@ const ReportsPage: React.FC = () => {
           ordered = temp;
         }
       } catch (e) {
-        console.warn('Failed to load gathering order for reports:', e);
+        logger.warn('Failed to load gathering order for reports:', e);
       }
       setGatherings(ordered);
       
@@ -427,29 +428,32 @@ const ReportsPage: React.FC = () => {
 
   const attendanceChartLabels = useMemo(() => {
     if (!metrics?.attendanceData) return [] as string[];
-    const dates = [...metrics.attendanceData.map((s: any) => s.date)].sort((a: string, b: string) => a.localeCompare(b));
-    return dates.map(formatShortDate);
+    // Get unique dates and sort them
+    const uniqueDates = [...new Set(metrics.attendanceData.map((s: any) => s.date))].sort((a: string, b: string) => a.localeCompare(b));
+    return uniqueDates.map(formatShortDate);
   }, [metrics?.attendanceData]);
 
   const attendanceChartData = useMemo(() => {
     if (!metrics?.attendanceData) return { labels: [], datasets: [] };
     
+    // Get unique dates in the same order as attendanceChartLabels
+    const uniqueDates = [...new Set(metrics.attendanceData.map((s: any) => s.date))].sort((a: string, b: string) => a.localeCompare(b));
+    
     // Group data by date and gathering
     const byDate: Record<string, Record<number, number>> = {};
     metrics.attendanceData.forEach((s: any) => {
-      const dateKey = formatShortDate(s.date);
       const value = s.present_individuals || s.present || 0;
       const numericValue = typeof value === 'string' ? parseInt(value, 10) : value;
       
-      if (!byDate[dateKey]) {
-        byDate[dateKey] = {};
+      if (!byDate[s.date]) {
+        byDate[s.date] = {};
       }
-      byDate[dateKey][s.gatheringId] = numericValue;
+      byDate[s.date][s.gatheringId as number] = numericValue;
     });
 
     // Generate datasets for each gathering
     const datasets: any[] = [];
-    const gatheringIds = Array.from(new Set(metrics.attendanceData.map((s: any) => s.gatheringId)));
+    const gatheringIds: number[] = Array.from(new Set(metrics.attendanceData.map((s: any) => s.gatheringId)));
     
     // Define colors for different gatherings - blue for first, orange for second
     const colors = [
@@ -463,10 +467,10 @@ const ReportsPage: React.FC = () => {
       'rgba(245, 158, 11, 0.6)',  // Yellow
     ];
 
-    gatheringIds.forEach((gatheringId, index) => {
-      const gatheringName = gatheringNames[gatheringId as number] || `Gathering ${gatheringId}`;
-      const data = attendanceChartLabels.map((dateKey) => {
-        return byDate[dateKey]?.[gatheringId as number] || 0;
+    gatheringIds.forEach((gatheringId: number, index) => {
+      const gatheringName = gatheringNames[gatheringId] || `Gathering ${gatheringId}`;
+      const data = uniqueDates.map((date: string) => {
+        return byDate[date]?.[gatheringId] || 0;
       });
       
       datasets.push({
@@ -480,10 +484,10 @@ const ReportsPage: React.FC = () => {
     });
 
     // Calculate trend line from total values
-    const totalBars = attendanceChartLabels.map((dateKey) => {
-      return Object.values(byDate[dateKey] || {}).reduce((sum, val) => sum + val, 0);
+    const totalBars = uniqueDates.map((date: string) => {
+      return Object.values(byDate[date] || {} as Record<number, number>).reduce((sum: number, val: number) => sum + val, 0);
     });
-    const trend = movingAverage(totalBars, Math.min(3, Math.max(2, Math.floor(totalBars.length / 4) || 2)));
+    const trend = movingAverage(totalBars as number[], Math.min(3, Math.max(2, Math.floor(totalBars.length / 4) || 2)));
     
     datasets.push({
       type: 'line' as const,
@@ -692,11 +696,11 @@ const ReportsPage: React.FC = () => {
         endDate
       };
       
-      console.log('Exporting data with params:', params);
+      logger.log('Exporting data with params:', params);
       
       const response = await reportsAPI.exportData(params);
       
-      console.log('Export response received:', response);
+      logger.log('Export response received:', response);
       
       // Check if response has data
       if (!response.data) {
@@ -715,7 +719,7 @@ const ReportsPage: React.FC = () => {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       
-      console.log('File download initiated successfully');
+      logger.log('File download initiated successfully');
       
     } catch (err: any) {
       console.error('Export error:', err);

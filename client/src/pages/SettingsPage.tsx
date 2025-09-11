@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { settingsAPI } from '../services/api';
+import logger from '../utils/logger';
 
 import {
   PencilIcon,
@@ -43,7 +44,7 @@ const SettingsPage: React.FC = () => {
       setDataAccessEnabled(enabled);
       
       // You could add a success notification here
-      console.log(`Data access ${enabled ? 'enabled' : 'disabled'}`);
+      logger.log(`Data access ${enabled ? 'enabled' : 'disabled'}`);
     } catch (err) {
       console.error('Failed to update data access setting:', err);
       // Revert the toggle if the update failed
