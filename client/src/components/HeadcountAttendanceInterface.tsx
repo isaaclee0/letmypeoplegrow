@@ -46,50 +46,6 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   const { socket, isConnected, sendHeadcountUpdate } = useWebSocket();
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
-  // Debug: Log when component mounts/unmounts
-  useEffect(() => {
-    console.log('🎯 HeadcountAttendanceInterface: Component mounted', {
-      gatheringTypeId,
-      date,
-      authLoading,
-      isAuthenticated,
-      hasUser: !!user
-    });
-    
-    return () => {
-      console.log('🎯 HeadcountAttendanceInterface: Component unmounting');
-    };
-  }, []);
-
-  // Reset state when gathering or date changes
-  useEffect(() => {
-    console.log('🔄 HeadcountAttendanceInterface: Props changed, resetting state', {
-      gatheringTypeId,
-      date
-    });
-    setHeadcount(0);
-    setUserHeadcount(0);
-    setIsLoading(true);
-    setLastUpdated(new Date().toISOString());
-    setLastUpdatedBy('you');
-    setOtherUsers([]);
-    
-    // Load new data for the new gathering/date if auth is ready
-    if (!authLoading && isAuthenticated && user) {
-      console.log('🔄 HeadcountAttendanceInterface: Loading data for new gathering/date');
-      setTimeout(() => {
-        loadHeadcount();
-      }, 100);
-    }
-  }, [gatheringTypeId, date, authLoading, isAuthenticated, user, loadHeadcount]);
-
-  // Notify parent component when headcount changes
-  useEffect(() => {
-    if (onHeadcountChange) {
-      onHeadcountChange(headcount);
-    }
-  }, [headcount, onHeadcountChange]);
-
   // Load initial headcount data
   const loadHeadcount = useCallback(async (showLoading: boolean = true) => {
     // Don't load data if authentication is not ready
@@ -134,6 +90,50 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       }
     }
   }, [gatheringTypeId, date, authLoading, isAuthenticated, user]);
+
+  // Debug: Log when component mounts/unmounts
+  useEffect(() => {
+    console.log('🎯 HeadcountAttendanceInterface: Component mounted', {
+      gatheringTypeId,
+      date,
+      authLoading,
+      isAuthenticated,
+      hasUser: !!user
+    });
+    
+    return () => {
+      console.log('🎯 HeadcountAttendanceInterface: Component unmounting');
+    };
+  }, []);
+
+  // Reset state when gathering or date changes
+  useEffect(() => {
+    console.log('🔄 HeadcountAttendanceInterface: Props changed, resetting state', {
+      gatheringTypeId,
+      date
+    });
+    setHeadcount(0);
+    setUserHeadcount(0);
+    setIsLoading(true);
+    setLastUpdated(new Date().toISOString());
+    setLastUpdatedBy('you');
+    setOtherUsers([]);
+    
+    // Load new data for the new gathering/date if auth is ready
+    if (!authLoading && isAuthenticated && user) {
+      console.log('🔄 HeadcountAttendanceInterface: Loading data for new gathering/date');
+      setTimeout(() => {
+        loadHeadcount();
+      }, 100);
+    }
+  }, [gatheringTypeId, date, authLoading, isAuthenticated, user, loadHeadcount]);
+
+  // Notify parent component when headcount changes
+  useEffect(() => {
+    if (onHeadcountChange) {
+      onHeadcountChange(headcount);
+    }
+  }, [headcount, onHeadcountChange]);
 
   // Update headcount via WebSocket (optimistic updates)
   const updateHeadcount = useCallback(async (newCount: number) => {

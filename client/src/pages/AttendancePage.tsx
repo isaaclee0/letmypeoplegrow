@@ -365,6 +365,11 @@ const AttendancePage: React.FC = () => {
   const [showDesktopLeftFade, setShowDesktopLeftFade] = useState(false);
   const tabSliderRef = useRef<HTMLDivElement>(null);
   const desktopTabSliderRef = useRef<HTMLDivElement>(null);
+  
+  // Performance optimization refs
+  const animationFrameRef = useRef<number | null>(null);
+  const lastTouchTimeRef = useRef<number>(0);
+  const touchThrottleDelay = 16; // ~60fps
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   
@@ -567,25 +572,65 @@ const AttendancePage: React.FC = () => {
     sliderRef.current.scrollLeft = scrollLeft - walk;
   };
 
-  // Touch handlers for mobile
+  // Optimized touch handlers for mobile with better performance
   const handleTouchStart = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!sliderRef.current) return;
+    
+    // Cancel any pending animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    
     setIsDragging(true);
     setStartX(e.touches[0].pageX - sliderRef.current.offsetLeft);
     setScrollLeft(sliderRef.current.scrollLeft);
+    lastTouchTimeRef.current = Date.now();
   };
 
   const handleTouchMove = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!isDragging || !sliderRef.current) return;
+    
+    // Throttle touch events for better performance
+    const now = Date.now();
+    if (now - lastTouchTimeRef.current < touchThrottleDelay) {
+      return;
+    }
+    lastTouchTimeRef.current = now;
+    
     e.preventDefault();
-    const x = e.touches[0].pageX - sliderRef.current.offsetLeft;
-    const walk = (x - startX) * 2;
-    sliderRef.current.scrollLeft = scrollLeft - walk;
+    
+    // Use requestAnimationFrame for smooth scrolling
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    
+    animationFrameRef.current = requestAnimationFrame(() => {
+      if (!sliderRef.current) return;
+      const x = e.touches[0].pageX - sliderRef.current.offsetLeft;
+      const walk = (x - startX) * 2;
+      sliderRef.current.scrollLeft = scrollLeft - walk;
+    });
   };
 
   const handleTouchEnd = () => {
     setIsDragging(false);
+    
+    // Clean up animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
   };
+
+  // Cleanup animation frames on unmount
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   // Check scroll position and update fade indicators
   const checkScrollPosition = (sliderRef: React.RefObject<HTMLDivElement>, isMobile: boolean) => {

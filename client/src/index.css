@@ -52,4 +52,7 @@ code {
 .tab-slider {
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch; /* iOS momentum scrolling */
+  touch-action: pan-x; /* Optimize for horizontal scrolling */
+  will-change: scroll-position; /* Hint to browser for optimization */
+  transform: translateZ(0); /* Force hardware acceleration */
 }
