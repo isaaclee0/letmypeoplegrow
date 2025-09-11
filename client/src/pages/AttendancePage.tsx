@@ -100,7 +100,7 @@ const AttendancePage: React.FC = () => {
   
   const [isSyncing, setIsSyncing] = useState(false);
   
-  // Helper functions for localStorage
+  // Helper functions for localStorage (legacy support)
   const saveLastViewed = (gatheringId: number, date: string) => {
     const lastViewed = {
       gatheringId,
@@ -108,6 +108,13 @@ const AttendancePage: React.FC = () => {
       timestamp: Date.now()
     };
     localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
+    
+    // Also save to user preferences system
+    try {
+      userPreferences.setAttendanceLastViewed(gatheringId, date);
+    } catch (e) {
+      console.warn('Failed to save last viewed to user preferences:', e);
+    }
   };
 
   // Keep refs in sync for WebSocket handler
@@ -814,12 +821,26 @@ const AttendancePage: React.FC = () => {
         
         // Set default gathering honoring saved order and default preference
         if (userGatherings.length > 0) {
-          const lastViewed = getLastViewed();
+          // Try to get last viewed from user preferences first, then fallback to localStorage
+          let lastViewed = null;
+          try {
+            lastViewed = await userPreferences.getAttendanceLastViewed();
+          } catch (e) {
+            console.warn('Failed to get last viewed from user preferences, falling back to localStorage:', e);
+            lastViewed = getLastViewed();
+          }
+          
           let gatheringToSelect: GatheringType | null = null;
 
           // Try last viewed first
           if (lastViewed) {
+            console.log('🔍 Looking for last viewed gathering:', lastViewed.gatheringId);
             gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId) || null;
+            if (gatheringToSelect) {
+              console.log('✅ Found last viewed gathering:', gatheringToSelect.name);
+            } else {
+              console.log('❌ Last viewed gathering not found in current gatherings');
+            }
           }
 
           // Apply saved order
@@ -850,6 +871,13 @@ const AttendancePage: React.FC = () => {
           // Check if we have cached data that should influence our gathering/date selection
           const cachedData = localStorage.getItem('attendance_cached_data');
           let finalGatheringToSelect = gatheringToSelect || ordered[0] || userGatherings[0];
+          
+          console.log('🎯 Final gathering selection:', {
+            gatheringToSelect: gatheringToSelect?.name || 'none',
+            finalGatheringToSelect: finalGatheringToSelect?.name || 'none',
+            orderedFirst: ordered[0]?.name || 'none',
+            userGatheringsFirst: userGatherings[0]?.name || 'none'
+          });
           
           if (cachedData && !gatheringToSelect) {
             try {
@@ -929,12 +957,30 @@ const AttendancePage: React.FC = () => {
             dateToSelect = lastViewedDate;
             shouldUpdate = true;
           } else {
-            // Fallback to general last viewed
-            const lastViewed = getLastViewed();
-            if (lastViewed && validDates.includes(lastViewed.date)) {
-              console.log('📅 Using date from general last viewed:', lastViewed.date);
-              dateToSelect = lastViewed.date;
-              shouldUpdate = true;
+            // Fallback to general last viewed from user preferences
+            try {
+              const lastViewed = await userPreferences.getAttendanceLastViewed();
+              if (lastViewed && validDates.includes(lastViewed.date)) {
+                console.log('📅 Using date from general last viewed (user preferences):', lastViewed.date);
+                dateToSelect = lastViewed.date;
+                shouldUpdate = true;
+              } else {
+                // Final fallback to localStorage
+                const localStorageLastViewed = getLastViewed();
+                if (localStorageLastViewed && validDates.includes(localStorageLastViewed.date)) {
+                  console.log('📅 Using date from general last viewed (localStorage):', localStorageLastViewed.date);
+                  dateToSelect = localStorageLastViewed.date;
+                  shouldUpdate = true;
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to get last viewed from user preferences, trying localStorage:', e);
+              const localStorageLastViewed = getLastViewed();
+              if (localStorageLastViewed && validDates.includes(localStorageLastViewed.date)) {
+                console.log('📅 Using date from general last viewed (localStorage fallback):', localStorageLastViewed.date);
+                dateToSelect = localStorageLastViewed.date;
+                shouldUpdate = true;
+              }
             }
           }
         }
@@ -1203,10 +1249,12 @@ const AttendancePage: React.FC = () => {
     // Clear attendance state to prevent cross-gathering contamination
     setPresentById({});
     presentByIdRef.current = {};
-    setHeadcountValue(0); // Reset headcount value when switching gatherings
     
-    // Set the new gathering - this will trigger loadAttendanceData via useEffect
+    // Set the new gathering first - this will trigger loadAttendanceData via useEffect
     setSelectedGathering(gathering);
+    
+    // Reset headcount value after setting the new gathering to prevent race conditions
+    setHeadcountValue(0);
   }, []);
 
   // Load attendance data when date or gathering changes
@@ -1239,8 +1287,17 @@ const AttendancePage: React.FC = () => {
       // This ensures presentById doesn't carry over from previous dates
       const contextChanged = !cachedContextKey || cachedContextKey !== currentContextKey;
       
+      console.log('🔄 [CONTEXT] Checking context change:', {
+        cachedContextKey,
+        currentContextKey,
+        contextChanged,
+        selectedGathering: selectedGathering?.id,
+        selectedDate
+      });
+      
       // Reset headcount value when context changes
       if (contextChanged) {
+        console.log('🔄 [CONTEXT] Context changed, resetting headcount value');
         setHeadcountValue(0);
       }
       
@@ -1825,8 +1882,18 @@ const AttendancePage: React.FC = () => {
     const handleHeadcountUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        console.log('🔌 [WEBSOCKET] Received headcount update:', data);
+        console.log('🔌 [WEBSOCKET] Received headcount update:', {
+          data,
+          currentGathering: selectedGathering.id,
+          currentDate: selectedDate,
+          headcountValue
+        });
         // The HeadcountAttendanceInterface will handle the update
+      } else {
+        console.log('🔌 [WEBSOCKET] Ignored headcount update (wrong context):', {
+          received: { gatheringId: data.gatheringId, date: data.date },
+          expected: { gatheringId: selectedGathering.id, date: selectedDate }
+        });
       }
     };
 

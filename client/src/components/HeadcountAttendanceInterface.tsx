@@ -73,7 +73,15 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     setLastUpdated(new Date().toISOString());
     setLastUpdatedBy('you');
     setOtherUsers([]);
-  }, [gatheringTypeId, date]);
+    
+    // Load new data for the new gathering/date if auth is ready
+    if (!authLoading && isAuthenticated && user) {
+      console.log('🔄 HeadcountAttendanceInterface: Loading data for new gathering/date');
+      setTimeout(() => {
+        loadHeadcount();
+      }, 100);
+    }
+  }, [gatheringTypeId, date, authLoading, isAuthenticated, user, loadHeadcount]);
 
   // Notify parent component when headcount changes
   useEffect(() => {
@@ -135,6 +143,9 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       currentUserHeadcount: userHeadcount
     });
     
+    // Store the previous value for potential rollback
+    const previousUserHeadcount = userHeadcount;
+    
     // Update user's individual contribution immediately for smooth experience
     setUserHeadcount(newCount);
     setLastUpdated(new Date().toISOString());
@@ -146,7 +157,9 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     } catch (error: any) {
       console.error('Failed to update headcount via WebSocket:', error);
       // Revert the optimistic update on error
-      setUserHeadcount(userHeadcount);
+      setUserHeadcount(previousUserHeadcount);
+      setLastUpdated(new Date().toISOString());
+      setLastUpdatedBy('You (reverted)');
     }
   }, [gatheringTypeId, date, headcount, userHeadcount, sendHeadcountUpdate]);
 
@@ -154,6 +167,8 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   // WebSocket event handlers
   useEffect(() => {
     if (!socket || !isConnected) return;
+
+    console.log('🔌 Headcount: Joining WebSocket room', { gatheringTypeId, date });
 
     // Join the headcount room
     socket.emit('load_headcount', {
@@ -199,15 +214,22 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         
         setLastUpdated(data.timestamp);
         setLastUpdatedBy(data.updatedByName);
+      } else {
+        console.log('🔔 WebSocket headcount update ignored (wrong gathering/date):', {
+          received: { gatheringId: data.gatheringId, date: data.date },
+          expected: { gatheringTypeId, date }
+        });
       }
     };
 
     socket.on('headcount_updated', handleHeadcountUpdated);
 
     return () => {
+      console.log('🔌 Headcount: Leaving WebSocket room', { gatheringTypeId, date });
       socket.off('headcount_updated', handleHeadcountUpdated);
+      // Note: The server should handle room cleanup when the socket disconnects
     };
-  }, [socket, isConnected, gatheringTypeId, date]);
+  }, [socket, isConnected, gatheringTypeId, date, user?.id]);
 
   // Only load data when authentication is fully ready
   useEffect(() => {
