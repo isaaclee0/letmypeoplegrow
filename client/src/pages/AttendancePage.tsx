@@ -102,17 +102,20 @@ const AttendancePage: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   
   // Helper functions for localStorage (legacy support)
-  const saveLastViewed = (gatheringId: number, date: string) => {
+  const saveLastViewed = async (gatheringId: number, date: string) => {
     const lastViewed = {
       gatheringId,
       date,
       timestamp: Date.now()
     };
+    
+    // Save to localStorage for immediate access
     localStorage.setItem('attendance_last_viewed', JSON.stringify(lastViewed));
     
-    // Also save to user preferences system
+    // Also save to user preferences system (both general and gathering-specific)
     try {
-      userPreferences.setAttendanceLastViewed(gatheringId, date);
+      await userPreferences.setAttendanceLastViewed(gatheringId, date);
+      await userPreferences.setAttendanceGatheringDate(gatheringId, date);
     } catch (e) {
       logger.warn('Failed to save last viewed to user preferences:', e);
     }
@@ -274,8 +277,18 @@ const AttendancePage: React.FC = () => {
     }
   }, []); // Run only once on mount
   
-  const getLastViewed = () => {
+  const getLastViewed = async () => {
     try {
+      // First try the new user preferences system
+      const lastViewed = await userPreferences.getAttendanceLastViewed();
+      if (lastViewed) {
+        // Only use if less than 24 hours old
+        if (Date.now() - lastViewed.timestamp < 24 * 60 * 60 * 1000) {
+          return { gatheringId: lastViewed.gatheringId, date: lastViewed.date };
+        }
+      }
+      
+      // Fallback to localStorage for backward compatibility
       const saved = localStorage.getItem('attendance_last_viewed');
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -989,13 +1002,32 @@ const AttendancePage: React.FC = () => {
           }
         }
         
-        // If no cached data within 24 hours, find the most recent date for this gathering
+        // If no cached data within 24 hours, check for last viewed date for this gathering
+        if (!shouldUpdate && selectedGathering) {
+          try {
+            // Check user preferences for last viewed date for this specific gathering
+            const lastViewedDate = await userPreferences.getLastViewedDateForGathering(selectedGathering.id);
+            
+            if (lastViewedDate && validDates.includes(lastViewedDate)) {
+              logger.log('📅 Using last viewed date for gathering:', {
+                gatheringId: selectedGathering.id,
+                date: lastViewedDate
+              });
+              dateToSelect = lastViewedDate;
+              shouldUpdate = true;
+            }
+          } catch (err) {
+            console.error('Failed to get last viewed date for gathering:', err);
+          }
+        }
+        
+        // If still no date selected, fall back to most recent date
         if (!shouldUpdate) {
           // Sort dates in descending order (most recent first)
           const sortedDates = [...validDates].sort((a, b) => b.localeCompare(a));
           const mostRecentDate = sortedDates[0];
           
-          logger.log('📅 No recent cache found, using most recent date for gathering:', mostRecentDate);
+          logger.log('📅 No last viewed date found, using most recent date for gathering:', mostRecentDate);
           dateToSelect = mostRecentDate;
           shouldUpdate = true;
         }
@@ -1267,7 +1299,8 @@ const AttendancePage: React.FC = () => {
 
   // Load attendance data when date or gathering changes
   useEffect(() => {
-    if (selectedGathering && selectedDate) {
+    const loadData = async () => {
+      if (selectedGathering && selectedDate) {
       logger.log('📅 Main data loading effect triggered:', {
         gatheringId: selectedGathering.id,
         gatheringName: selectedGathering.name,
@@ -1390,9 +1423,11 @@ const AttendancePage: React.FC = () => {
       }
       
       // Save as last viewed (both general and gathering-specific)
-      saveLastViewed(selectedGathering.id, selectedDate);
-      userPreferences.setAttendanceGatheringDate(selectedGathering.id, selectedDate);
-    }
+      await saveLastViewed(selectedGathering.id, selectedDate);
+      }
+    };
+    
+    loadData();
   }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Removed pendingChanges dependency
 
   // WebSocket real-time updates handle all data synchronization now

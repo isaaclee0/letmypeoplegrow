@@ -782,9 +782,23 @@ router.get('/me/preferences', verifyToken, async (req, res) => {
     const preferencesObj = {};
     preferences.forEach(pref => {
       try {
-        preferencesObj[pref.preference_key] = JSON.parse(pref.preference_value);
+        // Handle different data types that might be returned from the database
+        let parsedValue;
+        if (typeof pref.preference_value === 'string') {
+          // If it's a string, try to parse it as JSON
+          parsedValue = JSON.parse(pref.preference_value);
+        } else if (typeof pref.preference_value === 'object' && pref.preference_value !== null) {
+          // If it's already an object, use it directly
+          parsedValue = pref.preference_value;
+        } else {
+          // If it's null or undefined, use null
+          parsedValue = null;
+        }
+        preferencesObj[pref.preference_key] = parsedValue;
       } catch (e) {
         console.warn(`Failed to parse preference ${pref.preference_key}:`, e);
+        // Set to null if parsing fails
+        preferencesObj[pref.preference_key] = null;
       }
     });
 
