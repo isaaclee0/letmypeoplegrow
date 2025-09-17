@@ -10,7 +10,7 @@ COPY server/package*.json ./
 # Install all dependencies (including dev dependencies)
 RUN npm install
 
-# Copy server source code
+# Copy server source code (development needs all files)
 COPY server/ ./
 
 # Create uploads directory

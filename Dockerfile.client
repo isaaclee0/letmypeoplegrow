@@ -10,8 +10,15 @@ COPY client/package*.json ./
 # Install all dependencies (include dev deps for Vite build)
 RUN npm ci
 
-# Copy source code
-COPY client/ ./
+# Copy only necessary source files
+COPY client/public ./public
+COPY client/src ./src
+COPY client/scripts ./scripts
+COPY client/index.html ./index.html
+COPY client/tsconfig.json ./
+COPY client/tailwind.config.js ./
+COPY client/postcss.config.js ./
+COPY client/vite.config.ts ./
 
 # Build the app (Vite outputs to dist)
 RUN npm run build

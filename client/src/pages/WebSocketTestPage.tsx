@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { useWebSocket } from '../contexts/WebSocketContext';
+// Note: This test page uses the old WebSocket context for testing purposes
+// import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAuth } from '../contexts/AuthContext';
 import logger from '../utils/logger';
 
 const WebSocketTestPage: React.FC = () => {
   logger.log('🧪 WebSocketTestPage - Component rendered');
   
-  const { socket, isConnected, connectionStatus } = useWebSocket();
+  // Temporarily disabled - WebSocket context moved to AttendancePage only
+  const socket = null;
+  const isConnected = false;
+  const connectionStatus = 'disconnected' as const;
   const { user } = useAuth();
   const [messages, setMessages] = useState<string[]>([]);
   const [testMessage, setTestMessage] = useState('');

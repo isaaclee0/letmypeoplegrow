@@ -13,7 +13,7 @@ import 'chart.js/auto';
 import { Bar } from 'react-chartjs-2';
 
 const ReportsPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, refreshUserData } = useAuth();
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [selectedGatherings, setSelectedGatherings] = useState<GatheringType[]>([]);
@@ -387,6 +387,20 @@ const ReportsPage: React.FC = () => {
 
   // Load recent session details to derive absence streaks and recent visitors
   // duplicate removed
+
+  // Refresh user data on component mount to get latest gathering assignments
+  useEffect(() => {
+    const refreshUserDataOnMount = async () => {
+      try {
+        logger.log('🔄 Refreshing user data on reports page mount to get latest gathering assignments');
+        await refreshUserData();
+      } catch (error) {
+        logger.warn('Failed to refresh user data on mount:', error);
+      }
+    };
+    
+    refreshUserDataOnMount();
+  }, []); // Run only on mount
 
   useEffect(() => {
     if (hasReportsAccess) {

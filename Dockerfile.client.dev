@@ -14,7 +14,7 @@ ENV REACT_APP_VERSION=$VERSION
 # Install dependencies
 RUN npm install --legacy-peer-deps
 
-# Copy client source code
+# Copy client source code (development needs all files)
 COPY client/ ./
 
 # Expose port

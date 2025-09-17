@@ -363,6 +363,9 @@ export const attendanceAPI = {
     
   updateHeadcountMode: (gatheringTypeId: number, date: string, mode: 'separate' | 'combined' | 'averaged') => 
     api.put(`/attendance/headcount/mode/${gatheringTypeId}/${date}`, { mode }),
+    
+  updateUserHeadcount: (gatheringTypeId: number, date: string, targetUserId: number, headcount: number) => 
+    api.post(`/attendance/headcount/update-user/${gatheringTypeId}/${date}/${targetUserId}`, { headcount }),
 };
 
 // Users API

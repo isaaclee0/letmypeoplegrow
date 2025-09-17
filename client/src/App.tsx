@@ -2,7 +2,6 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
-import { WebSocketProvider } from './contexts/WebSocketContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import LoginPage from './pages/LoginPage';
@@ -107,10 +106,9 @@ function App() {
   return (
     <AuthProvider>
       <SettingsProvider>
-        <WebSocketProvider>
-          <PWAUpdateProvider>
-            <ToastContainer>
-              <Router>
+        <PWAUpdateProvider>
+          <ToastContainer>
+            <Router>
             <div className="min-h-screen bg-gray-50">
               <Routes>
                 <Route
@@ -188,7 +186,6 @@ function App() {
               </Router>
             </ToastContainer>
           </PWAUpdateProvider>
-        </WebSocketProvider>
       </SettingsProvider>
     </AuthProvider>
   );

@@ -1,6 +1,6 @@
 const express = require('express');
 const Database = require('../config/database');
-const { verifyToken, requireGatheringAccess, auditLog } = require('../middleware/auth');
+const { verifyToken, requireGatheringAccess, requireRole, auditLog } = require('../middleware/auth');
 const { requireLastAttendedColumn, columnExists } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 const websocketBroadcast = require('../utils/websocketBroadcast');
@@ -480,6 +480,193 @@ router.put('/headcount/mode/:gatheringTypeId/:date', disableCache, requireGather
   }
 });
 
+// Update another user's headcount (Admin and Coordinator only)
+router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId', 
+  disableCache, 
+  requireGatheringAccess, 
+  requireRole(['admin', 'coordinator']),
+  auditLog('UPDATE_OTHER_USER_HEADCOUNT'), 
+  async (req, res) => {
+    try {
+      const { gatheringTypeId, date, targetUserId } = req.params;
+      const { headcount } = req.body;
+      
+      logger.debugLog('POST /headcount/update-user received', {
+        gatheringTypeId,
+        date,
+        targetUserId,
+        headcount,
+        updatedBy: req.user.id,
+        updatedByRole: req.user.role
+      });
+
+      if (typeof headcount !== 'number' || headcount < 0) {
+        return res.status(400).json({ error: 'Valid headcount number is required.' });
+      }
+
+      // Verify the target user exists and is in the same church
+      const targetUser = await Database.query(`
+        SELECT id, first_name, last_name, role, church_id 
+        FROM users 
+        WHERE id = ? AND church_id = ? AND is_active = true
+      `, [targetUserId, req.user.church_id]);
+
+      if (targetUser.length === 0) {
+        return res.status(404).json({ error: 'Target user not found or not in your church.' });
+      }
+
+      // First, verify this is a headcount gathering
+      const gathering = await Database.query(`
+        SELECT attendance_type FROM gathering_types 
+        WHERE id = ? AND church_id = ?
+      `, [gatheringTypeId, req.user.church_id]);
+
+      if (gathering.length === 0) {
+        return res.status(404).json({ error: 'Gathering not found.' });
+      }
+
+      if (gathering[0].attendance_type !== 'headcount') {
+        return res.status(400).json({ error: 'This gathering is not configured for headcount attendance.' });
+      }
+
+      let sessionId;
+      let sessionMode = 'separate';
+      await Database.transaction(async (conn) => {
+        // Get or create attendance session
+        let sessionResult = await conn.query(`
+          SELECT id, headcount_mode FROM attendance_sessions 
+          WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+        `, [gatheringTypeId, date, req.user.church_id]);
+
+        if (sessionResult.length === 0) {
+          // Create new session with separate mode
+          const newSession = await conn.query(`
+            INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id, headcount_mode)
+            VALUES (?, ?, ?, ?, ?)
+          `, [gatheringTypeId, date, req.user.id, req.user.church_id, 'separate']);
+          sessionId = newSession.insertId;
+          sessionMode = 'separate';
+        } else {
+          sessionId = sessionResult[0].id;
+          sessionMode = sessionResult[0].headcount_mode || 'separate';
+        }
+
+        // Insert or update headcount record for the target user
+        await conn.query(`
+          INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
+          VALUES (?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+          headcount = VALUES(headcount),
+          updated_by = VALUES(updated_by),
+          updated_at = CURRENT_TIMESTAMP
+        `, [sessionId, headcount, parseInt(targetUserId), req.user.church_id]);
+      });
+
+      // Calculate the display value based on mode
+      let displayHeadcount = headcount;
+      let displayMode = sessionMode;
+      
+      if (sessionMode === 'combined') {
+        const combinedResult = await Database.query(`
+          SELECT SUM(headcount) as total FROM headcount_records 
+          WHERE session_id = ?
+        `, [sessionId]);
+        displayHeadcount = combinedResult[0].total || 0;
+      } else if (sessionMode === 'averaged') {
+        const avgResult = await Database.query(`
+          SELECT AVG(headcount) as average FROM headcount_records 
+          WHERE session_id = ?
+        `, [sessionId]);
+        displayHeadcount = Math.round(avgResult[0].average || 0);
+      }
+
+      // Get all users' headcounts for this session for broadcast
+      const otherUsersForBroadcast = await Database.query(`
+        SELECT h.headcount, h.updated_at, u.first_name, u.last_name, u.id
+        FROM headcount_records h
+        LEFT JOIN users u ON h.updated_by = u.id
+        WHERE h.session_id = ?
+        ORDER BY h.updated_at DESC
+      `, [sessionId]);
+
+      // Broadcast the update via WebSocket
+      try {
+        const broadcastData = {
+          gatheringId: parseInt(gatheringTypeId),
+          date,
+          headcount: displayHeadcount,
+          userHeadcount: headcount, // The target user's individual headcount
+          mode: displayMode,
+          updatedBy: parseInt(targetUserId),
+          updatedByName: `${targetUser[0].first_name} ${targetUser[0].last_name}`,
+          updatedByAdmin: `${req.user.first_name} ${req.user.last_name}`,
+          timestamp: new Date().toISOString(),
+          churchId: req.user.church_id,
+          otherUsers: otherUsersForBroadcast
+            .map(user => ({
+              userId: user.id,
+              name: user.id === req.user.id ? 'You' : `${user.first_name} ${user.last_name}`,
+              headcount: user.headcount,
+              lastUpdated: user.updated_at,
+              isCurrentUser: user.id === req.user.id
+            }))
+            .sort((a, b) => {
+              // Put current user first, then sort others alphabetically
+              if (a.isCurrentUser && !b.isCurrentUser) return -1;
+              if (!a.isCurrentUser && b.isCurrentUser) return 1;
+              if (a.isCurrentUser && b.isCurrentUser) return 0;
+              return a.name.localeCompare(b.name);
+            })
+        };
+        
+        logger.debugLog('WebSocket broadcast data for user headcount update', {
+          headcount: broadcastData.headcount,
+          userHeadcount: broadcastData.userHeadcount,
+          mode: broadcastData.mode,
+          updatedBy: broadcastData.updatedBy,
+          updatedByAdmin: broadcastData.updatedByAdmin
+        });
+        
+        websocketBroadcast('headcount_updated', broadcastData);
+      } catch (wsError) {
+        console.error('WebSocket broadcast error:', wsError);
+        // Don't fail the request if WebSocket fails
+      }
+
+      res.json({ 
+        message: 'User headcount updated successfully',
+        headcount: displayHeadcount,
+        userHeadcount: headcount,
+        mode: displayMode,
+        updatedUser: {
+          id: parseInt(targetUserId),
+          name: `${targetUser[0].first_name} ${targetUser[0].last_name}`
+        },
+        updatedBy: `${req.user.first_name} ${req.user.last_name}`,
+        otherUsers: otherUsersForBroadcast
+          .map(user => ({
+            userId: user.id,
+            name: user.id === req.user.id ? 'You' : `${user.first_name} ${user.last_name}`,
+            headcount: user.headcount,
+            lastUpdated: user.updated_at,
+            isCurrentUser: user.id === req.user.id
+          }))
+          .sort((a, b) => {
+            // Put current user first, then sort others alphabetically
+            if (a.isCurrentUser && !b.isCurrentUser) return -1;
+            if (!a.isCurrentUser && b.isCurrentUser) return 1;
+            if (a.isCurrentUser && b.isCurrentUser) return 0;
+            return a.name.localeCompare(b.name);
+          })
+      });
+
+    } catch (error) {
+      console.error('Update user headcount error:', error);
+      res.status(500).json({ error: 'Failed to update user headcount.' });
+    }
+  }
+);
+
 // Helper function to get the last N service dates for a gathering type
 const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount) => {
   try {
@@ -851,9 +1038,25 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         
         // Check if visitor's last attendance was within the relevant service dates
         const lastAttendedStr = visitor.last_attended.toISOString().split('T')[0];
+        
+        // Debug logging for REMMINGA family
+        if (visitor.name && visitor.name.includes('REMMINGA')) {
+          console.log('🔍 REMMINGA filtering debug:', {
+            name: visitor.name,
+            people_type: visitor.people_type,
+            last_attended: lastAttendedStr,
+            relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
+            shouldAppear: relevantServiceDates.some(serviceDate => {
+              const serviceDateStr = serviceDate.session_date ? serviceDate.session_date.toISOString().split('T')[0] : 'undefined';
+              return lastAttendedStr >= serviceDateStr;
+            })
+          });
+        }
+        
         return relevantServiceDates.some(serviceDate => {
-          const serviceDateStr = serviceDate.toISOString().split('T')[0];
-          return serviceDateStr >= lastAttendedStr;
+          if (!serviceDate || !serviceDate.session_date) return false;
+          const serviceDateStr = serviceDate.session_date.toISOString().split('T')[0];
+          return lastAttendedStr >= serviceDateStr;
         });
       });
 
@@ -1061,10 +1264,7 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
     
     const recentVisitorFamilies = allVisitorFamilies.filter(family => {
-      // Always include families created in the last 2 months
-      if (family.last_activity >= twoMonthsAgo) return true;
-      
-      // For older families, check if they attended within the relevant service dates
+      // Apply service-based filtering for all families (remove the 2-month bypass)
       const familyTypes = family.people_types.split(',');
       const isLocal = familyTypes.includes('local_visitor');
       const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
@@ -1072,9 +1272,27 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
       if (!family.last_activity) return false;
       
       const lastActivityStr = family.last_activity.toISOString().split('T')[0];
+      
+      // Debug logging for REMMINGA family in recent visitors
+      if (family.family_name && family.family_name.includes('REMMINGA')) {
+        console.log('🔍 REMMINGA recent visitors filtering debug:', {
+          family_name: family.family_name,
+          family_type: family.family_type,
+          people_types: family.people_types,
+          last_activity: lastActivityStr,
+          isLocal: isLocal,
+          relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
+          shouldAppear: relevantServiceDates.some(serviceDate => {
+            const serviceDateStr = serviceDate.session_date ? serviceDate.session_date.toISOString().split('T')[0] : 'undefined';
+            return lastActivityStr >= serviceDateStr;
+          })
+        });
+      }
+      
       return relevantServiceDates.some(serviceDate => {
-        const serviceDateStr = serviceDate.toISOString().split('T')[0];
-        return serviceDateStr >= lastActivityStr;
+        if (!serviceDate || !serviceDate.session_date) return false;
+        const serviceDateStr = serviceDate.session_date.toISOString().split('T')[0];
+        return lastActivityStr >= serviceDateStr;
       });
     });
 

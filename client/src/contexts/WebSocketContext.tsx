@@ -4,10 +4,7 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { useSettings } from './SettingsContext';
 import { useNavigate } from 'react-router-dom';
-// Remove react-i18next import as it's causing issues
-// import { useTranslation } from 'react-i18next';
-
-// Create a placeholder for useTranslation until we properly set up i18next
+// Simple translation placeholder
 const useTranslation = () => {
   return {
     t: (key: string) => key,
@@ -64,8 +61,6 @@ interface WebSocketContextType {
   isConnected: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   activeUsers: ActiveUser[];
-  joinAttendanceRoom: (gatheringId: number, date: string) => void;
-  leaveAttendanceRoom: (gatheringId: number, date: string) => void;
   sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
   sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
   loadAttendanceData: (gatheringId: number, date: string) => Promise<{ attendanceList: any[]; visitors: any[] }>;
@@ -122,9 +117,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       return;
     }
 
-    // Clean up existing socket if it exists (each tab needs its own connection)
+    // Clean up existing socket if it exists (only if user changed)
     if (socket) {
-      // Always create fresh connections for each tab to ensure proper room management
       console.log(`🔌 [Tab ${tabId.current}] Cleaning up existing socket before creating new one`);
       socket.disconnect();
       setSocket(null);
@@ -220,7 +214,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
     console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData, 'isPWA:', isPWA);
     
-    // Simplified configuration to prevent connection issues
+    // Optimized configuration for better stability
     const connectionId = `${authData.userId}_${tabId.current}_${Date.now()}`;
     const socketConfig = {
       auth: { 
@@ -230,12 +224,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       },
       withCredentials: true, // Important: send cookies with WebSocket connection
       transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
-      timeout: 15000, // Increased timeout for better stability
+      timeout: 8000, // Reduced timeout for faster failure detection
       reconnection: true,
-      reconnectionAttempts: 5, // More attempts for better resilience
-      reconnectionDelay: 1000, // Start with 1 second
-      reconnectionDelayMax: 10000, // Max 10 seconds
-      forceNew: true, // Force new connection per tab to prevent conflicts
+      reconnectionAttempts: 3, // Reduced attempts to prevent connection storms
+      reconnectionDelay: 500, // Faster initial reconnection
+      reconnectionDelayMax: 5000, // Reduced max delay
+      forceNew: false, // Reuse connections when possible
       upgrade: true, // Enable upgrade to WebSocket
       rememberUpgrade: true, // Remember the upgraded transport
       autoConnect: true, // Automatically connect
@@ -244,10 +238,10 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         tabId: tabId.current,
         connectionId: connectionId
       },
-      // Additional stability settings
-      pingTimeout: 60000, // 60 second ping timeout
-      pingInterval: 25000, // 25 second ping interval
-      maxReconnectionAttempts: 5
+      // Optimized stability settings
+      pingTimeout: 30000, // Reduced ping timeout
+      pingInterval: 15000, // Reduced ping interval for faster detection
+      maxReconnectionAttempts: 3
     };
     
     console.log(`🔌 [Tab ${tabId.current}] Socket config for ${isPWA ? 'PWA' : 'Browser'}:`, socketConfig);
@@ -287,6 +281,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       // For unexpected disconnections, provide user feedback
       if (reason === 'transport close' || reason === 'transport error') {
         console.log(`🔄 [Tab ${tabId.current}] Unexpected disconnection detected, WebSocket will attempt to reconnect automatically`);
+      }
+      
+      // Set connecting status for reconnection attempts
+      if (reason !== 'io client disconnect') {
+        setConnectionStatus('connecting');
       }
     });
 
@@ -420,19 +419,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
 
-  // Join attendance room (DISABLED - server uses manual broadcasting)
-  const joinAttendanceRoom = (gatheringId: number, date: string) => {
-    // Room-based system is disabled on server - using manual broadcasting instead
-    // This function is kept for compatibility but does nothing
-    console.log(`📋 Room system disabled - using manual broadcasting for gathering ${gatheringId}, date ${date}`);
-  };
-
-  // Leave attendance room (DISABLED - server uses manual broadcasting)
-  const leaveAttendanceRoom = (gatheringId: number, date: string) => {
-    // Room-based system is disabled on server - using manual broadcasting instead
-    // This function is kept for compatibility but does nothing
-    console.log(`🚪 Room system disabled - using manual broadcasting for gathering ${gatheringId}, date ${date}`);
-  };
 
   // Send attendance update via WebSocket
   const sendAttendanceUpdate = async (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>): Promise<void> => {
@@ -616,8 +602,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     isConnected,
     connectionStatus,
     activeUsers,
-    joinAttendanceRoom,
-    leaveAttendanceRoom,
     sendAttendanceUpdate,
     sendHeadcountUpdate,
     loadAttendanceData,

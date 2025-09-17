@@ -14,9 +14,6 @@ import {
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'general' | 'system' | 'privacy'>('general');
-  // Commented out data access functionality for now
-  // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
-  // const [isUpdating, setIsUpdating] = useState(false);
 
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
@@ -24,41 +21,6 @@ const SettingsPage: React.FC = () => {
     { id: 'privacy', name: 'Data Privacy', icon: ShieldCheckIcon },
   ];
 
-  // Commented out Data Access Control Functions for now
-  /*
-  const loadDataAccessSettings = useCallback(async () => {
-    try {
-      const response = await settingsAPI.getDataAccess();
-      setDataAccessEnabled(response.data.dataAccessEnabled);
-    } catch (err) {
-      console.error('Failed to load data access settings:', err);
-      // Default to disabled if we can't load the setting
-      setDataAccessEnabled(false);
-    }
-  }, []);
-
-  const updateDataAccess = async (enabled: boolean) => {
-    try {
-      setIsUpdating(true);
-      await settingsAPI.updateDataAccess(enabled);
-      setDataAccessEnabled(enabled);
-      
-      // You could add a success notification here
-      logger.log(`Data access ${enabled ? 'enabled' : 'disabled'}`);
-    } catch (err) {
-      console.error('Failed to update data access setting:', err);
-      // Revert the toggle if the update failed
-      setDataAccessEnabled(!enabled);
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-  */
-
-  // Commented out loading settings since we removed the functionality
-  // useEffect(() => {
-  //   loadDataAccessSettings();
-  // }, [loadDataAccessSettings]);
 
   // Handle URL parameters for tab selection
   useEffect(() => {

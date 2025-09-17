@@ -55,8 +55,6 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
   const { 
     isConnected, 
     connectionStatus, 
-    joinAttendanceRoom, 
-    leaveAttendanceRoom, 
     onAttendanceUpdate, 
     onVisitorUpdate,
     onUserActivity,
@@ -127,7 +125,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
       isProcessingRoomChange.current = true;
       
       console.log(`[Hook ${hookId.current}] 📋 Joining attendance WebSocket room: gathering ${gatheringId}, date ${date}`);
-      joinAttendanceRoom(gatheringId, date);
+      // Room system disabled - using manual broadcasting
       currentGatheringId.current = gatheringId;
       currentDate.current = date;
       
@@ -136,7 +134,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
         isProcessingRoomChange.current = false;
       }, 200);
     }, 100);
-  }, [enabled, gatheringId, date, isConnected, joinAttendanceRoom, user?.church_id]);
+  }, [enabled, gatheringId, date, isConnected, user?.church_id]);
 
   // Simplified leave room logic
   const leaveRoom = useCallback(() => {
@@ -159,7 +157,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
     isProcessingRoomChange.current = true;
     
     console.log(`[Hook ${hookId.current}] 🚪 Leaving attendance room: gathering ${currentGatheringId.current}, date ${currentDate.current}`);
-    leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
+    // Room system disabled - no leave needed
     
     // Clear current room tracking
     currentGatheringId.current = null;
@@ -169,7 +167,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
     setTimeout(() => {
       isProcessingRoomChange.current = false;
     }, 200);
-  }, [leaveAttendanceRoom]);
+  }, []);
 
   // Auto-join room when connected and parameters are available
   useEffect(() => {
@@ -183,7 +181,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
         // Leave previous room if any (directly, no global coordination needed)
         if (currentGatheringId.current && currentDate.current) {
           console.log(`[Hook ${hookId.current}] 📋 Leaving previous room before joining new one`);
-          leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
+          // Room system disabled - no leave needed
           
           // Small delay to ensure leave completes before join
           setTimeout(() => {
@@ -221,7 +219,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
         if (!globalRoomState.pendingLeaveOperations.has(roomKey)) {
           console.log(`[Hook ${hookId.current}] 🧹 Cleanup: Leaving room on unmount`);
           globalRoomState.pendingLeaveOperations.add(roomKey);
-          leaveAttendanceRoom(currentGatheringId.current, currentDate.current);
+          // Room system disabled - no leave needed
           
           // Clean up after a delay
           setTimeout(() => {
@@ -232,7 +230,7 @@ export const useAttendanceWebSocket = (options: AttendanceWebSocketOptions): Att
         }
       }
     };
-  }, [isConnected, leaveAttendanceRoom]);
+  }, [isConnected]);
 
   // Check if we're in the correct room (stable version)
   useEffect(() => {

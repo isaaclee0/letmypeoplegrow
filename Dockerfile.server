@@ -10,8 +10,12 @@ COPY server/package*.json ./
 # Install dependencies
 RUN npm install
 
-# Copy source code
-COPY server/ ./
+# Copy only necessary source files
+COPY server/src ./src
+COPY server/scripts ./scripts
+COPY server/uploads ./uploads
+COPY server/package*.json ./
+COPY server/.env* ./
 
 # Create uploads directory
 RUN mkdir -p uploads

@@ -24,10 +24,17 @@ class WebSocketService {
           methods: ['GET', 'POST'],
           credentials: true
         },
-        // Connection settings
-        pingTimeout: 60000,
-        pingInterval: 25000,
-        transports: ['websocket', 'polling']
+        // Optimized connection settings for better stability
+        pingTimeout: 30000, // Reduced timeout for faster failure detection
+        pingInterval: 15000, // Reduced interval for more responsive health checks
+        transports: ['websocket', 'polling'],
+        // Additional stability settings
+        allowEIO3: true, // Backward compatibility
+        maxHttpBufferSize: 1e6, // 1MB buffer size
+        connectTimeout: 8000, // 8 second connection timeout
+        // Connection management
+        allowUpgrades: true,
+        perMessageDeflate: false // Disable compression for better performance
       });
 
       this.setupAuthentication();
@@ -36,6 +43,7 @@ class WebSocketService {
       // Set up periodic cleanup of deduplication entries
       this.cleanupInterval = setInterval(() => {
         this.cleanupRecentUpdates();
+        this.cleanupStaleConnections();
       }, 30000); // Clean up every 30 seconds
       
       logger.info('WebSocket service initialized successfully');
@@ -1061,6 +1069,55 @@ class WebSocketService {
       });
       this.recentUpdates.clear();
     }
+  }
+
+  /**
+   * Clean up stale connections to prevent memory leaks
+   */
+  cleanupStaleConnections() {
+    if (!this.io) return;
+    
+    // Clean up disconnected sockets from tracking maps
+    for (const [userKey, socketIds] of this.connectedUsers.entries()) {
+      const activeSocketIds = new Set();
+      
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket && socket.connected) {
+          activeSocketIds.add(socketId);
+        }
+      }
+      
+      if (activeSocketIds.size === 0) {
+        this.connectedUsers.delete(userKey);
+      } else {
+        this.connectedUsers.set(userKey, activeSocketIds);
+      }
+    }
+    
+    // Clean up church socket tracking
+    for (const [churchId, socketIds] of this.churchSockets.entries()) {
+      const activeSocketIds = new Set();
+      
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket && socket.connected) {
+          activeSocketIds.add(socketId);
+        }
+      }
+      
+      if (activeSocketIds.size === 0) {
+        this.churchSockets.delete(churchId);
+      } else {
+        this.churchSockets.set(churchId, activeSocketIds);
+      }
+    }
+    
+    logger.debugLog('WebSocket connection cleanup completed', {
+      connectedUsers: this.connectedUsers.size,
+      churchSockets: this.churchSockets.size,
+      totalConnections: this.io.engine.clientsCount
+    });
   }
 
   /**

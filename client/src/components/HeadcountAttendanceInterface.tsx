@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, MinusIcon, PencilIcon, CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { attendanceAPI } from '../services/api';
-import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAuth } from '../contexts/AuthContext';
 
 interface HeadcountAttendanceInterfaceProps {
@@ -9,6 +8,10 @@ interface HeadcountAttendanceInterfaceProps {
   date: string;
   gatheringName: string;
   onHeadcountChange?: (headcount: number) => void;
+  // WebSocket props
+  socket: any;
+  isConnected: boolean;
+  sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
 }
 
 interface HeadcountData {
@@ -29,7 +32,10 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   gatheringTypeId,
   date,
   gatheringName,
-  onHeadcountChange
+  onHeadcountChange,
+  socket,
+  isConnected,
+  sendHeadcountUpdate
 }) => {
   const [headcount, setHeadcount] = useState<number>(0);
   const [userHeadcount, setUserHeadcount] = useState<number>(0); // User's individual contribution
@@ -43,7 +49,9 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     lastUpdated: string;
     isCurrentUser?: boolean;
   }>>([]);
-  const { socket, isConnected, sendHeadcountUpdate } = useWebSocket();
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState<string>('');
+  const [isUpdatingUserHeadcount, setIsUpdatingUserHeadcount] = useState(false);
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   // Load initial headcount data
@@ -261,6 +269,56 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     }
   };
 
+  // Check if current user can edit other users' headcounts
+  const canEditOtherUsers = useMemo(() => {
+    return user && (user.role === 'admin' || user.role === 'coordinator');
+  }, [user]);
+
+  // Handle starting to edit another user's headcount
+  const handleStartEditUser = (userId: number, currentValue: number) => {
+    if (!canEditOtherUsers) return;
+    setEditingUserId(userId);
+    setEditingValue(currentValue.toString());
+  };
+
+  // Handle canceling edit
+  const handleCancelEdit = () => {
+    setEditingUserId(null);
+    setEditingValue('');
+  };
+
+  // Handle saving edit
+  const handleSaveEdit = async () => {
+    if (!editingUserId || !canEditOtherUsers) return;
+    
+    const numValue = parseInt(editingValue, 10);
+    if (isNaN(numValue) || numValue < 0) {
+      return; // Invalid input
+    }
+
+    setIsUpdatingUserHeadcount(true);
+    try {
+      await attendanceAPI.updateUserHeadcount(gatheringTypeId, date, editingUserId, numValue);
+      console.log('✅ User headcount updated successfully');
+    } catch (error: any) {
+      console.error('❌ Failed to update user headcount:', error);
+      // Note: The WebSocket will handle the UI update, so we don't need to manually update state
+    } finally {
+      setIsUpdatingUserHeadcount(false);
+      setEditingUserId(null);
+      setEditingValue('');
+    }
+  };
+
+  // Handle key press in edit input
+  const handleEditKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit();
+    } else if (e.key === 'Escape') {
+      handleCancelEdit();
+    }
+  };
+
   // Check if we should show the total (always show unless total is 0)
   const shouldShowTotal = useMemo(() => {
     return headcount > 0;
@@ -376,10 +434,54 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
       {otherUsers.length > 0 && (
         <div className="text-center">
           <div className="flex flex-wrap justify-center gap-2">
-            {otherUsers.map((user) => (
-              <div key={user.userId} className="bg-gray-100 rounded-md px-3 py-1 text-sm">
-                <span className="text-gray-700">{user.name.split(' ')[0]}</span>
-                <span className="font-medium text-gray-900 ml-1">{user.headcount}</span>
+            {otherUsers.map((userData) => (
+              <div key={userData.userId} className="bg-gray-100 rounded-md px-3 py-2 text-sm flex items-center gap-2 group min-h-[40px]">
+                <span className="text-gray-700">{userData.name.split(' ')[0]}</span>
+                
+                {editingUserId === userData.userId ? (
+                  // Edit mode
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={editingValue}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      onKeyDown={handleEditKeyPress}
+                      className="w-16 px-2 py-1 text-center text-base border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[32px]"
+                      min="0"
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleSaveEdit}
+                      disabled={isUpdatingUserHeadcount}
+                      className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
+                      title="Save"
+                    >
+                      <CheckIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      disabled={isUpdatingUserHeadcount}
+                      className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded disabled:opacity-50 min-h-[32px] min-w-[32px] flex items-center justify-center"
+                      title="Cancel"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  // Display mode
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium text-gray-900">{userData.headcount}</span>
+                    {canEditOtherUsers && !userData.isCurrentUser && (
+                      <button
+                        onClick={() => handleStartEditUser(userData.userId, userData.headcount)}
+                        className="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded opacity-0 group-hover:opacity-100 transition-all min-h-[32px] min-w-[32px] flex items-center justify-center"
+                        title={`Edit ${userData.name}'s headcount`}
+                      >
+                        <PencilIcon className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
