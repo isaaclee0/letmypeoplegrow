@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-client",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^2.2.5",

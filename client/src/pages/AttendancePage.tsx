@@ -48,24 +48,8 @@ const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
   const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
-  // Initialize selectedDate from cache if available, otherwise use today
+  // Initialize selectedDate to today - will be updated by gathering selection logic
   const [selectedDate, setSelectedDate] = useState(() => {
-    try {
-      const cachedData = localStorage.getItem('attendance_cached_data');
-      if (cachedData) {
-        const parsed = JSON.parse(cachedData);
-        const cacheAge = Date.now() - (parsed.timestamp || 0);
-        const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
-        
-        if (!isStale && parsed.date && parsed.attendanceList?.length > 0) {
-          logger.log('📅 Initializing selectedDate from cache:', parsed.date);
-          return parsed.date;
-        }
-      }
-    } catch (err) {
-      console.error('Failed to initialize date from cache:', err);
-    }
-    
     logger.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
     return format(new Date(), 'yyyy-MM-dd');
   });
@@ -99,6 +83,9 @@ const AttendancePage: React.FC = () => {
   }>>([]);
   
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Trigger for refreshing regular attendance data (similar to how visitors work)
+  const [attendanceRefreshTrigger, setAttendanceRefreshTrigger] = useState(0);
   
   // Helper functions for localStorage (legacy support)
   const saveLastViewed = async (gatheringId: number, date: string) => {
@@ -210,48 +197,8 @@ const AttendancePage: React.FC = () => {
         hasAttendanceList: !!parsed.attendanceList?.length
       });
       
-      if (!isStale && parsed.attendanceList?.length > 0) {
-        logger.log('🚀 Loading cached data immediately on navigation');
-        
-        // Load cached attendance data immediately
-        setAttendanceList(parsed.attendanceList || []);
-        setVisitors(parsed.visitors || []);
-        
-                      // Initialize presentById from cached data directly (like visitors)
-              const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
-              
-              // Apply any pending offline changes to cached data
-              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-              currentPendingChanges.forEach((change: any) => {
-                if (change.gatheringId === parsed.gatheringId && change.date === parsed.date) {
-                  cachedPresentById[change.individualId] = change.present;
-                }
-              });
-              
-              // Use cached data directly to prevent cross-date contamination
-              setPresentById(cachedPresentById);
-              presentByIdRef.current = cachedPresentById;
-        
-        // Update visitor attendance state from cached data
-        const newVisitorAttendance: { [key: number]: boolean } = {};
-        (parsed.visitors || []).forEach((visitor: any) => {
-          if (visitor.id) {
-            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-          }
-        });
-        setVisitorAttendance(newVisitorAttendance);
-        
-        logger.log('✅ Cached data loaded successfully');
-        logger.log('📊 Cache load summary:', {
-          attendanceListLength: parsed.attendanceList?.length || 0,
-          visitorsLength: parsed.visitors?.length || 0,
-          presentByIdKeys: Object.keys(cachedPresentById).length,
-          samplePresentById: Object.fromEntries(Object.entries(cachedPresentById).slice(0, 5))
-        });
-        
-        // Mark that we have loaded cached data to prevent immediate clearing
-        sessionStorage.setItem('attendance_cache_loaded', 'true');
-      } else if (isStale) {
+      // Note: Cached attendance data is now loaded by dedicated effects
+      if (isStale) {
         logger.log('⏰ Cache is stale, will load fresh data');
       } else if (!parsed.attendanceList?.length) {
         logger.log('📭 Cache exists but no attendance data');
@@ -857,6 +804,26 @@ const AttendancePage: React.FC = () => {
   }, [selectedDate, validDates]);
 
   // Refresh user data on component mount to get latest gathering assignments
+  // Manual refresh function for gatherings
+  const refreshGatherings = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      logger.log('🔄 Manually refreshing gatherings list...');
+      const response = await gatheringsAPI.getAll();
+      // All users (including admins) only see their assigned gatherings
+      // Admins can assign themselves to any gathering they want to see
+      const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
+        user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
+      );
+      setGatherings(userGatherings);
+      logger.log('✅ Gatherings refreshed successfully:', userGatherings.map(g => g.name));
+    } catch (err) {
+      logger.error('❌ Failed to refresh gatherings:', err);
+      setError('Failed to refresh gatherings');
+    }
+  }, [user]);
+
   useEffect(() => {
     const refreshUserDataOnMount = async () => {
       try {
@@ -870,6 +837,14 @@ const AttendancePage: React.FC = () => {
     refreshUserDataOnMount();
   }, []); // Run only on mount
 
+  // Auto-refresh gatherings when user data changes (including gathering assignments)
+  useEffect(() => {
+    if (user) {
+      logger.log('🔄 User data changed, refreshing gatherings list...');
+      refreshGatherings();
+    }
+  }, [user?.gatheringAssignments, refreshGatherings]);
+
   // Load gatherings when user data is available
   useEffect(() => {
     const loadGatherings = async () => {
@@ -877,12 +852,11 @@ const AttendancePage: React.FC = () => {
       
       try {
         const response = await gatheringsAPI.getAll();
-        // Admin users see all gatherings, other users only see their assigned gatherings
-        const userGatherings = user?.role === 'admin' 
-          ? response.data.gatherings 
-          : response.data.gatherings.filter((g: GatheringType) => 
-              user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
-            );
+        // All users (including admins) only see their assigned gatherings
+        // Admins can assign themselves to any gathering they want to see
+        const userGatherings = response.data.gatherings.filter((g: GatheringType) => 
+          user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
+        );
         setGatherings(userGatherings);
         
         // Set default gathering honoring saved order and default preference
@@ -976,7 +950,7 @@ const AttendancePage: React.FC = () => {
     };
 
     loadGatherings();
-  }, [user]); // Re-run when user data changes (including gathering assignments)
+  }, [user, user?.gatheringAssignments]); // Re-run when user data or gathering assignments change
 
   // Set date when gathering changes (use cached, last viewed, or nearest date)
   useEffect(() => {
@@ -988,6 +962,7 @@ const AttendancePage: React.FC = () => {
         logger.log('📅 Setting date for gathering:', selectedGathering?.name, 'with valid dates:', validDates);
         
         // First, check if we have cached data for this gathering (within 24 hours)
+        // Prioritize cached date to respect recent user selections
         const cachedData = localStorage.getItem('attendance_cached_data');
         if (cachedData && selectedGathering) {
           try {
@@ -996,13 +971,13 @@ const AttendancePage: React.FC = () => {
             const isWithin24Hours = cacheAge < 24 * 60 * 60 * 1000; // 24 hours
             
             if (isWithin24Hours && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
-              logger.log('📅 Using date from cache for gathering change (within 24 hours):', {
-                gatheringId: parsed.gatheringId,
-                date: parsed.date,
-                ageHours: Math.round(cacheAge / (60 * 60 * 1000))
-              });
-              dateToSelect = parsed.date;
-              shouldUpdate = true;
+              logger.log('📅 Using cached date for gathering:', {
+                  gatheringId: parsed.gatheringId,
+                  date: parsed.date,
+                  ageHours: Math.round(cacheAge / (60 * 60 * 1000))
+                });
+                dateToSelect = parsed.date;
+                shouldUpdate = true;
             }
           } catch (err) {
             console.error('Failed to parse cached data for date selection:', err);
@@ -1010,6 +985,7 @@ const AttendancePage: React.FC = () => {
         }
         
         // If no cached data within 24 hours, check for last viewed date for this gathering
+        // Prioritize last viewed date over nearest date logic to respect user selections
         if (!shouldUpdate && selectedGathering) {
           try {
             // Check user preferences for last viewed date for this specific gathering
@@ -1017,25 +993,23 @@ const AttendancePage: React.FC = () => {
             
             if (lastViewedDate && validDates.includes(lastViewedDate)) {
               logger.log('📅 Using last viewed date for gathering:', {
-                gatheringId: selectedGathering.id,
-                date: lastViewedDate
-              });
-              dateToSelect = lastViewedDate;
-              shouldUpdate = true;
+                  gatheringId: selectedGathering.id,
+                  date: lastViewedDate
+                });
+                dateToSelect = lastViewedDate;
+                shouldUpdate = true;
             }
           } catch (err) {
             console.error('Failed to get last viewed date for gathering:', err);
           }
         }
         
-        // If still no date selected, fall back to most recent date
+        // If still no date selected, fall back to nearest date to today
         if (!shouldUpdate) {
-          // Sort dates in descending order (most recent first)
-          const sortedDates = [...validDates].sort((a, b) => b.localeCompare(a));
-          const mostRecentDate = sortedDates[0];
+          const nearestDate = findNearestDate(validDates);
           
-          logger.log('📅 No last viewed date found, using most recent date for gathering:', mostRecentDate);
-          dateToSelect = mostRecentDate;
+          logger.log('📅 No last viewed date found, using nearest date to today for gathering:', nearestDate);
+          dateToSelect = nearestDate;
           shouldUpdate = true;
         }
       
@@ -1048,240 +1022,7 @@ const AttendancePage: React.FC = () => {
     setDateForGathering();
   }, [validDates, selectedGathering]);
 
-  // Add request deduplication and cancellation
-  const loadAttendanceDataRef = useRef<AbortController | null>(null);
-  const currentRequestKey = useRef<string | null>(null);
-
-  const loadAttendanceData = useCallback(async () => {
-    if (!selectedGathering) return;
-
-    const requestKey = `${selectedGathering.id}-${selectedDate}`;
-    
-    // Prevent duplicate requests
-    if (currentRequestKey.current === requestKey) {
-      logger.log(`⏭️ Skipping duplicate request for ${requestKey}`);
-      return;
-    }
-
-    // Cancel previous request if it exists
-    if (loadAttendanceDataRef.current) {
-      logger.log(`❌ Cancelling previous request for ${currentRequestKey.current}`);
-      loadAttendanceDataRef.current.abort();
-    }
-
-    // Create new AbortController for this request
-    const abortController = new AbortController();
-    loadAttendanceDataRef.current = abortController;
-    currentRequestKey.current = requestKey;
-
-    logger.log(`🔄 Loading attendance data for gathering ${selectedGathering.id} on ${selectedDate}`);
-    setIsLoading(true);
-    
-    // Store current data in case we need to preserve it on error
-    const currentAttendanceList = attendanceListRef.current;
-    const currentVisitors = visitorsRef.current;
-    
-    try {
-      let response;
-      
-      // Try WebSocket first if connected, fall back to REST API
-      if (isWebSocketConnected) {
-        try {
-          logger.log(`📡 Loading via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
-          response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
-          logger.log(`📊 Received fresh attendance data via WebSocket:`, {
-            attendeeCount: response.attendanceList?.length || 0,
-            visitorCount: response.visitors?.length || 0,
-            gatheringId: selectedGathering.id,
-            date: selectedDate,
-            timestamp: new Date().toISOString()
-          });
-        } catch (wsError) {
-          logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
-          throw wsError; // Re-throw to trigger REST API fallback
-        }
-      } else {
-        throw new Error('WebSocket not connected, using REST API');
-      }
-      
-      setAttendanceList(response.attendanceList || []);
-      setVisitors(response.visitors || []);
-      
-      // Initialize presentById from server data directly (like visitors)
-      const serverPresentById = syncPresentByIdWithAttendanceList(response.attendanceList || []);
-      
-      // Apply any pending offline changes for this exact gathering/date
-      const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-      currentPendingChanges.forEach((change: any) => {
-        if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
-          serverPresentById[change.individualId] = change.present;
-        }
-      });
-      
-      logger.log('🔄 Setting presentById from server data:', {
-        serverKeys: Object.keys(serverPresentById).length,
-        sampleData: Object.fromEntries(Object.entries(serverPresentById).slice(0, 5)),
-        gatheringId: selectedGathering.id,
-        date: selectedDate
-      });
-      
-      // Use server data directly to prevent cross-date contamination
-      setPresentById(serverPresentById);
-      presentByIdRef.current = serverPresentById;
-      
-        // Cache the attendance data for offline use with server state applied
-        const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
-          // Use the server present state which includes pending changes
-          const finalPresent = serverPresentById[person.id] ?? person.present;
-          return { ...person, present: finalPresent };
-        });
-      
-      const cacheData = {
-        gatheringId: selectedGathering.id,
-        date: selectedDate,
-        attendanceList: attendanceListForCache,
-        visitors: response.visitors || [],
-        timestamp: Date.now(),
-        hasPendingChanges: pendingChanges.some(change => 
-          change.gatheringId === selectedGathering.id && change.date === selectedDate
-        )
-      };
-      localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
-      logger.log('💾 Cached attendance data for offline use:', {
-        gatheringId: selectedGathering.id,
-        date: selectedDate,
-        attendees: attendanceListForCache.length,
-        visitors: response.visitors?.length || 0,
-        hasPendingChanges: cacheData.hasPendingChanges
-      });
-      
-      // Update visitor attendance state from server data
-      // WebSocket handles real-time changes, so we can use server data directly
-      const newVisitorAttendance: { [key: number]: boolean } = {};
-      (response.visitors || []).forEach((visitor: any) => {
-        if (visitor.id) {
-          newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-        }
-      });
-      logger.log(`👥 Setting visitor attendance:`, newVisitorAttendance);
-      setVisitorAttendance(newVisitorAttendance);
-      
-    } catch (err) {
-      // Don't process if request was cancelled
-      if (err instanceof Error && err.name === 'AbortError') {
-        logger.log(`🚫 WebSocket request cancelled for ${requestKey}`);
-        return;
-      }
-      
-      // Fall back to REST API if WebSocket failed or not connected
-      try {
-        logger.log(`📡 Falling back to REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
-        
-        // Check if request was cancelled before making API call
-        if (abortController.signal.aborted) {
-          logger.log(`❌ Request cancelled before API call for ${requestKey}`);
-          return;
-        }
-        
-        const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
-        
-        // Check if request was cancelled after API call
-        if (abortController.signal.aborted) {
-          logger.log(`❌ Request cancelled after API call for ${requestKey}`);
-          return;
-        }
-        
-        logger.log(`📊 Received attendance data via REST API:`, {
-          attendeeCount: apiResponse.data.attendanceList?.length || 0,
-          visitorCount: apiResponse.data.visitors?.length || 0,
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
-          timestamp: new Date().toISOString()
-        });
-        
-        setAttendanceList(apiResponse.data.attendanceList || []);
-        setVisitors(apiResponse.data.visitors || []);
-        
-        // Initialize presentById from server data directly (API fallback)
-        const serverPresentById = syncPresentByIdWithAttendanceList(apiResponse.data.attendanceList || []);
-        
-        // Apply any pending offline changes for this exact gathering/date
-        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-        currentPendingChanges.forEach((change: any) => {
-          if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
-            serverPresentById[change.individualId] = change.present;
-          }
-        });
-        
-        logger.log('📝 Setting presentById from API data:', {
-          serverKeys: Object.keys(serverPresentById).length,
-          gatheringId: selectedGathering.id,
-          date: selectedDate
-        });
-        
-        setPresentById(serverPresentById);
-        presentByIdRef.current = serverPresentById;
-        
-        // Cache the attendance data for offline use with server state applied
-        const attendanceListForCache = (apiResponse.data.attendanceList || []).map((person: any) => {
-          // Use the server present state which includes pending changes
-          const finalPresent = serverPresentById[person.id] ?? person.present;
-          return { ...person, present: finalPresent };
-        });
-        
-        const cacheData = {
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
-          attendanceList: attendanceListForCache,
-          visitors: apiResponse.data.visitors || [],
-          timestamp: Date.now(),
-          hasPendingChanges: pendingChanges.some(change => 
-            change.gatheringId === selectedGathering.id && change.date === selectedDate
-          )
-        };
-        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
-        
-        // Update visitor attendance state from server data
-        const newVisitorAttendance: { [key: number]: boolean } = {};
-        (apiResponse.data.visitors || []).forEach((visitor: any) => {
-          if (visitor.id) {
-            newVisitorAttendance[visitor.id] = Boolean(visitor.present);
-          }
-        });
-        setVisitorAttendance(newVisitorAttendance);
-        
-        // Clear any previous error since REST API worked
-        setError('');
-        
-      } catch (apiError) {
-        // Don't show error if request was cancelled
-        if (apiError instanceof Error && apiError.name === 'AbortError') {
-          logger.log(`🚫 API request cancelled for ${requestKey}`);
-          return;
-        }
-        
-        console.error(`❌ Both WebSocket and REST API failed for gathering ${selectedGathering.id} on ${selectedDate}:`, { 
-          originalError: err, 
-          apiError 
-        });
-        setError('Failed to load attendance data - using cached data');
-        
-        // Preserve existing data instead of clearing it on connection failure
-        if (currentAttendanceList.length > 0 || currentVisitors.length > 0) {
-          logger.log('📱 Preserving existing attendance data due to connection failure');
-          setAttendanceList(currentAttendanceList);
-          setVisitors(currentVisitors);
-        }
-      }
-    } finally {
-      // Clear request tracking if this is still the current request
-      if (currentRequestKey.current === requestKey) {
-        loadAttendanceDataRef.current = null;
-        currentRequestKey.current = null;
-      }
-      setIsLoading(false);
-    }
-  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, showToast]);
+  // Note: loadAttendanceData function removed - regular attendance now loaded by dedicated effect
 
   // Manual refresh function removed - automatic syncing handles refreshes now
 
@@ -1350,76 +1091,21 @@ const AttendancePage: React.FC = () => {
       }
       
       if (contextChanged) {
-        logger.log('🧹 Clearing state for date/gathering change:', {
+        logger.log('🧹 Context changed for date/gathering:', {
           previous: cachedContextKey,
-          current: currentContextKey,
-          clearing: 'presentById, attendanceList, visitors, visitorAttendance'
+          current: currentContextKey
         });
         
-        // Clear all state to prevent cross-date contamination
-        setAttendanceList([]);
-        setVisitors([]);
-        setPresentById({});
-        presentByIdRef.current = {};
-        setVisitorAttendance({});
+        // Note: Both regular attendance and visitor data are now managed by separate dedicated effects
+        // No need to clear state here as each system manages its own loading independently
       } else {
-        logger.log('📋 Same date/gathering context, preserving state for potential merging:', currentContextKey);
+        logger.log('📋 Same date/gathering context:', currentContextKey);
       }
       
-      // First try to load cached data immediately (for faster UX)
-      if (cachedData) {
-        try {
-          const parsed = JSON.parse(cachedData);
-          if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-            // Check if cache is fresh (less than 5 minutes old) to avoid showing stale data
-            const cacheAge = Date.now() - (parsed.timestamp || 0);
-            const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
-            
-            logger.log('📱 Loading cached attendance data:', {
-              attendees: parsed.attendanceList?.length || 0,
-              visitors: parsed.visitors?.length || 0,
-              cacheAge: Math.round(cacheAge / 1000) + 's',
-              isStale
-            });
-            
-            if (!isStale) {
-              setAttendanceList(parsed.attendanceList || []);
-              setVisitors(parsed.visitors || []);
-              
-              // Initialize presentById from cached data directly (no merge)
-              const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
-              
-              // Apply any pending offline changes to cached data
-              const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-              currentPendingChanges.forEach((change: any) => {
-                if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
-                  cachedPresentById[change.individualId] = change.present;
-                }
-              });
-              
-              // Use cached data directly to prevent cross-date contamination
-              setPresentById(cachedPresentById);
-              presentByIdRef.current = cachedPresentById;
-            } else {
-              logger.log('🗑️ Cache is stale, skipping cached data and fetching fresh');
-            }
-          }
-        } catch (err) {
-          console.error('Failed to parse cached attendance data:', err);
-        }
-      }
+      // Note: Cached data loading is now handled by the dedicated regular attendance effect
       
-      // Always load fresh data on page load to ensure accuracy
-      // Cache is only used for immediate UX while fresh data loads
-      logger.log('🔄 Loading fresh attendance data (cache used for immediate UX only)');
-      
-      if (isWebSocketConnected) {
-        logger.log('🔌 WebSocket connected - loading fresh data via WebSocket');
-      } else {
-        logger.log('📡 WebSocket not connected - loading fresh data via REST API');
-      }
-      
-      loadAttendanceData();
+      // Note: Regular attendance data is now loaded by a separate dedicated effect
+      // This matches the pattern used for visitor data loading
       
       // Load the last used group by family setting for this gathering
       const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
@@ -1435,7 +1121,7 @@ const AttendancePage: React.FC = () => {
     };
     
     loadData();
-  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceData]); // Removed pendingChanges dependency
+  }, [selectedGathering, selectedDate, isWebSocketConnected]); // Removed loadAttendanceData dependency to avoid circular dependency
 
   // WebSocket real-time updates handle all data synchronization now
   // No need for visibility-based refreshes that cause issues on mobile PWA
@@ -1521,6 +1207,119 @@ const AttendancePage: React.FC = () => {
     loadAllVisitors();
   }, [selectedGathering, selectedDate, allRecentVisitorsPool]);
 
+  // Load regular attendance data when gathering or date changes (similar to visitor loading pattern)
+  useEffect(() => {
+    const loadRegularAttendance = async () => {
+      console.log('🔍 Regular attendance effect triggered:', {
+        selectedGathering: selectedGathering?.id,
+        selectedDate,
+        attendanceRefreshTrigger,
+        isWebSocketConnected,
+        validDatesLength: validDates.length
+      });
+      
+      if (!selectedGathering || !selectedDate) {
+        console.log('❌ Early return - missing selectedGathering or selectedDate');
+        return;
+      }
+      
+      // Don't load if we don't have valid dates yet (date selection still in progress)
+      if (validDates.length === 0) {
+        console.log('⏳ Waiting for valid dates to be loaded...');
+        return;
+      }
+      
+      // Don't load if the selected date is not in the valid dates (date selection still in progress)
+      if (!validDates.includes(selectedDate)) {
+        console.log('⏳ Selected date not in valid dates yet, waiting for date selection...');
+        return;
+      }
+      
+      try {
+        console.log('🔄 Starting to load regular attendance data...');
+        setIsLoading(true);
+        
+        // Try WebSocket first if connected, fall back to REST API
+        let response;
+        if (isWebSocketConnected) {
+          try {
+            logger.log(`📡 Loading regular attendance via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
+            response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
+          } catch (wsError) {
+            logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
+            throw wsError; // Re-throw to trigger REST API fallback
+          }
+        } else {
+          logger.log(`📡 Loading regular attendance via REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
+          const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
+          response = apiResponse.data;
+        }
+        
+        logger.log(`📊 Received regular attendance data:`, {
+          attendeeCount: response.attendanceList?.length || 0,
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          timestamp: new Date().toISOString()
+        });
+        
+        console.log('📊 Setting attendanceList with data:', response.attendanceList?.length || 0, 'items');
+        setAttendanceList(response.attendanceList || []);
+        
+        // Initialize presentById from server data directly
+        const serverPresentById = syncPresentByIdWithAttendanceList(response.attendanceList || []);
+        
+        // Apply any pending offline changes for this exact gathering/date
+        const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
+        currentPendingChanges.forEach((change: any) => {
+          if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
+            serverPresentById[change.individualId] = change.present;
+          }
+        });
+        
+        logger.log('🔄 Setting presentById from server data:', {
+          serverKeys: Object.keys(serverPresentById).length,
+          gatheringId: selectedGathering.id,
+          date: selectedDate
+        });
+        
+        setPresentById(serverPresentById);
+        presentByIdRef.current = serverPresentById;
+        
+        // Cache the attendance data for offline use with server state applied
+        const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
+          const finalPresent = serverPresentById[person.id] ?? person.present;
+          return { ...person, present: finalPresent };
+        });
+        
+        const cacheData = {
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          attendanceList: attendanceListForCache,
+          visitors: response.visitors || [],
+          timestamp: Date.now(),
+          hasPendingChanges: pendingChanges.some(change => 
+            change.gatheringId === selectedGathering.id && change.date === selectedDate
+          )
+        };
+        localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
+        
+        logger.log('💾 Cached regular attendance data:', {
+          gatheringId: selectedGathering.id,
+          date: selectedDate,
+          attendees: attendanceListForCache.length
+        });
+        
+      } catch (err) {
+        console.error('Failed to load regular attendance data:', err);
+        setError('Failed to load attendance data');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadRegularAttendance();
+  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, attendanceRefreshTrigger, validDates]);
+
   // Function to quickly add a recent visitor
   const quickAddRecentVisitor = async (recentVisitor: Visitor) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
@@ -1562,7 +1361,7 @@ const AttendancePage: React.FC = () => {
       showSuccess(`Added ${recentVisitor.name} from recent visitors`);
       
       // Reload attendance data and related visitor data to ensure immediate visibility
-      await loadAttendanceData();
+      setAttendanceRefreshTrigger(prev => prev + 1);
       
       // Also refresh recent visitors and all church people to ensure newly added visitors appear immediately
       if (selectedGathering) {
@@ -1951,10 +1750,8 @@ const AttendancePage: React.FC = () => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
         logger.log('🔌 [WEBSOCKET] Received visitor update:', data);
-        // Handle visitor updates
-        if (data.visitors) {
-          setVisitors(data.visitors);
-        }
+        // Note: visitors are managed separately by loadAllVisitors effect
+        // WebSocket updates are handled by the visitor system's own real-time updates
       }
     };
 
@@ -1969,6 +1766,14 @@ const AttendancePage: React.FC = () => {
       socket?.off('visitor_updated', handleVisitorUpdated);
     };
   }, [socket, isWebSocketConnected, selectedGathering?.id, selectedDate]);
+
+  // Refresh gatherings when WebSocket reconnects (user might have been assigned/unassigned while offline)
+  useEffect(() => {
+    if (isWebSocketConnected && user) {
+      logger.log('🔌 WebSocket reconnected, refreshing gatherings to get latest assignments...');
+      refreshGatherings();
+    }
+  }, [isWebSocketConnected, user?.id, refreshGatherings]);
 
   // WebSocket attendance updates (disabled - using direct socket access instead)
   const attendanceWebSocket = {
@@ -2255,7 +2060,7 @@ const AttendancePage: React.FC = () => {
       }
 
       // Reload attendance data and related visitor data to ensure immediate visibility
-      await loadAttendanceData();
+      setAttendanceRefreshTrigger(prev => prev + 1);
       
       // Also refresh recent visitors and all church people to ensure new visitors appear immediately
       if (selectedGathering) {
@@ -2310,7 +2115,7 @@ const AttendancePage: React.FC = () => {
         if (!groups[familyKey]) {
           groups[familyKey] = {
             family_id: person.familyId,
-            family_name: person.familyName,
+            familyName: person.familyName,
             members: [] as Individual[],
           };
         }
@@ -2320,7 +2125,7 @@ const AttendancePage: React.FC = () => {
         if (!groups[individualGroupKey]) {
           groups[individualGroupKey] = {
             family_id: null,
-            family_name: null,
+            familyName: null,
             members: [] as Individual[],
           };
         }
@@ -2336,7 +2141,7 @@ const AttendancePage: React.FC = () => {
       return [{ familyId: null, familyName: null, members: visitorsInput, isFamily: false, groupKey: 'ungrouped' }];
     }
 
-    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean; groupKey: string } } = {};
+    const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean; groupKey: string; firstSeenIndex: number } } = {};
 
     visitorsInput.forEach((visitor, index) => {
       const visitorId = visitor.id || `temp_${index}`;
@@ -2358,26 +2163,65 @@ const AttendancePage: React.FC = () => {
         const computedFamilyId = isFamily
           ? (visitor.visitorFamilyGroup ? Number(visitor.visitorFamilyGroup) : (visitor.familyId ?? null))
           : (visitor.familyId ?? null);
-        grouped[groupKey] = { familyId: computedFamilyId, familyName, members: [], isFamily, groupKey };
+        grouped[groupKey] = { 
+          familyId: computedFamilyId, 
+          familyName, 
+          members: [], 
+          isFamily, 
+          groupKey,
+          firstSeenIndex: index // Track when this family was first seen to preserve order
+        };
       }
       grouped[groupKey].members.push(visitor);
     });
-    return Object.values(grouped);
+    
+    // Sort groups by firstSeenIndex to preserve the order families were first encountered
+    // and sort members within each family by their original order in the input array
+    const sortedGroups = Object.values(grouped)
+      .sort((a, b) => a.firstSeenIndex - b.firstSeenIndex)
+      .map(group => {
+        // Sort family members by their original order in the input array
+        const sortedMembers = group.members.sort((a, b) => {
+          const indexA = visitorsInput.findIndex(v => v.id === a.id);
+          const indexB = visitorsInput.findIndex(v => v.id === b.id);
+          return indexA - indexB;
+        });
+        
+        // Remove the firstSeenIndex property before returning
+        const { firstSeenIndex, ...groupWithoutIndex } = group;
+        return { ...groupWithoutIndex, members: sortedMembers };
+      });
+    
+    return sortedGroups;
   }, [groupByFamily]);
 
-  // Build displayed visitors groups: if searching, include all recent visitors (even >6 weeks); otherwise only within 6 weeks
+  // Build displayed recent visitors groups: only show visitors who have attended within configured service limits
   const displayedGroupedVisitors = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
+    
     if (search) {
+      // When searching, include all recent visitors (even those outside service limits)
       const poolMap = new Map<number | string, Visitor>();
-      allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); else poolMap.set(`c_${v.name}`, v); });
-      allRecentVisitorsPool.forEach(v => { if (v.id && !poolMap.has(v.id)) poolMap.set(v.id, v); });
-      const pool = Array.from(poolMap.values());
-      const filtered = pool.filter(v => v.name.toLowerCase().includes(search));
+      allRecentVisitorsPool.forEach(v => { if (v.id) poolMap.set(v.id, v); });
+      allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); });
+      const filtered = Array.from(poolMap.values()).filter(v => v.name.toLowerCase().includes(search));
       return groupVisitors(filtered);
     }
-    return groupVisitors(allVisitors);
-  }, [searchTerm, allVisitors, allRecentVisitorsPool, groupVisitors]);
+    
+    // When not searching, preserve the original order of all visitors
+    // Don't separate by attendance status to avoid reordering family members
+    const poolMap = new Map<number | string, Visitor>();
+    
+    // Add all recent visitors first (preserving their original order)
+    allRecentVisitorsPool.forEach(v => { if (v.id) poolMap.set(v.id, v); });
+    
+    // Add all current visitors, but only if they're not already in the pool
+    // This preserves the order while ensuring we have the most up-to-date data
+    allVisitors.forEach(v => { if (v.id) poolMap.set(v.id, v); });
+    
+    const allVisitorsInOrder = Array.from(poolMap.values());
+    return groupVisitors(allVisitorsInOrder);
+  }, [searchTerm, allRecentVisitorsPool, allVisitors, groupVisitors]);
 
   // Filter families based on search term and sort members (memoized)
   const filteredGroupedAttendees = useMemo(() => {
@@ -2406,10 +2250,10 @@ const AttendancePage: React.FC = () => {
   const groupedAllChurchVisitors = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
     
-    // Get IDs of people already visible in current gathering (attendees + current visitors)
+    // Get IDs of people already visible in current gathering (attendees + recent visitors)
     const currentlyVisibleIds = new Set([
       ...attendanceList.map(person => person.id),
-      ...allVisitors.map(visitor => visitor.id)
+      ...allRecentVisitorsPool.map(visitor => visitor.id)
     ]);
     
     // Filter to show only church people NOT currently visible in this gathering
@@ -2419,7 +2263,7 @@ const AttendancePage: React.FC = () => {
     );
     
     return groupVisitors(availableChurchPeople);
-  }, [allChurchVisitors, attendanceList, allVisitors, searchTerm, groupVisitors]);
+  }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors]);
 
   // Sort members within each group
   filteredGroupedAttendees.forEach((group: any) => {
@@ -2566,7 +2410,7 @@ const AttendancePage: React.FC = () => {
       showSuccess('Added visitor family to this service');
       
       // Reload attendance data and related visitor data to ensure immediate visibility
-      await loadAttendanceData();
+      setAttendanceRefreshTrigger(prev => prev + 1);
       
       // Also refresh recent visitors and all church people to ensure newly added visitors appear immediately
       try {
@@ -2597,6 +2441,23 @@ const AttendancePage: React.FC = () => {
       return visitor.id && visitorAttendance[visitor.id];
     }).length;
   }, [allVisitors, visitorAttendance]);
+
+  // Memoized family name computation for visitor form
+  const computedVisitorFamilyName = useMemo(() => {
+    const validMembers = visitorForm.persons.filter(member => 
+      member.firstName.trim() && 
+      (member.lastName.trim() || member.lastNameUnknown)
+    );
+    
+    if (validMembers.length === 0) return '';
+    
+    return generateFamilyName(validMembers.map(person => ({
+      firstName: person.firstName.trim(),
+      lastName: person.lastName.trim(),
+      lastUnknown: person.lastNameUnknown,
+      isChild: false // No distinction
+    })));
+  }, [visitorForm.persons]);
 
   // Helper function to get the appropriate modal title
   const getAddModalTitle = () => {
@@ -2866,29 +2727,7 @@ const AttendancePage: React.FC = () => {
     setPendingChanges(validChanges);
     logger.log('📱 Loaded offline changes:', validChanges.length);
     
-    // Load cached attendance data if available
-    const cachedData = localStorage.getItem('attendance_cached_data');
-    if (cachedData && selectedGathering?.id && selectedDate) {
-      try {
-        const parsed = JSON.parse(cachedData);
-        logger.log('📱 Checking cached data:', {
-          cached: { gatheringId: parsed.gatheringId, date: parsed.date },
-          current: { gatheringId: selectedGathering.id, date: selectedDate },
-          match: parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate
-        });
-        
-        if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-          logger.log('📱 Loading cached attendance data:', {
-            attendees: parsed.attendanceList?.length || 0,
-            visitors: parsed.visitors?.length || 0
-          });
-          setAttendanceList(parsed.attendanceList || []);
-          setVisitors(parsed.visitors || []);
-        }
-      } catch (err) {
-        console.error('Failed to parse cached attendance data:', err);
-      }
-    }
+    // Note: Cached attendance data is now loaded by dedicated effects
   }, [selectedGathering?.id, selectedDate]);
 
   // Clear error on component unmount to prevent stale state
@@ -2999,7 +2838,7 @@ const AttendancePage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="space-y-6 pb-32">
       {/* Header */}
       <div className="bg-white shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -3077,26 +2916,29 @@ const AttendancePage: React.FC = () => {
                     </div>
                   ))}
                   
-                  {/* Edit Tab */}
-                  <div className="flex-shrink-0 min-w-0">
-                    <button
-                      draggable={false}
-                      onClick={(e) => {
-                        if (!isDragging) {
-                          openReorderModal();
-                        }
-                      }}
-                      className="h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
-                      title="Edit gathering order"
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
-                          <PencilIcon className="h-3 w-3" />
-                          <span>Edit Order</span>
-                        </span>
-                      </div>
-                    </button>
-                  </div>
+                  {/* Edit Tab - Only show when there are multiple gatherings */}
+                  {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
+                    <div className="flex-shrink-0 min-w-0">
+                      <button
+                        draggable={false}
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            openReorderModal();
+                          }
+                        }}
+                        className="h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                        title="Edit gathering order"
+                      >
+                        <div className="flex items-center justify-center h-full">
+                          <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
+                            <PencilIcon className="h-3 w-3" />
+                            <span>Edit Order</span>
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                  
                 </div>
                 
                 {/* Fade indicators */}
@@ -3158,26 +3000,29 @@ const AttendancePage: React.FC = () => {
                     </div>
                   ))}
                   
-                  {/* Edit Tab */}
-                  <div className="flex-shrink-0">
-                    <button
-                      draggable={false}
-                      onClick={(e) => {
-                        if (!isDragging) {
-                          openReorderModal();
-                        }
-                      }}
-                      className="h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
-                      title="Edit gathering order"
-                    >
-                      <div className="flex items-center justify-center h-full">
-                        <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
-                          <PencilIcon className="h-3 w-3" />
-                          <span>Edit Order</span>
-                        </span>
-                      </div>
-                    </button>
-                  </div>
+                  {/* Edit Tab - Only show when there are multiple gatherings */}
+                  {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
+                    <div className="flex-shrink-0">
+                      <button
+                        draggable={false}
+                        onClick={(e) => {
+                          if (!isDragging) {
+                            openReorderModal();
+                          }
+                        }}
+                        className="h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
+                        title="Edit gathering order"
+                      >
+                        <div className="flex items-center justify-center h-full">
+                          <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
+                            <PencilIcon className="h-3 w-3" />
+                            <span>Edit Order</span>
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                  
                 </div>
                 
                 {/* Fade indicators */}
@@ -3366,6 +3211,30 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
+      {/* No gatherings available message */}
+      {gatherings.length === 0 && (
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="text-center py-8">
+              <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-medium text-gray-900">No gatherings available</h3>
+              <p className="mt-1 text-sm text-gray-500 mb-4">
+                You haven't created any gatherings yet. Create a gathering to start taking attendance.
+              </p>
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-4 max-w-md mx-auto">
+                <div className="text-sm text-blue-700">
+                  <p className="font-medium mb-2">Get started by:</p>
+                  <ul className="text-left space-y-1">
+                    <li>• <a href="/app/gatherings" className="text-blue-600 hover:text-blue-800 underline">Creating your first gathering</a></li>
+                    <li>• <a href="/app/people" className="text-blue-600 hover:text-blue-800 underline">Adding people to your congregation</a></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* No gathering or no valid dates message */}
       {selectedGathering && validDates.length === 0 && (
         <div className="bg-white shadow rounded-lg">
@@ -3533,16 +3402,16 @@ const AttendancePage: React.FC = () => {
               <div className="space-y-4">
                 {filteredGroupedAttendees.map((group: any) => (
                   <div key={group.family_id || group.members[0].id} className={groupByFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
-                    {groupByFamily && group.family_name && (
+                    {groupByFamily && group.familyName && (
                       <div className="flex justify-between items-center mb-3">
                         <h4 className="text-md font-medium text-gray-900">
                           {(() => {
                             // Convert surname to uppercase: "SURNAME, firstname and firstname"
-                            const parts = group.family_name.split(', ');
+                            const parts = group.familyName.split(', ');
                             if (parts.length >= 2) {
                               return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`;
                             }
-                            return group.family_name;
+                            return group.familyName;
                           })()}
                         </h4>
                         <button
@@ -3623,12 +3492,12 @@ const AttendancePage: React.FC = () => {
 
 
 
-      {/* Visitors Section - Only for Standard Gatherings */}
+      {/* Recent Visitors Section - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && filteredGroupedVisitors.length > 0 && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Visitors
+              Recent Visitors
             </h3>
             <div className="space-y-4">
               {filteredGroupedVisitors.map((group: any) => (
@@ -3649,13 +3518,15 @@ const AttendancePage: React.FC = () => {
                             return group.familyName;
                           })()}
                         </h4>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          group.members[0].visitorType === 'potential_regular' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                        </span>
+                        {group.members[0].visitorType !== 'regular' && (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            group.members[0].visitorType === 'potential_regular' 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {group.members[0].visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                          </span>
+                        )}
                                                                                         {(user?.role === 'admin' || user?.role === 'coordinator') && (
                                     <button
                                       onClick={(e) => {
@@ -3671,25 +3542,27 @@ const AttendancePage: React.FC = () => {
                                 )}
 
                       </div>
-                      {group.members.length > 1 && (
-                        <button
-                          onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup || group.members[0].id)}
-                          disabled={isAttendanceLocked}
-                          className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                            isAttendanceLocked 
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                              : 'bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200 hover:border-primary-300'
-                          }`}
-                        >
-                          {(() => {
-                            const familyVisitors = group.members;
-                            const presentCount = familyVisitors.filter((visitor: any) => {
-                              return visitor.id && visitorAttendance[visitor.id];
-                            }).length;
-                            return presentCount > 0 ? 'Uncheck all family' : 'Check all family';
-                          })()}
-                        </button>
-                      )}
+                      <div className="flex items-center space-x-3">
+                        {group.members.length > 1 && (
+                          <button
+                            onClick={() => toggleAllVisitorFamily(group.members[0].visitorFamilyGroup || group.members[0].id)}
+                            disabled={isAttendanceLocked}
+                            className={`inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                              isAttendanceLocked 
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                                : 'bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200 hover:border-primary-300'
+                            }`}
+                          >
+                            {(() => {
+                              const familyVisitors = group.members;
+                              const presentCount = familyVisitors.filter((visitor: any) => {
+                                return visitor.id && visitorAttendance[visitor.id];
+                              }).length;
+                              return presentCount > 0 ? 'Uncheck all family' : 'Check all family';
+                            })()}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
@@ -3746,13 +3619,15 @@ const AttendancePage: React.FC = () => {
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
                               <div className="flex items-center space-x-2 mt-1">
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                  person.visitorType === 'potential_regular' 
-                                    ? 'bg-green-100 text-green-800' 
-                                    : 'bg-gray-100 text-gray-800'
-                                }`}>
-                                  {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                                </span>
+                                {person.visitorType !== 'regular' && (
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                    person.visitorType === 'potential_regular' 
+                                      ? 'bg-green-100 text-green-800' 
+                                      : 'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                                  </span>
+                                )}
                                 {(user?.role === 'admin' || user?.role === 'coordinator') && (
                                     <button
                                       onClick={(e) => {
@@ -3781,12 +3656,12 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-      {/* Add People From Church (people not currently visible in this gathering) - Only show for standard gatherings */}
+      {/* All People (people not currently visible in this gathering) - Only show for standard gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-gray-900">Add People From Church</h3>
+              <h3 className="text-lg font-medium text-gray-900">All People</h3>
               <button
                 type="button"
                 onClick={() => setShowAllVisitorsSection(v => !v)}
@@ -3815,9 +3690,11 @@ const AttendancePage: React.FC = () => {
                                   return group.familyName;
                                 })()}
                               </h4>
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${group.members[0]?.visitorType === 'potential_regular' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                                {group.members[0]?.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
-                              </span>
+                              {group.members[0]?.visitorType !== 'regular' && (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${group.members[0]?.visitorType === 'potential_regular' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                  {group.members[0]?.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
+                                </span>
+                              )}
                             </div>
                             {group.familyId && (
                               <button
@@ -3941,24 +3818,6 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Family Name Field */}
-                <div>
-                  <label htmlFor="familyName" className="block text-sm font-medium text-gray-700">
-                    Family Name
-                  </label>
-                  <input
-                    id="familyName"
-                    type="text"
-                    value={visitorForm.familyName}
-                    onChange={(e) => setVisitorForm({ ...visitorForm, familyName: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                    placeholder="Leave blank to auto-generate from member names"
-                  />
-                  <p className="mt-1 text-sm text-gray-500">
-                    Optional. If left blank, will be generated from the member names.
-                  </p>
-                </div>
-
                 {/* Persons List */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
@@ -4071,6 +3930,28 @@ const AttendancePage: React.FC = () => {
                     />
                   </div>
                 )}
+
+                {/* Family Name Display */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Family Name
+                  </label>
+                  <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-900 font-medium">
+                        {computedVisitorFamilyName || 'Enter family member names above'}
+                      </span>
+                      {computedVisitorFamilyName && (
+                        <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                          Auto-generated
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Family name is automatically generated from the member names above.
+                  </p>
+                </div>
                 
                 <div className="flex justify-end space-x-3 pt-4">
                   <button

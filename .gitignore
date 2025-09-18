@@ -138,3 +138,6 @@ sqldumps/
 
 # Local one-off SQL migration
 /migration.sql
+
+# Dummy Data
+family-dummy-data.tsv

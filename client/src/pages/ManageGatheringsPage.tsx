@@ -553,7 +553,7 @@ const ManageGatheringsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-32">
       {/* Header */}
       <div className="bg-white overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -624,18 +624,10 @@ const ManageGatheringsPage: React.FC = () => {
               </p>
               {/* Prominent guidance to add button */}
               <div className="hidden sm:block">
-                <div className="fixed bottom-16 right-28 z-40 flex items-center space-x-3">
-                  <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
-                    <p className="text-base font-semibold">Click the plus to add a gathering</p>
+                <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
+                  <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 h-14 flex items-center justify-center text-primary-800 animate-slide-right mr-2">
+                    <p className="text-base font-semibold whitespace-nowrap">Add Gathering Here</p>
                   </div>
-                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 opacity-70">
-                    <defs>
-                      <marker id="arrowhead-g" markerWidth="8" markerHeight="8" refX="0" refY="2" orient="auto">
-                        <polygon points="0 0, 4 2, 0 4" fill="currentColor" />
-                      </marker>
-                    </defs>
-                    <path d="M10 10 C 70 10, 95 60, 105 105" stroke="currentColor" strokeWidth="4" fill="none" markerEnd="url(#arrowhead-g)" />
-                  </svg>
                 </div>
               </div>
             </div>

@@ -958,8 +958,8 @@ router.post('/update-existing',
         }
         
         // Add the last gathering name
-        const lastName = current.trim();
-        if (lastName) gatheringNames.push(lastName);
+        const lastGatheringName = current.trim();
+        if (lastGatheringName) gatheringNames.push(lastGatheringName);
         
         if (gatheringNames.length === 0) {
           console.log(`No gatherings specified for: ${firstName} ${lastName}`);

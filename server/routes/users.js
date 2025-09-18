@@ -666,6 +666,7 @@ router.post('/:userId/gatherings',
         [userId]
       );
 
+
       res.json({ 
         message: `User ${user.first_name} ${user.last_name} assigned to ${gatheringIds.length} gathering(s)`,
         assignedGatherings: availableGatherings.filter(g => gatheringIds.includes(g.id.toString()))

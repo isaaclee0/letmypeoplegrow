@@ -293,6 +293,7 @@ router.post('/send',
       
       console.log('✅ [INVITATION_DEBUG] Database transaction completed successfully');
 
+
       console.log('✅ [INVITATION_DEBUG] Invitation process completed successfully');
       res.json({ 
         message: 'Invitation sent successfully. The user can log in using their email or mobile with a one-time code at the login page.',

@@ -355,6 +355,11 @@ const PeoplePage: React.FC = () => {
     personName: string;
   }>({ personId: null, personName: '' });
 
+  // Family modal state variables
+  const [familyMembers, setFamilyMembers] = useState<Array<{firstName: string, lastName: string}>>([]);
+  const [familyName, setFamilyName] = useState('');
+  const [useSameSurname, setUseSameSurname] = useState(false);
+
   // UI state for visitor sections
   const [showArchivedVisitors, setShowArchivedVisitors] = useState(false);
   const [showArchivedPeople, setShowArchivedPeople] = useState(false);
@@ -1436,11 +1441,12 @@ const PeoplePage: React.FC = () => {
           individualsAPI.create({
             firstName: person.firstName,
             lastName: person.lastName,
-            familyId: familyResponse.data.familyId
+            familyId: familyResponse.data.id
           })
         );
         
-        await Promise.all(individualPromises);
+        const individualResponses = await Promise.all(individualPromises);
+        const individualIds = individualResponses.map(response => response.data.individualId);
         
         // Assign to selected gatherings
         const selectedGatheringIds = Object.keys(addPeopleForm.selectedGatherings)
@@ -1448,18 +1454,7 @@ const PeoplePage: React.FC = () => {
           .map(gatheringId => parseInt(gatheringId));
         
         if (selectedGatheringIds.length > 0) {
-          const individualIds = await Promise.all(
-            people.map(async (person) => {
-              const individualResponse = await individualsAPI.create({
-                firstName: person.firstName,
-                lastName: person.lastName,
-                familyId: familyResponse.data.familyId
-              });
-              return individualResponse.data.individualId;
-            })
-          );
-          
-          // Assign all individuals to selected gatherings
+          // Assign all individuals to selected gatherings using the IDs from creation
           for (const gatheringId of selectedGatheringIds) {
             await csvImportAPI.massAssign(gatheringId, individualIds);
           }
@@ -1512,7 +1507,8 @@ const PeoplePage: React.FC = () => {
       setShowAddModal(false);
       
       // Reload data
-      await loadData();
+      await loadPeople();
+      await loadFamilies();
       
     } catch (err: any) {
       console.error('Failed to add people:', err);
@@ -1855,7 +1851,7 @@ const PeoplePage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-32">
       {/* Header */}
       <div className="bg-white overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -3038,35 +3034,6 @@ const PeoplePage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Gathering Assignments - only for regular members */}
-                  {addPeopleForm.personType === 'regular' && gatheringTypes.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Assign to Gatherings (Optional)
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {gatheringTypes
-                          .filter(gathering => gathering.attendanceType !== 'headcount')
-                          .map((gathering) => (
-                            <label key={gathering.id} className="flex items-center">
-                              <input
-                                type="checkbox"
-                                checked={addPeopleForm.selectedGatherings[gathering.id] || false}
-                                onChange={(e) => setAddPeopleForm({
-                                  ...addPeopleForm,
-                                  selectedGatherings: {
-                                    ...addPeopleForm.selectedGatherings,
-                                    [gathering.id]: e.target.checked
-                                  }
-                                })}
-                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                              />
-                              <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
-                            </label>
-                          ))}
-                      </div>
-                    </div>
-                  )}
                       
                   {/* Persons List */}
                         <div>
@@ -3163,12 +3130,54 @@ const PeoplePage: React.FC = () => {
                 </div>
                   )}
 
-                  {/* Help text for regular attendees */}
-                  {addPeopleForm.personType === 'regular' && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-                      <div className="text-sm text-blue-700">
-                        <strong>Adding Regular Members:</strong> This will add the people to your People list. 
-                        You can optionally assign them to specific gatherings.
+                  {/* Family Name Display */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Family Name
+                    </label>
+                    <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-900 font-medium">
+                          {computedFamilyName || 'Enter family member names above'}
+                        </span>
+                        {computedFamilyName && (
+                          <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                            Auto-generated
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Family name is automatically generated from the member names above.
+                    </p>
+                  </div>
+
+                  {/* Gathering Assignments - only for regular members */}
+                  {addPeopleForm.personType === 'regular' && gatheringTypes.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Assign to Gatherings (Optional)
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {gatheringTypes
+                          .filter(gathering => gathering.attendanceType !== 'headcount')
+                          .map((gathering) => (
+                            <label key={gathering.id} className="flex items-center">
+                              <input
+                                type="checkbox"
+                                checked={addPeopleForm.selectedGatherings[gathering.id] || false}
+                                onChange={(e) => setAddPeopleForm({
+                                  ...addPeopleForm,
+                                  selectedGatherings: {
+                                    ...addPeopleForm.selectedGatherings,
+                                    [gathering.id]: e.target.checked
+                                  }
+                                })}
+                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              />
+                              <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
+                            </label>
+                          ))}
                       </div>
                     </div>
                   )}
@@ -3372,12 +3381,29 @@ const PeoplePage: React.FC = () => {
                   <div className="text-sm text-gray-500">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <p>Expected TSV format:</p>
-                      <a
-                        href="/api/csv-import/template"
+                      <button
+                        onClick={async () => {
+                          try {
+                            const response = await csvImportAPI.downloadTemplate();
+                            const blob = new Blob([response.data], { type: 'text/tab-separated-values' });
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'people_import_template.tsv';
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                            showSuccess('Template downloaded successfully');
+                          } catch (error) {
+                            console.error('Error downloading template:', error);
+                            setError('Failed to download template');
+                          }
+                        }}
                         className="ml-4 inline-flex items-center text-primary-600 hover:text-primary-700 font-medium"
                       >
                         Download template
-                      </a>
+                      </button>
                     </div>
                     <div className="mt-1 bg-gray-50 p-3 rounded border border-gray-200 overflow-x-auto">
                       <table className="w-full text-xs font-mono">
@@ -3458,12 +3484,29 @@ const PeoplePage: React.FC = () => {
                  <div className="text-sm text-gray-500">
                    <div className="flex items-center justify-between flex-wrap gap-2">
                    <p>Expected format (tab or comma separated):</p>
-                     <a
-                       href="/api/csv-import/template"
+                     <button
+                       onClick={async () => {
+                         try {
+                           const response = await csvImportAPI.downloadTemplate();
+                           const blob = new Blob([response.data], { type: 'text/tab-separated-values' });
+                           const url = window.URL.createObjectURL(blob);
+                           const a = document.createElement('a');
+                           a.href = url;
+                           a.download = 'people_import_template.tsv';
+                           document.body.appendChild(a);
+                           a.click();
+                           window.URL.revokeObjectURL(url);
+                           document.body.removeChild(a);
+                           showSuccess('Template downloaded successfully');
+                         } catch (error) {
+                           console.error('Error downloading template:', error);
+                           setError('Failed to download template');
+                         }
+                       }}
                        className="ml-4 inline-flex items-center text-primary-600 hover:text-primary-700 font-medium"
                      >
                        Download template
-                     </a>
+                     </button>
                    </div>
                    <div className="mt-1 bg-gray-50 border border-gray-200 rounded overflow-hidden">
                      <table className="w-full text-xs">
@@ -3932,22 +3975,11 @@ const PeoplePage: React.FC = () => {
              <PlusIcon className="h-6 w-6" />
            </button>
            {people.length === 0 && (
-             <>
-                <div className="fixed bottom-16 right-28 z-40 flex items-center space-x-3">
-                 <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 py-3 text-primary-800 animate-pulse">
-                   <p className="text-base font-semibold">Add your first people</p>
-                 </div>
-                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary-600 opacity-70">
-                    <defs>
-                      <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="0" refY="2" orient="auto">
-                        <polygon points="0 0, 4 2, 0 4" fill="currentColor" />
-                      </marker>
-                    </defs>
-                    <path d="M10 10 C 70 10, 95 60, 105 105" stroke="currentColor" strokeWidth="4" fill="none" markerEnd="url(#arrowhead)" />
-                  </svg>
+             <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">
+               <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg border border-primary-200 px-4 h-14 flex items-center justify-center text-primary-800 animate-slide-right mr-2">
+                 <p className="text-base font-semibold whitespace-nowrap">Add People Here</p>
                </div>
-
-             </>
+             </div>
            )}
          </>
        )}

@@ -678,7 +678,7 @@ const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount) => 
       LIMIT ?
     `, [gatheringTypeId, churchId, serviceCount]);
     
-    return serviceDates.map(row => row.session_date);
+    return serviceDates.map(row => ({ session_date: row.session_date }));
   } catch (error) {
     console.error('Error getting service dates:', error);
     return [];
@@ -1039,9 +1039,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         // Check if visitor's last attendance was within the relevant service dates
         const lastAttendedStr = visitor.last_attended.toISOString().split('T')[0];
         
-        // Debug logging for REMMINGA family
-        if (visitor.name && visitor.name.includes('REMMINGA')) {
-          console.log('🔍 REMMINGA filtering debug:', {
+        // Debug logging for specific families
+        if (visitor.name && (visitor.name.includes('REMMINGA') || visitor.name.includes('JARVELA') || visitor.name.includes('Vanderschoor'))) {
+          console.log('🔍 Visitor filtering debug:', {
             name: visitor.name,
             people_type: visitor.people_type,
             last_attended: lastAttendedStr,
@@ -1053,11 +1053,15 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           });
         }
         
-        return relevantServiceDates.some(serviceDate => {
-          if (!serviceDate || !serviceDate.session_date) return false;
-          const serviceDateStr = serviceDate.session_date.toISOString().split('T')[0];
-          return lastAttendedStr >= serviceDateStr;
-        });
+        // Check if visitor's last attendance is within the time window (on or after the oldest service date)
+        if (relevantServiceDates.length === 0) return false;
+        
+        // Get the oldest service date (last in the array since they're ordered DESC)
+        const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+        if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+        
+        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+        return lastAttendedStr >= oldestServiceDateStr;
       });
 
     // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion
@@ -1289,11 +1293,15 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
         });
       }
       
-      return relevantServiceDates.some(serviceDate => {
-        if (!serviceDate || !serviceDate.session_date) return false;
-        const serviceDateStr = serviceDate.session_date.toISOString().split('T')[0];
-        return lastActivityStr >= serviceDateStr;
-      });
+      // Check if visitor's last activity is within the time window (on or after the oldest service date)
+      if (relevantServiceDates.length === 0) return false;
+      
+      // Get the oldest service date (last in the array since they're ordered DESC)
+      const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+      if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+      
+      const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+      return lastActivityStr >= oldestServiceDateStr;
     });
 
     // Convert family data to individual visitor format to match main API

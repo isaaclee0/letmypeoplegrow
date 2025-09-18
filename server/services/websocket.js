@@ -1750,6 +1750,7 @@ class WebSocketService {
       });
     }
   }
+
 }
 
 // Create singleton instance

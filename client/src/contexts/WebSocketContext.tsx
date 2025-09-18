@@ -369,6 +369,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       });
     });
 
+
     newSocket.on('user_joined', (activity: UserActivity) => {
       console.log('👋 User joined room:', activity);
       userActivityCallbacks.current.forEach(callback => {
@@ -562,6 +563,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       visitorCallbacks.current.delete(callback);
     };
   }, []);
+
 
   // Subscribe to user activity
   const onUserActivity = useCallback((callback: (activity: UserActivity) => void): (() => void) => {
