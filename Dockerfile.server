@@ -11,7 +11,21 @@ COPY server/package*.json ./
 RUN npm install
 
 # Copy only necessary source files
-COPY server/src ./src
+COPY server/index.js ./
+COPY server/startup.js ./
+COPY server/delete-user-preferences.js ./
+COPY server/test-edit-functionality.js ./
+COPY server/update-church-id.js ./
+COPY server/update-church-id-backup.js ./
+COPY server/run-migration-022.js ./
+COPY server/fix_fresh_db_migrations.js ./
+COPY server/routes ./routes
+COPY server/middleware ./middleware
+COPY server/services ./services
+COPY server/utils ./utils
+COPY server/config ./config
+COPY server/migrations ./migrations
+COPY server/schema ./schema
 COPY server/scripts ./scripts
 COPY server/uploads ./uploads
 COPY server/package*.json ./
