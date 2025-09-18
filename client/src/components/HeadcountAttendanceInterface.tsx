@@ -263,6 +263,12 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
 
   // Handle direct input
   const handleDirectInput = (value: string) => {
+    // Handle empty input - reset to 0
+    if (value === '' || value.trim() === '') {
+      updateHeadcount(0);
+      return;
+    }
+    
     const numValue = parseInt(value, 10);
     if (!isNaN(numValue) && numValue >= 0) {
       updateHeadcount(numValue);
@@ -291,9 +297,16 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
   const handleSaveEdit = async () => {
     if (!editingUserId || !canEditOtherUsers) return;
     
-    const numValue = parseInt(editingValue, 10);
-    if (isNaN(numValue) || numValue < 0) {
-      return; // Invalid input
+    let numValue: number;
+    
+    // Handle empty input - reset to 0
+    if (editingValue === '' || editingValue.trim() === '') {
+      numValue = 0;
+    } else {
+      numValue = parseInt(editingValue, 10);
+      if (isNaN(numValue) || numValue < 0) {
+        return; // Invalid input
+      }
     }
 
     setIsUpdatingUserHeadcount(true);
