@@ -21,14 +21,37 @@ export function register(config?: Config) {
     window.addEventListener('load', () => {
       const swUrl = '/sw.js';
 
-      // Force unregister any existing service workers first
+      // Check if we're in development mode and skip service worker
+      const isDevelopment = process.env.NODE_ENV === 'development' || 
+                           window.location.hostname === 'localhost' ||
+                           window.location.hostname.includes('127.0.0.1');
+      
+      if (isDevelopment) {
+        console.log('🚫 Service worker registration disabled in development');
+        return;
+      }
+
+      // Only unregister if there are existing registrations that might be problematic
       navigator.serviceWorker.getRegistrations().then((registrations) => {
-        registrations.forEach((registration) => {
-          console.log('Unregistering existing service worker:', registration.scope);
-          registration.unregister();
-        });
+        if (registrations.length > 0) {
+          console.log('Found existing service worker registrations:', registrations.length);
+          
+          // Check if any registration is for a different scope or has issues
+          const problematicRegistrations = registrations.filter(reg => {
+            // Keep registrations that are working properly
+            return reg.active && reg.active.scriptURL.includes('sw.js');
+          });
+          
+          if (problematicRegistrations.length > 0) {
+            console.log('Unregistering problematic service workers:', problematicRegistrations.length);
+            problematicRegistrations.forEach((registration) => {
+              console.log('Unregistering service worker:', registration.scope);
+              registration.unregister();
+            });
+          }
+        }
         
-        // Wait a moment for unregistration to complete
+        // Wait a moment for any unregistration to complete
         setTimeout(() => {
           if (isLocalhost) {
             // This is running on localhost. Let's check if a service worker still exists or not.
@@ -70,8 +93,12 @@ function registerValidSW(swUrl: string, config?: Config) {
         // Force another update check after a short delay
         setTimeout(() => {
           console.log('Second update check for aggressive cache busting');
-          registration.update();
+          registration.update().catch((error) => {
+            console.warn('Second update check failed:', error);
+          });
         }, 1000);
+      }).catch((error) => {
+        console.warn('Immediate update check failed:', error);
       });
       
       // Set up update detection
@@ -108,6 +135,9 @@ function registerValidSW(swUrl: string, config?: Config) {
                 config.onSuccess(registration);
               }
             }
+          } else if (installingWorker.state === 'redundant') {
+            console.log('Service Worker became redundant - no update needed');
+            // Don't trigger any callbacks for redundant state
           }
         };
       };
@@ -141,6 +171,19 @@ function registerValidSW(swUrl: string, config?: Config) {
     })
     .catch((error) => {
       console.error('Error during service worker registration:', error);
+      
+      // If registration fails, try to check if the service worker file exists
+      fetch(swUrl, { method: 'HEAD' })
+        .then(response => {
+          if (response.ok) {
+            console.log('Service worker file exists but registration failed');
+          } else {
+            console.error('Service worker file not found:', swUrl);
+          }
+        })
+        .catch(fetchError => {
+          console.error('Failed to check service worker file:', fetchError);
+        });
     });
 }
 
