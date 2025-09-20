@@ -57,10 +57,11 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
               // Add a small delay to let the service worker process the message
               setTimeout(() => {
                 console.log('Reloading page after service worker update');
-                window.location.reload();
+                // Force a hard refresh to bypass all caches
+                window.location.reload(true);
               }, 500);
             }
-          }, 2000); // 2 second delay to show the banner
+          }, 1000); // Reduced delay to 1 second for faster updates
         }
         
         console.log('PWA update available - auto-applying in 2 seconds');
@@ -86,7 +87,8 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
     } else {
       // Fallback: force a hard refresh to bypass cache
       console.log('No waiting worker, forcing hard refresh');
-      window.location.href = window.location.href;
+      // Use replace to avoid adding to browser history
+      window.location.replace(window.location.href);
     }
   };
 

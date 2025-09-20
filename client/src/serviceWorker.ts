@@ -53,8 +53,15 @@ function registerValidSW(swUrl: string, config?: Config) {
     .then((registration) => {
       console.log('Service Worker registered successfully');
       
-      // Check for updates immediately
-      registration.update();
+      // Check for updates immediately and force refresh
+      registration.update().then(() => {
+        console.log('Immediate update check completed');
+        // Force another update check after a short delay
+        setTimeout(() => {
+          console.log('Second update check for aggressive cache busting');
+          registration.update();
+        }, 1000);
+      });
       
       // Set up update detection
       registration.onupdatefound = () => {
