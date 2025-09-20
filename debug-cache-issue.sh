@@ -12,12 +12,12 @@ echo ""
 
 # Check index.html headers
 echo "1. Index.html headers:"
-curl -I "http://$DOMAIN/index.html" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma)" || echo "Failed to fetch index.html"
+curl -I "http://$DOMAIN/index.html" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma|Date)" || echo "Failed to fetch index.html"
 echo ""
 
 # Check service worker headers
 echo "2. Service Worker headers:"
-curl -I "http://$DOMAIN/sw.js" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma)" || echo "Failed to fetch sw.js"
+curl -I "http://$DOMAIN/sw.js" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma|Date)" || echo "Failed to fetch sw.js"
 echo ""
 
 # Check main JS file headers (if available)
@@ -25,10 +25,21 @@ echo "3. Main JS file headers (checking for any .js file):"
 JS_FILE=$(curl -s "http://$DOMAIN" | grep -o 'src="[^"]*\.js[^"]*"' | head -1 | sed 's/src="//' | sed 's/"//')
 if [ ! -z "$JS_FILE" ]; then
     echo "Found JS file: $JS_FILE"
-    curl -I "http://$DOMAIN$JS_FILE" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma)" || echo "Failed to fetch $JS_FILE"
+    curl -I "http://$DOMAIN$JS_FILE" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma|Date)" || echo "Failed to fetch $JS_FILE"
 else
     echo "No JS files found in index.html"
 fi
+echo ""
+
+# Check if there are multiple service workers registered
+echo "4. Checking for multiple service worker registrations:"
+echo "   Open Developer Tools > Application > Service Workers"
+echo "   Look for multiple registrations with different scopes"
+echo ""
+
+# Check for CDN or proxy caching
+echo "5. Checking for CDN/Proxy headers:"
+curl -I "http://$DOMAIN/" 2>/dev/null | grep -E "(HTTP|Cache-Control|ETag|Last-Modified|Expires|Pragma|Date|X-Cache|X-Served-By|CF-Cache-Status)" || echo "Failed to fetch root"
 echo ""
 
 echo "📊 Browser cache debugging tips:"

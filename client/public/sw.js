@@ -1,13 +1,12 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-09-20T03:52:40.932Z
+// Generated on 2025-09-20T03:59:28.008Z
 // App Version: 1.2.4
-// Build Timestamp: 1758340360931
+// Build Timestamp: 1758340768008
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1.2.4-1758340360931';
+const CACHE_NAME = 'let-my-people-grow-v1.2.4-1758340768008';
 const APP_VERSION = '1.2.4';
 const urlsToCache = [
-  '/',
   '/manifest.json',
   '/favicon.ico',
   '/logo192.png',
@@ -47,37 +46,61 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // For HTML files (including index.html), always fetch from network first
+  if (event.request.destination === 'document' || event.request.url.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Don't cache HTML files - always get fresh version
+          console.log('Fetching fresh HTML:', event.request.url);
+          return response;
+        })
+        .catch((error) => {
+          console.warn('HTML fetch failed, trying cache:', error);
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+
+  // For service worker file, never cache
+  if (event.request.url.includes('/sw.js')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          console.log('Fetching fresh service worker:', event.request.url);
+          return response;
+        })
+    );
+    return;
+  }
+
+  // For other static assets, use network-first strategy
   event.respondWith(
-    caches.match(event.request)
+    fetch(event.request)
       .then((response) => {
-        // Return cached version or fetch from network
-        if (response) {
+        // Don't cache if not a valid response
+        if (!response || response.status !== 200 || response.type !== 'basic') {
           return response;
         }
-        
-        return fetch(event.request).then((response) => {
-          // Don't cache if not a valid response
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
 
-          // Clone the response
-          const responseToCache = response.clone();
+        // Clone the response
+        const responseToCache = response.clone();
 
-          caches.open(CACHE_NAME)
-            .then((cache) => {
-              cache.put(event.request, responseToCache);
-            })
-            .catch((error) => {
-              console.warn('Failed to cache response:', error);
-            });
+        caches.open(CACHE_NAME)
+          .then((cache) => {
+            cache.put(event.request, responseToCache);
+          })
+          .catch((error) => {
+            console.warn('Failed to cache response:', error);
+          });
 
-          return response;
-        }).catch((error) => {
-          console.warn('Fetch failed:', error);
-          // Return a fallback response or let the browser handle it
-          return new Response('Network error', { status: 503 });
-        });
+        return response;
+      })
+      .catch((error) => {
+        console.warn('Fetch failed, trying cache:', error);
+        // If network fails, try cache as fallback
+        return caches.match(event.request);
       })
   );
 });

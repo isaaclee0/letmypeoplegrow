@@ -32,8 +32,22 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
                          window.location.hostname === 'localhost' ||
                          window.location.hostname.includes('127.0.0.1');
     
-    if (isDevelopment) {
-      console.log('🚫 Service worker registration disabled in development');
+    // Check if we should disable service worker due to caching issues
+    const disableServiceWorker = localStorage.getItem('disable-service-worker') === 'true';
+    
+    if (isDevelopment || disableServiceWorker) {
+      console.log('🚫 Service worker registration disabled:', isDevelopment ? 'development mode' : 'manually disabled');
+      
+      // Clear any existing service workers in development
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          registrations.forEach((registration) => {
+            console.log('Unregistering service worker in development:', registration.scope);
+            registration.unregister();
+          });
+        });
+      }
+      
       return;
     }
     

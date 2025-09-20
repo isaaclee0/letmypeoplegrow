@@ -21,22 +21,33 @@ export function register(config?: Config) {
     window.addEventListener('load', () => {
       const swUrl = '/sw.js';
 
-      if (isLocalhost) {
-        // This is running on localhost. Let's check if a service worker still exists or not.
-        checkValidServiceWorker(swUrl, config);
-
-        // Add some additional logging to localhost, pointing developers to the
-        // service worker/PWA documentation.
-        navigator.serviceWorker.ready.then(() => {
-          console.log(
-            'This web app is being served cache-first by a service ' +
-              'worker. To learn more, visit https://bit.ly/CRA-PWA'
-          );
+      // Force unregister any existing service workers first
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        registrations.forEach((registration) => {
+          console.log('Unregistering existing service worker:', registration.scope);
+          registration.unregister();
         });
-      } else {
-        // Is not localhost. Just register service worker
-        registerValidSW(swUrl, config);
-      }
+        
+        // Wait a moment for unregistration to complete
+        setTimeout(() => {
+          if (isLocalhost) {
+            // This is running on localhost. Let's check if a service worker still exists or not.
+            checkValidServiceWorker(swUrl, config);
+
+            // Add some additional logging to localhost, pointing developers to the
+            // service worker/PWA documentation.
+            navigator.serviceWorker.ready.then(() => {
+              console.log(
+                'This web app is being served cache-first by a service ' +
+                  'worker. To learn more, visit https://bit.ly/CRA-PWA'
+              );
+            });
+          } else {
+            // Is not localhost. Just register service worker
+            registerValidSW(swUrl, config);
+          }
+        }, 100);
+      });
     });
   }
 }
