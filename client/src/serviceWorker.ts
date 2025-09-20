@@ -94,10 +94,10 @@ function registerValidSW(swUrl: string, config?: Config) {
         };
       };
       
-      // Reasonable update checking - check every 4 hours
-      const updateInterval = 4 * 60 * 60 * 1000; // Check every 4 hours (14,400,000ms)
+      // More aggressive update checking - check every 30 minutes
+      const updateInterval = 30 * 60 * 1000; // Check every 30 minutes (1,800,000ms)
       
-      console.log(`Service worker update checks scheduled every ${updateInterval / (60 * 60 * 1000)} hours`);
+      console.log(`Service worker update checks scheduled every ${updateInterval / (60 * 1000)} minutes`);
       
       setInterval(() => {
         console.log('Checking for service worker updates... (scheduled check)');
@@ -111,9 +111,9 @@ function registerValidSW(swUrl: string, config?: Config) {
         document.addEventListener('visibilitychange', () => {
           if (!document.hidden) {
             const now = Date.now();
-            // Only check for updates if it's been more than 5 minutes since last check
-            if (now - lastVisibilityCheck > 300000) { // 5 minutes instead of 30 seconds
-              console.log('Page became visible after 5+ minutes, checking for updates...');
+            // Only check for updates if it's been more than 2 minutes since last check
+            if (now - lastVisibilityCheck > 120000) { // 2 minutes instead of 5 minutes
+              console.log('Page became visible after 2+ minutes, checking for updates...');
               registration.update();
               lastVisibilityCheck = now;
             }

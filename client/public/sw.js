@@ -1,10 +1,11 @@
 // Service Worker for Let My People Grow PWA
-// Generated on 2025-09-17T23:35:48.205Z
-// App Version: 1.2.2
+// Generated on 2025-09-20T03:06:20.063Z
+// App Version: 1.2.3
+// Build Timestamp: 1758337580063
 // This handles caching and update notifications
 
-const CACHE_NAME = 'let-my-people-grow-v1.2.2-1758152148205';
-const APP_VERSION = '1.2.2';
+const CACHE_NAME = 'let-my-people-grow-v1.2.3-1758337580063';
+const APP_VERSION = '1.2.3';
 const urlsToCache = [
   '/',
   '/manifest.json',
@@ -16,19 +17,25 @@ const urlsToCache = [
 // Install event - cache resources
 self.addEventListener('install', (event) => {
   console.log('Service Worker installing...', CACHE_NAME, 'Version:', APP_VERSION);
+  
+  // Force update check immediately after installation
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
         console.log('Opened cache:', CACHE_NAME);
         return cache.addAll(urlsToCache).catch((error) => {
           console.warn('Failed to cache some resources:', error);
-          // Continue with installation even if some resources fail to cache
           return Promise.resolve();
         });
       })
       .then(() => {
         // Force activation for iOS Safari
         return self.skipWaiting();
+      })
+      .then(() => {
+        // Check for updates immediately after installation
+        console.log('Checking for service worker updates after installation...');
+        return self.registration.update();
       })
   );
 });
@@ -80,13 +87,13 @@ self.addEventListener('activate', (event) => {
   console.log('Service Worker activating...', CACHE_NAME, 'Version:', APP_VERSION);
   event.waitUntil(
     Promise.all([
-      // Clean up old caches
+      // Clean up old caches more aggressively
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cacheName) => {
-            // Delete all caches except the current one
-            if (cacheName !== CACHE_NAME) {
-              console.log('Deleting old cache:', cacheName);
+            // Delete all caches that don't match our current version pattern
+            if (!cacheName.includes('let-my-people-grow-v') || cacheName !== CACHE_NAME) {
+              console.log('Deleting old/foreign cache:', cacheName);
               return caches.delete(cacheName);
             }
           })
@@ -111,7 +118,7 @@ self.addEventListener('beforeinstallprompt', (event) => {
   console.log('Before install prompt');
 });
 
-// Force update check on every page load for iOS
+// Force update check on every page load and navigation
 self.addEventListener('fetch', (event) => {
   // Check for updates on navigation requests
   if (event.request.mode === 'navigate') {
@@ -120,6 +127,7 @@ self.addEventListener('fetch', (event) => {
         // If we get a new response, it might indicate an update
         if (response && response.status === 200) {
           // Check if we need to update
+          console.log('Navigation detected, checking for service worker updates...');
           self.registration.update();
         }
       }).catch(() => {
@@ -128,3 +136,4 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
