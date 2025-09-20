@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
+import { SmartCacheProvider } from './contexts/SmartCacheContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -106,8 +107,9 @@ function App() {
   return (
     <AuthProvider>
       <SettingsProvider>
-        <PWAUpdateProvider>
-          <ToastContainer>
+        <SmartCacheProvider>
+          <PWAUpdateProvider>
+            <ToastContainer>
             <Router>
             <div className="min-h-screen bg-gray-50">
               <Routes>
@@ -183,9 +185,10 @@ function App() {
               </Routes>
             </div>
             <PWAUpdateWrapper />
-              </Router>
-            </ToastContainer>
+            </Router>
+          </ToastContainer>
           </PWAUpdateProvider>
+        </SmartCacheProvider>
       </SettingsProvider>
     </AuthProvider>
   );

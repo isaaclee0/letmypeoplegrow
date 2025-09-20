@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { register } from '../serviceWorker';
+import { LoadingOverlay, useLoadingOverlay } from '../components/LoadingOverlay';
 
 interface PWAUpdateContextType {
   updateAvailable: boolean;
@@ -25,6 +26,7 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [showUpdateNotification, setShowUpdateNotification] = useState(false);
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
+  const { isLoading, showLoading, hideLoading } = useLoadingOverlay();
 
   useEffect(() => {
     // Skip service worker registration in development to avoid caching issues
@@ -61,9 +63,11 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
         if (registration.waiting) {
           setWaitingWorker(registration.waiting);
           
-          // Automatically apply the update after a short delay
+          // Show loading overlay and apply the update after a short delay
           setTimeout(() => {
             console.log('Auto-applying PWA update...');
+            showLoading('Updating app...', false);
+            
             if (registration.waiting) {
               // Send message to service worker to skip waiting and activate
               registration.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -88,6 +92,7 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
 
   const performUpdate = () => {
     console.log('Performing PWA update...', { waitingWorker: !!waitingWorker });
+    showLoading('Updating app...', false);
     
     if (waitingWorker) {
       // Send message to service worker to skip waiting and activate
@@ -115,6 +120,10 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
   return (
     <PWAUpdateContext.Provider value={value}>
       {children}
+      <LoadingOverlay 
+        isLoading={isLoading} 
+        message="Updating app..."
+      />
     </PWAUpdateContext.Provider>
   );
 };

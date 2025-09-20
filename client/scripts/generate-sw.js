@@ -95,34 +95,88 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // For other static assets, use network-first strategy
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        // Don't cache if not a valid response
-        if (!response || response.status !== 200 || response.type !== 'basic') {
+  // Smart caching strategy for different types of assets
+  const url = new URL(event.request.url);
+  const isStaticAsset = url.pathname.match(/\\.(png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$/);
+  const isManifest = url.pathname.includes('manifest.json');
+  const isLogo = url.pathname.includes('logo') || url.pathname.includes('favicon');
+
+  if (isStaticAsset || isManifest || isLogo) {
+    // For static assets, use cache-first strategy for better performance
+    event.respondWith(
+      caches.match(event.request)
+        .then((response) => {
+          if (response) {
+            console.log('Serving static asset from cache:', url.pathname);
+            
+            // Update cache in background for stale-while-revalidate
+            fetch(event.request)
+              .then((freshResponse) => {
+                if (freshResponse && freshResponse.status === 200) {
+                  const responseToCache = freshResponse.clone();
+                  caches.open(CACHE_NAME)
+                    .then((cache) => {
+                      cache.put(event.request, responseToCache);
+                      console.log('Updated static asset cache:', url.pathname);
+                    });
+                }
+              })
+              .catch(() => {
+                // Ignore background update failures
+              });
+            
+            return response;
+          }
+          
+          // If not in cache, fetch and cache
+          return fetch(event.request)
+            .then((response) => {
+              if (response && response.status === 200) {
+                const responseToCache = response.clone();
+                caches.open(CACHE_NAME)
+                  .then((cache) => {
+                    cache.put(event.request, responseToCache);
+                    console.log('Cached static asset:', url.pathname);
+                  });
+              }
+              return response;
+            });
+        })
+        .catch((error) => {
+          console.warn('Static asset fetch failed:', error);
+          return new Response('Asset not available', { status: 404 });
+        })
+    );
+  } else {
+    // For other assets, use network-first strategy
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Don't cache if not a valid response
+          if (!response || response.status !== 200 || response.type !== 'basic') {
+            return response;
+          }
+
+          // Clone the response
+          const responseToCache = response.clone();
+
+          caches.open(CACHE_NAME)
+            .then((cache) => {
+              cache.put(event.request, responseToCache);
+            })
+            .catch((error) => {
+              console.warn('Failed to cache response:', error);
+            });
+
           return response;
-        }
-
-        // Clone the response
-        const responseToCache = response.clone();
-
-        caches.open(CACHE_NAME)
-          .then((cache) => {
-            cache.put(event.request, responseToCache);
-          })
-          .catch((error) => {
-            console.warn('Failed to cache response:', error);
-          });
-
-        return response;
-      })
-      .catch((error) => {
-        console.warn('Fetch failed, trying cache:', error);
-        // If network fails, try cache as fallback
-        return caches.match(event.request);
-      })
-  );
+        })
+        .catch((error) => {
+          console.warn('Fetch failed, trying cache:', error);
+          // If network fails, try cache as fallback
+          return caches.match(event.request);
+        })
+    );
+  }
 });
 
 // Activate event - clean up old caches and take control immediately
