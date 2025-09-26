@@ -49,6 +49,17 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
     
+    // Handle network errors (server unavailable, no internet, etc.)
+    if (!error.response && (error.code === 'NETWORK_ERROR' || error.message?.includes('fetch'))) {
+      console.log('🌐 Network error detected - server may be unavailable');
+      // Don't redirect to login for network errors - let components handle offline mode
+      return Promise.reject({
+        ...error,
+        code: 'NETWORK_ERROR',
+        isNetworkError: true
+      });
+    }
+    
     // Handle 401 errors with token refresh
     if (error.response?.status === 401) {
       const originalRequest = error.config;
@@ -93,11 +104,22 @@ api.interceptors.response.use(
           isRefreshingToken = false;
           processQueue(refreshError, null);
           
-          // Clear user data and redirect to login
-          localStorage.removeItem('user');
-          if (window.location.pathname !== '/login') {
-            console.log('➡️ Redirecting to login due to refresh failure');
-            window.location.href = '/login';
+          // Only redirect to login if it's an authentication error, not a network error
+          if (refreshError.response?.status === 401 || refreshError.response?.status === 403) {
+            localStorage.removeItem('user');
+            if (window.location.pathname !== '/login') {
+              console.log('➡️ Redirecting to login due to auth failure');
+              window.location.href = '/login';
+            }
+          } else if (refreshError.isNetworkError) {
+            console.log('🌐 Token refresh failed due to network error - staying offline');
+            // Don't redirect to login for network errors
+          } else {
+            localStorage.removeItem('user');
+            if (window.location.pathname !== '/login') {
+              console.log('➡️ Redirecting to login due to unexpected error');
+              window.location.href = '/login';
+            }
           }
           return Promise.reject(refreshError);
         }

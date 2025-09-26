@@ -50,6 +50,14 @@ export const useCachedAPI = <T>(
       const error = err instanceof Error ? err : new Error('Unknown error');
       setError(error);
       console.error(`Failed to fetch data for ${key}:`, error);
+      
+      // Fallback to cached data if available (even if stale)
+      const fallbackEntry = smartCache.getCachedData<T>(key, true); // allowStale = true
+      if (fallbackEntry) {
+        console.log(`📦 Falling back to cached data for ${key} due to network error`);
+        setData(fallbackEntry.data);
+        setError(null); // Clear error since we have cached data
+      }
     } finally {
       setLoading(false);
     }

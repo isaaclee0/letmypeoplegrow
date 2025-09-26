@@ -41,7 +41,7 @@ const WebSocketLoadingScreen: React.FC<WebSocketLoadingScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="min-h-screen bg-gray-50 flex items-start justify-center pt-32">
       <div className="text-center max-w-md mx-auto px-4">
         <div className="mb-6">
           <LoadingSpinner size="large" />

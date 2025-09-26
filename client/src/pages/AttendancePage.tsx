@@ -10,7 +10,7 @@ import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
 import { getWebSocketMode } from '../utils/constants';
-import { useAttendanceWebSocketConnection } from '../hooks/useAttendanceWebSocketConnection';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { userPreferences } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import logger from '../utils/logger';
@@ -164,16 +164,7 @@ const AttendancePage: React.FC = () => {
 
   // Load cached data immediately on component mount for better UX during navigation
   useEffect(() => {
-    logger.log('🔍 AttendancePage mounted - checking for cached data...');
-    
-    // Debug: List all localStorage keys
-    logger.log('🔑 All localStorage keys:', Object.keys(localStorage));
-    logger.log('📋 LocalStorage content:');
-    for (const key of Object.keys(localStorage)) {
-      if (key.includes('attendance') || key.includes('gathering')) {
-        logger.log(`  ${key}:`, localStorage.getItem(key)?.substring(0, 100) + '...');
-      }
-    }
+    // Check for cached data on mount
     
     const cachedData = localStorage.getItem('attendance_cached_data');
     
@@ -187,21 +178,13 @@ const AttendancePage: React.FC = () => {
       const cacheAge = Date.now() - (parsed.timestamp || 0);
       const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
       
-      logger.log('📦 Found cached data:', {
-        gatheringId: parsed.gatheringId,
-        date: parsed.date,
-        attendees: parsed.attendanceList?.length || 0,
-        visitors: parsed.visitors?.length || 0,
-        cacheAge: Math.round(cacheAge / 1000) + 's',
-        isStale,
-        hasAttendanceList: !!parsed.attendanceList?.length
-      });
+      // Found cached data
       
       // Note: Cached attendance data is now loaded by dedicated effects
       if (isStale) {
-        logger.log('⏰ Cache is stale, will load fresh data');
+        // Cache is stale, will load fresh data
       } else if (!parsed.attendanceList?.length) {
-        logger.log('📭 Cache exists but no attendance data');
+        // Cache exists but no attendance data
       }
     } catch (err) {
       console.error('❌ Failed to parse cached attendance data on mount:', err);
@@ -362,26 +345,22 @@ const AttendancePage: React.FC = () => {
   }, []);
   
   // WebSocket integration with environment-based configuration
-  const { 
+  // Use global WebSocket context for attendance updates
+  const {
     socket,
-    isConnected: isWebSocketConnected, 
-    connectionStatus, 
+    isConnected: isWebSocketConnected,
+    connectionStatus,
+    isOfflineMode,
     sendAttendanceUpdate,
     sendHeadcountUpdate,
-    loadAttendanceData: loadAttendanceDataWebSocket
-  } = useAttendanceWebSocketConnection();
+    loadAttendanceData: loadAttendanceDataWebSocket,
+    onAttendanceUpdate,
+    onVisitorUpdate
+  } = useWebSocket();
   const webSocketMode = useMemo(() => getWebSocketMode(), []);
   const useWebSocketForUpdates = webSocketMode.enabled;
 
-  // Add connection debugging
-  useEffect(() => {
-    logger.log('🔌 WebSocket Connection Status:', {
-      isConnected: isWebSocketConnected,
-      connectionStatus,
-      webSocketMode,
-      useWebSocketForUpdates
-    });
-  }, [isWebSocketConnected, connectionStatus, webSocketMode, useWebSocketForUpdates]);
+  // Connection debugging disabled to reduce console noise
 
   // Helper function to get connection status styling
   const getConnectionStatusStyle = () => {
@@ -424,6 +403,17 @@ const AttendancePage: React.FC = () => {
           tooltip: webSocketMode.fallbackAllowed 
             ? 'WebSocket connection failed - Using REST API for updates'
             : 'Connection failed - Please refresh the page'
+        };
+      case 'offline':
+        return {
+          containerClass: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+          dotClass: 'bg-yellow-500',
+          label: pendingChanges.length > 0 
+            ? `${pendingChanges.length} Pending` 
+            : 'Offline Mode',
+          tooltip: pendingChanges.length > 0
+            ? `Offline - ${pendingChanges.length} changes saved locally`
+            : 'Offline mode - Using cached data'
         };
       case 'disconnected':
       default:
@@ -809,7 +799,6 @@ const AttendancePage: React.FC = () => {
     if (!user) return;
     
     try {
-      logger.log('🔄 Manually refreshing gatherings list...');
       const response = await gatheringsAPI.getAll();
       // All users (including admins) only see their assigned gatherings
       // Admins can assign themselves to any gathering they want to see
@@ -817,7 +806,14 @@ const AttendancePage: React.FC = () => {
         user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
       );
       setGatherings(userGatherings);
-      logger.log('✅ Gatherings refreshed successfully:', userGatherings.map(g => g.name));
+      
+      // Cache the full gatherings data for offline use
+      const cacheData = {
+        gatherings: response.data.gatherings,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('gatherings_cached_data', JSON.stringify(cacheData));
+      logger.log('💾 Cached gatherings data for offline use (refresh)');
     } catch (err) {
       logger.error('❌ Failed to refresh gatherings:', err);
       setError('Failed to refresh gatherings');
@@ -827,7 +823,6 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     const refreshUserDataOnMount = async () => {
       try {
-        logger.log('🔄 Refreshing user data on attendance page mount to get latest gathering assignments');
         await refreshUserData();
       } catch (error) {
         logger.warn('Failed to refresh user data on mount:', error);
@@ -840,7 +835,6 @@ const AttendancePage: React.FC = () => {
   // Auto-refresh gatherings when user data changes (including gathering assignments)
   useEffect(() => {
     if (user) {
-      logger.log('🔄 User data changed, refreshing gatherings list...');
       refreshGatherings();
     }
   }, [user?.gatheringAssignments, refreshGatherings]);
@@ -851,6 +845,29 @@ const AttendancePage: React.FC = () => {
       if (!user) return; // Wait for user data to be available
       
       try {
+        // Check if we're in offline mode and have cached gatherings
+        const cachedGatherings = localStorage.getItem('gatherings_cached_data');
+        
+        if (isOfflineMode && cachedGatherings) {
+          try {
+            const parsedCached = JSON.parse(cachedGatherings);
+            // Check if cached data is less than 24 hours old
+            const ageInHours = (Date.now() - parsedCached.timestamp) / (1000 * 60 * 60);
+            if (ageInHours < 24) {
+              // Filter cached gatherings by user's assignments
+              const userGatherings = parsedCached.gatherings.filter((g: GatheringType) => 
+                user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
+              );
+              setGatherings(userGatherings);
+              logger.log('📦 Loaded gatherings from cache (offline mode)');
+              return;
+            }
+          } catch (e) {
+            logger.warn('Failed to parse cached gatherings:', e);
+          }
+        }
+        
+        // Load from API (online mode or no valid cache)
         const response = await gatheringsAPI.getAll();
         // All users (including admins) only see their assigned gatherings
         // Admins can assign themselves to any gathering they want to see
@@ -858,6 +875,14 @@ const AttendancePage: React.FC = () => {
           user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
         );
         setGatherings(userGatherings);
+        
+        // Cache the full gatherings data for offline use
+        const cacheData = {
+          gatherings: response.data.gatherings,
+          timestamp: Date.now()
+        };
+        localStorage.setItem('gatherings_cached_data', JSON.stringify(cacheData));
+        logger.log('💾 Cached gatherings data for offline use');
         
         // Set default gathering honoring saved order and default preference
         if (userGatherings.length > 0) {
@@ -874,13 +899,7 @@ const AttendancePage: React.FC = () => {
 
           // Try last viewed first
           if (lastViewed) {
-            logger.log('🔍 Looking for last viewed gathering:', lastViewed.gatheringId);
             gatheringToSelect = userGatherings.find((g: GatheringType) => g.id === lastViewed.gatheringId) || null;
-            if (gatheringToSelect) {
-              logger.log('✅ Found last viewed gathering:', gatheringToSelect.name);
-            } else {
-              logger.log('❌ Last viewed gathering not found in current gatherings');
-            }
           }
 
           // Apply saved order
@@ -912,12 +931,7 @@ const AttendancePage: React.FC = () => {
           const cachedData = localStorage.getItem('attendance_cached_data');
           let finalGatheringToSelect = gatheringToSelect || ordered[0] || userGatherings[0];
           
-          logger.log('🎯 Final gathering selection:', {
-            gatheringToSelect: gatheringToSelect?.name || 'none',
-            finalGatheringToSelect: finalGatheringToSelect?.name || 'none',
-            orderedFirst: ordered[0]?.name || 'none',
-            userGatheringsFirst: userGatherings[0]?.name || 'none'
-          });
+          // Final gathering selection complete
           
           if (cachedData && !gatheringToSelect) {
             try {
@@ -950,7 +964,7 @@ const AttendancePage: React.FC = () => {
     };
 
     loadGatherings();
-  }, [user, user?.gatheringAssignments]); // Re-run when user data or gathering assignments change
+  }, [user, user?.gatheringAssignments, isOfflineMode]); // Re-run when user data, gathering assignments, or offline mode changes
 
   // Set date when gathering changes (use cached, last viewed, or nearest date)
   useEffect(() => {
@@ -959,7 +973,7 @@ const AttendancePage: React.FC = () => {
         let dateToSelect = null;
         let shouldUpdate = false;
         
-        logger.log('📅 Setting date for gathering:', selectedGathering?.name, 'with valid dates:', validDates);
+        // Setting date for gathering
         
         // First, check if we have cached data for this gathering (within 24 hours)
         // Prioritize cached date to respect recent user selections
@@ -971,13 +985,8 @@ const AttendancePage: React.FC = () => {
             const isWithin24Hours = cacheAge < 24 * 60 * 60 * 1000; // 24 hours
             
             if (isWithin24Hours && parsed.gatheringId === selectedGathering.id && validDates.includes(parsed.date)) {
-              logger.log('📅 Using cached date for gathering:', {
-                  gatheringId: parsed.gatheringId,
-                  date: parsed.date,
-                  ageHours: Math.round(cacheAge / (60 * 60 * 1000))
-                });
-                dateToSelect = parsed.date;
-                shouldUpdate = true;
+              dateToSelect = parsed.date;
+              shouldUpdate = true;
             }
           } catch (err) {
             console.error('Failed to parse cached data for date selection:', err);
@@ -1049,11 +1058,7 @@ const AttendancePage: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       if (selectedGathering && selectedDate) {
-      logger.log('📅 Main data loading effect triggered:', {
-        gatheringId: selectedGathering.id,
-        gatheringName: selectedGathering.name,
-        date: selectedDate
-      });
+      // Main data loading effect triggered
       
       // Critical: Clear presentById state when switching dates to prevent cross-date contamination
       // The presentById state should be date-specific, not persist across date changes
@@ -1076,30 +1081,18 @@ const AttendancePage: React.FC = () => {
       // This ensures presentById doesn't carry over from previous dates
       const contextChanged = !cachedContextKey || cachedContextKey !== currentContextKey;
       
-      logger.log('🔄 [CONTEXT] Checking context change:', {
-        cachedContextKey,
-        currentContextKey,
-        contextChanged,
-        selectedGathering: selectedGathering?.id,
-        selectedDate
-      });
-      
       // Reset headcount value when context changes
       if (contextChanged) {
-        logger.log('🔄 [CONTEXT] Context changed, resetting headcount value');
         setHeadcountValue(0);
       }
       
       if (contextChanged) {
-        logger.log('🧹 Context changed for date/gathering:', {
-          previous: cachedContextKey,
-          current: currentContextKey
-        });
+        // Context changed for date/gathering
         
         // Note: Both regular attendance and visitor data are now managed by separate dedicated effects
         // No need to clear state here as each system manages its own loading independently
       } else {
-        logger.log('📋 Same date/gathering context:', currentContextKey);
+        // Same date/gathering context
       }
       
       // Note: Cached data loading is now handled by the dedicated regular attendance effect
@@ -1210,59 +1203,37 @@ const AttendancePage: React.FC = () => {
   // Load regular attendance data when gathering or date changes (similar to visitor loading pattern)
   useEffect(() => {
     const loadRegularAttendance = async () => {
-      console.log('🔍 Regular attendance effect triggered:', {
-        selectedGathering: selectedGathering?.id,
-        selectedDate,
-        attendanceRefreshTrigger,
-        isWebSocketConnected,
-        validDatesLength: validDates.length
-      });
-      
       if (!selectedGathering || !selectedDate) {
-        console.log('❌ Early return - missing selectedGathering or selectedDate');
         return;
       }
       
       // Don't load if we don't have valid dates yet (date selection still in progress)
       if (validDates.length === 0) {
-        console.log('⏳ Waiting for valid dates to be loaded...');
         return;
       }
       
       // Don't load if the selected date is not in the valid dates (date selection still in progress)
       if (!validDates.includes(selectedDate)) {
-        console.log('⏳ Selected date not in valid dates yet, waiting for date selection...');
         return;
       }
       
       try {
-        console.log('🔄 Starting to load regular attendance data...');
         setIsLoading(true);
         
         // Try WebSocket first if connected, fall back to REST API
         let response;
         if (isWebSocketConnected) {
           try {
-            logger.log(`📡 Loading regular attendance via WebSocket for gathering ${selectedGathering.id} on ${selectedDate}`);
             response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
           } catch (wsError) {
             logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
             throw wsError; // Re-throw to trigger REST API fallback
           }
         } else {
-          logger.log(`📡 Loading regular attendance via REST API for gathering ${selectedGathering.id} on ${selectedDate}`);
           const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
           response = apiResponse.data;
         }
         
-        logger.log(`📊 Received regular attendance data:`, {
-          attendeeCount: response.attendanceList?.length || 0,
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
-          timestamp: new Date().toISOString()
-        });
-        
-        console.log('📊 Setting attendanceList with data:', response.attendanceList?.length || 0, 'items');
         setAttendanceList(response.attendanceList || []);
         
         // Initialize presentById from server data directly
@@ -1274,12 +1245,6 @@ const AttendancePage: React.FC = () => {
           if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
             serverPresentById[change.individualId] = change.present;
           }
-        });
-        
-        logger.log('🔄 Setting presentById from server data:', {
-          serverKeys: Object.keys(serverPresentById).length,
-          gatheringId: selectedGathering.id,
-          date: selectedDate
         });
         
         setPresentById(serverPresentById);
@@ -1303,14 +1268,34 @@ const AttendancePage: React.FC = () => {
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
-        logger.log('💾 Cached regular attendance data:', {
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
-          attendees: attendanceListForCache.length
-        });
+        // Cached regular attendance data
         
       } catch (err) {
         console.error('Failed to load regular attendance data:', err);
+        
+        // Try to load from cache as fallback
+        try {
+          const cachedData = localStorage.getItem('attendance_cached_data');
+          if (cachedData) {
+            const parsed = JSON.parse(cachedData);
+            if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
+              console.log('📦 Loading attendance data from cache due to server error');
+              setAttendanceList(parsed.attendanceList || []);
+              setVisitors(parsed.visitors || []);
+              
+              // Initialize presentById from cached data
+              const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
+              setPresentById(cachedPresentById);
+              presentByIdRef.current = cachedPresentById;
+              
+              setError('Using cached data - server unavailable');
+              return; // Exit early since we have cached data
+            }
+          }
+        } catch (cacheErr) {
+          console.error('Failed to load from cache:', cacheErr);
+        }
+        
         setError('Failed to load attendance data');
       } finally {
         setIsLoading(false);
@@ -1684,7 +1669,7 @@ const AttendancePage: React.FC = () => {
 
   // Family operation tracking removed - no longer needed without polling
 
-  // Handle all WebSocket events directly (no room management needed)
+  // Handle WebSocket events using global context
   useEffect(() => {
     if (!isWebSocketConnected || !selectedGathering || !selectedDate) {
       return;
@@ -1693,7 +1678,7 @@ const AttendancePage: React.FC = () => {
     const handleAttendanceUpdated = (data: any) => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        logger.log('🔌 [WEBSOCKET] Received attendance update:', data);
+        // Received attendance update via WebSocket
         // Handle standard attendance updates
         if (data.records) {
           // Update attendance records and presentById state (like visitor system)
@@ -1705,44 +1690,31 @@ const AttendancePage: React.FC = () => {
             return person;
           }));
           
-          // Update presentById state to match attendanceList (similar to visitor system)
+          // Update presentById state for immediate UI updates
           setPresentById(prev => {
-            const updated = { ...prev };
+            const newPresentById = { ...prev };
             data.records.forEach((record: any) => {
-              updated[record.individualId] = record.present;
+              newPresentById[record.individualId] = record.present;
             });
-            return updated;
-          });
-          
-          // Clear pending changes for these records
-          setPendingChanges(prev => {
-            const filtered = prev.filter(pendingChange => {
-              const hasMatchingRecord = data.records.some((record: any) =>
-                record.individualId === pendingChange.individualId
-              );
-              return !hasMatchingRecord;
-            });
-            return filtered;
+            return newPresentById;
           });
         }
-      }
-    };
-
-    const handleHeadcountUpdated = (data: any) => {
-      // Only process updates for the current gathering and date
-      if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
-        logger.log('🔌 [WEBSOCKET] Received headcount update:', {
-          data,
-          currentGathering: selectedGathering.id,
-          currentDate: selectedDate,
-          headcountValue
-        });
-        // The HeadcountAttendanceInterface will handle the update
-      } else {
-        logger.log('🔌 [WEBSOCKET] Ignored headcount update (wrong context):', {
-          received: { gatheringId: data.gatheringId, date: data.date },
-          expected: { gatheringId: selectedGathering.id, date: selectedDate }
-        });
+        
+        // Handle full refresh updates
+        if (data.attendanceList) {
+          setAttendanceList(data.attendanceList);
+          // Update presentById state
+          const newPresentById: { [key: number]: boolean } = {};
+          data.attendanceList.forEach((person: any) => {
+            newPresentById[person.id] = person.present;
+          });
+          setPresentById(newPresentById);
+        }
+        
+        // Handle visitor updates
+        if (data.visitors) {
+          setVisitors(data.visitors);
+        }
       }
     };
 
@@ -1750,42 +1722,43 @@ const AttendancePage: React.FC = () => {
       // Only process updates for the current gathering and date
       if (data.gatheringId === selectedGathering.id && data.date === selectedDate) {
         logger.log('🔌 [WEBSOCKET] Received visitor update:', data);
-        // Note: visitors are managed separately by loadAllVisitors effect
-        // WebSocket updates are handled by the visitor system's own real-time updates
+        setVisitors(data.visitors);
       }
     };
 
-    // Listen for all WebSocket events
-    socket?.on('attendance_updated', handleAttendanceUpdated);
-    socket?.on('headcount_updated', handleHeadcountUpdated);
-    socket?.on('visitor_updated', handleVisitorUpdated);
+    // Subscribe to WebSocket events
+    const unsubscribeAttendance = onAttendanceUpdate(handleAttendanceUpdated);
+    const unsubscribeVisitor = onVisitorUpdate(handleVisitorUpdated);
 
     return () => {
-      socket?.off('attendance_updated', handleAttendanceUpdated);
-      socket?.off('headcount_updated', handleHeadcountUpdated);
-      socket?.off('visitor_updated', handleVisitorUpdated);
+      unsubscribeAttendance();
+      unsubscribeVisitor();
     };
-  }, [socket, isWebSocketConnected, selectedGathering?.id, selectedDate]);
+  }, [selectedGathering, selectedDate, isWebSocketConnected, onAttendanceUpdate, onVisitorUpdate]);
 
   // Refresh gatherings when WebSocket reconnects (user might have been assigned/unassigned while offline)
   useEffect(() => {
     if (isWebSocketConnected && user) {
-      logger.log('🔌 WebSocket reconnected, refreshing gatherings to get latest assignments...');
       refreshGatherings();
     }
   }, [isWebSocketConnected, user?.id, refreshGatherings]);
 
-  // WebSocket attendance updates (disabled - using direct socket access instead)
+  // WebSocket attendance updates using global context
   const attendanceWebSocket = {
     isConnected: isWebSocketConnected,
-    isInRoom: false,
+    isInRoom: false, // Room system is disabled, using church-based broadcasting
     connectionStatus: connectionStatus,
     roomName: null,
     lastUpdate: null,
     userActivity: [], // No active users tracking in simplified WebSocket
-    joinRoom: () => {},
-    leaveRoom: () => {},
-    forceReconnect: () => {}
+    joinRoom: () => {}, // Room system disabled
+    leaveRoom: () => {}, // Room system disabled
+    forceReconnect: () => {
+      if (socket) {
+        socket.disconnect();
+        socket.connect();
+      }
+    }
   };
 
   // Polling is permanently disabled in favor of WebSocket real-time updates
@@ -2725,7 +2698,7 @@ const AttendancePage: React.FC = () => {
     }
     
     setPendingChanges(validChanges);
-    logger.log('📱 Loaded offline changes:', validChanges.length);
+    // Loaded offline changes
     
     // Note: Cached attendance data is now loaded by dedicated effects
   }, [selectedGathering?.id, selectedDate]);

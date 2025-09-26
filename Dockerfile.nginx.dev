@@ -1,8 +1,8 @@
 # Development Nginx for API routing
 FROM nginx:alpine
 
-# Copy nginx configuration
-COPY nginx-dev.conf /etc/nginx/conf.d/default.conf
+# Note: nginx configuration is mounted as a volume in docker-compose.dev.yml
+# No need to copy the config file during build
 
 # Expose port
 EXPOSE 80

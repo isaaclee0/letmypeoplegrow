@@ -10,6 +10,7 @@ export const OfflineModeIndicator: React.FC = () => {
   const [cachedDataInfo, setCachedDataInfo] = useState({
     hasUserData: false,
     hasAttendanceData: false,
+    hasGatheringsData: false,
     hasOfflineChanges: false,
     cacheSize: '0KB'
   });
@@ -19,6 +20,7 @@ export const OfflineModeIndicator: React.FC = () => {
       // Check what data is available offline
       const hasUserData = !!localStorage.getItem('user');
       const hasAttendanceData = !!localStorage.getItem('attendance_cached_data');
+      const hasGatheringsData = !!localStorage.getItem('gatherings_cached_data');
       const offlineChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
       const hasOfflineChanges = offlineChanges.length > 0;
       
@@ -30,6 +32,7 @@ export const OfflineModeIndicator: React.FC = () => {
       setCachedDataInfo({
         hasUserData,
         hasAttendanceData,
+        hasGatheringsData,
         hasOfflineChanges,
         cacheSize: `${cacheSize}KB`
       });
@@ -80,6 +83,14 @@ export const OfflineModeIndicator: React.FC = () => {
               <span>Attendance Data</span>
             </div>
             <div className="flex items-center space-x-1">
+              {cachedDataInfo.hasGatheringsData ? (
+                <CheckCircleIcon className="h-3 w-3 text-green-600" />
+              ) : (
+                <ExclamationTriangleIcon className="h-3 w-3 text-red-600" />
+              )}
+              <span>Gatherings Data</span>
+            </div>
+            <div className="flex items-center space-x-1">
               {cachedDataInfo.hasOfflineChanges ? (
                 <CheckCircleIcon className="h-3 w-3 text-green-600" />
               ) : (
@@ -93,7 +104,7 @@ export const OfflineModeIndicator: React.FC = () => {
           </div>
           <div className="mt-1 text-center">
             <span className="text-yellow-700">
-              {cachedDataInfo.hasUserData && cachedDataInfo.hasAttendanceData 
+              {cachedDataInfo.hasUserData && cachedDataInfo.hasAttendanceData && cachedDataInfo.hasGatheringsData
                 ? "✅ App fully functional offline" 
                 : "⚠️ Limited functionality offline"}
             </span>

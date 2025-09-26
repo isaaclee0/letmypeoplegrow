@@ -91,15 +91,15 @@ export const SmartCacheProvider: React.FC<{ children: ReactNode }> = ({ children
     return () => clearInterval(cleanupInterval);
   }, []);
 
-  const getCachedData = <T,>(key: string): CacheEntry<T> | null => {
+  const getCachedData = <T,>(key: string, allowStale: boolean = false): CacheEntry<T> | null => {
     const entry = cache.get(key);
     if (!entry) return null;
 
     const now = Date.now();
     const age = now - entry.timestamp;
 
-    // If data is expired and no stale-while-revalidate, return null
-    if (age > entry.strategy.maxAge && !entry.strategy.staleWhileRevalidate) {
+    // If data is expired and no stale-while-revalidate, return null (unless allowStale is true)
+    if (age > entry.strategy.maxAge && !entry.strategy.staleWhileRevalidate && !allowStale) {
       cache.delete(key);
       return null;
     }

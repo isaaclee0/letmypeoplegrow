@@ -93,6 +93,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             console.log('ℹ️ No active session found (user needs to login)');
             localStorage.removeItem('user');
             setUser(null);
+          } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('fetch')) {
+            // Network errors - keep cached user data and continue offline
+            console.log('🌐 Network error during auth check - continuing with cached user data');
+            const cachedUser = localStorage.getItem('user');
+            if (cachedUser) {
+              try {
+                const parsedUser = JSON.parse(cachedUser);
+                setUser(parsedUser);
+                console.log('📦 Using cached user data due to network error');
+              } catch (parseError) {
+                console.error('Failed to parse cached user data:', parseError);
+                localStorage.removeItem('user');
+                setUser(null);
+              }
+            }
           } else {
             console.error('💥 Unexpected auth initialization error:', error instanceof Error ? error.message : String(error));
             localStorage.removeItem('user');
