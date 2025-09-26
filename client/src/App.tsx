@@ -1,10 +1,13 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { WebSocketProvider, useWebSocket } from './contexts/WebSocketContext';
 import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { SmartCacheProvider } from './contexts/SmartCacheContext';
+import WebSocketLoadingScreen from './components/WebSocketLoadingScreen';
+import { OfflineModeIndicator } from './components/OfflineModeIndicator';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -103,14 +106,40 @@ const PWAUpdateWrapper: React.FC = () => {
   );
 };
 
+// WebSocket Connection Wrapper - shows loading screen until WebSocket is connected
+const WebSocketConnectionWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isConnected, connectionStatus, isOfflineMode } = useWebSocket();
+  const [manualOfflineMode, setManualOfflineMode] = React.useState(false);
+  
+  const handleOfflineMode = () => {
+    setManualOfflineMode(true);
+  };
+  
+  // Show loading screen until WebSocket is connected, offline mode is enabled, or manual offline mode is triggered
+  if (!isConnected && !isOfflineMode && !manualOfflineMode) {
+    return (
+      <WebSocketLoadingScreen 
+        connectionStatus={connectionStatus}
+        isConnected={isConnected}
+        onOfflineMode={handleOfflineMode}
+      />
+    );
+  }
+  
+  // WebSocket is connected, offline mode is enabled, or manual offline mode is triggered, show the app
+  return <>{children}</>;
+};
+
 function App() {
   return (
     <AuthProvider>
-      <SettingsProvider>
-        <SmartCacheProvider>
-          <PWAUpdateProvider>
-            <ToastContainer>
-            <Router>
+      <WebSocketProvider>
+        <SettingsProvider>
+          <SmartCacheProvider>
+            <PWAUpdateProvider>
+              <ToastContainer>
+              <Router>
+            <OfflineModeIndicator />
             <div className="min-h-screen bg-gray-50">
               <Routes>
                 <Route
@@ -139,7 +168,9 @@ function App() {
                   path="/websocket-test"
                   element={
                     <ProtectedRoute>
-                      <WebSocketTestPage />
+                      <WebSocketConnectionWrapper>
+                        <WebSocketTestPage />
+                      </WebSocketConnectionWrapper>
                     </ProtectedRoute>
                   }
                 />
@@ -151,7 +182,9 @@ function App() {
                   path="/app"
                   element={
                     <ProtectedRoute>
-                      <Layout />
+                      <WebSocketConnectionWrapper>
+                        <Layout />
+                      </WebSocketConnectionWrapper>
                     </ProtectedRoute>
                   }
                 >
@@ -185,11 +218,12 @@ function App() {
               </Routes>
             </div>
             <PWAUpdateWrapper />
-            </Router>
-          </ToastContainer>
-          </PWAUpdateProvider>
-        </SmartCacheProvider>
-      </SettingsProvider>
+              </Router>
+              </ToastContainer>
+            </PWAUpdateProvider>
+          </SmartCacheProvider>
+        </SettingsProvider>
+      </WebSocketProvider>
     </AuthProvider>
   );
 }

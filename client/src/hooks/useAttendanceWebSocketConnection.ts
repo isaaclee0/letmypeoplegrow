@@ -26,6 +26,10 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
   const visitorCallbacks = useRef<Set<(update: VisitorUpdate) => void>>(new Set());
   const userActivityCallbacks = useRef<Set<(activity: UserActivity) => void>>(new Set());
   
+  // Generate unique tab ID that distinguishes between browser tabs and PWA
+  const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+  const tabId = useRef(`${isPWA ? 'pwa' : 'tab'}_${Math.random().toString(36).substr(2, 9)}`);
+  
   // Connection management
   const connectingRef = useRef(false);
   const userRef = useRef(user);
@@ -68,11 +72,19 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
     }
 
     const serverUrl = window.location.origin;
-    const connectionId = `attendance_${authData.userId}_${Date.now()}`;
+    const connectionId = `attendance_${authData.userId}_${tabId.current}_${Date.now()}`;
+    
+    console.log(`🔌 Creating attendance WebSocket connection for ${isPWA ? 'PWA' : 'browser tab'}`, {
+      tabId: tabId.current,
+      connectionId,
+      userId: authData.userId,
+      churchId: authData.churchId
+    });
     
     const socketConfig = {
       auth: { 
         ...authData, 
+        tabId: tabId.current,
         connectionId: connectionId
       },
       withCredentials: true,
@@ -82,11 +94,12 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
       reconnectionAttempts: 3,
       reconnectionDelay: 500,
       reconnectionDelayMax: 5000,
-      forceNew: false,
+      forceNew: true, // Force new connection for each tab to avoid conflicts
       upgrade: true,
       rememberUpgrade: true,
       autoConnect: true,
       query: {
+        tabId: tabId.current,
         connectionId: connectionId
       },
       pingTimeout: 30000,
@@ -94,13 +107,13 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
       maxReconnectionAttempts: 3
     };
     
-    console.log('🔌 Connecting to WebSocket for attendance...', { serverUrl, authData });
+    console.log(`🔌 [Tab ${tabId.current}] Connecting to WebSocket for attendance...`, { serverUrl, authData, connectionId });
     
     const newSocket = io(serverUrl, socketConfig);
 
     // Connection event handlers
     newSocket.on('connect', () => {
-      console.log('✅ WebSocket connected for attendance:', newSocket.id);
+      console.log(`✅ [Tab ${tabId.current}] WebSocket connected for attendance:`, newSocket.id);
       setIsConnected(true);
       setConnectionStatus('connected');
       connectingRef.current = false;

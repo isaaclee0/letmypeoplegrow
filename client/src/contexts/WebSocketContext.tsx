@@ -59,7 +59,8 @@ export interface RoomUsersUpdate {
 interface WebSocketContextType {
   socket: ReturnType<typeof io> | null;
   isConnected: boolean;
-  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'offline';
+  isOfflineMode: boolean;
   activeUsers: ActiveUser[];
   sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
   sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
@@ -70,6 +71,7 @@ interface WebSocketContextType {
   onRoomUsersUpdate: (callback: (update: RoomUsersUpdate) => void) => () => void;
   getCurrentRoom: () => string | null;
   getConnectionStats: () => { connected: boolean; room: string | null; socketId: string | null };
+  retryConnection: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
@@ -79,18 +81,29 @@ interface WebSocketProviderProps {
 }
 
 export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }) => {
-  const tabId = useRef(Math.random().toString(36).substr(2, 9));
-  console.log(`🔌 WebSocketProvider initialized for tab ${tabId.current}`);
+  // Generate unique tab ID that distinguishes between browser tabs and PWA
+  const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+  const tabId = useRef(`${isPWA ? 'pwa' : 'tab'}_${Math.random().toString(36).substr(2, 9)}`);
+  const providerInitialized = useRef(false);
+  
+  if (!providerInitialized.current) {
+    console.log(`🔌 WebSocketProvider initialized for ${isPWA ? 'PWA' : 'browser tab'} ${tabId.current}`);
+    providerInitialized.current = true;
+  }
   
   const { user, refreshTokenAndUserData } = useAuth();
   const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error' | 'offline'>('disconnected');
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
   
   // Flag to prevent multiple initialization attempts
   const initializingRef = useRef(false);
+  const connectionAttemptsRef = useRef(0);
+  const lastConnectionAttemptRef = useRef(0);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Refs to store callbacks to avoid dependency issues
   const attendanceCallbacks = useRef<Set<(update: AttendanceUpdate) => void>>(new Set());
@@ -134,8 +147,23 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       return;
     }
 
-    // Set initialization flag
+    // Prevent connection if already connected
+    if (socket && isConnected) {
+      console.log(`🔌 [Tab ${tabId.current}] WebSocket already connected, skipping reconnection`);
+      return;
+    }
+
+    // Debounce rapid connection attempts (minimum 1 second between attempts)
+    const now = Date.now();
+    if (now - lastConnectionAttemptRef.current < 1000) {
+      console.log(`🔌 [Tab ${tabId.current}] Connection attempt too soon, debouncing...`);
+      return;
+    }
+    lastConnectionAttemptRef.current = now;
+
+    // Set initialization flag and increment connection attempts
     initializingRef.current = true;
+    connectionAttemptsRef.current += 1;
 
     // Since the app uses cookie-based authentication, we'll use a different approach
     // We'll pass the user info and let the server validate the session via cookies
@@ -210,12 +238,25 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       userAuthenticated: !!userRef.current
     });
 
+    // Add a small delay to ensure server is ready
+    setTimeout(() => {
+      createSocketConnection(serverUrl, authData, tabId, initializingRef, connectionAttemptsRef, lastConnectionAttemptRef);
+    }, 100);
+  }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
+
+  // Separate function for socket creation to avoid closure issues
+  const createSocketConnection = (serverUrl: string, authData: any, tabId: React.MutableRefObject<string>, initializingRef: React.MutableRefObject<boolean>, connectionAttemptsRef: React.MutableRefObject<number>, lastConnectionAttemptRef: React.MutableRefObject<number>) => {
     // Create socket connection with fallback from WebSocket to polling
     const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-    console.log(`🔌 [Tab ${tabId.current}] Creating socket connection to:`, serverUrl, 'with auth:', authData, 'isPWA:', isPWA);
-    
-    // Optimized configuration for better stability
+    // Optimized configuration for better stability and multi-tab support
     const connectionId = `${authData.userId}_${tabId.current}_${Date.now()}`;
+    
+    console.log(`🔌 Creating WebSocket connection for ${isPWA ? 'PWA' : 'browser tab'}`, {
+      tabId: tabId.current,
+      connectionId,
+      userId: authData.userId,
+      churchId: authData.churchId
+    });
     const socketConfig = {
       auth: { 
         ...authData, 
@@ -224,14 +265,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       },
       withCredentials: true, // Important: send cookies with WebSocket connection
       transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
-      timeout: 8000, // Reduced timeout for faster failure detection
+      timeout: 5000, // 5-second timeout before going offline
       reconnection: true,
       reconnectionAttempts: 3, // Reduced attempts to prevent connection storms
-      reconnectionDelay: 500, // Faster initial reconnection
+      reconnectionDelay: 1000, // Slightly longer initial reconnection
       reconnectionDelayMax: 5000, // Reduced max delay
-      forceNew: false, // Reuse connections when possible
+      forceNew: true, // Force new connection for each tab/PWA to prevent conflicts
       upgrade: true, // Enable upgrade to WebSocket
-      rememberUpgrade: true, // Remember the upgraded transport
+      rememberUpgrade: false, // Don't remember upgrade to allow fresh connections
       autoConnect: true, // Automatically connect
       // Simplified query parameters
       query: {
@@ -244,22 +285,36 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       maxReconnectionAttempts: 3
     };
     
-    console.log(`🔌 [Tab ${tabId.current}] Socket config for ${isPWA ? 'PWA' : 'Browser'}:`, socketConfig);
+    // Socket configuration optimized for multi-tab support
     
     const newSocket = io(serverUrl, socketConfig);
 
-    // Connection event handlers with detailed debugging
+    // Set up offline mode timeout (5 seconds for faster user experience)
+    connectionTimeoutRef.current = setTimeout(() => {
+      if (!newSocket.connected) {
+        console.log(`⏰ [Tab ${tabId.current}] Connection timeout - entering offline mode`);
+        console.log(`📦 [Tab ${tabId.current}] Offline mode: App will continue to function with cached data`);
+        setIsOfflineMode(true);
+        setConnectionStatus('offline');
+        initializingRef.current = false;
+      }
+    }, 5000); // Reduced from 10 seconds to 5 seconds
+
+    // Connection event handlers
     newSocket.on('connect', () => {
-      console.log(`✅ [Tab ${tabId.current}] WebSocket connected:`, newSocket.id, {
-        transport: newSocket.io.engine.transport.name,
-        upgraded: newSocket.io.engine.upgraded,
-        readyState: newSocket.io.engine.readyState,
-        tabId: tabId.current,
-        connectionId: connectionId
-      });
+      console.log(`✅ [Tab ${tabId.current}] WebSocket connected:`, newSocket.id);
       setIsConnected(true);
       setConnectionStatus('connected');
+      setIsOfflineMode(false); // Exit offline mode
       initializingRef.current = false; // Reset initialization flag
+      connectionAttemptsRef.current = 0; // Reset connection attempts on success
+      lastConnectionAttemptRef.current = 0; // Reset last attempt time
+      
+      // Clear the offline timeout since we're connected
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
     });
 
     newSocket.on('connected', (data) => {
@@ -267,21 +322,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
 
     newSocket.on('disconnect', (reason: string) => {
-      console.log(`📴 [Tab ${tabId.current}] WebSocket disconnected:`, reason, {
-        transport: newSocket.io?.engine?.transport?.name,
-        upgraded: newSocket.io?.engine?.upgraded,
-        tabId: tabId.current,
-        connectionId: connectionId
-      });
+      console.log(`📴 [Tab ${tabId.current}] WebSocket disconnected:`, reason);
       setIsConnected(false);
       setConnectionStatus('disconnected');
       setCurrentRoom(null);
       setActiveUsers([]);
-      
-      // For unexpected disconnections, provide user feedback
-      if (reason === 'transport close' || reason === 'transport error') {
-        console.log(`🔄 [Tab ${tabId.current}] Unexpected disconnection detected, WebSocket will attempt to reconnect automatically`);
-      }
       
       // Set connecting status for reconnection attempts
       if (reason !== 'io client disconnect') {
@@ -291,15 +336,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     newSocket.on('connect_error', async (error: Error) => {
       console.error(`❌ [Tab ${tabId.current}] WebSocket connection error:`, error.message);
-      console.log(`🔍 [Tab ${tabId.current}] Connection details:`, {
-        serverUrl,
-        transport: newSocket.io.opts.transports,
-        forceNew: newSocket.io.opts.forceNew,
-        upgrade: newSocket.io.opts.upgrade,
-        attemptNumber: (newSocket as any).reconnectionAttempts || 0,
-        tabId: tabId.current,
-        connectionId: connectionId
-      });
       
       // Check if this is a church ID mismatch error and try to fix it
       if (error.message && error.message.includes('Church ID mismatch')) {
@@ -322,9 +358,22 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         }
       }
       
+      // Check if this is a server unavailable error (timeout, connection refused, etc.)
+      if (error.message && (
+        error.message.includes('timeout') || 
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('Network Error') ||
+        error.message.includes('Failed to fetch')
+      )) {
+        console.log(`🌐 [Tab ${tabId.current}] Server appears to be unavailable - will enter offline mode`);
+        // Don't set error status immediately, let the timeout handle it
+        return;
+      }
+      
       setIsConnected(false);
       setConnectionStatus('error');
       initializingRef.current = false; // Reset initialization flag on error
+      // Don't reset connectionAttemptsRef on error - keep track for debugging
     });
 
     newSocket.on('reconnect', (attemptNumber: number) => {
@@ -409,8 +458,10 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
 
     setSocket(newSocket);
+  }; // End of createSocketConnection function
 
-    // Cleanup on unmount or user change
+  // Cleanup on unmount or user change
+  useEffect(() => {
     return () => {
       if (socket) {
         console.log('🧹 Cleaning up WebSocket connection');
@@ -418,7 +469,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         socket.disconnect();
       }
     };
-  }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
+  }, [socket]);
 
 
   // Send attendance update via WebSocket
@@ -599,10 +650,30 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   };
 
+  // Retry connection function
+  const retryConnection = () => {
+    console.log(`🔄 [Tab ${tabId.current}] Manual connection retry requested`);
+    setIsOfflineMode(false);
+    setConnectionStatus('connecting');
+    initializingRef.current = false;
+    connectionAttemptsRef.current = 0;
+    lastConnectionAttemptRef.current = 0;
+    
+    // Clear any existing timeout
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+    
+    // Trigger reconnection by calling the connection effect
+    // This will be handled by the useEffect that watches user?.id
+  };
+
   const value: WebSocketContextType = {
     socket,
     isConnected,
     connectionStatus,
+    isOfflineMode,
     activeUsers,
     sendAttendanceUpdate,
     sendHeadcountUpdate,
@@ -612,7 +683,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     onUserActivity,
     onRoomUsersUpdate,
     getCurrentRoom,
-    getConnectionStats
+    getConnectionStats,
+    retryConnection
   };
 
   return (

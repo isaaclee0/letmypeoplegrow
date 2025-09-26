@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
-// Note: This test page uses the old WebSocket context for testing purposes
-// import { useWebSocket } from '../contexts/WebSocketContext';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAuth } from '../contexts/AuthContext';
+import { ConnectionTestPanel } from '../components/ConnectionTestPanel';
+import { OfflineCapabilities } from '../components/OfflineCapabilities';
+import { OfflineStatus } from '../components/OfflineStatus';
 import logger from '../utils/logger';
 
 const WebSocketTestPage: React.FC = () => {
   logger.log('🧪 WebSocketTestPage - Component rendered');
   
-  // Temporarily disabled - WebSocket context moved to AttendancePage only
-  const socket = null;
-  const isConnected = false;
-  const connectionStatus = 'disconnected' as const;
+  // Use the actual WebSocket context
+  const { socket, isConnected, connectionStatus, isOfflineMode } = useWebSocket();
   const { user } = useAuth();
   const [messages, setMessages] = useState<string[]>([]);
   const [testMessage, setTestMessage] = useState('');
@@ -210,6 +210,21 @@ const WebSocketTestPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900 mb-6">
             WebSocket Connection Test
           </h1>
+
+          {/* Connection Test Panel */}
+          <div className="mb-6">
+            <ConnectionTestPanel />
+          </div>
+
+          {/* Offline Status */}
+          <div className="mb-6">
+            <OfflineStatus />
+          </div>
+
+          {/* Offline Capabilities */}
+          <div className="mb-6">
+            <OfflineCapabilities />
+          </div>
 
           {/* Connection Status */}
           <div className="bg-gray-100 rounded-lg p-4 mb-6">

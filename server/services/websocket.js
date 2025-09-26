@@ -668,6 +668,13 @@ class WebSocketService {
               f.family_type = 'regular' OR 
               (f.family_type IS NULL AND i.people_type = 'regular')
             )
+            AND (
+              i.is_active = true OR 
+              ar.present = 1 OR 
+              ar.present = true OR
+              -- Include archived people only if they have attendance records for past gatherings
+              (i.is_active = false AND ar.present = 1)
+            )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
           attendanceListParams = [socket.churchId, socket.churchId, gatheringId, date, socket.churchId, socket.churchId, socket.churchId, gatheringId];
@@ -691,6 +698,13 @@ class WebSocketService {
             AND (
               f.family_type = 'regular' OR 
               (f.family_type IS NULL AND i.people_type = 'regular')
+            )
+            AND (
+              i.is_active = true OR 
+              ar.present = 1 OR 
+              ar.present = true OR
+              -- Include archived people only if they have attendance records for past gatherings
+              (i.is_active = false AND ar.present = 1)
             )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
@@ -949,7 +963,7 @@ class WebSocketService {
   }
 
   /**
-   * Broadcast attendance update to room
+   * Broadcast attendance update to church (updated to use church-based broadcasting)
    * @param {number} gatheringId - Gathering ID
    * @param {string} date - Date string
    * @param {number} churchId - Church ID
@@ -962,23 +976,38 @@ class WebSocketService {
         return;
       }
 
-      const roomName = this.getAttendanceRoomName(gatheringId, date, churchId);
-      
-      logger.info('Broadcasting attendance update', {
-        roomName,
+      logger.info('Broadcasting attendance update to church', {
         gatheringId,
         date,
         churchId,
         updateType: updateData.type,
-        roomSize: this.attendanceRooms.get(roomName)?.size || 0
+        churchSocketCount: this.churchSockets.get(churchId)?.size || 0
       });
 
-      this.io.to(roomName).emit('attendance_update', {
+      // Use church-based broadcasting instead of room-based
+      const broadcastData = {
         gatheringId,
         date,
         timestamp: new Date().toISOString(),
         ...updateData
-      });
+      };
+      
+      // Get sockets for this church only (optimized church-based broadcasting)
+      const churchSocketIds = this.churchSockets.get(churchId);
+      let broadcastCount = 0;
+      
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            logger.debugLog(`Sending attendance update to socket ${socketId} (user ${clientSocket.userId})`);
+            clientSocket.emit('attendance_update', broadcastData);
+            broadcastCount++;
+          }
+        });
+      }
+      
+      logger.debugLog(`Attendance update broadcasted to ${broadcastCount} clients in church ${churchId}`);
 
     } catch (error) {
       logger.error('Error broadcasting attendance update', {
@@ -992,7 +1021,7 @@ class WebSocketService {
   }
 
   /**
-   * Broadcast visitor update to room
+   * Broadcast visitor update to church (updated to use church-based broadcasting)
    * @param {number} gatheringId - Gathering ID
    * @param {string} date - Date string
    * @param {number} churchId - Church ID
@@ -1005,22 +1034,38 @@ class WebSocketService {
         return;
       }
 
-      const roomName = this.getAttendanceRoomName(gatheringId, date, churchId);
-      
-      logger.info('Broadcasting visitor update', {
-        roomName,
+      logger.info('Broadcasting visitor update to church', {
         gatheringId,
         date,
         churchId,
-        updateType: updateData.type
+        updateType: updateData.type,
+        churchSocketCount: this.churchSockets.get(churchId)?.size || 0
       });
 
-      this.io.to(roomName).emit('visitor_update', {
+      // Use church-based broadcasting instead of room-based
+      const broadcastData = {
         gatheringId,
         date,
         timestamp: new Date().toISOString(),
         ...updateData
-      });
+      };
+      
+      // Get sockets for this church only (optimized church-based broadcasting)
+      const churchSocketIds = this.churchSockets.get(churchId);
+      let broadcastCount = 0;
+      
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          const clientSocket = this.io.sockets.sockets.get(socketId);
+          if (clientSocket) {
+            logger.debugLog(`Sending visitor update to socket ${socketId} (user ${clientSocket.userId})`);
+            clientSocket.emit('visitor_update', broadcastData);
+            broadcastCount++;
+          }
+        });
+      }
+      
+      logger.debugLog(`Visitor update broadcasted to ${broadcastCount} clients in church ${churchId}`);
 
     } catch (error) {
       logger.error('Error broadcasting visitor update', {

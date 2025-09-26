@@ -943,7 +943,13 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       -- Removed old visitors table reference - now using unified individuals/families system
       WHERE gl.gathering_type_id = ? 
-        AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
+        AND (
+          i.is_active = true OR 
+          ar.present = 1 OR 
+          ar.present = true OR
+          -- Include archived people only if they have attendance records for past gatherings
+          (i.is_active = false AND ar.present = 1)
+        )
         AND i.church_id = ?
     `;
 
@@ -1004,17 +1010,19 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         f.family_name,
         f.id as family_id,
         i.id,
-        i.people_type
+        i.people_type,
+        i.is_active
       FROM individuals i
       JOIN families f ON i.family_id = f.id
       JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.gathering_type_id = ?
+      LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND i.is_active = true
+        AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
         AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.church_id = ?
     `;
 
-    let visitorParams = [gatheringTypeId, req.user.church_id];
+    let visitorParams = [gatheringTypeId, sessionId, req.user.church_id];
 
     // Add search filter if provided
     if (search && search.trim()) {
@@ -1031,6 +1039,22 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const potentialVisitors = search && search.trim() ? 
       allPotentialVisitors : 
       allPotentialVisitors.filter(visitor => {
+        const currentDate = new Date(date);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const isPastGathering = currentDate < today;
+        
+        // For archived visitors: only show them if they have attendance records for past gatherings
+        if (visitor.is_active === false || visitor.is_active === 0) {
+          // For past gatherings: show archived visitors only if they have attendance records
+          if (isPastGathering) {
+            return visitor.present === 1 || visitor.present === true;
+          }
+          // For current/future gatherings: don't show archived visitors
+          return false;
+        }
+        
+        // For active visitors: apply normal service date filtering
         if (!visitor.last_attended) return true; // Include visitors who have never attended
         
         const relevantServiceDates = visitor.people_type === 'local_visitor' ? 
