@@ -1449,7 +1449,7 @@ const PeoplePage: React.FC = () => {
         );
         
         const individualResponses = await Promise.all(individualPromises);
-        const individualIds = individualResponses.map(response => response.data.individualId);
+        const individualIds = individualResponses.map(response => response.data.id);
         
         // Assign to selected gatherings
         const selectedGatheringIds = Object.keys(addPeopleForm.selectedGatherings)
