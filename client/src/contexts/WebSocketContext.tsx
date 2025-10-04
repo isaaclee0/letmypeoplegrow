@@ -130,6 +130,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       return;
     }
 
+    // CRITICAL: Verify user has church_id before attempting connection
+    // This prevents "Church ID mismatch" errors when cached data is stale
+    // (e.g., same user logging in from multiple locations)
+    if (!userRef.current.church_id) {
+      console.log('🔌 User data incomplete (missing church_id), skipping WebSocket connection until validated');
+      // Cache-first loading will trigger auth validation which will update the user
+      // When user is updated with church_id, this effect will re-run
+      return;
+    }
+
     // Clean up existing socket if it exists (only if user changed)
     if (socket) {
       console.log(`🔌 [Tab ${tabId.current}] Cleaning up existing socket before creating new one`);
