@@ -238,9 +238,11 @@ try {
 }
 
 // Global rate limiting - protect against general API abuse
+// Increased limit to accommodate cache-first loading pattern which makes multiple
+// background refresh requests on page load
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'development' ? 1000 : 100, // More lenient in development
+  max: process.env.NODE_ENV === 'development' ? 1000 : 300, // Increased from 100 to 300 for cache-first pattern
   message: { 
     error: 'Too many requests from this IP, please try again later.',
     retryAfter: '15 minutes'
