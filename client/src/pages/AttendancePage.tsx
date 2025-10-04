@@ -860,13 +860,39 @@ const AttendancePage: React.FC = () => {
                 user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
               );
               setGatherings(userGatherings);
+            
+            // IMPORTANT: Also select a gathering from cache to prevent "No valid dates" flash
+            if (userGatherings.length > 0 && !selectedGathering) {
+              // Try to use cached attendance data to select the right gathering
+              try {
+                const cachedAttendance = localStorage.getItem('attendance_cached_data');
+                if (cachedAttendance) {
+                  const parsed = JSON.parse(cachedAttendance);
+                  const cachedGathering = userGatherings.find((g: GatheringType) => g.id === parsed.gatheringId);
+                  if (cachedGathering) {
+                    setSelectedGathering(cachedGathering);
+                    logger.log('⚡ Selected gathering from cache:', cachedGathering.name);
+                  } else {
+                    // Fallback to first gathering
+                    setSelectedGathering(userGatherings[0]);
+                  }
+                } else {
+                  // No cached attendance, use first gathering
+                  setSelectedGathering(userGatherings[0]);
+            }
+          } catch (e) {
+                // On error, just use first gathering
+                setSelectedGathering(userGatherings[0]);
+              }
+            }
+            
             loadedFromCache = true;
             logger.log('⚡ Loaded gatherings from cache immediately');
           }
-            }
-          } catch (e) {
-            logger.warn('Failed to parse cached gatherings:', e);
         }
+      } catch (e) {
+        logger.warn('Failed to parse cached gatherings:', e);
+      }
         
       // STEP 2: Fetch fresh data from server (always, even if cache loaded)
       try {
