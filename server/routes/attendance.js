@@ -849,6 +849,11 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
     let sessionId = null;
     let visitors = [];
+    
+    // Get visitor configuration for filtering (moved here to use in both visitors and potentialVisitors)
+    const visitorConfig = await getVisitorConfig(req.user.church_id);
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
 
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
@@ -906,7 +911,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       });
 
       // Convert to flat list for backward compatibility
-      visitors = Object.values(familyGroups).flatMap(family => 
+      const allVisitors = Object.values(familyGroups).flatMap(family => 
         family.members.map(member => {
           const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const notesFromFamily = family.familyNotes || '';
@@ -924,10 +929,39 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             lastAttended: family.lastAttended,
             familyId: family.familyId,
             familyName: family.familyName,
-            present: member.present
+            present: member.present,
+            peopleType: member.peopleType,
+            lastAttendanceDate: member.lastAttendanceDate
           };
         })
       );
+      
+      // Apply service-limit filtering to visitors array (same logic as potentialVisitors)
+      visitors = allVisitors.filter(visitor => {
+        // Always show visitors who are marked present on this date
+        if (visitor.present) return true;
+        
+        // For visitors not marked present, apply service-limit filtering
+        if (!visitor.lastAttendanceDate) return true; // Include visitors who have never attended
+        
+        const relevantServiceDates = visitor.peopleType === 'local_visitor' ? 
+          localServiceDates : travellerServiceDates;
+        
+        // Check if visitor's last attendance was within the relevant service dates
+        const lastAttendedStr = visitor.lastAttendanceDate.toISOString ? 
+          visitor.lastAttendanceDate.toISOString().split('T')[0] : 
+          String(visitor.lastAttendanceDate).split('T')[0];
+        
+        // Check if visitor's last attendance is within the time window (on or after the oldest service date)
+        if (relevantServiceDates.length === 0) return false;
+        
+        // Get the oldest service date (last in the array since they're ordered DESC)
+        const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+        if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+        
+        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+        return lastAttendedStr >= oldestServiceDateStr;
+      });
     }
 
     // Get regular attendees and visitor families with attendance status
@@ -991,13 +1025,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
 
     // Get potential visitor attendees based on service-based filtering
-
-    // Get visitor configuration for this church
-    const visitorConfig = await getVisitorConfig(req.user.church_id);
-    
-    // Get the last N service dates for filtering
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
+    // (visitor config and service dates already fetched above for reuse)
     
     // Build the visitor query using service-based filtering
     let visitorQuery = `

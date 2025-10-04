@@ -1236,7 +1236,7 @@ const AttendancePage: React.FC = () => {
     };
 
     loadAllVisitors();
-  }, [selectedGathering, selectedDate, allRecentVisitorsPool]);
+  }, [selectedGathering, selectedDate, allRecentVisitorsPool, attendanceRefreshTrigger]);
 
   // Load regular attendance data when gathering or date changes (CACHE-FIRST approach)
   useEffect(() => {
