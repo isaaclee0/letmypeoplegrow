@@ -87,19 +87,16 @@ function registerValidSW(swUrl: string, config?: Config) {
     .then((registration) => {
       console.log('Service Worker registered successfully');
       
-      // Check for updates immediately and force refresh
-      registration.update().then(() => {
-        console.log('Immediate update check completed');
-        // Force another update check after a short delay
-        setTimeout(() => {
-          console.log('Second update check for aggressive cache busting');
-          registration.update().catch((error) => {
-            console.warn('Second update check failed:', error);
-          });
-        }, 1000);
-      }).catch((error) => {
-        console.warn('Immediate update check failed:', error);
-      });
+      // Delay update check slightly to let service worker fully initialize
+      // This prevents "script Unknown: Not found" errors on some browsers
+      setTimeout(() => {
+        registration.update().then(() => {
+          console.log('Initial update check completed');
+        }).catch((error) => {
+          // Silently ignore - this is common on first load
+          console.debug('Initial update check skipped:', error.message);
+        });
+      }, 2000); // Wait 2 seconds for SW to stabilize
       
       // Set up update detection
       registration.onupdatefound = () => {
