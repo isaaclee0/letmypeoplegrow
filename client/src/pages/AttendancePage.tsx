@@ -839,35 +839,37 @@ const AttendancePage: React.FC = () => {
     }
   }, [user?.gatheringAssignments, refreshGatherings]);
 
-  // Load gatherings when user data is available
+  // Load gatherings when user data is available (CACHE-FIRST approach)
   useEffect(() => {
     const loadGatherings = async () => {
       if (!user) return; // Wait for user data to be available
       
+      // STEP 1: Try to load from cache immediately for instant UI
+      let loadedFromCache = false;
       try {
-        // Check if we're in offline mode and have cached gatherings
         const cachedGatherings = localStorage.getItem('gatherings_cached_data');
-        
-        if (isOfflineMode && cachedGatherings) {
-          try {
+        if (cachedGatherings) {
             const parsedCached = JSON.parse(cachedGatherings);
-            // Check if cached data is less than 24 hours old
-            const ageInHours = (Date.now() - parsedCached.timestamp) / (1000 * 60 * 60);
-            if (ageInHours < 24) {
+          const cacheAge = Date.now() - parsedCached.timestamp;
+          const ageInHours = cacheAge / (1000 * 60 * 60);
+          
+          // Use cache if less than 7 days old
+          if (ageInHours < 168) { // 7 days = 168 hours
               // Filter cached gatherings by user's assignments
               const userGatherings = parsedCached.gatherings.filter((g: GatheringType) => 
                 user?.gatheringAssignments?.some((assignment: GatheringType) => assignment.id === g.id)
               );
               setGatherings(userGatherings);
-              logger.log('📦 Loaded gatherings from cache (offline mode)');
-              return;
+            loadedFromCache = true;
+            logger.log('⚡ Loaded gatherings from cache immediately');
+          }
             }
           } catch (e) {
             logger.warn('Failed to parse cached gatherings:', e);
-          }
         }
         
-        // Load from API (online mode or no valid cache)
+      // STEP 2: Fetch fresh data from server (always, even if cache loaded)
+      try {
         const response = await gatheringsAPI.getAll();
         // All users (including admins) only see their assigned gatherings
         // Admins can assign themselves to any gathering they want to see
@@ -958,8 +960,18 @@ const AttendancePage: React.FC = () => {
           
           setSelectedGathering(finalGatheringToSelect);
         }
+        
+        logger.log('✅ Fresh gatherings loaded from server and cached');
       } catch (err) {
+        console.error('Failed to load fresh gatherings:', err);
+        
+        // If we already loaded from cache, just log the error
+        if (loadedFromCache) {
+          logger.warn('⚠️ Could not refresh gatherings from server, using cached data');
+          // Don't set error - user already has working UI from cache
+        } else {
         setError('Failed to load gatherings');
+        }
       }
     };
 
@@ -1200,7 +1212,7 @@ const AttendancePage: React.FC = () => {
     loadAllVisitors();
   }, [selectedGathering, selectedDate, allRecentVisitorsPool]);
 
-  // Load regular attendance data when gathering or date changes (similar to visitor loading pattern)
+  // Load regular attendance data when gathering or date changes (CACHE-FIRST approach)
   useEffect(() => {
     const loadRegularAttendance = async () => {
       if (!selectedGathering || !selectedDate) {
@@ -1217,24 +1229,58 @@ const AttendancePage: React.FC = () => {
         return;
       }
       
+      // STEP 1: Load from cache immediately for instant UI (if available)
+      let loadedFromCache = false;
       try {
-        setIsLoading(true);
-        
-        // Try WebSocket first if connected, fall back to REST API
-        let response;
-        if (isWebSocketConnected) {
-          try {
-            response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
-          } catch (wsError) {
-            logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
-            throw wsError; // Re-throw to trigger REST API fallback
+        const cachedData = localStorage.getItem('attendance_cached_data');
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          const cacheAge = Date.now() - (parsed.timestamp || 0);
+          const isRelevantCache = parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate;
+          
+          if (isRelevantCache && cacheAge < 7 * 24 * 60 * 60 * 1000) { // Cache valid for 7 days
+            logger.log('⚡ Loading from cache immediately for instant UI');
+            setAttendanceList(parsed.attendanceList || []);
+            setVisitors(parsed.visitors || []);
+            
+            // Initialize presentById from cached data
+            const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
+            setPresentById(cachedPresentById);
+            presentByIdRef.current = cachedPresentById;
+            
+            loadedFromCache = true;
+            setIsLoading(false); // UI is ready with cached data
+            logger.log(`✅ Cache loaded (${cacheAge < 60000 ? 'fresh' : 'stale, will refresh'})`);
           }
-        } else {
-          const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
-          response = apiResponse.data;
+        }
+      } catch (cacheErr) {
+        console.error('Failed to load from cache:', cacheErr);
+      }
+      
+      // STEP 2: Fetch fresh data from server (always, even if cache loaded)
+      try {
+        // Only show loading spinner if we didn't load from cache
+        if (!loadedFromCache) {
+          setIsLoading(true);
         }
         
+          // Try WebSocket first if connected, fall back to REST API
+        let response;
+          if (isWebSocketConnected) {
+            try {
+              response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
+            } catch (wsError) {
+              logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
+              throw wsError; // Re-throw to trigger REST API fallback
+            }
+          } else {
+            const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
+            response = apiResponse.data;
+        }
+        
+        // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
+        setVisitors(response.visitors || []);
         
         // Initialize presentById from server data directly
         const serverPresentById = syncPresentByIdWithAttendanceList(response.attendanceList || []);
@@ -1250,7 +1296,7 @@ const AttendancePage: React.FC = () => {
         setPresentById(serverPresentById);
         presentByIdRef.current = serverPresentById;
         
-        // Cache the attendance data for offline use with server state applied
+        // Cache the fresh attendance data
         const attendanceListForCache = (response.attendanceList || []).map((person: any) => {
           const finalPresent = serverPresentById[person.id] ?? person.present;
           return { ...person, present: finalPresent };
@@ -1268,18 +1314,24 @@ const AttendancePage: React.FC = () => {
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
-        // Cached regular attendance data
+        logger.log('✅ Fresh data loaded from server and cached');
+        setError(''); // Clear any previous errors
         
       } catch (err) {
-        console.error('Failed to load regular attendance data:', err);
+        console.error('Failed to load fresh attendance data:', err);
         
-        // Try to load from cache as fallback
+        // If we already loaded from cache, just show a subtle error
+        if (loadedFromCache) {
+          logger.warn('⚠️ Could not refresh from server, using cached data');
+          // Don't set error - user already has working UI from cache
+        } else {
+          // No cache and server failed - try one more time to load from cache
         try {
           const cachedData = localStorage.getItem('attendance_cached_data');
           if (cachedData) {
             const parsed = JSON.parse(cachedData);
             if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
-              console.log('📦 Loading attendance data from cache due to server error');
+                logger.log('📦 Loading attendance data from cache due to server error');
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
               
@@ -1297,6 +1349,7 @@ const AttendancePage: React.FC = () => {
         }
         
         setError('Failed to load attendance data');
+        }
       } finally {
         setIsLoading(false);
       }

@@ -6,7 +6,6 @@ import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { SmartCacheProvider } from './contexts/SmartCacheContext';
-import WebSocketLoadingScreen from './components/WebSocketLoadingScreen';
 import { OfflineModeIndicator } from './components/OfflineModeIndicator';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
@@ -106,27 +105,11 @@ const PWAUpdateWrapper: React.FC = () => {
   );
 };
 
-// WebSocket Connection Wrapper - shows loading screen until WebSocket is connected
+// WebSocket Connection Wrapper - no longer blocks app, WebSocket connects in background
+// With cache-first loading, the app can start immediately with cached data
 const WebSocketConnectionWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isConnected, connectionStatus, isOfflineMode } = useWebSocket();
-  const [manualOfflineMode, setManualOfflineMode] = React.useState(false);
-  
-  const handleOfflineMode = () => {
-    setManualOfflineMode(true);
-  };
-  
-  // Show loading screen until WebSocket is connected, offline mode is enabled, or manual offline mode is triggered
-  if (!isConnected && !isOfflineMode && !manualOfflineMode) {
-    return (
-      <WebSocketLoadingScreen 
-        connectionStatus={connectionStatus}
-        isConnected={isConnected}
-        onOfflineMode={handleOfflineMode}
-      />
-    );
-  }
-  
-  // WebSocket is connected, offline mode is enabled, or manual offline mode is triggered, show the app
+  // WebSocket connects in background, app loads immediately from cache
+  // Connection status is shown via OfflineStatus component in the app
   return <>{children}</>;
 };
 

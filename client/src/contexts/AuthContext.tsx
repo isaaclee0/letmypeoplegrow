@@ -48,7 +48,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setIsLoading(true); // Set loading early to prevent flicker
       
       try {
-        // Validate localStorage data first and check for completeness
+        // STEP 1: Load from cache immediately for instant app startup
+        let loadedFromCache = false;
         const storedUser = localStorage.getItem('user');
         if (storedUser) {
           try {
@@ -58,7 +59,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             const hasRequiredFields = parsedUser.hasOwnProperty('mobileNumber') && parsedUser.hasOwnProperty('primaryContactMethod');
             
             if (hasRequiredFields) {
-              console.log('✅ Complete localStorage user data found');
+              console.log('⚡ Loading user from cache immediately');
+              setUser(parsedUser);
+              setIsLoading(false); // Allow app to start immediately with cached data
+              loadedFromCache = true;
             } else {
               console.log('⚠️ Incomplete localStorage user data (missing mobile fields), clearing cache');
               localStorage.removeItem('user');
@@ -69,15 +73,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }
         }
         
+        // STEP 2: Validate with server (always, even if cache loaded)
         try {
-          console.log('🚀 Checking for existing authentication...');
+          console.log('🚀 Validating authentication with server...');
           const response = await authAPI.getCurrentUser();
           const newUser = response.data.user;
           
           // Only update state if the new user data differs to prevent unnecessary re-renders
           setUser(prev => JSON.stringify(prev) !== JSON.stringify(newUser) ? newUser : prev);
           localStorage.setItem('user', JSON.stringify(newUser));
-          console.log('✅ User authenticated:', newUser.email);
+          console.log('✅ User authenticated and validated:', newUser.email);
           
           if (newUser.role === 'admin') {
             try {
@@ -94,24 +99,33 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             localStorage.removeItem('user');
             setUser(null);
           } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('fetch')) {
-            // Network errors - keep cached user data and continue offline
-            console.log('🌐 Network error during auth check - continuing with cached user data');
-            const cachedUser = localStorage.getItem('user');
-            if (cachedUser) {
-              try {
-                const parsedUser = JSON.parse(cachedUser);
-                setUser(parsedUser);
-                console.log('📦 Using cached user data due to network error');
-              } catch (parseError) {
-                console.error('Failed to parse cached user data:', parseError);
-                localStorage.removeItem('user');
-                setUser(null);
+            // Network errors - if we loaded from cache, just log and continue
+            if (loadedFromCache) {
+              console.log('⚠️ Could not validate session with server, continuing with cached user data');
+              // Don't clear user or show error - user already has working app from cache
+            } else {
+              // No cache and network error - try one more time to load from cache
+              console.log('🌐 Network error during auth check - attempting to use cached user data');
+              const cachedUser = localStorage.getItem('user');
+              if (cachedUser) {
+                try {
+                  const parsedUser = JSON.parse(cachedUser);
+                  setUser(parsedUser);
+                  console.log('📦 Using cached user data due to network error');
+                } catch (parseError) {
+                  console.error('Failed to parse cached user data:', parseError);
+                  localStorage.removeItem('user');
+                  setUser(null);
+                }
               }
             }
           } else {
             console.error('💥 Unexpected auth initialization error:', error instanceof Error ? error.message : String(error));
-            localStorage.removeItem('user');
-            setUser(null);
+            // Only clear cache if we got an auth error (not network error)
+            if (!loadedFromCache) {
+              localStorage.removeItem('user');
+              setUser(null);
+            }
           }
         }
       } finally {
