@@ -375,6 +375,9 @@ export const attendanceAPI = {
     
   addVisitorFamilyToService: (gatheringTypeId: number, date: string, familyId: number) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitor-family/${familyId}`),
+    
+  addIndividualToService: (gatheringTypeId: number, date: string, individualId: number) => 
+    api.post(`/attendance/${gatheringTypeId}/${date}/individual/${individualId}`),
 
   // Headcount endpoints
   getHeadcount: (gatheringTypeId: number, date: string, mode: 'separate' | 'combined' | 'averaged' = 'separate') => 

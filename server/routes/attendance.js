@@ -668,15 +668,25 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
 );
 
 // Helper function to get the last N service dates for a gathering type
-const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount) => {
+// If upToDate is provided, only returns services up to and including that date
+const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount, upToDate = null) => {
   try {
-    const serviceDates = await Database.query(`
+    let query = `
       SELECT DISTINCT session_date 
       FROM attendance_sessions 
       WHERE gathering_type_id = ? AND church_id = ?
-      ORDER BY session_date DESC 
-      LIMIT ?
-    `, [gatheringTypeId, churchId, serviceCount]);
+    `;
+    const params = [gatheringTypeId, churchId];
+    
+    if (upToDate) {
+      query += ` AND session_date <= ?`;
+      params.push(upToDate);
+    }
+    
+    query += ` ORDER BY session_date DESC LIMIT ?`;
+    params.push(serviceCount);
+    
+    const serviceDates = await Database.query(query, params);
     
     return serviceDates.map(row => ({ session_date: row.session_date }));
   } catch (error) {
@@ -852,8 +862,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     
     // Get visitor configuration for filtering (moved here to use in both visitors and potentialVisitors)
     const visitorConfig = await getVisitorConfig(req.user.church_id);
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
+    // Get service dates relative to the viewed date, not today
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
 
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
@@ -948,11 +959,12 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           localServiceDates : travellerServiceDates;
         
         // Check if visitor's last attendance was within the relevant service dates
-        const lastAttendedStr = visitor.lastAttendanceDate.toISOString ? 
-          visitor.lastAttendanceDate.toISOString().split('T')[0] : 
-          String(visitor.lastAttendanceDate).split('T')[0];
+        const lastAttendanceDate = new Date(visitor.lastAttendanceDate);
+        lastAttendanceDate.setHours(0, 0, 0, 0);
+        const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
         
         // Check if visitor's last attendance is within the time window (on or after the oldest service date)
+        // This checks if they attended within the last N services relative to the viewed date
         if (relevantServiceDates.length === 0) return false;
         
         // Get the oldest service date (last in the array since they're ordered DESC)
@@ -1286,9 +1298,10 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
     // Get visitor configuration for this church
     const visitorConfig = await getVisitorConfig(req.user.church_id);
     
-    // Get the last N service dates for filtering
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit);
+    // Get the last N service dates for filtering (relative to today for recent visitors endpoint)
+    const today = new Date().toISOString().split('T')[0];
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
     
     // Get all visitor families who have attended this gathering OR were created recently
     const allVisitorFamilies = await Database.query(`
@@ -1315,45 +1328,67 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
       ORDER BY last_activity DESC, f.family_name
     `, [req.user.church_id, gatheringTypeId, req.user.church_id]);
     
-    // Filter families based on service dates
-    const twoMonthsAgo = new Date();
-    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+    // Filter families based on service dates relative to today
+    // For the recent visitors endpoint, we use today's date (no specific viewing date)
+    
+    console.log('🔍 Recent visitors debug - Service dates:', {
+      today: today,
+      localServiceDatesCount: localServiceDates.length,
+      localServiceDates: localServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
+      travellerServiceDatesCount: travellerServiceDates.length,
+      travellerServiceDates: travellerServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
+      allVisitorFamiliesCount: allVisitorFamilies.length
+    });
     
     const recentVisitorFamilies = allVisitorFamilies.filter(family => {
-      // Apply service-based filtering for all families (remove the 2-month bypass)
-      const familyTypes = family.people_types.split(',');
-      const isLocal = familyTypes.includes('local_visitor');
+      // Apply service-based filtering for all families
+      // Use family_type as the primary determinant (traveller_visitor families use traveller limits)
+      // Only use local limits if family_type is explicitly local_visitor
+      const isLocal = family.family_type === 'local_visitor';
       const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
       
-      if (!family.last_activity) return false;
-      
-      const lastActivityStr = family.last_activity.toISOString().split('T')[0];
-      
-      // Debug logging for REMMINGA family in recent visitors
-      if (family.family_name && family.family_name.includes('REMMINGA')) {
-        console.log('🔍 REMMINGA recent visitors filtering debug:', {
-          family_name: family.family_name,
-          family_type: family.family_type,
-          people_types: family.people_types,
-          last_activity: lastActivityStr,
-          isLocal: isLocal,
-          relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
-          shouldAppear: relevantServiceDates.some(serviceDate => {
-            const serviceDateStr = serviceDate.session_date ? serviceDate.session_date.toISOString().split('T')[0] : 'undefined';
-            return lastActivityStr >= serviceDateStr;
-          })
-        });
+      if (!family.last_activity) {
+        console.log(`❌ ${family.family_name} - No last_activity`);
+        return false;
       }
       
+      const lastActivityDate = new Date(family.last_activity);
+      lastActivityDate.setHours(0, 0, 0, 0);
+      const lastActivityStr = lastActivityDate.toISOString().split('T')[0];
+      
+      // Debug logging for all visitor families
+      const debugInfo = {
+        family_name: family.family_name,
+        family_type: family.family_type,
+        people_types: family.people_types,
+        last_activity: lastActivityStr,
+        isLocal: isLocal,
+        today: today,
+        relevantServiceDatesCount: relevantServiceDates.length,
+        relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
+        oldestServiceDate: relevantServiceDates.length > 0 ? (relevantServiceDates[relevantServiceDates.length - 1]?.session_date?.toISOString().split('T')[0] || 'none') : 'none',
+      };
+      
       // Check if visitor's last activity is within the time window (on or after the oldest service date)
-      if (relevantServiceDates.length === 0) return false;
+      // This checks if they attended within the last N services relative to today
+      if (relevantServiceDates.length === 0) {
+        console.log(`❌ ${family.family_name} - No relevant service dates`, debugInfo);
+        return false;
+      }
       
       // Get the oldest service date (last in the array since they're ordered DESC)
       const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
-      if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+      if (!oldestServiceDate || !oldestServiceDate.session_date) {
+        console.log(`❌ ${family.family_name} - Invalid oldest service date`, debugInfo);
+        return false;
+      }
       
       const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-      return lastActivityStr >= oldestServiceDateStr;
+      const shouldAppear = lastActivityStr >= oldestServiceDateStr;
+      
+      console.log(`${shouldAppear ? '✅' : '❌'} ${family.family_name} - Last activity: ${lastActivityStr}, Oldest service: ${oldestServiceDateStr}`, debugInfo);
+      
+      return shouldAppear;
     });
 
     // Convert family data to individual visitor format to match main API
@@ -1580,16 +1615,27 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
 
           individualId = Number(individualResult.insertId);
         } else {
-          // Use existing
+          // Use existing individual
           individualId = Number(existingIndividual[0].id);
           
-          // Update family_id if creating a new family
+          // Determine the people_type based on visitorType
+          const peopleType = visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor';
+          
+          // Update family_id and people_type if creating/joining a new family
+          // This ensures existing individuals get the correct type when added to a visitor family
           if (familyId) {
             await conn.query(`
               UPDATE individuals 
-              SET family_id = ? 
+              SET family_id = ?, people_type = ?, updated_at = NOW()
               WHERE id = ?
-            `, [familyId, individualId]);
+            `, [familyId, peopleType, individualId]);
+          } else {
+            // Even if not joining a family, update people_type to match visitor type
+            await conn.query(`
+              UPDATE individuals 
+              SET people_type = ?, updated_at = NOW()
+              WHERE id = ?
+            `, [peopleType, individualId]);
           }
         }
 
@@ -2114,6 +2160,161 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
   } catch (error) {
     console.error('Add visitor family to service error:', error);
     res.status(500).json({ error: 'Failed to add visitor family to service.' });
+  }
+});
+
+// Add individual person to service
+router.post('/:gatheringTypeId/:date/individual/:individualId', requireGatheringAccess, auditLog('ADD_INDIVIDUAL_TO_SERVICE'), async (req, res) => {
+  try {
+    const { gatheringTypeId, date, individualId } = req.params;
+    
+    logger.debugLog('🔍 Adding individual to service:', {
+      gatheringTypeId,
+      date,
+      individualId,
+      churchId: req.user.church_id,
+      userId: req.user.id
+    });
+
+    await Database.transaction(async (conn) => {
+      // Check which columns exist for backward compatibility
+      const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
+      const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
+      const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
+      const hasGatheringListsChurchId = await columnExists('gathering_lists', 'church_id');
+
+      // Verify the individual exists
+      const individualCheck = await conn.query(`
+        SELECT i.id, i.first_name, i.last_name, i.family_id, f.family_type 
+        FROM individuals i
+        LEFT JOIN families f ON i.family_id = f.id
+        WHERE i.id = ? AND i.church_id = ?
+      `, [individualId, req.user.church_id]);
+
+      if (individualCheck.length === 0) {
+        throw new Error('Individual not found');
+      }
+
+      const individual = individualCheck[0];
+
+      // Get or create attendance session
+      let sessionResult;
+      if (hasSessionsChurchId) {
+        sessionResult = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+          VALUES (?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
+      } else {
+        sessionResult = await conn.query(`
+          INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+          VALUES (?, ?, ?)
+          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        `, [gatheringTypeId, date, req.user.id]);
+      }
+
+      let sessionId;
+      if (sessionResult.insertId) {
+        sessionId = Number(sessionResult.insertId);
+      } else {
+        const sessions = await conn.query(
+          hasSessionsChurchId
+            ? 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?'
+            : 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          hasSessionsChurchId 
+            ? [gatheringTypeId, date, req.user.church_id]
+            : [gatheringTypeId, date]
+        );
+        sessionId = Number(sessions[0].id);
+      }
+
+      // Add individual to gathering list if not already there
+      const existingGatheringList = await conn.query(
+        hasGatheringListsChurchId
+          ? 'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?'
+          : 'SELECT id FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
+        hasGatheringListsChurchId
+          ? [gatheringTypeId, individualId, req.user.church_id]
+          : [gatheringTypeId, individualId]
+      );
+
+      if (existingGatheringList.length === 0) {
+        await conn.query(
+          hasGatheringListsChurchId
+            ? 'INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id) VALUES (?, ?, ?, ?)'
+            : 'INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by) VALUES (?, ?, ?)',
+          hasGatheringListsChurchId
+            ? [gatheringTypeId, individualId, req.user.id, req.user.church_id]
+            : [gatheringTypeId, individualId, req.user.id]
+        );
+      }
+
+      // Add attendance record and mark as present
+      if (hasAttendanceRecordsChurchId) {
+        await conn.query(`
+          INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+          VALUES (?, ?, 1, ?)
+          ON DUPLICATE KEY UPDATE present = 1
+        `, [sessionId, individualId, req.user.church_id]);
+      } else {
+        await conn.query(`
+          INSERT INTO attendance_records (session_id, individual_id, present)
+          VALUES (?, ?, 1)
+          ON DUPLICATE KEY UPDATE present = 1
+        `, [sessionId, individualId]);
+      }
+
+      // Update last_attendance_date for the individual
+      if (hasIndividualsChurchId) {
+        await conn.query(`
+          UPDATE individuals 
+          SET last_attendance_date = ? 
+          WHERE id = ? AND church_id = ?
+        `, [date, individualId, req.user.church_id]);
+      } else {
+        await conn.query(`
+          UPDATE individuals 
+          SET last_attendance_date = ? 
+          WHERE id = ?
+        `, [date, individualId]);
+      }
+
+      logger.debugLog('✅ Successfully added individual to service:', {
+        individualId: individual.id,
+        name: `${individual.first_name} ${individual.last_name}`,
+        gatheringTypeId,
+        date
+      });
+      
+      res.json({ 
+        message: 'Individual added and marked present',
+        individual: {
+          id: individual.id,
+          firstName: individual.first_name,
+          lastName: individual.last_name
+        }
+      });
+    });
+
+    // Broadcast WebSocket update for individual addition
+    try {
+      websocketBroadcast.broadcastAttendanceRecords(
+        gatheringTypeId,
+        date,
+        req.user.church_id,
+        [{
+          individualId: parseInt(individualId),
+          present: true
+        }]
+      );
+      logger.debugLog('Broadcasted individual addition via WebSocket');
+    } catch (broadcastError) {
+      console.error('Error broadcasting individual addition:', broadcastError);
+      // Don't fail the operation if broadcast fails
+    }
+  } catch (error) {
+    console.error('Add individual to service error:', error);
+    res.status(500).json({ error: 'Failed to add individual to service.' });
   }
 });
 

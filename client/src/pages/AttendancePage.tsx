@@ -2068,21 +2068,30 @@ const AttendancePage: React.FC = () => {
           });
         }
 
-        // Update the individual visitor record directly
+        // Update ALL family members to have the same people_type (fix for mixed visitor types)
         const personType = visitorForm.personType === 'local_visitor' ? 'local_visitor' : 'traveller_visitor';
         
-        // For now, update the first person as the representative
-        // In a more sophisticated system, we'd update all family members
-        const firstPerson = people[0];
-        await individualsAPI.update(editingVisitorData.visitorId, {
-          firstName: firstPerson.firstName,
-          lastName: firstPerson.lastName,
-          familyId: editingVisitorData.familyId,
-          peopleType: personType
+        // Get all individuals to find family members
+        const allIndividualsResponse = await individualsAPI.getAll();
+        const allIndividuals = allIndividualsResponse.data.people || [];
+        
+        // Find all family members and update their people_type to match the family type
+        const familyMembers = allIndividuals.filter((ind: any) => ind.familyId === editingVisitorData.familyId);
+        
+        // Update each family member's people_type
+        const updatePromises = familyMembers.map(async (member: any) => {
+          return individualsAPI.update(member.id, {
+            firstName: member.firstName,
+            lastName: member.lastName,
+            familyId: editingVisitorData.familyId,
+            peopleType: personType
+          });
         });
-
-        response = { data: { message: 'Visitor updated successfully', individuals: [{ id: editingVisitorData.visitorId, firstName: firstPerson.firstName, lastName: firstPerson.lastName }] } };
-        showSuccess('Visitor updated successfully');
+        
+        await Promise.all(updatePromises);
+        
+        response = { data: { message: 'Visitor family updated successfully', individuals: familyMembers.map((m: any) => ({ id: m.id, firstName: m.firstName, lastName: m.lastName })) } };
+        showSuccess(`Visitor family updated successfully (${familyMembers.length} member${familyMembers.length !== 1 ? 's' : ''})`);
       } else {
         // Create new visitor family in People system and add to service
         const familyName = visitorForm.familyName.trim() || generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
@@ -2483,6 +2492,54 @@ const AttendancePage: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to add visitor family from All Visitors:', err);
       setError(err.response?.data?.error || 'Failed to add visitor family');
+    }
+  };
+
+  // Add individual person from All People section to the current service
+  const addIndividualFromAll = async (personId: number, personName: string) => {
+    if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
+    if (!selectedGathering || !selectedDate || !personId) return;
+    
+    logger.log('🔍 Adding individual to service:', {
+      personId,
+      personName,
+      gatheringId: selectedGathering.id,
+      date: selectedDate
+    });
+    
+    try {
+      // Add just this individual by creating a temporary single-person request
+      const response = await attendanceAPI.addIndividualToService(selectedGathering.id, selectedDate, personId);
+      logger.log('✅ Successfully added individual:', response.data);
+      showSuccess(`Added ${personName} to this service`);
+      
+      // Reload attendance data and related visitor data to ensure immediate visibility
+      setAttendanceRefreshTrigger(prev => prev + 1);
+      
+      // Also refresh recent visitors and all church people to ensure newly added person appears immediately
+      try {
+        // Refresh recent visitors for this gathering
+        const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+        setRecentVisitors(recentResponse.data.visitors || []);
+        setAllRecentVisitorsPool(recentResponse.data.visitors || []);
+        
+        // Refresh all church people to reflect the change
+        const allPeopleResponse = await attendanceAPI.getAllPeople();
+        setAllChurchVisitors(allPeopleResponse.data.visitors || []);
+        
+        logger.log('✅ Refreshed all visitor data after adding individual from all church people');
+      } catch (refreshErr) {
+        logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
+        // Don't throw error since the main operation succeeded
+      }
+    } catch (err: any) {
+      console.error('❌ Failed to add individual from All People:', err);
+      logger.error('Error details:', {
+        message: err.message,
+        response: err.response?.data,
+        status: err.response?.status
+      });
+      setError(err.response?.data?.error || err.message || 'Failed to add person');
     }
   };
 
@@ -3772,18 +3829,30 @@ const AttendancePage: React.FC = () => {
                             return (
                               <div 
                                 key={person.id || `all_${idx}`} 
-                                className={`p-2 rounded-md ${groupByFamily && group.familyName ? 'border-2 border-gray-200' : 'border border-gray-200'} ${needsWideLayout ? 'col-span-2' : ''}`}
+                                onClick={() => !isAttendanceLocked && person.id && addIndividualFromAll(person.id, displayName)}
+                                className={`p-3 rounded-md ${groupByFamily && group.familyName ? 'border-2' : 'border'} ${
+                                  isAttendanceLocked 
+                                    ? 'border-gray-200 cursor-not-allowed opacity-50' 
+                                    : 'border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer transition-all'
+                                } ${needsWideLayout ? 'col-span-2' : ''}`}
+                                title={isAttendanceLocked ? 'Editing locked' : `Click to add ${displayName} to this service`}
                               >
-                                <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                                <div className="flex items-center justify-between">
+                                  <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                                  <PlusIcon className={`h-4 w-4 flex-shrink-0 ml-2 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
+                                </div>
                                 {!groupByFamily && group.familyId && (
-                                  <div className="mt-2">
+                                  <div className="mt-2 pt-2 border-t border-gray-200">
                                     <button
                                       type="button"
                                       disabled={isAttendanceLocked}
-                                      onClick={() => addVisitorFamilyFromAll(group.familyId)}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        addVisitorFamilyFromAll(group.familyId);
+                                      }}
                                       className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
                                     >
-                                      Add family to this service
+                                      Add entire family instead
                                     </button>
                                   </div>
                                 )}
