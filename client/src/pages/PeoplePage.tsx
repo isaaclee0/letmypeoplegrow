@@ -305,6 +305,17 @@ const PeoplePage: React.FC = () => {
   const [uploadMode, setUploadMode] = useState<'new' | 'update'>('new');
   const [selectedPeople, setSelectedPeople] = useState<number[]>([]);
   const [potentialDuplicates, setPotentialDuplicates] = useState<Array<{firstName: string, lastName: string, reason: string}>>([]);
+  
+  // Modal tab slider state
+  const [isModalTabDragging, setIsModalTabDragging] = useState(false);
+  const [modalTabStartX, setModalTabStartX] = useState(0);
+  const [modalTabScrollLeft, setModalTabScrollLeft] = useState(0);
+  const [showModalTabLeftFade, setShowModalTabLeftFade] = useState(false);
+  const [showModalTabRightFade, setShowModalTabRightFade] = useState(true);
+  const modalTabSliderRef = useRef<HTMLDivElement>(null);
+  const modalTabAnimationFrameRef = useRef<number | null>(null);
+  const modalTabLastTouchTimeRef = useRef<number>(0);
+  const modalTabTouchThrottleDelay = 16; // ~60fps
   const [tsvAnalysis, setTsvAnalysis] = useState<{
     newPeople: number;
     existingPeople: number;
@@ -676,6 +687,36 @@ const PeoplePage: React.FC = () => {
       setTsvAnalysis(null);
     }
   }, [csvData, analyzeTSVForDuplicates, analyzeTSVData]);
+
+  // Cleanup animation frames on unmount
+  useEffect(() => {
+    return () => {
+      if (modalTabAnimationFrameRef.current) {
+        cancelAnimationFrame(modalTabAnimationFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Add scroll event listener for modal tab fade indicators
+  useEffect(() => {
+    const handleScroll = () => {
+      checkModalTabScrollPosition();
+    };
+
+    const modalSlider = modalTabSliderRef.current;
+
+    if (modalSlider) {
+      modalSlider.addEventListener('scroll', handleScroll);
+      // Initial check
+      handleScroll();
+    }
+
+    return () => {
+      if (modalSlider) {
+        modalSlider.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, [showAddModal]); // Re-run when modal opens/closes
 
   const loadPeople = async () => {
     try {
@@ -1199,24 +1240,57 @@ const PeoplePage: React.FC = () => {
     return result;
   }, [groupedVisitors, selectedGathering, searchTerm]);
 
-  // Split visitors into recent (<= 6 weeks) and older (> 6 weeks)
-  const SIX_WEEKS_DAYS = 42;
+  // Helper function to get the last weekend date (Saturday or Sunday, whichever is most recent)
+  const getLastWeekendDate = () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayOfWeek = today.getDay(); // 0 = Sunday, 6 = Saturday
+    
+    // If today is Sunday (0), use today
+    if (dayOfWeek === 0) {
+      return today;
+    }
+    
+    // If today is Saturday (6), use today
+    if (dayOfWeek === 6) {
+      return today;
+    }
+    
+    // Otherwise, find the most recent Saturday or Sunday
+    // If we're Mon-Wed (1-3), last Sunday is closer
+    // If we're Thu-Fri (4-5), next Saturday is closer, but we want LAST weekend, so use last Sunday
+    // Actually, we always want the LAST weekend, so:
+    // - If today is Mon (1), last Sunday was yesterday (1 day ago)
+    // - If today is Tue (2), last Sunday was 2 days ago
+    // - etc.
+    
+    // Calculate days since last Sunday
+    const daysSinceLastSunday = dayOfWeek; // Mon=1, Tue=2, ..., Sat=6
+    const lastSunday = new Date(today);
+    lastSunday.setDate(today.getDate() - daysSinceLastSunday);
+    
+    return lastSunday;
+  };
+
+  // Split visitors into recent and older based on weeks from last weekend
   const parseISO = (s?: string) => {
     if (!s) return undefined;
     const d = new Date(s);
     return isNaN(d.getTime()) ? undefined : d;
   };
-  const daysSince = (d?: Date) => {
-    if (!d) return Infinity;
-    const ms = Date.now() - d.getTime();
+  
+  const daysSinceDate = (fromDate: Date, compareDate?: Date) => {
+    if (!compareDate) return Infinity;
+    const ms = fromDate.getTime() - compareDate.getTime();
     return ms / (1000 * 60 * 60 * 24);
   };
+  
   const getGroupLastAttended = (group: any): number => {
     // Prefer family's lastAttended if available
     if (group.familyId) {
       const fam = families.find(f => f.id === group.familyId);
       const famDate = parseISO(fam?.lastAttended as any);
-      if (famDate) return daysSince(famDate);
+      if (famDate) return daysSinceDate(getLastWeekendDate(), famDate);
     }
     // Fallback to latest member lastAttendanceDate if present
     let latest: Date | undefined = undefined;
@@ -1233,16 +1307,57 @@ const PeoplePage: React.FC = () => {
       });
     }
     
-    return daysSince(latest);
+    return daysSinceDate(getLastWeekendDate(), latest);
+  };
+
+  // Helper to determine if a group is primarily local or traveller visitors
+  const getGroupVisitorType = (group: any): 'local' | 'traveller' => {
+    // Check if family has a type
+    if (group.familyId) {
+      const fam = families.find(f => f.id === group.familyId);
+      if (fam?.familyType === 'traveller_visitor') return 'traveller';
+      if (fam?.familyType === 'local_visitor') return 'local';
+    }
+    
+    // Check member types
+    const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
+    const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
+    
+    // If mixed or unknown, default to local (more conservative - longer threshold)
+    if (hasTravellerVisitor) return 'traveller';
+    return 'local';
   };
 
   const recentVisitorGroups = useMemo(() => {
-    return filteredVisitorGroups.filter(group => getGroupLastAttended(group) <= SIX_WEEKS_DAYS);
-  }, [filteredVisitorGroups, families]);
+    return filteredVisitorGroups.filter(group => {
+      const daysSinceLastAttendance = getGroupLastAttended(group);
+      const visitorType = getGroupVisitorType(group);
+      
+      // Use visitor config to determine threshold
+      // Convert service limits to approximate weeks (assuming 1 service per week)
+      const thresholdWeeks = visitorType === 'local' 
+        ? visitorConfig.localVisitorServiceLimit 
+        : visitorConfig.travellerVisitorServiceLimit;
+      const thresholdDays = thresholdWeeks * 7; // weeks to days
+      
+      return daysSinceLastAttendance <= thresholdDays;
+    });
+  }, [filteredVisitorGroups, families, visitorConfig]);
 
   const olderVisitorGroups = useMemo(() => {
-    return filteredVisitorGroups.filter(group => getGroupLastAttended(group) > SIX_WEEKS_DAYS);
-  }, [filteredVisitorGroups, families]);
+    return filteredVisitorGroups.filter(group => {
+      const daysSinceLastAttendance = getGroupLastAttended(group);
+      const visitorType = getGroupVisitorType(group);
+      
+      // Use visitor config to determine threshold
+      const thresholdWeeks = visitorType === 'local' 
+        ? visitorConfig.localVisitorServiceLimit 
+        : visitorConfig.travellerVisitorServiceLimit;
+      const thresholdDays = thresholdWeeks * 7;
+      
+      return daysSinceLastAttendance > thresholdDays;
+    });
+  }, [filteredVisitorGroups, families, visitorConfig]);
 
   // Create individual people list (not grouped by family)
   const filteredIndividualPeople = people.filter((person: Person) => {
@@ -1363,6 +1478,91 @@ const PeoplePage: React.FC = () => {
       
       return { ...prev, persons: newPersons };
     });
+  };
+
+  // Modal tab slider handlers
+  const handleModalTabMouseDown = (e: React.MouseEvent) => {
+    if (!modalTabSliderRef.current) return;
+    setIsModalTabDragging(true);
+    setModalTabStartX(e.pageX - modalTabSliderRef.current.offsetLeft);
+    setModalTabScrollLeft(modalTabSliderRef.current.scrollLeft);
+    modalTabSliderRef.current.style.cursor = 'grabbing';
+  };
+
+  const handleModalTabMouseLeave = () => {
+    if (!modalTabSliderRef.current) return;
+    setIsModalTabDragging(false);
+    modalTabSliderRef.current.style.cursor = 'grab';
+  };
+
+  const handleModalTabMouseUp = () => {
+    if (!modalTabSliderRef.current) return;
+    setIsModalTabDragging(false);
+    modalTabSliderRef.current.style.cursor = 'grab';
+  };
+
+  const handleModalTabMouseMove = (e: React.MouseEvent) => {
+    if (!isModalTabDragging || !modalTabSliderRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - modalTabSliderRef.current.offsetLeft;
+    const walk = (x - modalTabStartX) * 2;
+    modalTabSliderRef.current.scrollLeft = modalTabScrollLeft - walk;
+  };
+
+  const handleModalTabTouchStart = (e: React.TouchEvent) => {
+    if (!modalTabSliderRef.current) return;
+    
+    if (modalTabAnimationFrameRef.current) {
+      cancelAnimationFrame(modalTabAnimationFrameRef.current);
+      modalTabAnimationFrameRef.current = null;
+    }
+    
+    setIsModalTabDragging(true);
+    setModalTabStartX(e.touches[0].pageX - modalTabSliderRef.current.offsetLeft);
+    setModalTabScrollLeft(modalTabSliderRef.current.scrollLeft);
+    modalTabLastTouchTimeRef.current = Date.now();
+  };
+
+  const handleModalTabTouchMove = (e: React.TouchEvent) => {
+    if (!isModalTabDragging || !modalTabSliderRef.current) return;
+    
+    const now = Date.now();
+    if (now - modalTabLastTouchTimeRef.current < modalTabTouchThrottleDelay) {
+      return;
+    }
+    modalTabLastTouchTimeRef.current = now;
+    
+    e.preventDefault();
+    
+    if (modalTabAnimationFrameRef.current) {
+      cancelAnimationFrame(modalTabAnimationFrameRef.current);
+    }
+    
+    modalTabAnimationFrameRef.current = requestAnimationFrame(() => {
+      if (!modalTabSliderRef.current) return;
+      const x = e.touches[0].pageX - modalTabSliderRef.current.offsetLeft;
+      const walk = (x - modalTabStartX) * 2;
+      modalTabSliderRef.current.scrollLeft = modalTabScrollLeft - walk;
+    });
+  };
+
+  const handleModalTabTouchEnd = () => {
+    setIsModalTabDragging(false);
+    
+    if (modalTabAnimationFrameRef.current) {
+      cancelAnimationFrame(modalTabAnimationFrameRef.current);
+      modalTabAnimationFrameRef.current = null;
+    }
+  };
+
+  const checkModalTabScrollPosition = () => {
+    if (!modalTabSliderRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = modalTabSliderRef.current;
+    const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5;
+    const isAtStart = scrollLeft <= 5;
+    
+    setShowModalTabRightFade(!isAtEnd);
+    setShowModalTabLeftFade(!isAtStart);
   };
 
   // Memoized family name computation to avoid recomputes on frequent handler invocations
@@ -2430,13 +2630,13 @@ const PeoplePage: React.FC = () => {
               <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
                 <h4 className="text-md font-medium text-gray-900 mb-3">Visitor Filtering Configuration</h4>
                 <p className="text-sm text-gray-600 mb-4">
-                  Configure how long visitors appear in recent visitor lists for attendance taking.
+                  Configure how long visitors appear in recent visitor lists. These settings apply to both the Attendance page (based on number of services) and the People page (based on weeks from the last weekend).
                 </p>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Local Visitors (services to keep)
+                      Local Visitors (services/weeks to keep)
                     </label>
                     <input
                       type="number"
@@ -2450,13 +2650,14 @@ const PeoplePage: React.FC = () => {
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Local visitors appear in recent lists for this many services after their last attendance.
+                      <strong>Attendance page:</strong> Shows visitors for this many services after their last attendance.<br />
+                      <strong>People page:</strong> Shows visitors who attended within this many weeks from the last weekend.
                     </p>
                   </div>
                   
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Traveller Visitors (services to keep)
+                      Traveller Visitors (services/weeks to keep)
                     </label>
                     <input
                       type="number"
@@ -2470,7 +2671,8 @@ const PeoplePage: React.FC = () => {
                       className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      Traveller visitors appear in recent lists for this many services after their last attendance.
+                      <strong>Attendance page:</strong> Shows visitors for this many services after their last attendance.<br />
+                      <strong>People page:</strong> Shows visitors who attended within this many weeks from the last weekend.
                     </p>
                   </div>
                 </div>
@@ -2493,10 +2695,10 @@ const PeoplePage: React.FC = () => {
               </div>
             )}
             <div className="space-y-4">
-              {/* Recent Visitors (configurable service-based filtering) */}
+              {/* Recent Visitors (configurable week-based filtering from last weekend) */}
               {recentVisitorGroups.length > 0 && (
                 <>
-                  <h4 className="text-md font-medium text-gray-800">Recent (based on configured service limits)</h4>
+                  <h4 className="text-md font-medium text-gray-800">Recent (attended within configured weeks from last weekend)</h4>
                   {groupByFamily ? (
                     // Grouped by family view
                     <div className="space-y-4">
@@ -2988,38 +3190,107 @@ const PeoplePage: React.FC = () => {
                     Copy & Paste
                   </button>
                 </nav>
-                <nav className="md:hidden -mb-px flex space-x-8" aria-label="Tabs">
-                  <button
-                    onClick={() => setAddModalMode('person')}
-                    className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm ${
-                      addModalMode === 'person'
-                        ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }`}
-                  >
-                    Add People
-                  </button>
-                  <button
-                    onClick={() => setAddModalMode('csv')}
-                    className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm ${
-                      addModalMode === 'csv'
-                        ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }`}
-                  >
-                    TSV Upload
-                  </button>
-                  <button
-                    onClick={() => setAddModalMode('copy-paste')}
-                    className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm ${
-                      addModalMode === 'copy-paste'
-                        ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }`}
-                  >
-                    Copy & Paste
-                  </button>
-                </nav>
+                {/* Mobile: Horizontal scrollable tabs with fade indicators */}
+                <div className="md:hidden">
+                  <div className="relative w-full overflow-hidden">
+                    <div 
+                      ref={modalTabSliderRef}
+                      className="flex items-center space-x-1 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider" 
+                      style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
+                      onMouseDown={handleModalTabMouseDown}
+                      onMouseLeave={handleModalTabMouseLeave}
+                      onMouseUp={handleModalTabMouseUp}
+                      onMouseMove={handleModalTabMouseMove}
+                      onTouchStart={handleModalTabTouchStart}
+                      onTouchMove={handleModalTabTouchMove}
+                      onTouchEnd={handleModalTabTouchEnd}
+                    >
+                      <div className="flex-shrink-0 min-w-0">
+                        <button
+                          draggable={false}
+                          onClick={(e) => {
+                            if (!isModalTabDragging) {
+                              setAddModalMode('person');
+                            }
+                          }}
+                          className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
+                            addModalMode === 'person'
+                              ? 'bg-primary-500 text-white'
+                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center justify-center h-full">
+                            <span className="text-center leading-tight whitespace-nowrap">
+                              Add People
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                      <div className="flex-shrink-0 min-w-0">
+                        <button
+                          draggable={false}
+                          onClick={(e) => {
+                            if (!isModalTabDragging) {
+                              setAddModalMode('csv');
+                            }
+                          }}
+                          className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
+                            addModalMode === 'csv'
+                              ? 'bg-primary-500 text-white'
+                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center justify-center h-full">
+                            <span className="text-center leading-tight whitespace-nowrap">
+                              TSV Upload
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                      <div className="flex-shrink-0 min-w-0">
+                        <button
+                          draggable={false}
+                          onClick={(e) => {
+                            if (!isModalTabDragging) {
+                              setAddModalMode('copy-paste');
+                            }
+                          }}
+                          className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
+                            addModalMode === 'copy-paste'
+                              ? 'bg-primary-500 text-white'
+                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center justify-center h-full">
+                            <span className="text-center leading-tight whitespace-nowrap">
+                              Copy & Paste
+                            </span>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {/* Fade indicators */}
+                    {showModalTabLeftFade && (
+                      <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
+                        <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                          <svg viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                    {showModalTabRightFade && (
+                      <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
+                        <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                          <svg viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {error && (
