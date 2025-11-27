@@ -1392,16 +1392,19 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
     });
 
     // Convert family data to individual visitor format to match main API
+    // IMPORTANT: Only return individuals who are actually in gathering_lists for this gathering
+    // This prevents showing entire families when only one individual was added
     const processedVisitors = [];
     
     for (const family of recentVisitorFamilies) {
-      // Get individual family members
+      // Get individual family members who are actually in gathering_lists for this gathering
       const familyMembers = await Database.query(`
-        SELECT id, first_name, last_name, people_type
-        FROM individuals 
-        WHERE family_id = ? AND is_active = true AND church_id = ?
-        ORDER BY first_name
-      `, [family.family_id, req.user.church_id]);
+        SELECT i.id, i.first_name, i.last_name, i.people_type
+        FROM individuals i
+        JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
+        WHERE i.family_id = ? AND i.is_active = true AND i.church_id = ?
+        ORDER BY i.first_name
+      `, [gatheringTypeId, family.family_id, req.user.church_id]);
       
       // Create visitor object for each individual
       for (const member of familyMembers) {
