@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
+import { integrationsAPI } from '../services/api';
+import logger from '../utils/logger';
 import {
   Bars3Icon,
   BellIcon,
@@ -16,16 +18,50 @@ import {
   PencilIcon,
   ArrowRightOnRectangleIcon,
   ArrowPathIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [elvantoConnected, setElvantoConnected] = useState(false);
   const { user, logout } = useAuth();
   const { updateAvailable, performUpdate } = usePWAUpdate();
   const location = useLocation();
   const navigate = useNavigate();
   const notificationsRef = useRef<HTMLDivElement>(null);
+
+  // Load Elvanto connection status from cache immediately, then fetch from API
+  useEffect(() => {
+    if (user?.role !== 'admin') {
+      setElvantoConnected(false);
+      return;
+    }
+
+    // Load from cache immediately to prevent flash
+    const cachedStatus = localStorage.getItem('elvanto_connected');
+    if (cachedStatus !== null) {
+      setElvantoConnected(cachedStatus === 'true');
+    }
+
+    // Fetch fresh status from API in the background
+    const fetchElvantoStatus = async () => {
+      try {
+        const response = await integrationsAPI.getElvantoStatus();
+        const connected = response.data.connected === true;
+        setElvantoConnected(connected);
+        // Update cache
+        localStorage.setItem('elvanto_connected', connected.toString());
+      } catch (error) {
+        logger.error('Failed to fetch Elvanto status:', error);
+        const connected = false;
+        setElvantoConnected(connected);
+        localStorage.setItem('elvanto_connected', connected.toString());
+      }
+    };
+
+    fetchElvantoStatus();
+  }, [user?.role]);
 
   // Close notifications when clicking outside
   useEffect(() => {
@@ -43,7 +79,6 @@ const Layout: React.FC = () => {
 
   const navigation = user?.role === 'attendance_taker' ? [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
-    // { name: 'Settings', href: '/app/settings', icon: PencilIcon }, // Temporarily hidden
   ] : [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
     { name: 'People', href: '/app/people', icon: UsersIcon },
@@ -52,8 +87,10 @@ const Layout: React.FC = () => {
       { name: 'Users', href: '/app/users', icon: UserCircleIcon }
     ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
-    // Migrations removed
-    // { name: 'Settings', href: '/app/settings', icon: PencilIcon }, // Temporarily hidden
+    ...(user?.role === 'admin' && elvantoConnected ? [
+      { name: 'Import from Elvanto', href: '/app/elvanto-import', icon: ArrowDownTrayIcon }
+    ] : []),
+    { name: 'Settings', href: '/app/settings', icon: PencilIcon },
   ];
 
   const handleLogout = async () => {

@@ -977,10 +977,18 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     }
 
     // Get regular attendees and visitor families with attendance status
+    // Check if people_type_at_time column exists for historical type support
+    const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+    
+    // Use historical people_type if available, otherwise fall back to current type
+    const peopleTypeExpression = hasPeopleTypeAtTime 
+      ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
+      : `i.people_type`;
+    
     let attendanceListQuery = `
       SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
              COALESCE(ar.present, false) as present,
-             i.people_type,
+             ${peopleTypeExpression},
              f.family_type AS familyType,
              f.last_attended AS lastAttended
       FROM gathering_lists gl
@@ -1009,26 +1017,48 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
     let attendanceListParams = [sessionId, gatheringTypeId, req.user.church_id];
 
-    // Add filtering logic
+    // Add filtering logic - use historical people_type for filtering
+    // For future dates (no attendance records), check current people_type
+    // For past dates, use historical type if available
     if (search && search.trim()) {
       // When searching, only include regular attendees (exclude visitor families)
-      attendanceListQuery += ` AND (
-        f.family_type = 'regular' OR 
-        (f.family_type IS NULL AND i.people_type = 'regular')
-      ) AND (
-        i.first_name LIKE ? OR 
-        i.last_name LIKE ? OR 
-        f.family_name LIKE ?
-      )`;
+      // Use historical type if available, but also check current type for future dates
+      if (hasPeopleTypeAtTime) {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular') OR 
+          (f.family_type IS NULL AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular')
+        ) AND (
+          i.first_name LIKE ? OR 
+          i.last_name LIKE ? OR 
+          f.family_name LIKE ?
+        )`;
+      } else {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND i.people_type = 'regular') OR 
+          (f.family_type IS NULL AND i.people_type = 'regular')
+        ) AND (
+          i.first_name LIKE ? OR 
+          i.last_name LIKE ? OR 
+          f.family_name LIKE ?
+        )`;
+      }
       const searchTerm = `%${search.trim()}%`;
       attendanceListParams.push(searchTerm, searchTerm, searchTerm);
     } else {
       // When not searching, filter to only include regular attendees (exclude visitor families)
       // Include regular families and individuals without families (but not visitors)
-      attendanceListQuery += ` AND (
-        f.family_type = 'regular' OR 
-        (f.family_type IS NULL AND i.people_type = 'regular')
-      )`;
+      // Use historical type if available, but also check current type for future dates
+      if (hasPeopleTypeAtTime) {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular') OR 
+          (f.family_type IS NULL AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular')
+        )`;
+      } else {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND i.people_type = 'regular') OR 
+          (f.family_type IS NULL AND i.people_type = 'regular')
+        )`;
+      }
       // No parameters needed for regular attendee filtering
     }
 
@@ -1040,23 +1070,30 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     // (visitor config and service dates already fetched above for reuse)
     
     // Build the visitor query using service-based filtering
+    // Use historical people_type if available
+    const visitorPeopleTypeExpression = hasPeopleTypeAtTime
+      ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
+      : `i.people_type`;
+    
     let visitorQuery = `
       SELECT DISTINCT 
         CONCAT(i.first_name, ' ', i.last_name) as name,
-        CASE WHEN i.people_type = 'local_visitor' THEN 'potential_regular' ELSE 'temporary_other' END as visitor_type,
+        CASE WHEN ${hasPeopleTypeAtTime ? 'COALESCE(ar.people_type_at_time, i.people_type)' : 'i.people_type'} = 'local_visitor' THEN 'potential_regular' ELSE 'temporary_other' END as visitor_type,
         f.id as visitor_family_group,
         f.family_notes as notes,
         i.last_attendance_date as last_attended,
         f.family_name,
         f.id as family_id,
         i.id,
-        i.people_type,
+        ${visitorPeopleTypeExpression},
         i.is_active
       FROM individuals i
       JOIN families f ON i.family_id = f.id
       JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.gathering_type_id = ?
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-      WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
+      WHERE ${hasPeopleTypeAtTime 
+        ? `(COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor') OR (ar.people_type_at_time IS NULL AND i.people_type IN ('local_visitor', 'traveller_visitor')))`
+        : `i.people_type IN ('local_visitor', 'traveller_visitor')`}
         AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
         AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.church_id = ?
@@ -1097,7 +1134,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         // For active visitors: apply normal service date filtering
         if (!visitor.last_attended) return true; // Include visitors who have never attended
         
-        const relevantServiceDates = visitor.people_type === 'local_visitor' ? 
+        // Use historical people_type if available, otherwise use current type
+        const historicalPeopleType = visitor.people_type || (hasPeopleTypeAtTime ? null : 'regular');
+        const relevantServiceDates = historicalPeopleType === 'local_visitor' ? 
           localServiceDates : travellerServiceDates;
         
         // Check if visitor's last attendance was within the relevant service dates
@@ -1211,18 +1250,51 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
 
       // Update individual attendance records with better concurrency handling
       if (attendanceRecords && attendanceRecords.length > 0) {
+        // Check if people_type_at_time column exists
+        const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+        
         for (const record of attendanceRecords) {
+          // Fetch current people_type to store as historical type
+          let peopleTypeAtTime = null;
+          if (hasPeopleTypeAtTime) {
+            const individualResult = hasIndividualsChurchId
+              ? await conn.query(`
+                  SELECT people_type FROM individuals WHERE id = ? AND church_id = ?
+                `, [record.individualId, req.user.church_id])
+              : await conn.query(`
+                  SELECT people_type FROM individuals WHERE id = ?
+                `, [record.individualId]);
+            
+            if (individualResult.length > 0 && individualResult[0].people_type) {
+              peopleTypeAtTime = individualResult[0].people_type;
+            }
+          }
+          
           // Use REPLACE INTO to handle concurrent updates more reliably
           if (hasAttendanceRecordsChurchId) {
-            await conn.query(`
-              REPLACE INTO attendance_records (session_id, individual_id, present, church_id)
-              VALUES (?, ?, ?, ?)
-            `, [sessionId, record.individualId, record.present, req.user.church_id]);
+            if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+              await conn.query(`
+                REPLACE INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+                VALUES (?, ?, ?, ?, ?)
+              `, [sessionId, record.individualId, record.present, req.user.church_id, peopleTypeAtTime]);
+            } else {
+              await conn.query(`
+                REPLACE INTO attendance_records (session_id, individual_id, present, church_id)
+                VALUES (?, ?, ?, ?)
+              `, [sessionId, record.individualId, record.present, req.user.church_id]);
+            }
           } else {
-            await conn.query(`
-              REPLACE INTO attendance_records (session_id, individual_id, present)
-              VALUES (?, ?, ?)
-            `, [sessionId, record.individualId, record.present]);
+            if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+              await conn.query(`
+                REPLACE INTO attendance_records (session_id, individual_id, present, people_type_at_time)
+                VALUES (?, ?, ?, ?)
+              `, [sessionId, record.individualId, record.present, peopleTypeAtTime]);
+            } else {
+              await conn.query(`
+                REPLACE INTO attendance_records (session_id, individual_id, present)
+                VALUES (?, ?, ?)
+              `, [sessionId, record.individualId, record.present]);
+            }
           }
           
           // Update last_attendance_date if person is marked present
@@ -1567,10 +1639,13 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
           }
         }
 
+        // Determine family_type based on visitorType
+        const familyType = visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor';
+        
         const familyResult = await conn.query(`
-            INSERT INTO families (family_name, created_by, church_id)
-            VALUES (?, ?, ?)
-          `, [finalFamilyName, req.user.id, req.user.church_id]);
+            INSERT INTO families (family_name, family_type, created_by, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [finalFamilyName, familyType, req.user.id, req.user.church_id]);
         familyId = Number(familyResult.insertId);
       }
 
@@ -1624,6 +1699,13 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
           // Determine the people_type based on visitorType
           const peopleType = visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor';
           
+          // Get old family_id before update for sync
+          const oldIndividual = await conn.query(
+            'SELECT family_id FROM individuals WHERE id = ?',
+            [individualId]
+          );
+          const oldFamilyId = oldIndividual.length > 0 ? oldIndividual[0].family_id : null;
+          
           // Update family_id and people_type if creating/joining a new family
           // This ensures existing individuals get the correct type when added to a visitor family
           if (familyId) {
@@ -1632,6 +1714,32 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
               SET family_id = ?, people_type = ?, updated_at = NOW()
               WHERE id = ?
             `, [familyId, peopleType, individualId]);
+            
+            // Sync family_type for new family
+            const newFamilyMembers = await conn.query(
+              'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+              [familyId]
+            );
+            if (newFamilyMembers.length === 1 && newFamilyMembers[0].people_type) {
+              await conn.query(
+                'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                [newFamilyMembers[0].people_type, familyId]
+              );
+            }
+            
+            // Sync old family if family_id changed
+            if (oldFamilyId && oldFamilyId !== familyId) {
+              const oldFamilyMembers = await conn.query(
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+                [oldFamilyId]
+              );
+              if (oldFamilyMembers.length === 1 && oldFamilyMembers[0].people_type) {
+                await conn.query(
+                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                  [oldFamilyMembers[0].people_type, oldFamilyId]
+                );
+              }
+            }
           } else {
             // Even if not joining a family, update people_type to match visitor type
             await conn.query(`
@@ -1639,6 +1747,20 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
               SET people_type = ?, updated_at = NOW()
               WHERE id = ?
             `, [peopleType, individualId]);
+            
+            // Sync old family if individual was in a family
+            if (oldFamilyId) {
+              const oldFamilyMembers = await conn.query(
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+                [oldFamilyId]
+              );
+              if (oldFamilyMembers.length === 1 && oldFamilyMembers[0].people_type) {
+                await conn.query(
+                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                  [oldFamilyMembers[0].people_type, oldFamilyId]
+                );
+              }
+            }
           }
         }
 
@@ -1769,9 +1891,11 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
             finalFamilyName = `${familyLastName}, ${people.slice(0, 2).map(p => p.firstName || 'Unknown').join(' & ')}`;
           }
         }
+        // Determine family_type based on visitorType (regular attendees use 'regular')
+        const familyType = visitorType === 'potential_regular' ? 'local_visitor' : (visitorType === 'temporary_other' ? 'traveller_visitor' : 'regular');
         const familyResult = await conn.query(
-          'INSERT INTO families (family_name, created_by, church_id) VALUES (?, ?, ?)',
-          [finalFamilyName, req.user.id, req.user.church_id]
+          'INSERT INTO families (family_name, family_type, created_by, church_id) VALUES (?, ?, ?, ?)',
+          [finalFamilyName, familyType, req.user.id, req.user.church_id]
         );
         familyId = Number(familyResult.insertId);
       }
@@ -1866,8 +1990,9 @@ router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, auditLog
           familyLastName = mainPerson.lastName.toUpperCase();
           const familyName = `${familyLastName}, ${people.map(p => p.firstName).join(' & ')}`;
           
+          // Regular attendees - set family_type to 'regular'
           const familyResult = await conn.query(`
-            INSERT INTO families (family_name) VALUES (?)
+            INSERT INTO families (family_name, family_type) VALUES (?, 'regular')
           `, [familyName]);
           
           familyId = Number(familyResult.insertId);
@@ -2099,11 +2224,23 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         }
 
         // Mark as present in attendance records
-      await conn.query(`
-        INSERT INTO attendance_records (session_id, individual_id, present, church_id)
-        VALUES (?, ?, true, ?)
-        ON DUPLICATE KEY UPDATE present = VALUES(present)
-      `, [sessionId, individual.id, req.user.church_id]);
+        // Store historical people_type if column exists
+        const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+        const peopleTypeAtTime = individual.people_type || null;
+        
+        if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+            VALUES (?, ?, true, ?, ?)
+            ON DUPLICATE KEY UPDATE present = VALUES(present), people_type_at_time = VALUES(people_type_at_time)
+          `, [sessionId, individual.id, req.user.church_id, peopleTypeAtTime]);
+        } else {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+            VALUES (?, ?, true, ?)
+            ON DUPLICATE KEY UPDATE present = VALUES(present)
+          `, [sessionId, individual.id, req.user.church_id]);
+        }
 
         // Update last_attendance_date for the individual
       await conn.query(`
@@ -2253,18 +2390,48 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
       }
 
       // Add attendance record and mark as present
+      // Store historical people_type if column exists
+      const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+      let peopleTypeAtTime = null;
+      
+      if (hasPeopleTypeAtTime) {
+        const individualResult = hasIndividualsChurchId
+          ? await conn.query('SELECT people_type FROM individuals WHERE id = ? AND church_id = ?', [individualId, req.user.church_id])
+          : await conn.query('SELECT people_type FROM individuals WHERE id = ?', [individualId]);
+        
+        if (individualResult.length > 0 && individualResult[0].people_type) {
+          peopleTypeAtTime = individualResult[0].people_type;
+        }
+      }
+      
       if (hasAttendanceRecordsChurchId) {
-        await conn.query(`
-          INSERT INTO attendance_records (session_id, individual_id, present, church_id)
-          VALUES (?, ?, 1, ?)
-          ON DUPLICATE KEY UPDATE present = 1
-        `, [sessionId, individualId, req.user.church_id]);
+        if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+            VALUES (?, ?, 1, ?, ?)
+            ON DUPLICATE KEY UPDATE present = 1, people_type_at_time = VALUES(people_type_at_time)
+          `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
+        } else {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+            VALUES (?, ?, 1, ?)
+            ON DUPLICATE KEY UPDATE present = 1
+          `, [sessionId, individualId, req.user.church_id]);
+        }
       } else {
-        await conn.query(`
-          INSERT INTO attendance_records (session_id, individual_id, present)
-          VALUES (?, ?, 1)
-          ON DUPLICATE KEY UPDATE present = 1
-        `, [sessionId, individualId]);
+        if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
+            VALUES (?, ?, 1, ?)
+            ON DUPLICATE KEY UPDATE present = 1, people_type_at_time = VALUES(people_type_at_time)
+          `, [sessionId, individualId, peopleTypeAtTime]);
+        } else {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present)
+            VALUES (?, ?, 1)
+            ON DUPLICATE KEY UPDATE present = 1
+          `, [sessionId, individualId]);
+        }
       }
 
       // Update last_attendance_date for the individual

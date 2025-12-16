@@ -261,6 +261,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     // Optimized configuration for better stability and multi-tab support
     const connectionId = `${authData.userId}_${tabId.current}_${Date.now()}`;
     
+    // Track connection state for retry logic
+    const connectionState = {
+      hasEverConnected: false,
+      reconnectAttemptCount: 0
+    };
+    
     console.log(`🔌 Creating WebSocket connection for ${isPWA ? 'PWA' : 'browser tab'}`, {
       tabId: tabId.current,
       connectionId,
@@ -275,11 +281,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       },
       withCredentials: true, // Important: send cookies with WebSocket connection
       transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
-      timeout: 5000, // 5-second timeout before going offline
+      timeout: 10000, // 10-second timeout to allow retry attempts to complete
       reconnection: true,
-      reconnectionAttempts: 3, // Reduced attempts to prevent connection storms
-      reconnectionDelay: 1000, // Slightly longer initial reconnection
-      reconnectionDelayMax: 5000, // Reduced max delay
+      reconnectionAttempts: 5, // Increased attempts for better reliability
+      reconnectionDelay: 1000, // Initial reconnection delay
+      reconnectionDelayMax: 5000, // Max delay between attempts
+      randomizationFactor: 0.5, // Add some randomization to prevent thundering herd
       forceNew: true, // Force new connection for each tab/PWA to prevent conflicts
       upgrade: true, // Enable upgrade to WebSocket
       rememberUpgrade: false, // Don't remember upgrade to allow fresh connections
@@ -292,33 +299,51 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       // Optimized stability settings
       pingTimeout: 30000, // Reduced ping timeout
       pingInterval: 15000, // Reduced ping interval for faster detection
-      maxReconnectionAttempts: 3
+      maxReconnectionAttempts: 5
     };
     
     // Socket configuration optimized for multi-tab support
     
     const newSocket = io(serverUrl, socketConfig);
 
-    // Set up offline mode timeout (5 seconds for faster user experience)
+    // Set up offline mode timeout - increased to allow socket.io retry mechanism to complete
+    // Calculate timeout: initial delay + (reconnectionAttempts * maxDelay) + buffer
+    // 1000ms initial + (5 attempts * 5000ms max) + 5000ms buffer = ~35 seconds
+    const OFFLINE_TIMEOUT_MS = 35000;
     connectionTimeoutRef.current = setTimeout(() => {
-      if (!newSocket.connected) {
-        console.log(`⏰ [Tab ${tabId.current}] Connection timeout - entering offline mode`);
+      // Only enter offline mode if browser is online (if browser is offline, we already handled it via event listener)
+      if (!navigator.onLine) {
+        console.log(`📴 Browser is offline - offline mode already active`);
+        return;
+      }
+      
+      if (!newSocket.connected && !connectionState.hasEverConnected) {
+        console.log(`⏰ [Tab ${tabId.current}] Connection timeout after ${OFFLINE_TIMEOUT_MS}ms - entering offline mode`);
         console.log(`📦 [Tab ${tabId.current}] Offline mode: App will continue to function with cached data`);
         setIsOfflineMode(true);
         setConnectionStatus('offline');
         initializingRef.current = false;
       }
-    }, 5000); // Reduced from 10 seconds to 5 seconds
+    }, OFFLINE_TIMEOUT_MS);
 
     // Connection event handlers
     newSocket.on('connect', () => {
       console.log(`✅ [Tab ${tabId.current}] WebSocket connected:`, newSocket.id);
+      connectionState.hasEverConnected = true;
       setIsConnected(true);
       setConnectionStatus('connected');
-      setIsOfflineMode(false); // Exit offline mode
+      
+      // Only exit offline mode if browser is online (don't exit if browser is offline)
+      if (navigator.onLine) {
+        setIsOfflineMode(false); // Exit offline mode
+      } else {
+        console.log(`📴 Browser is offline - keeping offline mode active despite WebSocket connection`);
+      }
+      
       initializingRef.current = false; // Reset initialization flag
       connectionAttemptsRef.current = 0; // Reset connection attempts on success
       lastConnectionAttemptRef.current = 0; // Reset last attempt time
+      connectionState.reconnectAttemptCount = 0; // Reset reconnect attempt count
       
       // Clear the offline timeout since we're connected
       if (connectionTimeoutRef.current) {
@@ -355,6 +380,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
           if (refreshSuccess) {
             console.log(`✅ [Tab ${tabId.current}] Token and user data refreshed successfully - will retry connection on next attempt`);
             // The WebSocket will automatically retry and should work with the fresh token
+            // Don't reset initializingRef here - let socket.io handle the retry
           } else {
             console.log(`❌ [Tab ${tabId.current}] Failed to refresh token and user data - falling back to page refresh`);
             window.location.reload();
@@ -375,29 +401,98 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         error.message.includes('Network Error') ||
         error.message.includes('Failed to fetch')
       )) {
-        console.log(`🌐 [Tab ${tabId.current}] Server appears to be unavailable - will enter offline mode`);
-        // Don't set error status immediately, let the timeout handle it
+        console.log(`🌐 [Tab ${tabId.current}] Server appears to be unavailable - socket.io will retry automatically`);
+        // Keep status as 'connecting' to show retry is in progress
+        setConnectionStatus('connecting');
+        // Don't reset initializingRef - let socket.io handle retries
         return;
       }
       
+      // For other errors, still allow socket.io to retry
       setIsConnected(false);
-      setConnectionStatus('error');
-      initializingRef.current = false; // Reset initialization flag on error
-      // Don't reset connectionAttemptsRef on error - keep track for debugging
+      setConnectionStatus('connecting'); // Keep as 'connecting' to allow retries
+      // Don't reset initializingRef on error - let socket.io handle retries
+    });
+
+    newSocket.on('reconnect_attempt', (attemptNumber: number) => {
+      connectionState.reconnectAttemptCount = attemptNumber;
+      console.log(`🔄 [Tab ${tabId.current}] WebSocket reconnection attempt ${attemptNumber}...`);
+      setConnectionStatus('connecting');
+      // Reset the offline timeout on each retry attempt to give it more time
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+      }
+      connectionTimeoutRef.current = setTimeout(() => {
+        // Only enter offline mode if browser is online (if browser is offline, we already handled it)
+        if (!navigator.onLine) {
+          console.log(`📴 Browser is offline - offline mode already active`);
+          return;
+        }
+        
+        if (!newSocket.connected && !connectionState.hasEverConnected) {
+          console.log(`⏰ [Tab ${tabId.current}] Connection timeout after retry attempts - entering offline mode`);
+          setIsOfflineMode(true);
+          setConnectionStatus('offline');
+          initializingRef.current = false;
+        }
+      }, OFFLINE_TIMEOUT_MS);
     });
 
     newSocket.on('reconnect', (attemptNumber: number) => {
       console.log(`🔄 [Tab ${tabId.current}] WebSocket reconnected after ${attemptNumber} attempts`);
+      connectionState.hasEverConnected = true;
       setConnectionStatus('connected');
+      connectionState.reconnectAttemptCount = 0;
+      
+      // Clear the offline timeout since we're connected
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
     });
 
     newSocket.on('reconnect_error', (error: Error) => {
-      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection error:`, error.message);
+      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection error (attempt ${connectionState.reconnectAttemptCount}):`, error.message);
+      // Keep status as 'connecting' to show retry is still in progress
+      setConnectionStatus('connecting');
     });
 
     newSocket.on('reconnect_failed', () => {
-      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection failed`);
+      console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection failed after all attempts`);
+      
+      // Check if browser is offline - if so, enter offline mode immediately
+      if (!navigator.onLine) {
+        console.log(`📴 Browser is offline - entering offline mode`);
+        setIsOfflineMode(true);
+        setConnectionStatus('offline');
+        initializingRef.current = false;
+        return; // Don't retry if browser is offline
+      }
+      
       setConnectionStatus('error');
+      initializingRef.current = false; // Allow manual retry after all automatic retries fail
+      
+      // Set up a delayed retry mechanism - wait 10 seconds then try again
+      // Only if browser is still online
+      setTimeout(() => {
+        if (!navigator.onLine) {
+          console.log(`📴 Browser went offline during delayed retry - entering offline mode`);
+          setIsOfflineMode(true);
+          setConnectionStatus('offline');
+          return;
+        }
+        
+        if (!newSocket.connected && userRef.current) {
+          console.log(`🔄 [Tab ${tabId.current}] Attempting delayed retry after reconnect_failed...`);
+          // Reset flags to allow retry
+          initializingRef.current = false;
+          connectionAttemptsRef.current = 0;
+          lastConnectionAttemptRef.current = 0;
+          // Trigger reconnection by disconnecting and reconnecting
+          newSocket.disconnect();
+          newSocket.connect();
+        }
+      }, 10000); // Wait 10 seconds before delayed retry
     });
 
     // Event handlers for real-time updates
@@ -469,6 +564,44 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     setSocket(newSocket);
   }; // End of createSocketConnection function
+
+  // Listen for browser offline/online events to immediately enter/exit offline mode
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('🌐 Browser came online - attempting WebSocket reconnection');
+      setIsOfflineMode(false);
+      // If socket exists but not connected, trigger reconnection
+      if (socket && !socket.connected && userRef.current) {
+        socket.connect();
+      }
+    };
+
+    const handleOffline = () => {
+      console.log('📴 Browser went offline - entering offline mode immediately');
+      setIsOfflineMode(true);
+      setConnectionStatus('offline');
+      // Clear any pending timeout since we're already offline
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Check initial network status
+    if (!navigator.onLine) {
+      console.log('📴 Browser is offline on page load - entering offline mode');
+      setIsOfflineMode(true);
+      setConnectionStatus('offline');
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [socket]);
 
   // Cleanup on unmount or user change
   useEffect(() => {
@@ -662,6 +795,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
   // Retry connection function
   const retryConnection = () => {
+    // Don't retry if browser is offline
+    if (!navigator.onLine) {
+      console.log(`📴 Browser is offline - cannot retry connection`);
+      setIsOfflineMode(true);
+      setConnectionStatus('offline');
+      return;
+    }
+    
     console.log(`🔄 [Tab ${tabId.current}] Manual connection retry requested`);
     setIsOfflineMode(false);
     setConnectionStatus('connecting');
@@ -675,8 +816,20 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       connectionTimeoutRef.current = null;
     }
     
-    // Trigger reconnection by calling the connection effect
-    // This will be handled by the useEffect that watches user?.id
+    // If socket exists, try to reconnect it
+    if (socket) {
+      socket.disconnect();
+      socket.connect();
+    } else if (userRef.current) {
+      // Trigger reconnection by calling the connection effect
+      // This will be handled by the useEffect that watches user?.id
+      // Force a re-trigger by updating a dependency
+      const currentUser = userRef.current;
+      userRef.current = null; // Temporarily clear to allow re-trigger
+      setTimeout(() => {
+        userRef.current = currentUser;
+      }, 100);
+    }
   };
 
   const value: WebSocketContextType = {

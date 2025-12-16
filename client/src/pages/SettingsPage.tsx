@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { settingsAPI } from '../services/api';
+import { integrationsAPI } from '../services/api';
 import logger from '../utils/logger';
 
 import {
@@ -9,25 +9,71 @@ import {
   ShieldCheckIcon,
   ShieldExclamationIcon,
   ArrowPathIcon,
+  LinkIcon,
+  XMarkIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  LinkSlashIcon,
 } from '@heroicons/react/24/outline';
+import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'privacy'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations'>('general');
+
+  // Elvanto integration state
+  const [elvantoStatus, setElvantoStatus] = useState<{
+    configured: boolean;
+    connected: boolean;
+    elvantoAccount: string | null;
+    loading: boolean;
+    error?: string | null;
+  }>({
+    configured: false,
+    connected: false,
+    elvantoAccount: null,
+    loading: true,
+    error: null
+  });
+
+  // Elvanto API key input
+  const [elvantoApiKey, setElvantoApiKey] = useState('');
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [showApiKeyGuide, setShowApiKeyGuide] = useState(false);
+  const [showDisconnectModal, setShowDisconnectModal] = useState(false);
 
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
-    { id: 'privacy', name: 'Data Privacy', icon: ShieldCheckIcon },
+    { id: 'integrations', name: 'Integrations', icon: LinkIcon },
   ];
 
+  // Fetch Elvanto integration status
+  const fetchElvantoStatus = useCallback(async () => {
+    try {
+      const response = await integrationsAPI.getElvantoStatus();
+      const connected = response.data.connected === true;
+      setElvantoStatus({
+        ...response.data,
+        loading: false
+      });
+      // Update cache for Layout component
+      localStorage.setItem('elvanto_connected', connected.toString());
+    } catch (error) {
+      logger.error('Failed to fetch Elvanto status:', error);
+      setElvantoStatus(prev => ({ ...prev, loading: false }));
+      // Update cache on error
+      localStorage.setItem('elvanto_connected', 'false');
+    }
+  }, []);
 
   // Handle URL parameters for tab selection
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
-    if (tabParam && ['general', 'system', 'privacy'].includes(tabParam)) {
-      setActiveTab(tabParam as 'general' | 'system' | 'privacy');
+    if (tabParam && ['general', 'system', 'integrations'].includes(tabParam)) {
+      setActiveTab(tabParam as 'general' | 'system' | 'integrations');
     }
   }, []);
 
@@ -46,6 +92,137 @@ const SettingsPage: React.FC = () => {
   };
 
   const systemInfo = getSystemInfo();
+
+  // Handle Elvanto connect with API key
+  const handleElvantoConnect = async () => {
+    if (!elvantoApiKey.trim()) {
+      setConnectionError('Please enter your Elvanto API key.');
+      return;
+    }
+
+    try {
+      setSavingConfig(true);
+      setConnectionError(null);
+      await integrationsAPI.connectElvanto(elvantoApiKey.trim());
+      setElvantoApiKey(''); // Clear the input
+      await fetchElvantoStatus(); // Refresh status (this will update cache)
+    } catch (error: any) {
+      logger.error('Failed to connect Elvanto:', error);
+      setConnectionError(error.response?.data?.error || 'Failed to connect. Please check your API key.');
+      // Update cache on error
+      localStorage.setItem('elvanto_connected', 'false');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  // Handle Elvanto disconnect
+  const handleElvantoDisconnect = async () => {
+    setShowDisconnectModal(true);
+  };
+
+  const confirmDisconnect = async () => {
+    setShowDisconnectModal(false);
+    
+    try {
+      console.log('🔌 [CLIENT] Starting Elvanto disconnect...');
+      setElvantoStatus(prev => ({ ...prev, loading: true }));
+      
+      // CRITICAL: Clear all Elvanto-related localStorage items to prevent re-sync
+      // The userPreferences service syncs localStorage items with prefix "preference_" to database
+      console.log('🔌 [CLIENT] Clearing Elvanto localStorage items...');
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('elvanto') || key.includes('Elvanto'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => {
+        console.log(`🔌 [CLIENT] Removing localStorage key: ${key}`);
+        localStorage.removeItem(key);
+      });
+      
+      // Also clear the elvanto_connected status
+      localStorage.setItem('elvanto_connected', 'false');
+      
+      setElvantoStatus({
+        configured: false,
+        connected: false,
+        elvantoAccount: null,
+        loading: false,
+        error: null
+      });
+      
+      // Perform the disconnect
+      console.log('🔌 [CLIENT] Calling disconnectElvanto API...');
+      const disconnectResponse = await integrationsAPI.disconnectElvanto();
+      console.log('🔌 [CLIENT] Disconnect API response:', disconnectResponse);
+      
+      // Verify the disconnect by checking status after a brief delay
+      // This ensures the database transaction has committed
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Refresh status to confirm disconnect (this should return disconnected)
+      const statusResponse = await integrationsAPI.getElvantoStatus();
+      const connected = statusResponse.data.connected === true;
+      
+      console.log('🔌 [CLIENT] Status check after disconnect:', {
+        connected,
+        configured: statusResponse.data.configured,
+        fullResponse: statusResponse.data
+      });
+      
+      // Update state based on actual API response
+      setElvantoStatus({
+        ...statusResponse.data,
+        loading: false
+      });
+      localStorage.setItem('elvanto_connected', connected.toString());
+      
+      // If still showing as connected, something went wrong
+      if (connected) {
+        console.error('🔌 [CLIENT] ERROR: Status still shows connected after disconnect!', statusResponse.data);
+        logger.error('Elvanto disconnect may have failed - status still shows connected', statusResponse.data);
+        // Force disconnected state
+        setElvantoStatus({
+          configured: false,
+          connected: false,
+          elvantoAccount: null,
+          loading: false,
+          error: 'Disconnect may have failed. Please try again.'
+        });
+        localStorage.setItem('elvanto_connected', 'false');
+      } else {
+        console.log('🔌 [CLIENT] Successfully disconnected - status confirmed');
+        // Refresh the page to remove the "Import from Elvanto" menu option
+        window.location.reload();
+      }
+    } catch (error: any) {
+      console.error('🔌 [CLIENT] Disconnect error:', error);
+      console.error('🔌 [CLIENT] Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        config: error.config
+      });
+      logger.error('Failed to disconnect Elvanto:', error);
+      // Update cache and status on error
+      localStorage.setItem('elvanto_connected', 'false');
+      setElvantoStatus(prev => ({
+        ...prev,
+        connected: false,
+        configured: false,
+        loading: false,
+        error: error.response?.data?.error || 'Failed to disconnect Elvanto'
+      }));
+    }
+  };
+
+  // Load Elvanto status on mount
+  useEffect(() => {
+    fetchElvantoStatus();
+  }, [fetchElvantoStatus]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -100,12 +277,6 @@ const SettingsPage: React.FC = () => {
                       <dt className="text-sm font-medium text-gray-500">Role</dt>
                       <dd className="mt-1 text-sm text-gray-900 capitalize">
                         {user?.role?.replace('_', ' ')}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Default Gathering</dt>
-                      <dd className="mt-1 text-sm text-gray-900">
-                        {user?.defaultGatheringId ? `ID: ${user.defaultGatheringId}` : 'Not set'}
                       </dd>
                     </div>
                   </dl>
@@ -178,119 +349,325 @@ const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'privacy' && (
+          {activeTab === 'integrations' && (
             <div className="space-y-6">
-              {user?.role !== 'admin' ? (
-                <div className="text-center py-8">
-                  <ShieldExclamationIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">Admin Access Required</h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Only administrators can manage data privacy settings.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  {/* Data Access Control */}
-                  <div className="p-6 border border-gray-200 rounded-lg">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h4 className="text-lg font-medium text-gray-900">External Data Access</h4>
-                        <p className="mt-1 text-sm text-gray-600">
-                          Control whether your church's attendance data can be accessed from external applications like Google Sheets.
-                        </p>
-                        <div className="mt-3">
-                          <div className="flex items-center space-x-2">
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                              <ShieldExclamationIcon className="w-3 h-3 mr-1" />
-                              Disabled
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              Data is only accessible within this application
-                            </span>
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">External Integrations</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Connect your account with external services to enhance your church management experience.
+                </p>
+
+                <div className="mt-6 space-y-6">
+                  {/* Elvanto Integration */}
+                  <div className="border border-gray-200 rounded-lg p-6">
+                    {/* Connection Status Header */}
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0">
+                          <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                            </svg>
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-medium text-gray-900">Elvanto</h4>
+                          <p className="text-sm text-gray-600">
+                            Import people and families from your Elvanto account.
+                          </p>
+                          {elvantoStatus.connected && (
+                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                              <CheckCircleIcon className="w-3 h-3 mr-1" />
+                              {elvantoStatus.elvantoAccount || 'Connected'}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        {elvantoStatus.loading ? (
+                          <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
+                        ) : elvantoStatus.connected ? (
+                              <>
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  <ShieldCheckIcon className="w-3 h-3 mr-1" />
+                                  Connected
+                                </span>
+                                <button
+                                  onClick={handleElvantoDisconnect}
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                >
+                                  Disconnect
+                                </button>
+                              </>
+                        ) : (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                <ShieldExclamationIcon className="w-3 h-3 mr-1" />
+                                Not Connected
+                              </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* API Key Connection Form - Only show when not connected */}
+                    {!elvantoStatus.connected && !elvantoStatus.loading && (
+                      <div className="border-t border-gray-200 pt-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h5 className="text-md font-medium text-gray-900">Connect with API Key</h5>
+                          <button
+                            onClick={() => setShowApiKeyGuide(true)}
+                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                          >
+                            <InformationCircleIcon className="h-4 w-4 mr-1.5" />
+                            How to get API Key
+                          </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                          <div>
+                            <label htmlFor="elvanto-api-key" className="block text-sm font-medium text-gray-700">
+                              Elvanto API Key
+                            </label>
+                            <input
+                              type="password"
+                              id="elvanto-api-key"
+                              value={elvantoApiKey}
+                              onChange={(e) => setElvantoApiKey(e.target.value)}
+                              onKeyPress={(e) => e.key === 'Enter' && handleElvantoConnect()}
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                              placeholder="Paste your Elvanto API key here"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              Your API key is stored securely and only used to access your Elvanto data.
+                            </p>
+                          </div>
+
+                          {/* Connection Error */}
+                          {connectionError && (
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                              <div className="flex">
+                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                <div className="ml-2">
+                                  <p className="text-sm text-red-700">{connectionError}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex justify-end">
+                            <button
+                              onClick={handleElvantoConnect}
+                              disabled={savingConfig || !elvantoApiKey.trim()}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {savingConfig ? (
+                                <>
+                                  <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                  Connecting...
+                                </>
+                              ) : (
+                                <>
+                                  <LinkIcon className="h-4 w-4 mr-2" />
+                                  Connect
+                                </>
+                              )}
+                            </button>
                           </div>
                         </div>
                       </div>
-                      <div className="ml-6">
-                        <button
-                          // onClick={() => updateDataAccess(!dataAccessEnabled)}
-                          disabled={true} // Disabled as API is removed
-                          className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
-                            // dataAccessEnabled ? 'bg-primary-600' : 'bg-gray-200'
-                            'bg-gray-200' // Disabled as API is removed
-                          }`}
-                        >
-                          <span
-                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                              // dataAccessEnabled ? 'translate-x-5' : 'translate-x-0'
-                              'translate-x-0' // Disabled as API is removed
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    )}
 
-                  {/* Information Panel */}
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <div className="flex">
-                      <div className="flex-shrink-0">
-                        <ShieldCheckIcon className="h-5 w-5 text-blue-400" />
-                      </div>
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-blue-800">How This Works</h3>
-                        <div className="mt-2 text-sm text-blue-700">
-                          <p className="mb-2">
-                            <strong>When Enabled:</strong> Your attendance data can be accessed by external applications 
-                            (like Google Sheets) using simple HTTP requests. This allows for data integration and reporting.
-                          </p>
-                          <p className="mb-2">
-                            <strong>When Disabled:</strong> All external access to your data is blocked. Data can only be 
-                            viewed and managed within this application.
-                          </p>
-                          <p>
-                            <strong>Security Note:</strong> When enabled, ensure that only trusted applications and users 
-                            have access to your data endpoints.
-                          </p>
+                    <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <InformationCircleIcon className="h-5 w-5 text-blue-400" />
+                        </div>
+                        <div className="ml-3">
+                          <h4 className="text-sm font-medium text-blue-800">What you'll get</h4>
+                          <div className="mt-2 text-sm text-blue-700">
+                            <ul className="list-disc list-inside space-y-1">
+                              <li>Sync people data between systems</li>
+                              <li>Automated attendance tracking</li>
+                              <li>Seamless integration with your existing workflow</li>
+                            </ul>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
-
-                                     {/* Usage Instructions */}
-                   {/* {dataAccessEnabled && (
-                     <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                       <div className="flex">
-                         <div className="flex-shrink-0">
-                           <ShieldCheckIcon className="h-5 w-5 text-green-400" />
-                         </div>
-                         <div className="ml-3">
-                           <h3 className="text-sm font-medium text-green-800">Data Access Enabled</h3>
-                           <div className="mt-2 text-sm text-green-700">
-                             <p className="mb-2">
-                               Your data is now accessible from external applications. You can use the following endpoints:
-                             </p>
-                             <div className="bg-white p-3 rounded border">
-                               <code className="text-xs font-mono">
-                                 GET /api/importrange/attendance?church_id=YOUR_CHURCH_ID&startDate=2024-01-01&endDate=2024-12-31
-                               </code>
-                             </div>
-                             <p className="mt-2">
-                               For Google Sheets integration, use the IMPORTRANGE function with your domain URL and church ID.
-                             </p>
-                             <p className="mt-1 text-xs text-green-600">
-                               <strong>Note:</strong> You'll need to provide your church ID as a parameter. Contact your administrator for this information.
-                             </p>
-                           </div>
-                         </div>
-                       </div>
-                     </div>
-                   )} */}
                 </div>
-              )}
+              </div>
             </div>
           )}
+
         </div>
       </div>
+
+      {/* API Key Setup Guide Modal */}
+      <Modal
+        isOpen={showApiKeyGuide}
+        onClose={() => setShowApiKeyGuide(false)}
+        className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+      >
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold text-gray-900">How to Get Your Elvanto API Key</h2>
+            <button
+              onClick={() => setShowApiKeyGuide(false)}
+              className="text-gray-400 hover:text-gray-500 focus:outline-none"
+            >
+              <XMarkIcon className="h-6 w-6" />
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-800">
+                Follow these simple steps to get your API key from Elvanto. You'll need admin access to your Elvanto account.
+              </p>
+            </div>
+
+            {/* Step 1 */}
+            <div className="border-l-4 border-blue-500 pl-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
+                    1
+                  </div>
+                </div>
+                <div className="ml-4 flex-1">
+                  <h3 className="text-lg font-medium text-gray-900">Log in to Elvanto</h3>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Go to <a href="https://www.elvanto.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline">elvanto.com</a> and log in with your admin account.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div className="border-l-4 border-blue-500 pl-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
+                    2
+                  </div>
+                </div>
+                <div className="ml-4 flex-1">
+                  <h3 className="text-lg font-medium text-gray-900">Go to Settings → Integrations</h3>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Click on <strong>Settings</strong> in the top menu, then select <strong>Integrations</strong> from the sidebar.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div className="border-l-4 border-blue-500 pl-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
+                    3
+                  </div>
+                </div>
+                <div className="ml-4 flex-1">
+                  <h3 className="text-lg font-medium text-gray-900">Find API Access</h3>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Look for <strong>API Access</strong> or <strong>Developer</strong> section. Click on it to view your API keys.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 4 */}
+            <div className="border-l-4 border-blue-500 pl-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
+                    4
+                  </div>
+                </div>
+                <div className="ml-4 flex-1">
+                  <h3 className="text-lg font-medium text-gray-900">Copy Your API Key</h3>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Copy your API key and paste it into the field above. If you don't have one, you can generate a new key from this page.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="flex">
+                <InformationCircleIcon className="h-5 w-5 text-yellow-400 flex-shrink-0" />
+                <div className="ml-3">
+                  <h4 className="text-sm font-medium text-yellow-800">Keep Your API Key Secure</h4>
+                  <p className="mt-1 text-sm text-yellow-700">
+                    Your API key provides access to your Elvanto data. Keep it private and don't share it publicly.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowApiKeyGuide(false)}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Elvanto Disconnect Confirmation Modal */}
+      <Modal
+        isOpen={showDisconnectModal}
+        onClose={() => setShowDisconnectModal(false)}
+      >
+        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Disconnect Elvanto
+              </h3>
+              <button
+                onClick={() => setShowDisconnectModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
+            </div>
+            
+            <div className="text-center mb-6">
+              <p className="text-sm text-gray-600 mb-2">
+                Are you sure you want to disconnect from Elvanto?
+              </p>
+              <p className="text-sm text-gray-500">
+                This will stop syncing data between the services. You can reconnect at any time.
+              </p>
+            </div>
+            
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowDisconnectModal(false)}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDisconnect}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
+              >
+                <LinkSlashIcon className="h-4 w-4 mr-2" />
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

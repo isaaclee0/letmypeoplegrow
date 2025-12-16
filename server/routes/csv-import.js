@@ -789,15 +789,15 @@ router.put('/mass-update-people-type',
             if (familyId) {
               // Check if all family members now have the same people_type
               const familyMembers = await conn.query(
-                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
-                [familyId]
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+                [familyId, req.user.church_id]
               );
 
               // If all family members have the same type, update the family type to match
-              if (familyMembers.length === 1) {
+              if (familyMembers.length === 1 && familyMembers[0].people_type) {
                 await conn.query(
-                  'UPDATE families SET familyType = ?, updated_at = NOW() WHERE id = ?',
-                  [peopleType, familyId]
+                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+                  [familyMembers[0].people_type, familyId, req.user.church_id]
                 );
               }
             }

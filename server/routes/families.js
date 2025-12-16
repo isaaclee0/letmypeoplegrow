@@ -128,6 +128,19 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMIL
       return res.status(404).json({ error: 'Family not found' });
     }
 
+    // If family_type was changed, sync all active members' people_type to match
+    if (familyType && ['regular', 'local_visitor', 'traveller_visitor'].includes(familyType)) {
+      try {
+        await Database.query(
+          'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE family_id = ? AND is_active = true AND church_id = ?',
+          [familyType, id, req.user.church_id]
+        );
+      } catch (error) {
+        console.error('Error syncing individual people_type with family_type:', error);
+        // Don't fail the request - log error but continue
+      }
+    }
+
     res.json({ message: 'Family updated successfully', id: Number(id) });
   } catch (error) {
     console.error('Update family error:', error);

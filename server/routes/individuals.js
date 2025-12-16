@@ -256,6 +256,30 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVID
   }
 });
 
+// Helper function to sync family_type when all members have the same people_type
+async function syncFamilyTypeIfUnified(familyId, churchId) {
+  if (!familyId) return;
+  
+  try {
+    // Get all active family members' people_type
+    const familyMembers = await Database.query(
+      'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+      [familyId, churchId]
+    );
+
+    // If all family members have the same type, update family_type to match
+    if (familyMembers.length === 1 && familyMembers[0].people_type) {
+      await Database.query(
+        'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+        [familyMembers[0].people_type, familyId, churchId]
+      );
+    }
+  } catch (error) {
+    console.error('Error syncing family type:', error);
+    // Don't throw - this is a sync operation, shouldn't fail the main update
+  }
+}
+
 // Update individual (Admin/Coordinator)
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIVIDUAL'), async (req, res) => {
   try {
@@ -263,6 +287,19 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     const { firstName, lastName, familyId, peopleType } = req.body;
 
     console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType });
+
+    // Get current family_id before update (to sync old family if familyId is changing)
+    const currentIndividual = await Database.query(
+      'SELECT family_id FROM individuals WHERE id = ? AND church_id = ?',
+      [id, req.user.church_id]
+    );
+
+    if (currentIndividual.length === 0) {
+      return res.status(404).json({ error: 'Individual not found' });
+    }
+
+    const oldFamilyId = currentIndividual[0].family_id;
+    const newFamilyId = familyId !== undefined ? familyId : oldFamilyId;
 
     // Build dynamic update - only include fields that are actually provided
     const fields = ['first_name = ?', 'last_name = ?'];
@@ -291,6 +328,19 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Individual not found' });
+    }
+
+    // Sync family_type for both old and new families if people_type was changed
+    if (peopleType) {
+      // Sync new family (if individual is in a family)
+      if (newFamilyId) {
+        await syncFamilyTypeIfUnified(newFamilyId, req.user.church_id);
+      }
+      
+      // Sync old family if family_id changed (to update old family's type)
+      if (oldFamilyId && oldFamilyId !== newFamilyId) {
+        await syncFamilyTypeIfUnified(oldFamilyId, req.user.church_id);
+      }
     }
 
     res.json({

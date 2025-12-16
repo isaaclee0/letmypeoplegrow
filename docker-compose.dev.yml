@@ -39,6 +39,7 @@ services:
       AUTH_DEV_BYPASS: 'false'
       PORT: 3001
       CLIENT_URL: http://localhost:3000
+      # BASE_URL comes from server/.env file (via env_file above)
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: church_attendance

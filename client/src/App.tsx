@@ -22,6 +22,7 @@ import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
 import ProfilePage from './pages/ProfilePage';
 import WebSocketTestPage from './pages/WebSocketTestPage';
+import ElvantoImportPage from './pages/ElvantoImportPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -191,6 +192,14 @@ function App() {
                   {/* Advanced Migrations removed */}
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="profile" element={<ProfilePage />} />
+                  <Route 
+                    path="elvanto-import" 
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <ElvantoImportPage />
+                      </RoleProtectedRoute>
+                    } 
+                  />
                   <Route path="websocket-test" element={<WebSocketTestPage />} />
                   <Route path="notification-rules" element={
                     <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>

@@ -642,6 +642,12 @@ class WebSocketService {
         const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
         const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
         const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
+        const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+
+        // Use historical people_type if available
+        const peopleTypeExpression = hasPeopleTypeAtTime 
+          ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
+          : `i.people_type`;
 
         // Load attendance list (same logic as REST API)
         let attendanceListQuery;
@@ -654,7 +660,7 @@ class WebSocketService {
               i.first_name as firstName,
               i.last_name as lastName,
               i.last_attendance_date as lastAttendanceDate,
-              i.people_type,
+              ${peopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -665,8 +671,12 @@ class WebSocketService {
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id AND ar.church_id = ?
             WHERE i.church_id = ? AND gl.gathering_type_id = ?
             AND (
-              f.family_type = 'regular' OR 
-              (f.family_type IS NULL AND i.people_type = 'regular')
+              (f.family_type = 'regular' AND ${hasPeopleTypeAtTime 
+                ? 'COALESCE(ar.people_type_at_time, i.people_type)' 
+                : 'i.people_type'} = 'regular') OR 
+              (f.family_type IS NULL AND ${hasPeopleTypeAtTime 
+                ? 'COALESCE(ar.people_type_at_time, i.people_type)' 
+                : 'i.people_type'} = 'regular')
             )
             AND (
               i.is_active = true OR 
@@ -685,7 +695,7 @@ class WebSocketService {
               i.first_name as firstName,
               i.last_name as lastName,
               i.last_attendance_date as lastAttendanceDate,
-              i.people_type,
+              ${peopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -696,8 +706,12 @@ class WebSocketService {
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id
             WHERE gl.gathering_type_id = ?
             AND (
-              f.family_type = 'regular' OR 
-              (f.family_type IS NULL AND i.people_type = 'regular')
+              (f.family_type = 'regular' AND ${hasPeopleTypeAtTime 
+                ? 'COALESCE(ar.people_type_at_time, i.people_type)' 
+                : 'i.people_type'} = 'regular') OR 
+              (f.family_type IS NULL AND ${hasPeopleTypeAtTime 
+                ? 'COALESCE(ar.people_type_at_time, i.people_type)' 
+                : 'i.people_type'} = 'regular')
             )
             AND (
               i.is_active = true OR 
@@ -714,6 +728,11 @@ class WebSocketService {
         const attendanceList = await conn.query(attendanceListQuery, attendanceListParams);
 
         // Load visitors (same logic as REST API)
+        // Use historical people_type if available
+        const visitorPeopleTypeExpression = hasPeopleTypeAtTime
+          ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
+          : `i.people_type`;
+        
         let visitorsQuery;
         let visitorsParams;
         
@@ -724,7 +743,7 @@ class WebSocketService {
               i.first_name as firstName,
               i.last_name as lastName,
               i.last_attendance_date as lastAttendanceDate,
-              i.people_type,
+              ${visitorPeopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -732,7 +751,9 @@ class WebSocketService {
             LEFT JOIN families f ON i.family_id = f.id AND f.church_id = ?
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ? AND ats.church_id = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id AND ar.church_id = ?
-            WHERE i.church_id = ? AND i.people_type IN ('local_visitor', 'traveller_visitor')
+            WHERE i.church_id = ? AND ${hasPeopleTypeAtTime 
+              ? `(COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor') OR (ar.people_type_at_time IS NULL AND i.people_type IN ('local_visitor', 'traveller_visitor')))`
+              : `i.people_type IN ('local_visitor', 'traveller_visitor')`}
             AND EXISTS (
               SELECT 1 FROM gathering_lists gl 
               WHERE gl.individual_id = i.id 
@@ -749,7 +770,7 @@ class WebSocketService {
               i.first_name as firstName,
               i.last_name as lastName,
               i.last_attendance_date as lastAttendanceDate,
-              i.people_type,
+              ${visitorPeopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
               COALESCE(ar.present, false) as present
@@ -757,7 +778,9 @@ class WebSocketService {
             LEFT JOIN families f ON i.family_id = f.id
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ?
             LEFT JOIN attendance_records ar ON ar.session_id = ats.id AND ar.individual_id = i.id
-            WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
+            WHERE ${hasPeopleTypeAtTime 
+              ? `(COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor') OR (ar.people_type_at_time IS NULL AND i.people_type IN ('local_visitor', 'traveller_visitor')))`
+              : `i.people_type IN ('local_visitor', 'traveller_visitor')`}
             AND EXISTS (
               SELECT 1 FROM gathering_lists gl 
               WHERE gl.individual_id = i.id 

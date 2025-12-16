@@ -688,6 +688,40 @@ export const settingsAPI = {
   // DISABLED: External data access feature is currently disabled
   // getDataAccess: () => api.get('/settings/data-access'),
   // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
+  // Elvanto configuration
+  getElvantoConfig: () => api.get('/settings/elvanto-config'),
+  updateElvantoConfig: (data: {
+    clientId: string;
+    clientSecret?: string;
+    redirectUri: string;
+  }) => api.put('/settings/elvanto-config', data),
+};
+
+// Integrations API
+export const integrationsAPI = {
+  // Elvanto integration - API Key based
+  getElvantoStatus: () => api.get('/integrations/elvanto/status'),
+  connectElvanto: (apiKey: string) => api.post('/integrations/elvanto/connect', { apiKey }),
+  disconnectElvanto: () => api.post('/integrations/elvanto/disconnect'),
+  // Elvanto data
+  getElvantoPeople: (params?: { page?: number; per_page?: number; search?: string; include_family?: string }) =>
+    api.get('/integrations/elvanto/people', { params }),
+  getElvantoFamilies: (params?: { page?: number; per_page?: number; search?: string; include_archived?: string }) =>
+    api.get('/integrations/elvanto/families', { params }),
+  getElvantoGroups: (params?: { page?: number; per_page?: number; search?: string }) =>
+    api.get('/integrations/elvanto/groups', { params }),
+  getElvantoGroupInfo: (groupId: string) =>
+    api.get(`/integrations/elvanto/groups/${groupId}`),
+  getElvantoServices: (params?: { page?: number; per_page?: number }) =>
+    api.get('/integrations/elvanto/services', { params }),
+  importFromElvanto: (data: { peopleIds?: string[]; familyIds?: string[]; gatheringIds?: number[] }) =>
+    api.post('/integrations/elvanto/import', data),
+  checkGatheringDuplicates: (data: { groupIds?: string[]; serviceTypeIds?: string[] }) =>
+    api.post('/integrations/elvanto/check-gathering-duplicates', data),
+  importGatheringsFromElvanto: (data: { groupIds?: string[]; serviceTypeIds?: string[]; gatheringInfo?: Record<string, { name?: string; description?: string; dayOfWeek: string; startTime: string; frequency: string }>; nameOverrides?: Record<string, string> }) =>
+    api.post('/integrations/elvanto/import-gatherings', data),
+  // Debug - dump all available Elvanto data
+  debugDumpElvanto: () => api.get('/integrations/elvanto/debug-dump'),
 };
 
 // Visitor Configuration API

@@ -15,6 +15,9 @@ export default defineConfig({
     },
     // Completely disable WebSocket functionality
     ws: false,
+    // Allow all hosts to work with nginx proxy
+    // Nginx will rewrite Host header to localhost:3000, but Vite still checks origin
+    allowedHosts: ['all'],
     proxy: {
       '/api': {
         // When accessing Vite directly on :3000 (not via nginx), forward API to the server container
