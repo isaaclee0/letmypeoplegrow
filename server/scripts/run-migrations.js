@@ -24,24 +24,22 @@ function splitSqlStatements(sqlContent) {
 }
 
 // Helper function to execute multiple SQL statements
+// Uses Database.executeMultipleStatements which preserves session variables (@sql, @column_exists, etc.)
 async function executeMultipleStatements(sqlContent) {
+  // Count statements for logging
   const statements = splitSqlStatements(sqlContent);
-  console.log(`Executing ${statements.length} statements...`);
+  console.log(`Executing ${statements.length} statements on a single connection...`);
   
+  // Use Database method which executes on a single connection to preserve session variables
+  const result = await Database.executeMultipleStatements(sqlContent);
+  
+  // Log each statement execution
   for (let i = 0; i < statements.length; i++) {
     const statement = statements[i];
-    console.log(`Executing statement ${i + 1}/${statements.length}: ${statement.substring(0, 50)}...`);
-    
-    try {
-      await Database.query(statement);
-      console.log(`✅ Statement ${i + 1} executed successfully`);
-    } catch (error) {
-      console.error(`❌ Statement ${i + 1} failed:`, error.message);
-      throw error;
-    }
+    console.log(`✅ Statement ${i + 1}/${statements.length} executed: ${statement.substring(0, 50)}...`);
   }
   
-  return { success: true, statementsExecuted: statements.length };
+  return result;
 }
 
 // Helper function to get migration description

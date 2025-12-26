@@ -16,7 +16,7 @@ export const getAppVersion = (): string => {
     return packageJson.version;
   } catch (error) {
     // Final fallback
-    const fallbackVersion = '1.3.9';
+    const fallbackVersion = '1.4.0';
     return fallbackVersion;
   }
 };

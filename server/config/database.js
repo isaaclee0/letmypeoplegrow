@@ -72,6 +72,38 @@ class Database {
       return false;
     }
   }
+
+  /**
+   * Execute multiple SQL statements on a single connection
+   * This preserves session variables (@sql, @column_exists, etc.) between statements
+   * @param {string} sqlContent - SQL content with multiple statements separated by semicolons
+   * @returns {Promise<Object>} - Result with success status and statement count
+   */
+  static async executeMultipleStatements(sqlContent) {
+    let conn;
+    try {
+      conn = await pool.getConnection();
+      
+      // Split SQL into statements
+      const statements = sqlContent
+        .split(';')
+        .map(stmt => stmt.trim())
+        .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'))
+        .map(stmt => stmt + ';');
+      
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
+        await conn.query(statement);
+      }
+      
+      return { success: true, statementsExecuted: statements.length };
+    } catch (err) {
+      console.error('Database executeMultipleStatements error:', err);
+      throw err;
+    } finally {
+      if (conn) conn.release();
+    }
+  }
 }
 
 module.exports = Database; 
