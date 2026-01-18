@@ -7,13 +7,31 @@ const path = require('path');
 const generateServiceWorker = () => {
   const timestamp = Date.now();
   
-  // Get the current version from package.json
-  let currentVersion = '0.9.6'; // fallback
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-    currentVersion = packageJson.version;
-  } catch (error) {
-    console.warn('Could not read package.json for version, using fallback');
+  // Get the current version from VERSION file (single source of truth)
+  let currentVersion;
+  
+  // Try multiple locations for VERSION file (local dev vs Docker build)
+  const possiblePaths = [
+    path.join(__dirname, '../../VERSION'),      // Local development: client/scripts -> project root
+    path.join(__dirname, '../VERSION'),         // Docker build: /app/scripts -> /app/VERSION
+    path.join(process.cwd(), 'VERSION'),        // Current working directory
+  ];
+  
+  for (const versionPath of possiblePaths) {
+    try {
+      currentVersion = fs.readFileSync(versionPath, 'utf8').trim();
+      console.log(`Read version from VERSION file: ${currentVersion} (${versionPath})`);
+      break;
+    } catch (error) {
+      // Try next path
+    }
+  }
+  
+  if (!currentVersion) {
+    console.error('ERROR: Could not read VERSION file from any of these locations:');
+    possiblePaths.forEach(p => console.error(`  - ${p}`));
+    console.error('Please ensure VERSION file exists in the project root.');
+    process.exit(1);
   }
   
   const cacheName = `let-my-people-grow-v${currentVersion}-${timestamp}`;

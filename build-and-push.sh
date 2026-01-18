@@ -2,10 +2,18 @@
 
 # Build and push Docker images to Docker Hub
 # Usage: ./build-and-push.sh [version]
-# If no version is provided, uses the default version
+# If no version is provided, reads from VERSION file
 
-# Default version (change this when releasing new versions)
-VERSION=${1:-v1.4.0}
+# Read version from VERSION file (single source of truth)
+if [ -f "VERSION" ]; then
+    FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+else
+    echo "ERROR: VERSION file not found!"
+    exit 1
+fi
+
+# Use provided version or default to VERSION file (with 'v' prefix)
+VERSION=${1:-v$FILE_VERSION}
 
 # Configuration
 REGISTRY="staugustine1"
@@ -48,11 +56,11 @@ echo "✅ Server image built and pushed: $SERVER_IMAGE:$VERSION"
 
 # Build and push client image
 echo "Building client image..."
-echo "  - This will regenerate the service worker with cache busting"
+echo "  - Version will be read from VERSION file during build"
+echo "  - Service worker will be regenerated with cache busting"
 docker buildx build \
     --builder $BUILDER \
     --platform linux/amd64 \
-    --build-arg VERSION=$VERSION \
     -t $CLIENT_IMAGE:$VERSION \
     -t $CLIENT_IMAGE:latest \
     -f Dockerfile.client.optimized \

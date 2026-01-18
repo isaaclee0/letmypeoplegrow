@@ -7,9 +7,11 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY client/package*.json ./
 
-# Get version from package.json and set as build arg
-ARG VERSION
-ENV REACT_APP_VERSION=$VERSION
+# Copy VERSION file (single source of truth for versioning)
+COPY VERSION ./VERSION
+
+# Read version from VERSION file and set as environment variable
+RUN VERSION=$(cat VERSION | tr -d '[:space:]') && echo "Building version: $VERSION"
 
 # Install all dependencies for Vite build
 RUN npm ci
@@ -24,8 +26,8 @@ COPY client/tailwind.config.js ./
 COPY client/postcss.config.js ./
 COPY client/vite.config.ts ./
 
-# Build the app (Vite -> dist)
-RUN npm run build
+# Set REACT_APP_VERSION from VERSION file and build
+RUN export REACT_APP_VERSION=$(cat VERSION | tr -d '[:space:]') && npm run build
 
 # Production stage
 FROM nginx:alpine
