@@ -32,7 +32,6 @@ import { Bars3Icon } from '@heroicons/react/24/outline';
 interface PersonForm {
   firstName: string;
   lastName: string;
-  lastNameUnknown: boolean;
   fillLastNameFromAbove: boolean;
 }
 
@@ -307,6 +306,7 @@ const AttendancePage: React.FC = () => {
   const touchThrottleDelay = 16; // ~60fps
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
+  const [isSubmittingVisitor, setIsSubmittingVisitor] = useState(false);
   
   // Smart truncation function for gathering names
   const getSmartTruncatedName = useCallback((name: string, allNames: string[], maxLength: number = 17) => {
@@ -463,7 +463,6 @@ const AttendancePage: React.FC = () => {
     persons: [{
       firstName: '',
       lastName: '',
-      lastNameUnknown: false,
       fillLastNameFromAbove: false
     }],
     autoFillSurname: false,
@@ -1887,7 +1886,6 @@ const AttendancePage: React.FC = () => {
       persons: [{
         firstName: '',
         lastName: '',
-        lastNameUnknown: false,
         fillLastNameFromAbove: false
       }],
       autoFillSurname: false,
@@ -1921,7 +1919,6 @@ const AttendancePage: React.FC = () => {
       return {
         firstName,
         lastName,
-        lastNameUnknown: lastName === 'Unknown' || !lastName,
         fillLastNameFromAbove: false
       };
     });
@@ -1955,14 +1952,13 @@ const AttendancePage: React.FC = () => {
       const newPerson = { 
         firstName: '', 
         lastName: '', 
-        lastNameUnknown: false,
         fillLastNameFromAbove: true // Default to checked for subsequent people
       };
       
       // Auto-fill surname from first person if they have one
       if (prev.persons.length > 0) {
         const firstPerson = prev.persons[0];
-        if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
+        if (firstPerson.lastName && firstPerson.lastName.trim()) {
           newPerson.lastName = firstPerson.lastName;
         }
       }
@@ -1986,23 +1982,13 @@ const AttendancePage: React.FC = () => {
       const newPersons = [...prev.persons];
       newPersons[index] = { ...newPersons[index], ...updates };
       
-      // Handle last name unknown checkbox
-      if (updates.lastNameUnknown !== undefined) {
-        newPersons[index].lastName = updates.lastNameUnknown ? '' : newPersons[index].lastName;
-        // If setting to unknown, also uncheck fill from above
-        if (updates.lastNameUnknown) {
-          newPersons[index].fillLastNameFromAbove = false;
-        }
-      }
-      
       // Handle fill from above checkbox
       if (updates.fillLastNameFromAbove !== undefined) {
         if (updates.fillLastNameFromAbove && index > 0) {
-          // Fill from first person's last name
+          // Fill from first person's last name (only if they have one)
           const firstPerson = newPersons[0];
-          if (firstPerson.lastName && !firstPerson.lastNameUnknown) {
+          if (firstPerson.lastName && firstPerson.lastName.trim()) {
             newPersons[index].lastName = firstPerson.lastName;
-            newPersons[index].lastNameUnknown = false;
           }
         }
         // If unchecking fill from above, don't clear the name (let user decide)
@@ -2011,8 +1997,8 @@ const AttendancePage: React.FC = () => {
       // If updating first person's last name, update all others who have fillLastNameFromAbove checked
       if (index === 0 && updates.lastName !== undefined) {
         for (let i = 1; i < newPersons.length; i++) {
-          if (newPersons[i].fillLastNameFromAbove && !newPersons[i].lastNameUnknown) {
-            newPersons[i].lastName = updates.lastName;
+          if (newPersons[i].fillLastNameFromAbove) {
+            newPersons[i].lastName = updates.lastName || '';
           }
         }
       }
@@ -2024,7 +2010,9 @@ const AttendancePage: React.FC = () => {
   const handleSubmitVisitor = async () => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
     if (!selectedGathering) return;
+    if (isSubmittingVisitor) return; // Prevent double-clicks
     
+    setIsSubmittingVisitor(true);
     try {
       // Validate form
       for (const person of visitorForm.persons) {
@@ -2032,18 +2020,15 @@ const AttendancePage: React.FC = () => {
           setError('First name is required for all persons');
           return;
         }
-        if (!person.lastName.trim() && !person.lastNameUnknown) {
-          setError('Last name is required for all persons (or check "Unknown")');
-          return;
-        }
+        // Last name is optional - can be empty
       }
 
-      // Build people array
+      // Build people array - use empty string for missing surnames (not 'Unknown')
       const people = visitorForm.persons.map(person => ({
         firstName: person.firstName.trim(),
-        lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
+        lastName: person.lastName.trim(), // Can be empty string
         firstUnknown: false, // Always false - we accept whatever is entered
-        lastUnknown: person.lastNameUnknown,
+        lastUnknown: !person.lastName.trim(), // true if surname is empty
         isChild: false // No distinction
       }));
 
@@ -2078,11 +2063,13 @@ const AttendancePage: React.FC = () => {
         // Find all family members and update their people_type to match the family type
         const familyMembers = allIndividuals.filter((ind: any) => ind.familyId === editingVisitorData.familyId);
         
-        // Update each family member's people_type
-        const updatePromises = familyMembers.map(async (member: any) => {
+        // Update each existing family member's people_type and names
+        const updatePromises = familyMembers.map(async (member: any, index: number) => {
+          // If there's a corresponding form entry, update with form data
+          const formPerson = people[index];
           return individualsAPI.update(member.id, {
-            firstName: member.firstName,
-            lastName: member.lastName,
+            firstName: formPerson ? formPerson.firstName : member.firstName,
+            lastName: formPerson ? formPerson.lastName : member.lastName,
             familyId: editingVisitorData.familyId,
             peopleType: personType
           });
@@ -2090,8 +2077,45 @@ const AttendancePage: React.FC = () => {
         
         await Promise.all(updatePromises);
         
-        response = { data: { message: 'Visitor family updated successfully', individuals: familyMembers.map((m: any) => ({ id: m.id, firstName: m.firstName, lastName: m.lastName })) } };
-        showSuccess(`Visitor family updated successfully (${familyMembers.length} member${familyMembers.length !== 1 ? 's' : ''})`);
+        // Create new individuals for any additional people added to the form
+        const newPeopleCount = people.length - familyMembers.length;
+        let createdIndividuals: any[] = [];
+        
+        if (newPeopleCount > 0) {
+          const newPeople = people.slice(familyMembers.length);
+          const createPromises = newPeople.map(async (person) => {
+            return individualsAPI.create({
+              firstName: person.firstName,
+              lastName: person.lastName,
+              familyId: editingVisitorData.familyId,
+              peopleType: personType
+            });
+          });
+          
+          const createResults = await Promise.all(createPromises);
+          createdIndividuals = createResults.map(r => r.data);
+          
+          // Add the new individuals to the current service attendance
+          if (selectedGathering && selectedDate) {
+            const addToServicePromises = createdIndividuals.map(async (individual) => {
+              return attendanceAPI.addIndividualToService(
+                selectedGathering.id,
+                selectedDate,
+                individual.id
+              );
+            });
+            await Promise.all(addToServicePromises);
+          }
+        }
+        
+        const totalMembers = familyMembers.length + createdIndividuals.length;
+        response = { data: { message: 'Visitor family updated successfully', individuals: [...familyMembers, ...createdIndividuals].map((m: any) => ({ id: m.id, firstName: m.firstName, lastName: m.lastName })) } };
+        
+        if (newPeopleCount > 0) {
+          showSuccess(`Visitor family updated: ${newPeopleCount} new member${newPeopleCount !== 1 ? 's' : ''} added (${totalMembers} total)`);
+        } else {
+          showSuccess(`Visitor family updated successfully (${totalMembers} member${totalMembers !== 1 ? 's' : ''})`);
+        }
       } else {
         // Create new visitor family in People system and add to service
         const familyName = visitorForm.familyName.trim() || generateFamilyName(convertToUtilityFormat(people)) || 'Visitor Family';
@@ -2149,7 +2173,6 @@ const AttendancePage: React.FC = () => {
         persons: [{
           firstName: '',
           lastName: '',
-          lastNameUnknown: false,
           fillLastNameFromAbove: false
         }],
         autoFillSurname: false,
@@ -2162,6 +2185,8 @@ const AttendancePage: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to save visitor:', err);
       setError(err.response?.data?.error || 'Failed to save visitor');
+    } finally {
+      setIsSubmittingVisitor(false);
     }
   };
 
@@ -2554,16 +2579,15 @@ const AttendancePage: React.FC = () => {
   // Memoized family name computation for visitor form
   const computedVisitorFamilyName = useMemo(() => {
     const validMembers = visitorForm.persons.filter(member => 
-      member.firstName.trim() && 
-      (member.lastName.trim() || member.lastNameUnknown)
+      member.firstName.trim()
     );
     
     if (validMembers.length === 0) return '';
     
     return generateFamilyName(validMembers.map(person => ({
       firstName: person.firstName.trim(),
-      lastName: person.lastName.trim(),
-      lastUnknown: person.lastNameUnknown,
+      lastName: person.lastName.trim(), // Can be empty string
+      lastUnknown: !person.lastName.trim(), // true if surname is empty
       isChild: false // No distinction
     })));
   }, [visitorForm.persons]);
@@ -2675,30 +2699,59 @@ const AttendancePage: React.FC = () => {
   const getPersonDisplayName = (person: any, familyName?: string) => {
     // For visitors with .name property
     if (person.name) {
+      const parts = person.name.trim().split(' ');
+      const firstName = parts[0];
+      const lastName = parts.slice(1).join(' ');
+      
       if (familyName) {
-        // Extract surname from family name and compare with visitor's name
-        const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
-        const parts = person.name.trim().split(' ');
-        const firstName = parts[0];
-        const lastName = parts.slice(1).join(' ');
+        // Check if family name has no surname (no comma means first names only)
+        const hasSurnameInFamilyName = familyName.includes(',');
         
-        // Only hide surname if it matches the family surname and is not empty
-        if (lastName && lastName.toLowerCase() !== 'unknown' && familySurname === lastName.toLowerCase()) {
+        if (!hasSurnameInFamilyName) {
+          // Family has no surname - show only first name
+          return firstName;
+        }
+        
+        // Family has surname - extract and compare
+        const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
+        
+        // Only hide surname if it matches the family surname and is not empty/unknown
+        if (lastName && lastName.toLowerCase() !== 'unknown' && lastName.trim() && familySurname === lastName.toLowerCase()) {
           return firstName;
         }
       }
+      
+      // If no family name or surname doesn't match, check if person has no surname
+      if (!lastName || lastName.toLowerCase() === 'unknown' || !lastName.trim()) {
+        return firstName;
+      }
+      
       return person.name;
     }
     
     // For regular attendees with firstName/lastName
-    if (familyName && person.lastName) {
+    if (familyName) {
+      // Check if family name has no surname (no comma means first names only)
+      const hasSurnameInFamilyName = familyName.includes(',');
+      
+      if (!hasSurnameInFamilyName) {
+        // Family has no surname - show only first name
+        return person.firstName || '';
+      }
+      
+      // Family has surname - extract and compare
       const familySurname = familyName.split(',')[0]?.trim().toLowerCase();
-      const personSurname = person.lastName.toLowerCase();
+      const personSurname = person.lastName?.toLowerCase() || '';
       
       // Only hide surname if it matches the family surname and is not empty/unknown
-      if (familySurname && personSurname && familySurname === personSurname && personSurname !== 'unknown') {
+      if (personSurname && personSurname !== 'unknown' && familySurname === personSurname) {
         return person.firstName;
       }
+    }
+    
+    // If person has no surname, show only first name
+    if (!person.lastName || person.lastName.toLowerCase() === 'unknown' || !person.lastName.trim()) {
+      return person.firstName || '';
     }
     
     return `${person.firstName || ''} ${person.lastName || ''}`.trim();
@@ -3893,13 +3946,14 @@ const AttendancePage: React.FC = () => {
                   {getAddModalTitle()}
                 </h3>
                 <button
+                  disabled={isSubmittingVisitor}
                   onClick={() => {
                     setShowAddVisitorModal(false);
                     setIsEditingVisitor(false);
                     setEditingVisitorData(null);
                     setError('');
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
@@ -3971,24 +4025,11 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.lastName}
                           onChange={(e) => updatePerson(index, { lastName: e.target.value })}
-                          disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
+                          disabled={index > 0 && person.fillLastNameFromAbove}
                           className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
-                          placeholder="Last name"
+                          placeholder="Last name (optional)"
                         />
                         <div className="flex flex-col space-y-1 mt-1">
-                          {/* For person 1 or any person: Unknown checkbox */}
-                          <div className="flex items-center">
-                            <input
-                              id={`personLastNameUnknown-${index}`}
-                              type="checkbox"
-                              checked={person.lastNameUnknown}
-                              onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                            />
-                            <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
-                              Unknown
-                            </label>
-                          </div>
                           {/* For person 2+: Fill from above checkbox */}
                           {index > 0 && (
                             <div className="flex items-center">
@@ -3997,7 +4038,6 @@ const AttendancePage: React.FC = () => {
                                 type="checkbox"
                                 checked={person.fillLastNameFromAbove}
                                 onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
-                                disabled={person.lastNameUnknown}
                                 className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                               />
                               <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
@@ -4052,46 +4092,75 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Family Name Display */}
+                {/* Family Name Display/Edit */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Family Name
                   </label>
-                  <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-900 font-medium">
-                        {computedVisitorFamilyName || 'Enter family member names above'}
-                      </span>
-                      {computedVisitorFamilyName && (
-                        <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
-                          Auto-generated
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Family name is automatically generated from the member names above.
-                  </p>
+                  {isEditingVisitor ? (
+                    <>
+                      <input
+                        type="text"
+                        value={visitorForm.familyName}
+                        onChange={(e) => setVisitorForm({ ...visitorForm, familyName: e.target.value })}
+                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        placeholder="Family name"
+                      />
+                      <p className="mt-1 text-sm text-gray-500">
+                        Edit the family name if needed, or leave as is.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-900 font-medium">
+                            {computedVisitorFamilyName || 'Enter family member names above'}
+                          </span>
+                          {computedVisitorFamilyName && (
+                            <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                              Auto-generated
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <p className="mt-1 text-sm text-gray-500">
+                        Family name is automatically generated from the member names above.
+                      </p>
+                    </>
+                  )}
                 </div>
                 
                 <div className="flex justify-end space-x-3 pt-4">
                   <button
                     type="button"
+                    disabled={isSubmittingVisitor}
                     onClick={() => {
                       setShowAddVisitorModal(false);
                       setIsEditingVisitor(false);
                       setEditingVisitorData(null);
                       setError('');
                     }}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    disabled={isSubmittingVisitor}
+                    className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {getAddButtonText()}
+                    {isSubmittingVisitor ? (
+                      <span className="flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Saving...
+                      </span>
+                    ) : (
+                      getAddButtonText()
+                    )}
                   </button>
                 </div>
               </form>
