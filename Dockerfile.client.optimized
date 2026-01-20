@@ -26,8 +26,8 @@ COPY client/tailwind.config.js ./
 COPY client/postcss.config.js ./
 COPY client/vite.config.ts ./
 
-# Set REACT_APP_VERSION from VERSION file and build
-RUN export REACT_APP_VERSION=$(cat VERSION | tr -d '[:space:]') && npm run build
+# Set VITE_APP_VERSION from VERSION file and build
+RUN export VITE_APP_VERSION=$(cat VERSION | tr -d '[:space:]') && npm run build
 
 # Production stage
 FROM nginx:alpine
