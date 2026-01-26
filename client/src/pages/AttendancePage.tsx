@@ -144,8 +144,7 @@ const AttendancePage: React.FC = () => {
     if (dateChanged || gatheringChanged) {
       logger.log('🧹 Date/gathering switched, clearing presentById state:', {
         from: { date: prevDateRef.current, gathering: prevGatheringRef.current },
-        to: { date: selectedDate, gathering: selectedGathering?.id },
-        currentPresentByIdKeys: Object.keys(presentById).length
+        to: { date: selectedDate, gathering: selectedGathering?.id }
       });
       
       // Clear presentById when switching to a different date/gathering
@@ -159,7 +158,7 @@ const AttendancePage: React.FC = () => {
     // Update refs for next comparison
     prevDateRef.current = selectedDate;
     prevGatheringRef.current = selectedGathering?.id || null;
-  }, [selectedDate, selectedGathering?.id, presentById]); // Include presentById to ensure we have current keys for logging
+  }, [selectedDate, selectedGathering?.id]); // Removed presentById - only react to date/gathering changes
 
   // Load cached data immediately on component mount for better UX during navigation
   useEffect(() => {
@@ -1239,6 +1238,13 @@ const AttendancePage: React.FC = () => {
 
   // Load regular attendance data when gathering or date changes (CACHE-FIRST approach)
   useEffect(() => {
+    // Track if this effect has been cancelled (user changed date/gathering before fetch completed)
+    let isCancelled = false;
+    
+    // Capture current values to check against after async operations
+    const currentGatheringId = selectedGathering?.id;
+    const currentDate = selectedDate;
+    
     const loadRegularAttendance = async () => {
       if (!selectedGathering || !selectedDate) {
         return;
@@ -1303,6 +1309,13 @@ const AttendancePage: React.FC = () => {
             response = apiResponse.data;
         }
         
+        // CRITICAL: Check if this request is still relevant before updating state
+        // This prevents race conditions when user changes date quickly
+        if (isCancelled) {
+          logger.log('🚫 Ignoring stale response - date/gathering changed during fetch');
+          return;
+        }
+        
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
         setVisitors(response.visitors || []);
@@ -1313,7 +1326,7 @@ const AttendancePage: React.FC = () => {
         // Apply any pending offline changes for this exact gathering/date
         const currentPendingChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
         currentPendingChanges.forEach((change: any) => {
-          if (change.gatheringId === selectedGathering.id && change.date === selectedDate) {
+          if (change.gatheringId === currentGatheringId && change.date === currentDate) {
             serverPresentById[change.individualId] = change.present;
           }
         });
@@ -1328,13 +1341,13 @@ const AttendancePage: React.FC = () => {
         });
         
         const cacheData = {
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
+          gatheringId: currentGatheringId,
+          date: currentDate,
           attendanceList: attendanceListForCache,
           visitors: response.visitors || [],
           timestamp: Date.now(),
           hasPendingChanges: pendingChanges.some(change => 
-            change.gatheringId === selectedGathering.id && change.date === selectedDate
+            change.gatheringId === currentGatheringId && change.date === currentDate
           )
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
@@ -1343,6 +1356,12 @@ const AttendancePage: React.FC = () => {
         setError(''); // Clear any previous errors
         
       } catch (err) {
+        // Check if cancelled before handling error
+        if (isCancelled) {
+          logger.log('🚫 Ignoring error from stale request - date/gathering changed');
+          return;
+        }
+        
         console.error('Failed to load fresh attendance data:', err);
         
         // If we already loaded from cache, just show a subtle error
@@ -1355,7 +1374,7 @@ const AttendancePage: React.FC = () => {
           const cachedData = localStorage.getItem('attendance_cached_data');
           if (cachedData) {
             const parsed = JSON.parse(cachedData);
-            if (parsed.gatheringId === selectedGathering.id && parsed.date === selectedDate) {
+            if (parsed.gatheringId === currentGatheringId && parsed.date === currentDate) {
                 logger.log('📦 Loading attendance data from cache due to server error');
               setAttendanceList(parsed.attendanceList || []);
               setVisitors(parsed.visitors || []);
@@ -1376,11 +1395,18 @@ const AttendancePage: React.FC = () => {
         setError('Failed to load attendance data');
         }
       } finally {
-        setIsLoading(false);
+        if (!isCancelled) {
+          setIsLoading(false);
+        }
       }
     };
 
     loadRegularAttendance();
+    
+    // Cleanup function - cancel any in-flight requests when dependencies change
+    return () => {
+      isCancelled = true;
+    };
   }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, attendanceRefreshTrigger, validDates]);
 
   // Function to quickly add a recent visitor
