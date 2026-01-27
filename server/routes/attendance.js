@@ -888,7 +888,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE f.family_type IN ('local_visitor', 'traveller_visitor') 
-          AND i.is_active = true
+          AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
           AND i.people_type IN ('local_visitor', 'traveller_visitor')
           AND i.church_id = ?
         ORDER BY f.family_name, i.first_name
