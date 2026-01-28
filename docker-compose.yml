@@ -89,6 +89,33 @@ services:
     networks:
       - app-network
 
+  # Internal Admin Panel (localhost only)
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: church_attendance_admin
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: production
+      DOCKER_ENV: "true"
+      ADMIN_PORT: 7777
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: church_attendance
+      DB_USER: church_user
+      DB_PASSWORD: church_password
+    ports:
+      - "127.0.0.1:7777:7777"
+    command: node admin/index.js
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
   # Nginx Reverse Proxy
   nginx:
     image: nginx:alpine

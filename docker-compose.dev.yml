@@ -98,6 +98,36 @@ services:
       - app-network-dev
     command: npm start
 
+  # Internal Admin Panel (localhost only)
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.server.dev
+    container_name: church_attendance_admin_dev
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: development
+      DOCKER_ENV: "true"
+      ADMIN_PORT: 7777
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: church_attendance
+      DB_USER: church_user
+      DB_PASSWORD: church_password
+    ports:
+      - "127.0.0.1:7777:7777"
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    command: node admin/index.js
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network-dev
+
   # Nginx for API routing (Development)
   nginx:
     build:

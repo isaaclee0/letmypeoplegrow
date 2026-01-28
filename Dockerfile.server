@@ -28,14 +28,16 @@ COPY server/migrations ./migrations
 COPY server/schema ./schema
 COPY server/scripts ./scripts
 COPY server/uploads ./uploads
+COPY server/admin ./admin
 COPY server/package*.json ./
 COPY server/.env* ./
 
 # Create uploads directory
 RUN mkdir -p uploads
 
-# Expose port
+# Expose ports (3001 for main server, 7777 for admin panel)
 EXPOSE 3001
+EXPOSE 7777
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

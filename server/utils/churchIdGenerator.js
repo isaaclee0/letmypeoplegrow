@@ -82,6 +82,7 @@ const generateSimpleChurchId = async (churchName) => {
 /**
  * Get church ID for existing church or generate new one
  * Uses secure generation in production, simple in development
+ * Also creates the church_settings record to store the church name
  */
 const getOrCreateChurchId = async (churchName) => {
   try {
@@ -96,11 +97,27 @@ const getOrCreateChurchId = async (churchName) => {
     }
     
     // Generate new church ID based on environment
+    let newChurchId;
     if (process.env.NODE_ENV === 'production') {
-      return await generateSecureChurchId(churchName);
+      newChurchId = await generateSecureChurchId(churchName);
     } else {
-      return await generateSimpleChurchId(churchName);
+      newChurchId = await generateSimpleChurchId(churchName);
     }
+    
+    // Create the church_settings record with the church name
+    // This ensures the church name is saved when the church_id is first created
+    try {
+      await Database.query(`
+        INSERT INTO church_settings (church_id, church_name, country_code, timezone, onboarding_completed)
+        VALUES (?, ?, 'AU', 'Australia/Sydney', false)
+      `, [newChurchId, churchName]);
+      console.log(`✅ Created church_settings for "${churchName}" with ID: ${newChurchId}`);
+    } catch (insertError) {
+      // If insert fails (e.g., duplicate), log but don't throw - the ID is still valid
+      console.warn(`⚠️ Could not create church_settings for ${newChurchId}:`, insertError.message);
+    }
+    
+    return newChurchId;
   } catch (error) {
     console.error('Error getting or creating church ID:', error);
     throw error;
