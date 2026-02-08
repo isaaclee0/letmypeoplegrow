@@ -1,5 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
+import path from 'path';
+
+// Read version from VERSION file (single source of truth)
+// Check parent dir (local dev), /VERSION (Docker dev mount), ./VERSION (Docker prod COPY)
+const versionPaths = [
+  path.resolve(__dirname, '..', 'VERSION'),
+  '/VERSION',
+  path.resolve(__dirname, 'VERSION'),
+];
+const versionFile = versionPaths.find(p => fs.existsSync(p));
+const appVersion = versionFile
+  ? fs.readFileSync(versionFile, 'utf-8').trim()
+  : '0.0.0';
 
 export default defineConfig({
   plugins: [react()],
@@ -38,6 +52,7 @@ export default defineConfig({
     'process.env': {},
     'process.env.VITE_HMR': 'false',
     'process.env.VITE_WS': 'false',
+    '__APP_VERSION__': JSON.stringify(appVersion),
   },
   // Ensure service worker is copied to build output
   publicDir: 'public',

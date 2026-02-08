@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
     // Admin users can see all gatherings, other users only see their assigned gatherings
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at,
                COUNT(DISTINCT gl.individual_id) as member_count,
                COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
@@ -26,12 +26,12 @@ router.get('/', async (req, res) => {
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         WHERE gt.is_active = true AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.is_active, gt.created_at
-        ORDER BY gt.name
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at
+        ORDER BY gt.id
       `, [req.user.church_id]);
     } else {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at,
                COUNT(DISTINCT gl.individual_id) as member_count,
                COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
@@ -41,8 +41,8 @@ router.get('/', async (req, res) => {
         LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE gt.is_active = true AND uga.user_id = ? AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.is_active, gt.created_at
-        ORDER BY gt.name
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at
+        ORDER BY gt.id
       `, [req.user.id, req.user.church_id]);
     }
     
@@ -108,7 +108,7 @@ router.post('/',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { name, description, dayOfWeek, startTime, frequency, attendanceType, customSchedule, setAsDefault } = req.body;
+      const { name, description, dayOfWeek, startTime, frequency, attendanceType, customSchedule, setAsDefault, kioskEnabled } = req.body;
     
     // Validate that standard gatherings have required fields
     if (attendanceType === 'standard' && (!dayOfWeek || !startTime || !frequency)) {
@@ -129,8 +129,8 @@ router.post('/',
     const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
     
     const result = await Database.query(`
-      INSERT INTO gathering_types (name, description, day_of_week, start_time, frequency, attendance_type, custom_schedule, created_by, church_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gathering_types (name, description, day_of_week, start_time, frequency, attendance_type, custom_schedule, kiosk_enabled, created_by, church_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       name, 
       description, 
@@ -139,6 +139,7 @@ router.post('/',
       isHeadcountWithCustom ? null : (frequency || 'weekly'), 
       attendanceType,
       customSchedule ? JSON.stringify(customSchedule) : null,
+      attendanceType === 'standard' && kioskEnabled ? true : false,
       req.user.id, 
       req.user.church_id
     ]);
@@ -185,7 +186,7 @@ const hasAttendanceRecords = async (gatheringId, churchId) => {
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHERING_TYPE'), async (req, res) => {
   try {
     const gatheringId = parseInt(req.params.id);
-    const { name, description, dayOfWeek, startTime, frequency, attendanceType, customSchedule } = req.body;
+    const { name, description, dayOfWeek, startTime, frequency, attendanceType, customSchedule, kioskEnabled } = req.body;
     
     // Verify user has access to this gathering
     const assignments = await Database.query(
@@ -235,11 +236,15 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
     const hasCustomSchedule = customSchedule && Object.keys(customSchedule).length > 0;
     const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
     
+    // Only allow kiosk for standard gatherings
+    const kioskValue = attendanceType === 'standard' && kioskEnabled ? true : false;
+
     const result = await Database.query(`
       UPDATE gathering_types 
       SET name = ?, description = ?, day_of_week = ?, start_time = ?, frequency = ?, 
           attendance_type = COALESCE(?, attendance_type), 
-          custom_schedule = ?
+          custom_schedule = ?,
+          kiosk_enabled = ?
       WHERE id = ? AND church_id = ?
     `, [
       name, 
@@ -249,6 +254,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
       isHeadcountWithCustom ? null : (frequency || 'weekly'), 
       attendanceType,
       customSchedule ? JSON.stringify(customSchedule) : null,
+      kioskValue,
       gatheringId, 
       req.user.church_id
     ]);

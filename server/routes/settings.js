@@ -1,4 +1,5 @@
 const express = require('express');
+const https = require('https');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 
@@ -17,6 +18,9 @@ router.get('/', requireRole(['admin']), async (req, res) => {
         cs.email_from_name,
         cs.email_from_address,
         cs.onboarding_completed,
+        cs.location_name,
+        cs.location_lat,
+        cs.location_lng,
         cs.created_at,
         cs.updated_at
       FROM church_settings cs
@@ -178,6 +182,96 @@ router.put('/elvanto-config', requireRole(['admin']), async (req, res) => {
   } catch (error) {
     console.error('Update Elvanto config error:', error);
     res.status(500).json({ error: 'Failed to update Elvanto configuration.' });
+  }
+});
+
+// ===== Location endpoints =====
+
+// Helper: make HTTPS GET request
+function httpsGet(url) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    https.get({
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      headers: { 'User-Agent': 'LetMyPeopleGrow/1.0' }
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { resolve(data); }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Search cities via Open-Meteo geocoding (free, no API key)
+router.get('/location-search', requireRole(['admin']), async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim().length < 2) {
+      return res.json({ results: [] });
+    }
+
+    const data = await httpsGet(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q.trim())}&count=8&language=en&format=json`
+    );
+
+    const results = (data.results || []).map(r => ({
+      name: r.name,
+      admin1: r.admin1 || null,
+      country: r.country || null,
+      countryCode: r.country_code || null,
+      lat: r.latitude,
+      lng: r.longitude,
+      displayName: [r.name, r.admin1, r.country].filter(Boolean).join(', ')
+    }));
+
+    res.json({ results });
+  } catch (error) {
+    console.error('Location search error:', error);
+    res.status(500).json({ error: 'Failed to search locations.' });
+  }
+});
+
+// Update church location (admin only)
+router.put('/location', requireRole(['admin']), async (req, res) => {
+  try {
+    const { name, lat, lng } = req.body;
+
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: 'Location name is required.' });
+    }
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ error: 'Latitude/longitude out of range.' });
+    }
+
+    const existing = await Database.query(
+      'SELECT id FROM church_settings WHERE church_id = ? LIMIT 1',
+      [req.user.church_id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Church settings not found.' });
+    }
+
+    await Database.query(`
+      UPDATE church_settings
+      SET location_name = ?, location_lat = ?, location_lng = ?, updated_at = NOW()
+      WHERE church_id = ?
+    `, [name.trim(), lat, lng, req.user.church_id]);
+
+    res.json({
+      message: 'Location updated successfully.',
+      location: { name: name.trim(), lat, lng }
+    });
+  } catch (error) {
+    console.error('Update location error:', error);
+    res.status(500).json({ error: 'Failed to update location.' });
   }
 });
 

@@ -216,11 +216,11 @@ router.post('/upload/:gatheringId',
 // Get TSV template
 router.get('/template', verifyToken, async (req, res) => {
   try {
-    // Get all gathering types for this church
+    // Get all gathering types for this church (ordered by creation, not alphabetically)
     const gatherings = await Database.query(`
-      SELECT name FROM gathering_types 
-      WHERE church_id = ? 
-      ORDER BY name
+      SELECT name FROM gathering_types
+      WHERE church_id = ?
+      ORDER BY id
     `, [req.user.church_id]);
     
     // Create gathering names list for examples

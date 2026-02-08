@@ -59,7 +59,7 @@ const loadRoutes = () => {
     'invitations', 'csv-import', 'migrations', 'advancedMigrations', 'test', 
     'notification_rules', 
     // 'importrange', // Disabled - external data access feature
-    'settings', 'activities', 'visitor-config', 'integrations'
+    'settings', 'activities', 'visitor-config', 'integrations', 'ai'
   ];
 
   // Check external service availability (Crazytel for SMS, Brevo for Email)

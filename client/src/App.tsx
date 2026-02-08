@@ -6,6 +6,7 @@ import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { SmartCacheProvider } from './contexts/SmartCacheContext';
+import { KioskProvider } from './contexts/KioskContext';
 import { OfflineModeIndicator } from './components/OfflineModeIndicator';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
@@ -23,6 +24,8 @@ import Layout from './components/Layout';
 import ProfilePage from './pages/ProfilePage';
 import WebSocketTestPage from './pages/WebSocketTestPage';
 import ElvantoImportPage from './pages/ElvantoImportPage';
+import AiInsightsPage from './pages/AiInsightsPage';
+import KioskPage from './pages/KioskPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -120,6 +123,7 @@ function App() {
       <WebSocketProvider>
         <SettingsProvider>
           <SmartCacheProvider>
+            <KioskProvider>
             <PWAUpdateProvider>
               <ToastContainer>
               <Router>
@@ -200,6 +204,8 @@ function App() {
                       </RoleProtectedRoute>
                     } 
                   />
+                  <Route path="ai-insights" element={<AiInsightsPage />} />
+                  <Route path="kiosk" element={<KioskPage />} />
                   <Route path="websocket-test" element={<WebSocketTestPage />} />
                   <Route path="notification-rules" element={
                     <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
@@ -213,6 +219,7 @@ function App() {
               </Router>
               </ToastContainer>
             </PWAUpdateProvider>
+            </KioskProvider>
           </SmartCacheProvider>
         </SettingsProvider>
       </WebSocketProvider>

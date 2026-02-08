@@ -35,6 +35,7 @@ interface Gathering {
       customDates?: string[];
     };
   };
+  kioskEnabled?: boolean;
   isActive: boolean;
   memberCount?: number;
   recentVisitorCount?: number;
@@ -60,6 +61,7 @@ interface CreateGatheringData {
       customDates?: string[];
     };
   };
+  kioskEnabled?: boolean;
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -86,7 +88,8 @@ const ManageGatheringsPage: React.FC = () => {
     startTime: '10:00',
     frequency: 'weekly',
     attendanceType: 'standard' as 'standard' | 'headcount',
-    customSchedule: undefined as any
+    customSchedule: undefined as any,
+    kioskEnabled: false
   });
 
   const [createGatheringData, setCreateGatheringData] = useState<CreateGatheringData>({
@@ -95,7 +98,8 @@ const ManageGatheringsPage: React.FC = () => {
     dayOfWeek: 'Sunday',
     startTime: '10:00',
     frequency: 'weekly',
-    attendanceType: 'standard'
+    attendanceType: 'standard',
+    kioskEnabled: false
   });
 
   // Confirmation modal states
@@ -224,7 +228,8 @@ const ManageGatheringsPage: React.FC = () => {
         startTime: formattedStartTime,
         frequency: createGatheringData.frequency,
         attendanceType: createGatheringData.attendanceType,
-        customSchedule: createGatheringData.customSchedule
+        customSchedule: createGatheringData.customSchedule,
+        kioskEnabled: createGatheringData.kioskEnabled
       };
       
       logger.log('Creating gathering with data:', gatheringData);
@@ -243,6 +248,7 @@ const ManageGatheringsPage: React.FC = () => {
         frequency: createGatheringData.frequency,
         attendanceType: createGatheringData.attendanceType,
         customSchedule: createGatheringData.customSchedule,
+        kioskEnabled: createGatheringData.kioskEnabled,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -288,7 +294,8 @@ const ManageGatheringsPage: React.FC = () => {
       startTime: gathering.startTime,
       frequency: gathering.frequency,
       attendanceType: gathering.attendanceType,
-      customSchedule: gathering.customSchedule
+      customSchedule: gathering.customSchedule,
+      kioskEnabled: gathering.kioskEnabled || false
     });
     setShowEditForm(true);
   }, []);
@@ -913,6 +920,26 @@ const ManageGatheringsPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Kiosk Mode Toggle - only for standard gatherings */}
+                {editFormData.attendanceType === 'standard' && (
+                  <div>
+                    <label className="flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editFormData.kioskEnabled || false}
+                        onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                      <span className="ml-2 text-sm font-medium text-gray-700">
+                        Allow Self Sign-In (Kiosk Mode)
+                      </span>
+                    </label>
+                    <p className="mt-1 text-xs text-gray-500 ml-6">
+                      Enables a self-service sign-in page where attendees can check themselves in via a shared device.
+                    </p>
+                  </div>
+                )}
+
                 {/* Custom Schedule Display for Headcount Gatherings */}
                 {editFormData.attendanceType === 'headcount' && editFormData.customSchedule && (
                   <div className="bg-blue-50 p-4 rounded-lg border">
@@ -1058,6 +1085,26 @@ const ManageGatheringsPage: React.FC = () => {
                       </label>
                     </div>
                   </div>
+
+                  {/* Kiosk Mode Toggle - only for standard gatherings */}
+                  {createGatheringData.attendanceType === 'standard' && (
+                    <div>
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={createGatheringData.kioskEnabled || false}
+                          onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm font-medium text-gray-700">
+                          Allow Self Sign-In (Kiosk Mode)
+                        </span>
+                      </label>
+                      <p className="mt-1 text-xs text-gray-500 ml-6">
+                        Enables a self-service sign-in page where attendees can check themselves in via a shared device.
+                      </p>
+                    </div>
+                  )}
 
                   {createGatheringData.attendanceType === 'headcount' && (
                     <div className="bg-blue-50 p-4 rounded-lg">

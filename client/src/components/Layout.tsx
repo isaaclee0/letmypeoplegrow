@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useKiosk } from '../contexts/KioskContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
-import { integrationsAPI } from '../services/api';
+import { integrationsAPI, aiAPI, gatheringsAPI } from '../services/api';
 import logger from '../utils/logger';
 import {
   Bars3Icon,
@@ -19,13 +20,18 @@ import {
   ArrowRightOnRectangleIcon,
   ArrowPathIcon,
   ArrowDownTrayIcon,
+  SparklesIcon,
+  ComputerDesktopIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [elvantoConnected, setElvantoConnected] = useState(false);
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [kioskAvailable, setKioskAvailable] = useState(false);
   const { user, logout } = useAuth();
+  const kioskCtx = useKiosk();
   const { updateAvailable, performUpdate } = usePWAUpdate();
   const location = useLocation();
   const navigate = useNavigate();
@@ -63,6 +69,52 @@ const Layout: React.FC = () => {
     fetchElvantoStatus();
   }, [user?.role]);
 
+  // Load AI configuration status
+  useEffect(() => {
+    // Load from cache immediately
+    const cached = localStorage.getItem('ai_configured');
+    if (cached !== null) {
+      setAiConfigured(cached === 'true');
+    }
+
+    const fetchAiStatus = async () => {
+      try {
+        const response = await aiAPI.getStatus();
+        const configured = response.data.configured === true;
+        setAiConfigured(configured);
+        localStorage.setItem('ai_configured', configured.toString());
+      } catch (error) {
+        logger.error('Failed to fetch AI status:', error);
+        setAiConfigured(false);
+        localStorage.setItem('ai_configured', 'false');
+      }
+    };
+
+    fetchAiStatus();
+  }, []);
+
+  // Load kiosk availability (any gathering has kiosk_enabled)
+  useEffect(() => {
+    const cached = localStorage.getItem('kiosk_available');
+    if (cached !== null) {
+      setKioskAvailable(cached === 'true');
+    }
+
+    const fetchKioskStatus = async () => {
+      try {
+        const response = await gatheringsAPI.getAll();
+        const gatherings = response.data.gatherings || [];
+        const hasKiosk = gatherings.some((g: any) => g.kioskEnabled);
+        setKioskAvailable(hasKiosk);
+        localStorage.setItem('kiosk_available', hasKiosk.toString());
+      } catch (error) {
+        // Non-critical
+      }
+    };
+
+    fetchKioskStatus();
+  }, []);
+
   // Close notifications when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -87,6 +139,12 @@ const Layout: React.FC = () => {
       { name: 'Users', href: '/app/users', icon: UserCircleIcon }
     ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
+    ...(aiConfigured ? [
+      { name: 'AI Insights', href: '/app/ai-insights', icon: SparklesIcon }
+    ] : []),
+    ...(kioskAvailable ? [
+      { name: 'Kiosk', href: '/app/kiosk', icon: ComputerDesktopIcon }
+    ] : []),
     ...(user?.role === 'admin' && elvantoConnected ? [
       { name: 'Import from Elvanto', href: '/app/elvanto-import', icon: ArrowDownTrayIcon }
     ] : []),
@@ -102,6 +160,21 @@ const Layout: React.FC = () => {
     setSidebarOpen(false);
     navigate('/app/profile');
   };
+
+  // Kiosk locked mode: hide sidebar and top bar entirely
+  if (kioskCtx.isLocked) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
+        <main className="h-full overflow-y-auto focus:outline-none">
+          <div className="py-6">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
+              <Outlet />
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">

@@ -177,6 +177,7 @@ export interface GatheringType {
       customDates?: string[];
     };
   };
+  kioskEnabled?: boolean;
   isActive: boolean;
   memberCount?: number;
   createdAt?: string;
@@ -297,6 +298,7 @@ export const gatheringsAPI = {
         customDates?: string[];
       };
     };
+    kioskEnabled?: boolean;
     setAsDefault?: boolean;
   }) => 
     api.post('/gatherings', data),
@@ -320,6 +322,7 @@ export const gatheringsAPI = {
         customDates?: string[];
       };
     };
+    kioskEnabled?: boolean;
   }) => 
     api.put(`/gatherings/${gatheringId}`, data),
     
@@ -602,6 +605,9 @@ export const onboardingAPI = {
     timezone?: string;
     emailFromName?: string;
     emailFromAddress?: string;
+    locationName?: string;
+    locationLat?: number;
+    locationLng?: number;
   }) => 
     api.post('/onboarding/church-info', data),
     
@@ -695,6 +701,9 @@ export const settingsAPI = {
     clientSecret?: string;
     redirectUri: string;
   }) => api.put('/settings/elvanto-config', data),
+  // Location
+  searchLocation: (q: string) => api.get('/settings/location-search', { params: { q } }),
+  updateLocation: (data: { name: string; lat: number; lng: number }) => api.put('/settings/location', data),
 };
 
 // Integrations API
@@ -722,6 +731,15 @@ export const integrationsAPI = {
     api.post('/integrations/elvanto/import-gatherings', data),
   // Debug - dump all available Elvanto data
   debugDumpElvanto: () => api.get('/integrations/elvanto/debug-dump'),
+};
+
+// AI Insights API
+export const aiAPI = {
+  getStatus: () => api.get('/ai/status'),
+  configure: (data: { apiKey: string; provider: 'openai' | 'anthropic'; model?: string }) =>
+    api.post('/ai/configure', data),
+  disconnect: () => api.post('/ai/disconnect'),
+  ask: (question: string) => api.post('/ai/ask', { question }, { timeout: 60000 }),
 };
 
 // Visitor Configuration API

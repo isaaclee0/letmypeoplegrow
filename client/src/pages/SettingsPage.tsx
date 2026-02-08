@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { integrationsAPI } from '../services/api';
+import { integrationsAPI, aiAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
 
 import {
@@ -14,6 +14,7 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   LinkSlashIcon,
+  MapPinIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
@@ -43,6 +44,29 @@ const SettingsPage: React.FC = () => {
   const [showApiKeyGuide, setShowApiKeyGuide] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
 
+  // AI integration state
+  const [aiStatus, setAiStatus] = useState<{
+    configured: boolean;
+    provider: string | null;
+    loading: boolean;
+  }>({ configured: false, provider: null, loading: true });
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic'>('openai');
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [showAiDisconnectModal, setShowAiDisconnectModal] = useState(false);
+
+  // Location state
+  const [locationName, setLocationName] = useState<string | null>(null);
+  const [locationSearch, setLocationSearch] = useState('');
+  const [locationResults, setLocationResults] = useState<any[]>([]);
+  const [locationSearching, setLocationSearching] = useState(false);
+  const [locationSaving, setLocationSaving] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
+  const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const locationDropdownRef = useRef<HTMLDivElement>(null);
+
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
@@ -66,6 +90,128 @@ const SettingsPage: React.FC = () => {
       // Update cache on error
       localStorage.setItem('elvanto_connected', 'false');
     }
+  }, []);
+
+  // Fetch AI status
+  const fetchAiStatus = useCallback(async () => {
+    try {
+      const response = await aiAPI.getStatus();
+      setAiStatus({ ...response.data, loading: false });
+    } catch (error) {
+      logger.error('Failed to fetch AI status:', error);
+      setAiStatus(prev => ({ ...prev, loading: false }));
+    }
+  }, []);
+
+  // Handle AI connect
+  const handleAiConnect = async () => {
+    if (!aiApiKey.trim()) {
+      setAiError('Please enter your API key.');
+      return;
+    }
+    try {
+      setAiSaving(true);
+      setAiError(null);
+      await aiAPI.configure({ apiKey: aiApiKey.trim(), provider: aiProvider });
+      setAiApiKey('');
+      // Reload so the sidebar picks up the new AI Insights nav item
+      window.location.reload();
+    } catch (error: any) {
+      logger.error('Failed to configure AI:', error);
+      setAiError(error.response?.data?.error || error.response?.data?.details || 'Failed to connect. Please check your API key.');
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  // Handle AI disconnect
+  const confirmAiDisconnect = async () => {
+    setShowAiDisconnectModal(false);
+    try {
+      setAiStatus(prev => ({ ...prev, loading: true }));
+      await aiAPI.disconnect();
+      // Reload so the sidebar removes the AI Insights nav item
+      window.location.reload();
+    } catch (error: any) {
+      logger.error('Failed to disconnect AI:', error);
+      setAiStatus(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // Fetch church location on mount
+  const fetchLocation = useCallback(async () => {
+    try {
+      const response = await settingsAPI.getAll();
+      const settings = response.data.settings;
+      if (settings?.location_name) {
+        setLocationName(settings.location_name);
+      }
+    } catch (error) {
+      // Non-critical, ignore
+    }
+  }, []);
+
+  // Location search with debounce
+  const handleLocationSearchChange = (value: string) => {
+    setLocationSearch(value);
+    setLocationError(null);
+
+    if (locationDebounceRef.current) {
+      clearTimeout(locationDebounceRef.current);
+    }
+
+    if (value.trim().length < 2) {
+      setLocationResults([]);
+      setShowLocationDropdown(false);
+      return;
+    }
+
+    locationDebounceRef.current = setTimeout(async () => {
+      try {
+        setLocationSearching(true);
+        const response = await settingsAPI.searchLocation(value.trim());
+        setLocationResults(response.data.results || []);
+        setShowLocationDropdown(true);
+      } catch (error) {
+        logger.error('Location search failed:', error);
+        setLocationResults([]);
+      } finally {
+        setLocationSearching(false);
+      }
+    }, 300);
+  };
+
+  // Handle location selection
+  const handleLocationSelect = async (result: any) => {
+    try {
+      setLocationSaving(true);
+      setLocationError(null);
+      setShowLocationDropdown(false);
+      await settingsAPI.updateLocation({
+        name: result.displayName,
+        lat: result.lat,
+        lng: result.lng
+      });
+      setLocationName(result.displayName);
+      setLocationSearch('');
+      setLocationResults([]);
+    } catch (error: any) {
+      logger.error('Failed to save location:', error);
+      setLocationError(error.response?.data?.error || 'Failed to save location.');
+    } finally {
+      setLocationSaving(false);
+    }
+  };
+
+  // Close location dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (locationDropdownRef.current && !locationDropdownRef.current.contains(e.target as Node)) {
+        setShowLocationDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Handle URL parameters for tab selection
@@ -219,10 +365,12 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // Load Elvanto status on mount
+  // Load Elvanto + AI status + location on mount
   useEffect(() => {
     fetchElvantoStatus();
-  }, [fetchElvantoStatus]);
+    fetchAiStatus();
+    fetchLocation();
+  }, [fetchElvantoStatus, fetchAiStatus, fetchLocation]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -282,6 +430,81 @@ const SettingsPage: React.FC = () => {
                   </dl>
                 </div>
               </div>
+
+              {/* Church Location */}
+              {user?.role === 'admin' && (
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900">Church Location</h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Set your church's location to enable weather and holiday-aware attendance predictions.
+                  </p>
+
+                  <div className="mt-4 bg-gray-50 rounded-lg p-4">
+                    {locationName && (
+                      <div className="flex items-center mb-4 text-sm text-gray-900">
+                        <MapPinIcon className="h-5 w-5 text-gray-400 mr-2 flex-shrink-0" />
+                        <span className="font-medium">{locationName}</span>
+                      </div>
+                    )}
+
+                    <div className="relative" ref={locationDropdownRef}>
+                      <label htmlFor="location-search" className="block text-sm font-medium text-gray-700">
+                        {locationName ? 'Change location' : 'Search for your city'}
+                      </label>
+                      <div className="mt-1 relative">
+                        <input
+                          type="text"
+                          id="location-search"
+                          value={locationSearch}
+                          onChange={(e) => handleLocationSearchChange(e.target.value)}
+                          onFocus={() => {
+                            if (locationResults.length > 0) setShowLocationDropdown(true);
+                          }}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pr-10"
+                          placeholder="e.g. Sydney, London, New York..."
+                          disabled={locationSaving}
+                        />
+                        {locationSearching && (
+                          <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                            <ArrowPathIcon className="h-4 w-4 animate-spin text-gray-400" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Dropdown results */}
+                      {showLocationDropdown && locationResults.length > 0 && (
+                        <div className="absolute z-10 mt-1 w-full bg-white shadow-lg rounded-md border border-gray-200 max-h-60 overflow-auto">
+                          {locationResults.map((result, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => handleLocationSelect(result)}
+                              className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                            >
+                              <div className="text-sm font-medium text-gray-900">
+                                {result.name}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {[result.admin1, result.country].filter(Boolean).join(', ')}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {locationSaving && (
+                      <p className="mt-2 text-sm text-primary-600 flex items-center">
+                        <ArrowPathIcon className="h-4 w-4 animate-spin mr-1" />
+                        Saving location...
+                      </p>
+                    )}
+
+                    {locationError && (
+                      <p className="mt-2 text-sm text-red-600">{locationError}</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -494,6 +717,148 @@ const SettingsPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {/* AI Insights Integration */}
+                  <div className="border border-gray-200 rounded-lg p-6">
+                    {/* AI Status Header */}
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0">
+                          <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-medium text-gray-900">AI Insights</h4>
+                          <p className="text-sm text-gray-600">
+                            Ask questions about your attendance data in plain language.
+                          </p>
+                          {aiStatus.configured && (
+                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                              <CheckCircleIcon className="w-3 h-3 mr-1" />
+                              Connected via {aiStatus.provider === 'openai' ? 'OpenAI' : 'Anthropic'}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        {aiStatus.loading ? (
+                          <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
+                        ) : aiStatus.configured ? (
+                          <>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <ShieldCheckIcon className="w-3 h-3 mr-1" />
+                              Connected
+                            </span>
+                            <button
+                              onClick={() => setShowAiDisconnectModal(true)}
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                            >
+                              Disconnect
+                            </button>
+                          </>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                            <ShieldExclamationIcon className="w-3 h-3 mr-1" />
+                            Not Connected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* AI Config Form - Only show when not connected */}
+                    {!aiStatus.configured && !aiStatus.loading && (
+                      <div className="border-t border-gray-200 pt-6">
+                        <h5 className="text-md font-medium text-gray-900 mb-4">Connect your AI provider</h5>
+                        <div className="space-y-4">
+                          <div>
+                            <label htmlFor="ai-provider" className="block text-sm font-medium text-gray-700">
+                              AI Provider
+                            </label>
+                            <select
+                              id="ai-provider"
+                              value={aiProvider}
+                              onChange={(e) => setAiProvider(e.target.value as 'openai' | 'anthropic')}
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
+                            >
+                              <option value="openai">OpenAI (ChatGPT)</option>
+                              <option value="anthropic">Anthropic (Claude)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label htmlFor="ai-api-key" className="block text-sm font-medium text-gray-700">
+                              API Key
+                            </label>
+                            <input
+                              type="password"
+                              id="ai-api-key"
+                              value={aiApiKey}
+                              onChange={(e) => setAiApiKey(e.target.value)}
+                              onKeyPress={(e) => e.key === 'Enter' && handleAiConnect()}
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
+                              placeholder={aiProvider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              {aiProvider === 'openai'
+                                ? 'Get your key from platform.openai.com/api-keys'
+                                : 'Get your key from console.anthropic.com/settings/keys'}
+                            </p>
+                          </div>
+
+                          {aiError && (
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                              <div className="flex">
+                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                <div className="ml-2">
+                                  <p className="text-sm text-red-700">{aiError}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex justify-end">
+                            <button
+                              onClick={handleAiConnect}
+                              disabled={aiSaving || !aiApiKey.trim()}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {aiSaving ? (
+                                <>
+                                  <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                  Validating...
+                                </>
+                              ) : (
+                                <>
+                                  <LinkIcon className="h-4 w-4 mr-2" />
+                                  Connect
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <InformationCircleIcon className="h-5 w-5 text-purple-400" />
+                        </div>
+                        <div className="ml-3">
+                          <h4 className="text-sm font-medium text-purple-800">What you'll get</h4>
+                          <div className="mt-2 text-sm text-purple-700">
+                            <ul className="list-disc list-inside space-y-1">
+                              <li>Ask questions about attendance in plain English</li>
+                              <li>Get insights on attendance trends and patterns</li>
+                              <li>Identify people who may need pastoral follow-up</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -659,6 +1024,57 @@ const SettingsPage: React.FC = () => {
               </button>
               <button
                 onClick={confirmDisconnect}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
+              >
+                <LinkSlashIcon className="h-4 w-4 mr-2" />
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* AI Disconnect Confirmation Modal */}
+      <Modal
+        isOpen={showAiDisconnectModal}
+        onClose={() => setShowAiDisconnectModal(false)}
+      >
+        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Disconnect AI
+              </h3>
+              <button
+                onClick={() => setShowAiDisconnectModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
+            </div>
+            
+            <div className="text-center mb-6">
+              <p className="text-sm text-gray-600 mb-2">
+                Are you sure you want to disconnect AI Insights?
+              </p>
+              <p className="text-sm text-gray-500">
+                Your API key will be removed. You can reconnect at any time.
+              </p>
+            </div>
+            
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowAiDisconnectModal(false)}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmAiDisconnect}
                 className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
               >
                 <LinkSlashIcon className="h-4 w-4 mr-2" />

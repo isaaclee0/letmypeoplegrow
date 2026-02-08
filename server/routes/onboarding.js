@@ -246,39 +246,58 @@ router.post('/church-info',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { churchName, countryCode, timezone, emailFromName, emailFromAddress } = req.body;
+      const { churchName, countryCode, timezone, emailFromName, emailFromAddress, locationName, locationLat, locationLng } = req.body;
 
       // Check if settings already exist
       const existingSettings = await Database.query('SELECT id FROM church_settings WHERE church_id = ? LIMIT 1', [req.user.church_id]);
       
       if (existingSettings.length > 0) {
         // Update existing settings
-        await Database.query(`
-          UPDATE church_settings 
-          SET church_name = ?, country_code = ?, timezone = ?, email_from_name = ?, email_from_address = ?, updated_at = NOW()
-          WHERE id = ? AND church_id = ?
-        `, [
+        let query = `UPDATE church_settings SET church_name = ?, country_code = ?, timezone = ?, email_from_name = ?, email_from_address = ?`;
+        const params = [
           churchName,
           countryCode.toUpperCase(),
           timezone || 'America/New_York',
           emailFromName || 'Let My People Grow',
-          emailFromAddress || 'noreply@redeemercc.org.au',
-          existingSettings[0].id,
-          req.user.church_id
-        ]);
+          emailFromAddress || 'noreply@redeemercc.org.au'
+        ];
+
+        if (locationName && locationLat != null && locationLng != null) {
+          query += `, location_name = ?, location_lat = ?, location_lng = ?`;
+          params.push(locationName, locationLat, locationLng);
+        }
+
+        query += `, updated_at = NOW() WHERE id = ? AND church_id = ?`;
+        params.push(existingSettings[0].id, req.user.church_id);
+        await Database.query(query, params);
       } else {
         // Create new settings
-        await Database.query(`
-          INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, church_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [
-          churchName,
-          countryCode.toUpperCase(),
-          timezone || 'America/New_York',
-          emailFromName || 'Let My People Grow',
-          emailFromAddress || 'noreply@redeemercc.org.au',
-          req.user.church_id
-        ]);
+        if (locationName && locationLat != null && locationLng != null) {
+          await Database.query(`
+            INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, location_name, location_lat, location_lng, church_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            churchName,
+            countryCode.toUpperCase(),
+            timezone || 'America/New_York',
+            emailFromName || 'Let My People Grow',
+            emailFromAddress || 'noreply@redeemercc.org.au',
+            locationName, locationLat, locationLng,
+            req.user.church_id
+          ]);
+        } else {
+          await Database.query(`
+            INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, church_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [
+            churchName,
+            countryCode.toUpperCase(),
+            timezone || 'America/New_York',
+            emailFromName || 'Let My People Grow',
+            emailFromAddress || 'noreply@redeemercc.org.au',
+            req.user.church_id
+          ]);
+        }
       }
 
       // Save progress

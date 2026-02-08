@@ -104,6 +104,32 @@ async function initializeDatabase() {
       console.warn('⚠️  Could not ensure users.last_login_at column:', e.message);
     }
 
+    // Ensure location columns exist in church_settings
+    try {
+      const locNameCol = await Database.query("SHOW COLUMNS FROM church_settings LIKE 'location_name'");
+      if (locNameCol.length === 0) {
+        console.log('🛠️  Adding church_settings location columns');
+        await Database.query('ALTER TABLE church_settings ADD COLUMN location_name VARCHAR(255) NULL');
+        await Database.query('ALTER TABLE church_settings ADD COLUMN location_lat DECIMAL(10,7) NULL');
+        await Database.query('ALTER TABLE church_settings ADD COLUMN location_lng DECIMAL(10,7) NULL');
+        console.log('✅ church_settings location columns added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure church_settings location columns:', e.message);
+    }
+
+    // Ensure kiosk_enabled column exists in gathering_types
+    try {
+      const kioskCol = await Database.query("SHOW COLUMNS FROM gathering_types LIKE 'kiosk_enabled'");
+      if (kioskCol.length === 0) {
+        console.log('🛠️  Adding gathering_types.kiosk_enabled column');
+        await Database.query('ALTER TABLE gathering_types ADD COLUMN kiosk_enabled BOOLEAN DEFAULT false AFTER custom_schedule');
+        console.log('✅ gathering_types.kiosk_enabled added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure gathering_types.kiosk_enabled column:', e.message);
+    }
+
     console.log('🎉 Database initialization check completed!');
     
   } catch (error) {
