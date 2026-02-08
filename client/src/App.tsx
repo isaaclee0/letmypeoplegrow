@@ -204,7 +204,14 @@ function App() {
                       </RoleProtectedRoute>
                     } 
                   />
-                  <Route path="ai-insights" element={<AiInsightsPage />} />
+                  <Route
+                    path="ai-insights"
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <AiInsightsPage />
+                      </RoleProtectedRoute>
+                    }
+                  />
                   <Route path="kiosk" element={<KioskPage />} />
                   <Route path="websocket-test" element={<WebSocketTestPage />} />
                   <Route path="notification-rules" element={

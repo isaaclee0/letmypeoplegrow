@@ -139,7 +139,7 @@ const Layout: React.FC = () => {
       { name: 'Users', href: '/app/users', icon: UserCircleIcon }
     ] : []),
     { name: 'Reports', href: '/app/reports', icon: ChartBarIcon },
-    ...(aiConfigured ? [
+    ...(aiConfigured && user?.role === 'admin' ? [
       { name: 'AI Insights', href: '/app/ai-insights', icon: SparklesIcon }
     ] : []),
     ...(kioskAvailable ? [
