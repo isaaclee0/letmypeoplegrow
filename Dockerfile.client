@@ -4,10 +4,16 @@ FROM node:18-alpine AS builder
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first for better caching
 COPY client/package*.json ./
 
-# Install all dependencies (include dev deps for Vite build)
+# Copy VERSION file (single source of truth for versioning)
+COPY VERSION ./VERSION
+
+# Read version from VERSION file and set as environment variable
+RUN VERSION=$(cat VERSION | tr -d '[:space:]') && echo "Building version: $VERSION"
+
+# Install all dependencies for Vite build
 RUN npm ci
 
 # Copy only necessary source files
@@ -20,8 +26,8 @@ COPY client/tailwind.config.js ./
 COPY client/postcss.config.js ./
 COPY client/vite.config.ts ./
 
-# Build the app (Vite outputs to dist)
-RUN npm run build
+# Set VITE_APP_VERSION from VERSION file and build
+RUN export VITE_APP_VERSION=$(cat VERSION | tr -d '[:space:]') && npm run build
 
 # Production stage
 FROM nginx:alpine
