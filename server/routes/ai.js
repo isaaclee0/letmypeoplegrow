@@ -286,7 +286,7 @@ async function callAnthropic(apiKey, systemPrompt, userMessage, model) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: model || 'claude-sonnet-4-20250514',
+      model: model || 'claude-haiku-4-5-20251001',
       max_tokens: 2000,
       system: systemPrompt,
       messages: [
@@ -337,7 +337,7 @@ router.post('/configure', requireRole(['admin']), async (req, res) => {
       if (provider === 'openai') {
         await callOpenAI(apiKey.trim(), 'Say OK', 'Test', model || 'gpt-4o-mini');
       } else {
-        await callAnthropic(apiKey.trim(), 'Say OK', 'Test', model || 'claude-sonnet-4-20250514');
+        await callAnthropic(apiKey.trim(), 'Say OK', 'Test', model || 'claude-haiku-4-5-20251001');
       }
     } catch (validationError) {
       return res.status(400).json({
