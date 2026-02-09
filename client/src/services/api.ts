@@ -740,6 +740,16 @@ export const aiAPI = {
     api.post('/ai/configure', data),
   disconnect: () => api.post('/ai/disconnect'),
   ask: (question: string) => api.post('/ai/ask', { question }, { timeout: 60000 }),
+
+  // Chat history
+  getConversations: () => api.get('/ai/conversations'),
+  createConversation: (title?: string) => api.post('/ai/conversations', { title }),
+  getMessages: (conversationId: number) => api.get(`/ai/conversations/${conversationId}/messages`),
+  saveMessage: (conversationId: number, role: string, content: string) =>
+    api.post(`/ai/conversations/${conversationId}/messages`, { role, content }),
+  updateConversationTitle: (conversationId: number, title: string) =>
+    api.put(`/ai/conversations/${conversationId}/title`, { title }),
+  deleteConversation: (conversationId: number) => api.delete(`/ai/conversations/${conversationId}`),
 };
 
 // Visitor Configuration API

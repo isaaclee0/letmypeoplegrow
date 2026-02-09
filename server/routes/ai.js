@@ -718,4 +718,179 @@ RESPONSE GUIDELINES:
   }
 });
 
+// ===== Chat History Endpoints =====
+
+// Get all conversations for the user
+router.get('/conversations', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+
+    const conversations = await Database.query(`
+      SELECT
+        c.id,
+        c.title,
+        c.created_at,
+        c.updated_at,
+        COUNT(m.id) as message_count
+      FROM ai_chat_conversations c
+      LEFT JOIN ai_chat_messages m ON c.id = m.conversation_id
+      WHERE c.user_id = ? AND c.church_id = ?
+      GROUP BY c.id
+      ORDER BY c.updated_at DESC
+    `, [userId, churchId]);
+
+    res.json({ conversations });
+  } catch (error) {
+    logger.error('Get conversations error:', error);
+    res.status(500).json({ error: 'Failed to get conversations' });
+  }
+});
+
+// Create new conversation
+router.post('/conversations', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+    const { title } = req.body;
+
+    const result = await Database.query(`
+      INSERT INTO ai_chat_conversations (user_id, church_id, title)
+      VALUES (?, ?, ?)
+    `, [userId, churchId, title || 'New Chat']);
+
+    res.json({
+      conversation: {
+        id: result.insertId,
+        title: title || 'New Chat',
+        created_at: new Date(),
+        updated_at: new Date()
+      }
+    });
+  } catch (error) {
+    logger.error('Create conversation error:', error);
+    res.status(500).json({ error: 'Failed to create conversation' });
+  }
+});
+
+// Get messages for a conversation
+router.get('/conversations/:id/messages', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+    const { id } = req.params;
+
+    // Verify ownership
+    const conversation = await Database.query(`
+      SELECT id FROM ai_chat_conversations
+      WHERE id = ? AND user_id = ? AND church_id = ?
+    `, [id, userId, churchId]);
+
+    if (conversation.length === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const messages = await Database.query(`
+      SELECT id, role, content, created_at as timestamp
+      FROM ai_chat_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC
+    `, [id]);
+
+    res.json({ messages });
+  } catch (error) {
+    logger.error('Get messages error:', error);
+    res.status(500).json({ error: 'Failed to get messages' });
+  }
+});
+
+// Save message to conversation
+router.post('/conversations/:id/messages', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+    const { id } = req.params;
+    const { role, content } = req.body;
+
+    // Verify ownership
+    const conversation = await Database.query(`
+      SELECT id FROM ai_chat_conversations
+      WHERE id = ? AND user_id = ? AND church_id = ?
+    `, [id, userId, churchId]);
+
+    if (conversation.length === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    // Insert message
+    const result = await Database.query(`
+      INSERT INTO ai_chat_messages (conversation_id, role, content)
+      VALUES (?, ?, ?)
+    `, [id, role, content]);
+
+    // Update conversation updated_at
+    await Database.query(`
+      UPDATE ai_chat_conversations
+      SET updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [id]);
+
+    res.json({
+      message: {
+        id: result.insertId,
+        role,
+        content,
+        timestamp: new Date()
+      }
+    });
+  } catch (error) {
+    logger.error('Save message error:', error);
+    res.status(500).json({ error: 'Failed to save message' });
+  }
+});
+
+// Update conversation title
+router.put('/conversations/:id/title', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+    const { id } = req.params;
+    const { title } = req.body;
+
+    // Verify ownership and update
+    const result = await Database.query(`
+      UPDATE ai_chat_conversations
+      SET title = ?
+      WHERE id = ? AND user_id = ? AND church_id = ?
+    `, [title, id, userId, churchId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Update conversation title error:', error);
+    res.status(500).json({ error: 'Failed to update title' });
+  }
+});
+
+// Delete conversation
+router.delete('/conversations/:id', async (req, res) => {
+  try {
+    const { userId, churchId } = req.user;
+    const { id } = req.params;
+
+    // Delete (messages will cascade)
+    const result = await Database.query(`
+      DELETE FROM ai_chat_conversations
+      WHERE id = ? AND user_id = ? AND church_id = ?
+    `, [id, userId, churchId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Delete conversation error:', error);
+    res.status(500).json({ error: 'Failed to delete conversation' });
+  }
+});
+
 module.exports = router;

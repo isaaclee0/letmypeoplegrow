@@ -1166,18 +1166,8 @@ const PeoplePage: React.FC = () => {
       setError('Please select at least one person to merge');
       return;
     }
-    
+
     setMergeMode(mode);
-    setMergeData({
-      familyName: '',
-      familyType: 'regular',
-      mergeAssignments: true,
-      keepFamilyId: null,
-      mergeFamilyIds: []
-    });
-    if (mode === 'deduplicate') {
-      setDedupeKeepId(selectedPeople[0]);
-    }
     setShowMergeModal(true);
   };
 
