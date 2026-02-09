@@ -21,6 +21,7 @@ interface Gathering {
   description: string;
   dayOfWeek?: string;
   startTime?: string;
+  endTime?: string;
   frequency?: string;
   attendanceType: 'standard' | 'headcount';
   customSchedule?: {
@@ -47,6 +48,7 @@ interface CreateGatheringData {
   description: string;
   dayOfWeek?: string;
   startTime?: string;
+  endTime?: string;
   frequency?: string;
   attendanceType: 'standard' | 'headcount';
   customSchedule?: {
@@ -86,6 +88,7 @@ const ManageGatheringsPage: React.FC = () => {
     description: '',
     dayOfWeek: 'Sunday',
     startTime: '10:00',
+    endTime: '11:00',
     frequency: 'weekly',
     attendanceType: 'standard' as 'standard' | 'headcount',
     customSchedule: undefined as any,
@@ -97,6 +100,7 @@ const ManageGatheringsPage: React.FC = () => {
     description: 'Weekly Sunday morning gathering',
     dayOfWeek: 'Sunday',
     startTime: '10:00',
+    endTime: '11:00',
     frequency: 'weekly',
     attendanceType: 'standard',
     kioskEnabled: false
@@ -292,6 +296,12 @@ const ManageGatheringsPage: React.FC = () => {
       description: gathering.description || '',
       dayOfWeek: gathering.dayOfWeek,
       startTime: gathering.startTime,
+      endTime: gathering.endTime || (gathering.startTime ? (() => {
+        // Auto-calculate end time as start time + 1 hour if not set
+        const [hours, minutes] = gathering.startTime.split(':').map(Number);
+        const endHours = (hours + 1) % 24;
+        return `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      })() : '11:00'),
       frequency: gathering.frequency,
       attendanceType: gathering.attendanceType,
       customSchedule: gathering.customSchedule,
@@ -858,9 +868,33 @@ const ManageGatheringsPage: React.FC = () => {
                           id="edit-startTime"
                           type="time"
                           value={editFormData.startTime}
-                          onChange={(e) => setEditFormData({ ...editFormData, startTime: e.target.value })}
+                          onChange={(e) => {
+                            const newStartTime = e.target.value;
+                            // Auto-calculate end time as start time + 1 hour if end time not manually set
+                            const [hours, minutes] = newStartTime.split(':').map(Number);
+                            const endHours = (hours + 1) % 24;
+                            const autoEndTime = `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+                            setEditFormData({
+                              ...editFormData,
+                              startTime: newStartTime,
+                              endTime: editFormData.endTime || autoEndTime
+                            });
+                          }}
                           className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           required
+                        />
+                      </div>
+
+                      <div>
+                        <label htmlFor="edit-endTime" className="block text-sm font-medium text-gray-700">
+                          End Time
+                        </label>
+                        <input
+                          id="edit-endTime"
+                          type="time"
+                          value={editFormData.endTime || ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, endTime: e.target.value })}
+                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         />
                       </div>
 
