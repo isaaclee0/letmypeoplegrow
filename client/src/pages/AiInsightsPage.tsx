@@ -451,7 +451,35 @@ const AiInsightsPage: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Mobile Chat History - Collapsible section below chat */}
+        {/* Input Area */}
+        <div className="bg-white border-t border-gray-200 px-4 py-4 flex-shrink-0">
+          <div className="flex items-end space-x-2">
+            <div className="flex-1">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question about your church data..."
+                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                rows={2}
+                style={{ minHeight: '80px', maxHeight: '200px' }}
+              />
+            </div>
+            <button
+              onClick={() => sendMessage()}
+              disabled={isLoading || !input.trim()}
+              className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            >
+              <PaperAirplaneIcon className="w-5 h-5" />
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2 text-center">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
+
+        {/* Mobile Chat History - Collapsible section at bottom */}
         <div className="lg:hidden bg-white border-t border-gray-200 flex-shrink-0">
           <button
             onClick={() => setShowHistoryMobile(!showHistoryMobile)}
@@ -508,34 +536,6 @@ const AiInsightsPage: React.FC = () => {
               )}
             </div>
           )}
-        </div>
-
-        {/* Input Area */}
-        <div className="bg-white border-t border-gray-200 px-4 py-4 flex-shrink-0">
-          <div className="flex items-end space-x-2">
-            <div className="flex-1">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask a question about your church data..."
-                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                rows={2}
-                style={{ minHeight: '80px', maxHeight: '200px' }}
-              />
-            </div>
-            <button
-              onClick={() => sendMessage()}
-              disabled={isLoading || !input.trim()}
-              className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-            >
-              <PaperAirplaneIcon className="w-5 h-5" />
-            </button>
-          </div>
-          <p className="text-xs text-gray-500 mt-2 text-center">
-            Press Enter to send, Shift+Enter for new line
-          </p>
         </div>
       </div>
 
