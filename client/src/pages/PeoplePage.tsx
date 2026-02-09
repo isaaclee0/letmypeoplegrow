@@ -8,6 +8,10 @@ import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
 import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import AddPeopleModal from '../components/people/AddPeopleModal';
+import MergeModal from '../components/people/MergeModal';
+import NotesModal from '../components/people/NotesModal';
+import DataSecurityInfo from '../components/people/DataSecurityInfo';
+import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import logger from '../utils/logger';
@@ -257,17 +261,6 @@ const PeoplePage: React.FC = () => {
   // Merge functionality state
   const [showMergeModal, setShowMergeModal] = useState(false);
   const [mergeMode, setMergeMode] = useState<'individuals' | 'families' | 'deduplicate'>('individuals');
-  const [mergeData, setMergeData] = useState({
-    familyName: '',
-    familyType: 'regular' as 'regular' | 'local_visitor' | 'traveller_visitor',
-    mergeAssignments: true,
-    keepFamilyId: null as number | null,
-    mergeFamilyIds: [] as number[]
-  });
-  const [dedupeKeepId, setDedupeKeepId] = useState<number | null>(null);
-  
-  // Data security information state
-  const [showDataSecurityInfo, setShowDataSecurityInfo] = useState(false);
 
   // Removed AddPeopleForm state - moved to AddPeopleModal component
 
@@ -335,7 +328,6 @@ const PeoplePage: React.FC = () => {
   // Notes modal state
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [selectedFamilyForNotes, setSelectedFamilyForNotes] = useState<any>(null);
-  const [currentNotes, setCurrentNotes] = useState('');
 
   // Visitor configuration state
   const [visitorConfig, setVisitorConfig] = useState({
@@ -629,32 +621,10 @@ const PeoplePage: React.FC = () => {
 
   const handleOpenNotes = (family: any) => {
     setSelectedFamilyForNotes(family);
-    setCurrentNotes(family.familyNotes || '');
     setShowNotesModal(true);
   };
 
-  const handleSaveNotes = async () => {
-    try {
-      setIsLoading(true);
-      await familiesAPI.update(selectedFamilyForNotes.familyId, { 
-        familyNotes: currentNotes 
-      });
-      
-      // Update the local family data
-      setFamilies(families.map(family => 
-        family.id === selectedFamilyForNotes.familyId 
-          ? { ...family, familyNotes: currentNotes }
-          : family
-      ));
-      
-      setShowNotesModal(false);
-      showSuccess('Family notes updated successfully');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to update family notes');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Notes handler moved to NotesModal component
 
   // Load visitor configuration
   const loadVisitorConfig = async () => {
@@ -1189,100 +1159,7 @@ const PeoplePage: React.FC = () => {
 
   // removed: handleUpdatePeopleFamilies
 
-  const handleMergeIndividuals = async () => {
-    try {
-      setIsLoading(true);
-      setError('');
-      
-      if (!mergeData.familyName.trim()) {
-        setError('Family name is required');
-        return;
-      }
-      
-      const response = await familiesAPI.mergeIndividuals({
-        individualIds: selectedPeople,
-        familyName: mergeData.familyName.trim(),
-        familyType: mergeData.familyType,
-        mergeAssignments: mergeData.mergeAssignments
-      });
-      
-      showSuccess(`Successfully merged ${selectedPeople.length} individuals into family "${mergeData.familyName}"`);
-      setShowMergeModal(false);
-      setSelectedPeople([]);
-      await loadPeople();
-      await loadFamilies();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to merge individuals');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleMergeFamilies = async () => {
-    try {
-      setIsLoading(true);
-      setError('');
-      
-      if (!mergeData.keepFamilyId) {
-        setError('Please select a family to keep');
-        return;
-      }
-      
-      if (mergeData.mergeFamilyIds.length === 0) {
-        setError('Please select families to merge');
-        return;
-      }
-      
-      const response = await familiesAPI.merge({
-        keepFamilyId: mergeData.keepFamilyId,
-        mergeFamilyIds: mergeData.mergeFamilyIds,
-        newFamilyName: mergeData.familyName.trim() || undefined,
-        newFamilyType: mergeData.familyType
-      });
-      
-      showSuccess(`Successfully merged ${mergeData.mergeFamilyIds.length} families`);
-      setShowMergeModal(false);
-      setSelectedPeople([]);
-      await loadPeople();
-      await loadFamilies();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to merge families');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDeduplicateIndividuals = async () => {
-    try {
-      setIsLoading(true);
-      setError('');
-      
-      if (selectedPeople.length < 2) {
-        setError('Please select at least 2 individuals to deduplicate');
-        return;
-      }
-      
-      // Use the selected master record
-      const keepId = dedupeKeepId ?? selectedPeople[0];
-      const deleteIds = selectedPeople.filter(id => id !== keepId);
-      
-      const response = await individualsAPI.deduplicate({
-        keepId,
-        deleteIds,
-        mergeAssignments: mergeData.mergeAssignments
-      });
-      
-      showSuccess(`Successfully deduplicated ${deleteIds.length} individuals`);
-      setShowMergeModal(false);
-      setSelectedPeople([]);
-      setDedupeKeepId(null);
-      await loadPeople();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to deduplicate individuals');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // Merge handlers moved to MergeModal component
 
   const openMergeModal = (mode: 'individuals' | 'families' | 'deduplicate') => {
     if (selectedPeople.length === 0) {
@@ -1378,40 +1255,7 @@ const PeoplePage: React.FC = () => {
       </div>
 
       {/* Data Security Information */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-3 sm:px-6">
-          <button
-            onClick={() => setShowDataSecurityInfo(!showDataSecurityInfo)}
-            className="flex items-center text-sm text-gray-600 hover:text-gray-800 transition-colors"
-          >
-            <InformationCircleIcon className="h-4 w-4 mr-2" />
-            Data Security Information
-            <span className="ml-1 text-xs text-gray-400">
-              {showDataSecurityInfo ? '▼' : '▶'}
-            </span>
-          </button>
-          
-          {showDataSecurityInfo && (
-            <div className="mt-3 p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <div className="text-sm text-blue-800">
-                <p className="mb-2">
-                  <strong>Data Collection:</strong> This system only records names and basic family information. 
-                  No sensitive personal data such as addresses, phone numbers, or financial information is stored.
-                </p>
-                <p className="mb-2">
-                  <strong>Access Control:</strong> Information stored in the system is only accessible to users 
-                  with active logins and appropriate permissions within your church organisation.
-                </p>
-                <p className="text-blue-700">
-                  <strong>User Responsibility:</strong> You are responsible for the security of the information 
-                  you enter into this system. Please ensure that only authorised personnel have access to 
-                  user accounts and that login credentials are kept secure.
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <DataSecurityInfo />
 
       {/* Gathering Legend */}
       {gatheringTypes.length > 0 && (
@@ -1800,57 +1644,40 @@ const PeoplePage: React.FC = () => {
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                                                  {group.members.map((person: Person) => {
-                               const displayName = getPersonDisplayName(person, group.familyName);
-                               const needsWideLayout = shouldUseWideLayout(displayName);
 
-                               return (
-                                 <div
-                                   key={person.id}
-                                   className={`flex items-center justify-between p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                                     selectedPeople.includes(person.id)
-                                       ? 'border-primary-500 bg-primary-50'
-                                       : 'border-gray-200 hover:border-gray-300'
-                                   } ${needsWideLayout ? 'col-span-2' : ''}`}
-                                   onClick={() => togglePersonSelection(person.id)}
-                                 >
-                                   <div className="flex items-center space-x-3 flex-1 min-w-0">
-                                     <input
-                                       type="checkbox"
-                                       checked={selectedPeople.includes(person.id)}
-                                       onChange={() => togglePersonSelection(person.id)}
-                                       className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                                       onClick={(e) => e.stopPropagation()}
-                                     />
-                                     <div className="flex-1 min-w-0">
-                                       <div className="flex items-center space-x-2">
-                                         <span className="text-sm font-medium text-gray-900 truncate">
-                                           {displayName}
-                                         </span>
-                                         <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
-                                       </div>
-                                       <div className="text-xs text-gray-500">
-                                         {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
-                                       </div>
-                                       {(() => {
-                                         const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
-                                         return standardGatherings.length > 0 && (
-                                           <div className="flex items-center space-x-1 mt-1">
-                                             {standardGatherings.map(gathering => (
-                                               <div
-                                                 key={gathering.id}
-                                                 className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                                 title={gathering.name}
-                                               ></div>
-                                             ))}
-                                           </div>
-                                         );
-                                       })()}
-                                     </div>
-                                   </div>
+                                                   const displayName = getPersonDisplayName(person, group.familyName);
 
-                                 </div>
-                               );
-                             })}
+                                                   const needsWideLayout = shouldUseWideLayout(displayName);
+
+                                                   return (
+
+                                                     <PersonCard
+
+                                                       key={person.id}
+
+                                                       person={person}
+
+                                                       isSelected={selectedPeople.includes(person.id)}
+
+                                                       onToggleSelection={togglePersonSelection}
+
+                                                       displayName={displayName}
+
+                                                       needsWideLayout={needsWideLayout}
+
+                                                       getGatheringColor={getGatheringColor}
+
+                                                       getStandardGatheringAssignments={getStandardGatheringAssignments}
+
+                                                       AttendanceInfoButton={AttendanceInfoButton}
+
+                                                       variant="grouped"
+
+                                                     />
+
+                                                   );
+
+                                                 })}
                   </div>
                 </div>
               ))}
@@ -1859,48 +1686,38 @@ const PeoplePage: React.FC = () => {
             // Individual view (not grouped by family)
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                                      {filteredIndividualPeople.map((person: Person) => {
-                         const displayName = getPersonDisplayName(person); // No family context in individual view
-                         const needsWideLayout = shouldUseWideLayout(displayName);
 
-                         return (
-                           <div
-                             key={person.id}
-                             className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
-                               selectedPeople.includes(person.id)
-                                 ? 'border-primary-500 bg-primary-50'
-                                 : 'hover:bg-gray-50'
-                             } ${needsWideLayout ? 'col-span-2' : ''}`}
-                             onClick={() => togglePersonSelection(person.id)}
-                           >
-                             <div className="flex items-center space-x-3">
-                               <input
-                                 type="checkbox"
-                                 checked={selectedPeople.includes(person.id)}
-                                 onChange={() => togglePersonSelection(person.id)}
-                                 className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                                 onClick={(e) => e.stopPropagation()}
-                               />
-                               <div className="flex items-center space-x-2">
-                                 <span className="text-sm font-medium text-gray-900">{displayName}</span>
-                                 {(() => {
-                                   const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
-                                   return standardGatherings.length > 0 && (
-                                     <div className="flex items-center space-x-1">
-                                       {standardGatherings.map(gathering => (
-                                         <div
-                                           key={gathering.id}
-                                           className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                           title={gathering.name}
-                                         ></div>
-                                       ))}
-                                     </div>
-                                   );
-                                 })()}
-                               </div>
-                             </div>
-                           </div>
-                         );
-                       })}
+                                       const displayName = getPersonDisplayName(person);
+
+                                       const needsWideLayout = shouldUseWideLayout(displayName);
+
+                                       return (
+
+                                         <PersonCard
+
+                                           key={person.id}
+
+                                           person={person}
+
+                                           isSelected={selectedPeople.includes(person.id)}
+
+                                           onToggleSelection={togglePersonSelection}
+
+                                           displayName={displayName}
+
+                                           needsWideLayout={needsWideLayout}
+
+                                           getGatheringColor={getGatheringColor}
+
+                                           getStandardGatheringAssignments={getStandardGatheringAssignments}
+
+                                           variant="individual"
+
+                                         />
+
+                                       );
+
+                                     })}
             </div>
           )}
         </div>
@@ -2081,52 +1898,39 @@ const PeoplePage: React.FC = () => {
                           )}
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                             {group.members.map((person: Person) => {
+
                               const displayName = getPersonDisplayName(person, group.familyName);
+
                               const needsWideLayout = shouldUseWideLayout(displayName);
-                              
+
                               return (
-                                <div
+
+                                <PersonCard
+
                                   key={person.id}
-                                  className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
-                                    selectedPeople.includes(person.id)
-                                      ? 'border-primary-500 bg-primary-50'
-                                      : 'hover:bg-gray-50'
-                                  } ${needsWideLayout ? 'col-span-2' : ''}`}
-                                  onClick={() => togglePersonSelection(person.id)}
-                                >
-                                  <div className="flex items-center space-x-3">
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedPeople.includes(person.id)}
-                                      onChange={() => togglePersonSelection(person.id)}
-                                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                                      onClick={(e) => e.stopPropagation()}
-                                    />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center space-x-2">
-                                        <span className="text-sm font-medium text-gray-900 truncate">
-                                          {displayName}
-                                        </span>
-                                        <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
-                                      </div>
-                                      {(() => {
-                                        const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
-                                        return standardGatherings.length > 0 && (
-                                          <div className="flex items-center space-x-1 mt-1">
-                                            {standardGatherings.map(gathering => (
-                                              <div
-                                                key={gathering.id}
-                                                className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                                title={gathering.name}
-                                              ></div>
-                                            ))}
-                                          </div>
-                                        );
-                                      })()}
-                                    </div>
-                                  </div>
-                                </div>
+
+                                  person={person}
+
+                                  isSelected={selectedPeople.includes(person.id)}
+
+                                  onToggleSelection={togglePersonSelection}
+
+                                  displayName={displayName}
+
+                                  needsWideLayout={needsWideLayout}
+
+                                  getGatheringColor={getGatheringColor}
+
+                                  getStandardGatheringAssignments={getStandardGatheringAssignments}
+
+                                  AttendanceInfoButton={AttendanceInfoButton}
+
+                                  variant="grouped"
+
+                                />
+
                               );
+
                             })}
                           </div>
                         </div>
@@ -2267,52 +2071,39 @@ const PeoplePage: React.FC = () => {
                             )}
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
                               {group.members.map((person: Person) => {
+
                                 const displayName = getPersonDisplayName(person, group.familyName);
+
                                 const needsWideLayout = shouldUseWideLayout(displayName);
-                                
+
                                 return (
-                                  <div
+
+                                  <PersonCard
+
                                     key={person.id}
-                                    className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
-                                      selectedPeople.includes(person.id)
-                                        ? 'border-primary-500 bg-primary-50'
-                                        : 'hover:bg-gray-50'
-                                    } ${needsWideLayout ? 'col-span-2' : ''}`}
-                                    onClick={() => togglePersonSelection(person.id)}
-                                  >
-                                    <div className="flex items-center space-x-3">
-                                      <input
-                                        type="checkbox"
-                                        checked={selectedPeople.includes(person.id)}
-                                        onChange={() => togglePersonSelection(person.id)}
-                                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                                        onClick={(e) => e.stopPropagation()}
-                                      />
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center space-x-2">
-                                          <span className="text-sm font-medium text-gray-900 truncate">
-                                            {displayName}
-                                          </span>
-                                          <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
-                                        </div>
-                                        {(() => {
-                                          const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
-                                          return standardGatherings.length > 0 && (
-                                            <div className="flex items-center space-x-1 mt-1">
-                                              {standardGatherings.map(gathering => (
-                                                <div
-                                                  key={gathering.id}
-                                                  className={`w-2 h-2 rounded-full ${getGatheringColor(gathering.id)}`}
-                                                  title={gathering.name}
-                                                ></div>
-                                              ))}
-                                            </div>
-                                          );
-                                        })()}
-                                      </div>
-                                    </div>
-                                  </div>
+
+                                    person={person}
+
+                                    isSelected={selectedPeople.includes(person.id)}
+
+                                    onToggleSelection={togglePersonSelection}
+
+                                    displayName={displayName}
+
+                                    needsWideLayout={needsWideLayout}
+
+                                    getGatheringColor={getGatheringColor}
+
+                                    getStandardGatheringAssignments={getStandardGatheringAssignments}
+
+                                    AttendanceInfoButton={AttendanceInfoButton}
+
+                                    variant="grouped"
+
+                                  />
+
                                 );
+
                               })}
                             </div>
                           </div>
@@ -2858,262 +2649,36 @@ const PeoplePage: React.FC = () => {
        )}
 
        {/* Merge Modal */}
-       {showMergeModal ? createPortal(
-         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
-           <div className="flex items-center justify-center min-h-screen p-4">
-             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
-               <div className="flex items-center justify-between mb-4">
-                 <h3 className="text-lg font-medium text-gray-900">
-                   {mergeMode === 'individuals' ? 'Merge Individuals into Family' : 
-                    mergeMode === 'families' ? 'Merge Families' : 'Deduplicate Individuals'}
-                 </h3>
-                 <button
-                   onClick={() => setShowMergeModal(false)}
-                   className="text-gray-400 hover:text-gray-600"
-                 >
-                   <XMarkIcon className="h-6 w-6" />
-                 </button>
-               </div>
-
-               {error && (
-                 <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-                   <div className="text-sm text-red-700">{error}</div>
-                 </div>
-               )}
-
-               <div className="space-y-6">
-                 {mergeMode === 'individuals' ? (
-                   <>
-                     <div>
-                       <p className="text-sm text-gray-600 mb-4">
-                         Merge {selectedPeople.length} selected individuals into a new family. This is useful when people get married or need to be grouped together.
-                       </p>
-                       
-                       <div className="space-y-4">
-                         <div>
-                           <label className="block text-sm font-medium text-gray-700">
-                             Family Name *
-                           </label>
-                           <input
-                             type="text"
-                             value={mergeData.familyName}
-                             onChange={(e) => setMergeData({...mergeData, familyName: e.target.value})}
-                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                             placeholder="Enter family name"
-                             required
-                           />
-                         </div>
-                         
-                         <div>
-                           <label className="block text-sm font-medium text-gray-700">
-                             Family Type
-                           </label>
-                           <select
-                             value={mergeData.familyType}
-                             onChange={(e) => setMergeData({...mergeData, familyType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor'})}
-                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                           >
-                             <option value="regular">Regular Family</option>
-                             <option value="local_visitor">Local Visitor Family</option>
-                             <option value="traveller_visitor">Traveller Visitor Family</option>
-                           </select>
-                         </div>
-                         
-                         <div className="flex items-center space-x-2">
-                           <input
-                             type="checkbox"
-                             checked={mergeData.mergeAssignments}
-                             onChange={(e) => setMergeData({...mergeData, mergeAssignments: e.target.checked})}
-                             className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                           />
-                           <span className="text-sm text-gray-700">
-                             Merge gathering assignments from all individuals
-                           </span>
-                         </div>
-                       </div>
-                     </div>
-                   </>
-                 ) : mergeMode === 'families' ? (
-                   <>
-                     <div>
-                       <p className="text-sm text-gray-600 mb-4">
-                         Merge families. Select which family to keep and which families to merge into it.
-                       </p>
-                       
-                       <div className="space-y-4">
-                         <div>
-                           <label className="block text-sm font-medium text-gray-700">
-                             Keep Family
-                           </label>
-                           <select
-                             value={mergeData.keepFamilyId || ''}
-                             onChange={(e) => setMergeData({...mergeData, keepFamilyId: e.target.value ? parseInt(e.target.value) : null})}
-                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                           >
-                             <option value="">Select family to keep</option>
-                             {families.map(family => (
-                               <option key={family.id} value={family.id}>
-                                 {family.familyName} ({family.memberCount} members)
-                               </option>
-                             ))}
-                           </select>
-                         </div>
-                         
-                         <div>
-                           <label className="block text-sm font-medium text-gray-700">
-                             New Family Name (Optional)
-                           </label>
-                           <input
-                             type="text"
-                             value={mergeData.familyName}
-                             onChange={(e) => setMergeData({...mergeData, familyName: e.target.value})}
-                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                             placeholder="Leave blank to keep current name"
-                           />
-                         </div>
-                         
-                         <div>
-                           <label className="block text-sm font-medium text-gray-700">
-                             New Family Type (Optional)
-                           </label>
-                           <select
-                             value={mergeData.familyType}
-                             onChange={(e) => setMergeData({...mergeData, familyType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor'})}
-                             className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                           >
-                             <option value="regular">Regular Family</option>
-                             <option value="local_visitor">Local Visitor Family</option>
-                             <option value="traveller_visitor">Traveller Visitor Family</option>
-                           </select>
-                         </div>
-                       </div>
-                     </div>
-                   </>
-                  ) : (
-                   <>
-                     <div>
-                       <p className="text-sm text-gray-600 mb-4">
-                          Deduplicate {selectedPeople.length} selected individuals. Choose which record to keep as the master. The rest will be removed. Use this only for true duplicates, not different people.
-                       </p>
-                       
-                       <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">Master record to keep</label>
-                            <select
-                              value={dedupeKeepId || ''}
-                              onChange={(e) => setDedupeKeepId(e.target.value ? parseInt(e.target.value) : null)}
-                              className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                            >
-                              <option value="">Select record to keep</option>
-                              {people.filter(p => selectedPeople.includes(p.id)).map(p => (
-                                <option key={p.id} value={p.id}>
-                                  {p.firstName} {p.lastName}{p.familyName ? ` — Family: ${p.familyName}` : ''} (ID: {p.id})
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                         <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
-                           <div className="flex">
-                             <div className="text-sm text-yellow-700">
-                                <strong>Warning:</strong> This will permanently delete {selectedPeople.length - 1} individual(s). Ensure you selected the correct master record above.
-                             </div>
-                           </div>
-                         </div>
-                         
-                         <div className="flex items-center space-x-2">
-                           <input
-                             type="checkbox"
-                             checked={mergeData.mergeAssignments}
-                             onChange={(e) => setMergeData({...mergeData, mergeAssignments: e.target.checked})}
-                             className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                           />
-                           <span className="text-sm text-gray-700">
-                             Merge gathering assignments from deleted individuals to the kept individual
-                           </span>
-                         </div>
-                       </div>
-                     </div>
-                   </>
-                 )}
-                 
-                 <div className="flex justify-end space-x-3 pt-4">
-                   <button
-                     type="button"
-                     onClick={() => setShowMergeModal(false)}
-                     className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                   >
-                     Cancel
-                   </button>
-                   <button
-                     onClick={mergeMode === 'individuals' ? handleMergeIndividuals : 
-                              mergeMode === 'families' ? handleMergeFamilies : handleDeduplicateIndividuals}
-                     disabled={mergeMode === 'individuals' && !mergeData.familyName.trim()}
-                     className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                   >
-                     {mergeMode === 'individuals' ? 'Merge Individuals' : 
-                      mergeMode === 'families' ? 'Merge Families' : 'Deduplicate Individuals'}
-                   </button>
-                 </div>
-               </div>
-             </div>
-           </div>
-         </div>,
-                 document.body
-      ) : null}
+      <MergeModal
+        isOpen={showMergeModal}
+        onClose={() => setShowMergeModal(false)}
+        onSuccess={async (message) => {
+          setSelectedPeople([]);
+          await loadPeople();
+          await loadFamilies();
+          showSuccess(message);
+        }}
+        mergeMode={mergeMode}
+        selectedPeople={selectedPeople}
+        people={people}
+        families={families}
+      />
 
       {/* Family Notes Modal */}
-      {showNotesModal && selectedFamilyForNotes ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-            <div className="mt-3">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Family Notes: {selectedFamilyForNotes.familyName}
-                </h3>
-                <button
-                  onClick={() => setShowNotesModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-6 w-6" />
-                </button>
-              </div>
-              
-              <div className="mb-4">
-                <label htmlFor="familyNotes" className="block text-sm font-medium text-gray-700 mb-2">
-                  Notes
-                </label>
-                <textarea
-                  id="familyNotes"
-                  rows={6}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="Add notes about this family..."
-                  value={currentNotes}
-                  onChange={(e) => setCurrentNotes(e.target.value)}
-                />
-              </div>
-              
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowNotesModal(false)}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveNotes}
-                  disabled={isLoading}
-                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {isLoading ? 'Saving...' : 'Save Notes'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ) : null}
+      <NotesModal
+        isOpen={showNotesModal}
+        onClose={() => setShowNotesModal(false)}
+        onSuccess={async (message, updatedFamily) => {
+          // Update the local family data
+          setFamilies(families.map(family =>
+            family.id === updatedFamily.id
+              ? { ...family, familyNotes: updatedFamily.familyNotes }
+              : family
+          ));
+          showSuccess(message);
+        }}
+        family={selectedFamilyForNotes}
+      />
    </div>
  );
 };
