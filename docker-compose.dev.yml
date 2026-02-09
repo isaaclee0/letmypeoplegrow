@@ -76,7 +76,7 @@ services:
       context: .
       dockerfile: Dockerfile.client.dev
       args:
-        - VERSION=${VERSION:-1.5.0}
+        - VERSION=${VERSION:-1.5.3}
     container_name: church_attendance_client_dev
     restart: unless-stopped
     ports:
@@ -92,6 +92,7 @@ services:
       - FAST_REFRESH=false
       - VITE_HMR=false
       - VITE_USE_WEBSOCKETS=true
+      - VITE_APP_VERSION=${VERSION:-1.5.3}
     depends_on:
       - server
     networks:
