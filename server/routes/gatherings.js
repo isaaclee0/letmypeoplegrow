@@ -18,10 +18,11 @@ router.get('/', async (req, res) => {
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_end_time, gt.is_active, gt.created_at,
-               COUNT(DISTINCT gl.individual_id) as member_count,
+               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
+        LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
         LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
@@ -32,10 +33,11 @@ router.get('/', async (req, res) => {
     } else {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_end_time, gt.is_active, gt.created_at,
-               COUNT(DISTINCT gl.individual_id) as member_count,
+               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE WHEN ar.individual_id IS NOT NULL AND i.people_type IN ('local_visitor', 'traveller_visitor') AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND ar.present = true THEN ar.individual_id END) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
+        LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
         LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
