@@ -76,7 +76,7 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
               setTimeout(() => {
                 console.log('Reloading page after service worker update');
                 // Force a hard refresh to bypass all caches
-                window.location.reload(true);
+                window.location.reload();
               }, 500);
             }
           }, 1000); // Reduced delay to 1 second for faster updates
