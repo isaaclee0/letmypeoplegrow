@@ -128,6 +128,7 @@ const KioskPage: React.FC = () => {
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [startTime, setStartTime] = useState(kiosk.startTime || '10:00');
   const [endTime, setEndTime] = useState(kiosk.endTime || '11:00');
+  const [customMessage, setCustomMessage] = useState('Welcome\nPlease use this to sign in/out');
   const [isLoading, setIsLoading] = useState(true);
 
   // ===== PIN state =====
@@ -179,6 +180,20 @@ const KioskPage: React.FC = () => {
       setDaysAway(da);
     }
   }, [selectedGathering]);
+
+  // ===== Pre-populate kiosk settings from gathering =====
+  useEffect(() => {
+    if (selectedGathering && phase === 'setup') {
+      // Pre-populate end time from gathering's kiosk settings
+      if (selectedGathering.kioskEndTime) {
+        setEndTime(selectedGathering.kioskEndTime.substring(0, 5));
+      }
+      // Pre-populate custom message from gathering's kiosk settings
+      if (selectedGathering.kioskMessage) {
+        setCustomMessage(selectedGathering.kioskMessage);
+      }
+    }
+  }, [selectedGathering, phase]);
 
   // ===== Time-based mode defaulting =====
   const computeDefaultMode = useCallback((): KioskMode => {
@@ -451,11 +466,24 @@ const KioskPage: React.FC = () => {
   };
 
   // ===== Setup: enter kiosk mode -> go to PIN =====
-  const handleEnterKioskMode = () => {
+  const handleEnterKioskMode = async () => {
     if (!selectedGathering) {
       setError('Please select a gathering.');
       return;
     }
+
+    // Save kiosk settings (end time and custom message) to gathering for future use
+    try {
+      await gatheringsAPI.update(selectedGathering.id, {
+        kioskEndTime: endTime,
+        kioskMessage: customMessage,
+      });
+      console.log('✅ Kiosk settings saved to gathering');
+    } catch (err) {
+      console.error('Failed to save kiosk settings:', err);
+      // Don't block entering kiosk mode if save fails
+    }
+
     setPhase('pin');
     setPinInput('');
     setPinConfirm('');
@@ -672,6 +700,24 @@ const KioskPage: React.FC = () => {
             The kiosk will default to Check In before the gathering and switch to Check Out 15 minutes before the end time.
           </p>
 
+          {/* Custom Welcome Message */}
+          <div>
+            <label htmlFor="kiosk-message" className="block text-sm font-medium text-gray-700 mb-1">
+              Custom Welcome Message
+            </label>
+            <textarea
+              id="kiosk-message"
+              value={customMessage}
+              onChange={(e) => setCustomMessage(e.target.value)}
+              rows={3}
+              placeholder="Welcome&#10;Please use this to sign in/out"
+              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              This message will be displayed prominently on the kiosk screen. Use line breaks for better readability.
+            </p>
+          </div>
+
           {/* Show next gathering date info */}
           {selectedGathering && daysAway > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
@@ -803,6 +849,18 @@ const KioskPage: React.FC = () => {
         {daysAway > 0 && (
           <p className="text-xs text-amber-600 mt-1">
             This gathering is in {daysAway} day{daysAway !== 1 ? 's' : ''}
+          </p>
+        )}
+      </div>
+
+      {/* Custom Welcome Message */}
+      <div className="text-center mb-6 px-4">
+        <div className="text-3xl font-bold text-gray-800 leading-tight whitespace-pre-line">
+          {customMessage}
+        </div>
+        {selectedGathering?.kioskEndTime && (
+          <p className="text-sm text-gray-500 mt-2">
+            Sign-in closes at {selectedGathering.kioskEndTime.substring(0, 5)}
           </p>
         )}
       </div>

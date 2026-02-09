@@ -1156,85 +1156,41 @@ const AttendancePage: React.FC = () => {
   // No need for visibility-based refreshes that cause issues on mobile PWA
 
   // Load recent visitors when gathering changes
-  useEffect(() => {
-    const loadRecentVisitors = async () => {
-      if (!selectedGathering) return;
-      
-      try {
-        const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-        setRecentVisitors(response.data.visitors || []);
-        setAllRecentVisitorsPool(response.data.visitors || []);
-      } catch (err) {
-        console.error('Failed to load recent visitors:', err);
-      }
-    };
+  // REMOVED: This is now loaded by the combined /full endpoint
+  // useEffect(() => {
+  //   const loadRecentVisitors = async () => {
+  //     if (!selectedGathering) return;
+  //
+  //     try {
+  //       const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
+  //       setRecentVisitors(response.data.visitors || []);
+  //       setAllRecentVisitorsPool(response.data.visitors || []);
+  //     } catch (err) {
+  //       console.error('Failed to load recent visitors:', err);
+  //     }
+  //   };
+  //
+  //   loadRecentVisitors();
+  // }, [selectedGathering]);
 
-    loadRecentVisitors();
-  }, [selectedGathering]);
+  // REMOVED: This is now loaded by the combined /full endpoint
+  // useEffect(() => {
+  //   const loadAllChurchPeople = async () => {
+  //     try {
+  //       setIsLoadingAllVisitors(true);
+  //       const response = await attendanceAPI.getAllPeople();
+  //       setAllChurchVisitors(response.data.visitors || []); // Keep using same state var for compatibility
+  //     } catch (err) {
+  //       console.error('Failed to load all church people:', err);
+  //     } finally {
+  //       setIsLoadingAllVisitors(false);
+  //     }
+  //   };
+  //   loadAllChurchPeople();
+  // }, []);
 
-  // Load church-wide people once (or when user context changes significantly)
-  useEffect(() => {
-    const loadAllChurchPeople = async () => {
-      try {
-        setIsLoadingAllVisitors(true);
-        const response = await attendanceAPI.getAllPeople();
-        setAllChurchVisitors(response.data.visitors || []); // Keep using same state var for compatibility
-      } catch (err) {
-        console.error('Failed to load all church people:', err);
-      } finally {
-        setIsLoadingAllVisitors(false);
-      }
-    };
-    loadAllChurchPeople();
-  }, []);
-
-  // Combine current visitors with gathering-specific recent visitors from last 6 weeks
-  useEffect(() => {
-    if (!selectedGathering) return;
-
-    const loadAllVisitors = async () => {
-      try {
-        // Get current visitors for this date
-        const currentResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
-        const currentVisitors = currentResponse.data.visitors || [];
-
-        // Use already loaded gathering-specific recent visitors pool if available; otherwise fetch once
-        let gatheringRecentVisitors = allRecentVisitorsPool;
-        if (!gatheringRecentVisitors || gatheringRecentVisitors.length === 0) {
-          const recentResponse = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-          gatheringRecentVisitors = recentResponse.data.visitors || [];
-          setAllRecentVisitorsPool(gatheringRecentVisitors);
-        }
-
-        // Server now handles service-based filtering, so we use all visitors it returns
-        // The filtering is done on the server side using the configured service limits
-        const filteredGatheringRecentVisitors = gatheringRecentVisitors || [];
-
-        // Combine current visitors with gathering-specific recent visitors, avoiding duplicates
-        const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
-        const combinedVisitors = [
-          ...currentVisitors,
-          ...filteredGatheringRecentVisitors.filter((v: Visitor) => !currentVisitorIds.has(v.id))
-        ];
-
-        setAllVisitors(combinedVisitors);
-        
-        // Initialize visitor attendance state from server 'present' flags
-        const presentVisitorIds = new Set((currentVisitors || []).filter((cv: any) => cv.present).map((cv: any) => cv.id));
-        const initialVisitorAttendance: { [key: number]: boolean } = {};
-        combinedVisitors.forEach((visitor: Visitor) => {
-          if (visitor.id) {
-            initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
-          }
-        });
-        setVisitorAttendance(initialVisitorAttendance);
-      } catch (err) {
-        console.error('Failed to load all visitors:', err);
-      }
-    };
-
-    loadAllVisitors();
-  }, [selectedGathering, selectedDate, allRecentVisitorsPool, attendanceRefreshTrigger]);
+  // REMOVED: This is now loaded by the combined /full endpoint
+  // The /full endpoint provides visitors, recentVisitors, and allChurchPeople in one call
 
   // Load regular attendance data when gathering or date changes (CACHE-FIRST approach)
   useEffect(() => {
@@ -1294,19 +1250,59 @@ const AttendancePage: React.FC = () => {
         if (!loadedFromCache) {
           setIsLoading(true);
         }
-        
-          // Try WebSocket first if connected, fall back to REST API
+
+        // Try WebSocket first if connected, fall back to REST API
         let response;
-          if (isWebSocketConnected) {
-            try {
-              response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
-            } catch (wsError) {
-              logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
-              throw wsError; // Re-throw to trigger REST API fallback
-            }
-          } else {
-            const apiResponse = await attendanceAPI.get(selectedGathering.id, selectedDate);
-            response = apiResponse.data;
+
+        // If WebSocket is connecting (not yet connected), wait briefly before falling back to API
+        if (!isWebSocketConnected && connectionStatus === 'connecting' && loadedFromCache) {
+          logger.log('⏳ WebSocket connecting, waiting briefly (cache already shown)...');
+          await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5s for connection
+        }
+
+        if (isWebSocketConnected) {
+          try {
+            response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
+          } catch (wsError) {
+            logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
+            throw wsError; // Re-throw to trigger REST API fallback
+          }
+        } else {
+          // OPTIMIZED: Use /full endpoint to get all data in one call
+          const apiResponse = await attendanceAPI.getFull(selectedGathering.id, selectedDate);
+          response = apiResponse.data;
+
+          // Extract additional data from the combined response
+          if (response.recentVisitors) {
+            setRecentVisitors(response.recentVisitors);
+            setAllRecentVisitorsPool(response.recentVisitors);
+          }
+          if (response.allChurchPeople) {
+            setAllChurchVisitors(response.allChurchPeople);
+            setIsLoadingAllVisitors(false);
+          }
+
+          // Process visitors for the combined list
+          if (response.visitors && response.recentVisitors) {
+            const currentVisitors = response.visitors || [];
+            const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
+            const combinedVisitors = [
+              ...currentVisitors,
+              ...response.recentVisitors.filter((v: Visitor) => !currentVisitorIds.has(v.id))
+            ];
+
+            setAllVisitors(combinedVisitors);
+
+            // Initialize visitor attendance state
+            const presentVisitorIds = new Set(currentVisitors.filter((cv: any) => cv.present).map((cv: any) => cv.id));
+            const initialVisitorAttendance: { [key: number]: boolean } = {};
+            combinedVisitors.forEach((visitor: Visitor) => {
+              if (visitor.id) {
+                initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
+              }
+            });
+            setVisitorAttendance(initialVisitorAttendance);
+          }
         }
         
         // CRITICAL: Check if this request is still relevant before updating state

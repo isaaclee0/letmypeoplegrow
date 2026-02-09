@@ -82,18 +82,18 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
     });
     
     const socketConfig = {
-      auth: { 
-        ...authData, 
+      auth: {
+        ...authData,
         tabId: tabId.current,
         connectionId: connectionId
       },
       withCredentials: true,
       transports: ['websocket', 'polling'],
-      timeout: 8000,
+      timeout: 5000, // Reduced from 8000ms for faster initial connection
       reconnection: true,
-      reconnectionAttempts: 3,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5, // Increased from 3 for better reliability
+      reconnectionDelay: 300, // Reduced from 500ms for faster reconnection
+      reconnectionDelayMax: 3000, // Reduced from 5000ms
       forceNew: true, // Force new connection for each tab to avoid conflicts
       upgrade: true,
       rememberUpgrade: true,
@@ -104,7 +104,7 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
       },
       pingTimeout: 30000,
       pingInterval: 15000,
-      maxReconnectionAttempts: 3
+      maxReconnectionAttempts: 5 // Increased from 3
     };
     
     console.log(`🔌 [Tab ${tabId.current}] Connecting to WebSocket for attendance...`, { serverUrl, authData, connectionId });
@@ -202,7 +202,7 @@ export const useAttendanceWebSocketConnection = (): AttendanceWebSocketConnectio
       connectingRef.current = false;
       newSocket.disconnect();
     };
-  }, [user?.id, refreshTokenAndUserData]);
+  }, [user?.id, user?.church_id, refreshTokenAndUserData]);
 
   // Send attendance update via WebSocket
   const sendAttendanceUpdate = useCallback(async (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>): Promise<void> => {

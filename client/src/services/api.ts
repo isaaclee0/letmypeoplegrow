@@ -338,24 +338,28 @@ export const gatheringsAPI = {
 
 // Attendance API
 export const attendanceAPI = {
-  get: (gatheringTypeId: number, date: string) => 
+  get: (gatheringTypeId: number, date: string) =>
     api.get(`/attendance/${gatheringTypeId}/${date}`),
-    
+
+  // OPTIMIZED: Get all attendance data in one call (replaces 5 separate calls)
+  getFull: (gatheringTypeId: number, date: string) =>
+    api.get(`/attendance/${gatheringTypeId}/${date}/full`),
+
   record: (gatheringTypeId: number, date: string, data: {
     attendanceRecords: Array<{ individualId: number; present: boolean }>;
     visitors: Visitor[];
-  }) => 
+  }) =>
     api.post(`/attendance/${gatheringTypeId}/${date}`, data),
-    
-  getRecentVisitors: (gatheringTypeId: number) => 
+
+  getRecentVisitors: (gatheringTypeId: number) =>
     api.get(`/attendance/${gatheringTypeId}/visitors/recent`),
 
   // Church-wide visitors (all gatherings, all time)
-  getAllVisitors: () => 
+  getAllVisitors: () =>
     api.get('/attendance/visitors/all'),
 
   // Church-wide people (all gatherings, all time - including regular members)
-  getAllPeople: () => 
+  getAllPeople: () =>
     api.get('/attendance/people/all'),
     
   addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 

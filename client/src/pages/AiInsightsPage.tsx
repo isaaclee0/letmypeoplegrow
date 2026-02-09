@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { aiAPI } from '../services/api';
 import {
@@ -7,6 +8,11 @@ import {
   ExclamationTriangleIcon,
   SparklesIcon,
   Cog6ToothIcon,
+  PlusIcon,
+  TrashIcon,
+  ChatBubbleLeftRightIcon,
+  Bars3Icon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 
 interface Message {
@@ -14,6 +20,14 @@ interface Message {
   role: 'user' | 'assistant' | 'error';
   content: string;
   timestamp: Date;
+}
+
+interface Conversation {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
 }
 
 const SUGGESTED_QUESTIONS = [
@@ -34,6 +48,13 @@ const AiInsightsPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Chat history state
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<number | null>(null);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; title: string } | null>(null);
+
   // Check AI status on mount
   useEffect(() => {
     const checkStatus = async () => {
@@ -41,6 +62,11 @@ const AiInsightsPage: React.FC = () => {
         const response = await aiAPI.getStatus();
         setAiConfigured(response.data.configured);
         setProvider(response.data.provider);
+
+        // Load conversations if AI is configured
+        if (response.data.configured) {
+          loadConversations(true); // Auto-load latest conversation on page load
+        }
       } catch {
         setAiConfigured(false);
       }
@@ -52,6 +78,75 @@ const AiInsightsPage: React.FC = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Load all conversations
+  const loadConversations = async (autoLoadLatest = false) => {
+    try {
+      const response = await aiAPI.getConversations();
+      const convos = response.data.conversations || [];
+      setConversations(convos);
+
+      // Auto-load the most recent conversation on page load if there are any
+      if (autoLoadLatest && convos.length > 0 && !currentConversationId) {
+        loadConversation(convos[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    }
+  };
+
+  // Load a specific conversation
+  const loadConversation = async (conversationId: number) => {
+    try {
+      const response = await aiAPI.getMessages(conversationId);
+      const loadedMessages: Message[] = response.data.messages.map((msg: any) => ({
+        id: msg.id.toString(),
+        role: msg.role,
+        content: msg.content,
+        timestamp: new Date(msg.timestamp),
+      }));
+      setMessages(loadedMessages);
+      setCurrentConversationId(conversationId);
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+    }
+  };
+
+  // Create new conversation
+  const createNewChat = async () => {
+    setMessages([]);
+    setCurrentConversationId(null);
+    inputRef.current?.focus();
+  };
+
+  // Open delete confirmation modal
+  const openDeleteModal = (conversationId: number, title: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleteTarget({ id: conversationId, title });
+    setShowDeleteModal(true);
+  };
+
+  // Delete conversation (called from modal)
+  const confirmDeleteConversation = async () => {
+    if (!deleteTarget) return;
+
+    try {
+      await aiAPI.deleteConversation(deleteTarget.id);
+
+      // If deleting current conversation, clear it
+      if (deleteTarget.id === currentConversationId) {
+        setMessages([]);
+        setCurrentConversationId(null);
+      }
+
+      // Reload conversations
+      loadConversations();
+      setShowDeleteModal(false);
+      setDeleteTarget(null);
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
 
   // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -81,6 +176,15 @@ const AiInsightsPage: React.FC = () => {
     }
 
     try {
+      // Create conversation if this is the first message
+      let conversationId = currentConversationId;
+      if (!conversationId) {
+        const convResponse = await aiAPI.createConversation(text.substring(0, 50));
+        conversationId = convResponse.data.conversation.id;
+        setCurrentConversationId(conversationId);
+      }
+
+      // Get AI response
       const response = await aiAPI.ask(text);
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -89,6 +193,15 @@ const AiInsightsPage: React.FC = () => {
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, assistantMsg]);
+
+      // Save both messages to database
+      if (conversationId) {
+        await aiAPI.saveMessage(conversationId, 'user', text);
+        await aiAPI.saveMessage(conversationId, 'assistant', response.data.answer);
+
+        // Reload conversations to update the list
+        loadConversations();
+      }
     } catch (error: any) {
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -181,142 +294,227 @@ const AiInsightsPage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto flex flex-col" style={{ height: 'calc(100vh - 10rem)' }}>
-      {/* Header */}
-      <div className="bg-white shadow rounded-t-lg px-6 py-4 border-b border-gray-200 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-              <SparklesIcon className="w-5 h-5 text-purple-600" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">AI Insights</h1>
-              <p className="text-xs text-gray-500">
-                Powered by {provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'AI'}
-              </p>
-            </div>
-          </div>
-          {messages.length > 0 && (
+    <div className="flex h-full" style={{ height: 'calc(100vh - 10rem)' }}>
+      {/* Sidebar */}
+      {showSidebar && (
+        <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-gray-200">
             <button
-              onClick={() => setMessages([])}
-              className="text-sm text-gray-500 hover:text-gray-700 flex items-center"
+              onClick={createNewChat}
+              className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
             >
-              Clear chat
+              <PlusIcon className="w-4 h-4" />
+              <span className="text-sm font-medium">New Chat</span>
             </button>
-          )}
-        </div>
-      </div>
-
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto bg-gray-50 px-4 py-6 space-y-4">
-        {messages.length === 0 ? (
-          <div className="text-center py-8">
-            <SparklesIcon className="w-12 h-12 text-purple-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-700 mb-2">
-              Ask me anything about your church data
-            </h3>
-            <p className="text-sm text-gray-500 mb-6 max-w-md mx-auto">
-              I can help you understand attendance patterns, identify trends, and spot people who may need follow-up.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg mx-auto">
-              {SUGGESTED_QUESTIONS.map((q, i) => (
-                <button
-                  key={i}
-                  onClick={() => sendMessage(q)}
-                  className="text-left text-sm px-3 py-2 rounded-lg border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-colors"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
           </div>
-        ) : (
-          messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-lg px-4 py-3 ${
-                  msg.role === 'user'
-                    ? 'bg-purple-600 text-white'
-                    : msg.role === 'error'
-                    ? 'bg-red-50 border border-red-200 text-red-700'
-                    : 'bg-white border border-gray-200 text-gray-800 shadow-sm'
-                }`}
-              >
-                {msg.role === 'error' && (
-                  <div className="flex items-center mb-1">
-                    <ExclamationTriangleIcon className="w-4 h-4 mr-1 text-red-500" />
-                    <span className="text-xs font-medium text-red-600">Error</span>
+
+          {/* Conversations List */}
+          <div className="flex-1 overflow-y-auto p-2">
+            {conversations.length === 0 ? (
+              <div className="text-center py-8 text-sm text-gray-500">
+                <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                No conversations yet
+              </div>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => loadConversation(conv.id)}
+                  className={`group relative p-3 mb-1 rounded-md cursor-pointer transition-colors ${
+                    currentConversationId === conv.id
+                      ? 'bg-purple-50 border border-purple-200'
+                      : 'hover:bg-gray-50 border border-transparent'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {conv.title}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {conv.message_count} messages
+                      </p>
+                    </div>
+                    <button
+                      onClick={(e) => openDeleteModal(conv.id, conv.title, e)}
+                      className="opacity-0 group-hover:opacity-100 ml-2 p-1 text-gray-400 hover:text-red-600 transition-opacity"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
                   </div>
-                )}
-                {msg.role === 'assistant' ? (
-                  <div
-                    className="text-sm leading-relaxed prose prose-sm max-w-none"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-                  />
-                ) : (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                )}
-                <p className={`text-xs mt-1 ${
-                  msg.role === 'user' ? 'text-purple-200' : 'text-gray-400'
-                }`}>
-                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <div className="bg-white shadow rounded-t-lg px-6 py-4 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => setShowSidebar(!showSidebar)}
+                className="p-2 hover:bg-gray-100 rounded-md"
+              >
+                <Bars3Icon className="w-5 h-5 text-gray-600" />
+              </button>
+              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                <SparklesIcon className="w-5 h-5 text-purple-600" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">AI Insights</h1>
+                <p className="text-xs text-gray-500">
+                  Powered by {provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'AI'}
                 </p>
               </div>
             </div>
-          ))
-        )}
+          </div>
+        </div>
 
-        {/* Loading indicator */}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
-              <div className="flex items-center space-x-2">
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        {/* Messages Area */}
+        <div className="flex-1 overflow-y-auto bg-gray-50 px-4 py-6 space-y-4">
+          {messages.length === 0 ? (
+            <div className="text-center py-8">
+              <SparklesIcon className="w-12 h-12 text-purple-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-700 mb-2">
+                Ask me anything about your church data
+              </h3>
+              <p className="text-sm text-gray-500 mb-6 max-w-md mx-auto">
+                I can help you understand attendance patterns, identify trends, and spot people who may need follow-up.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg mx-auto">
+                {SUGGESTED_QUESTIONS.map((q, i) => (
+                  <button
+                    key={i}
+                    onClick={() => sendMessage(q)}
+                    className="text-left text-sm px-3 py-2 rounded-lg border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-colors"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[85%] rounded-lg px-4 py-3 ${
+                    msg.role === 'user'
+                      ? 'bg-purple-600 text-white'
+                      : msg.role === 'error'
+                      ? 'bg-red-50 border border-red-200 text-red-700'
+                      : 'bg-white border border-gray-200 text-gray-800 shadow-sm'
+                  }`}
+                >
+                  {msg.role === 'error' && (
+                    <div className="flex items-center mb-1">
+                      <ExclamationTriangleIcon className="w-4 h-4 mr-2" />
+                      <span className="font-medium text-sm">Error</span>
+                    </div>
+                  )}
+                  <div
+                    className="prose prose-sm max-w-none"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                  />
                 </div>
-                <span className="text-sm text-gray-500">Thinking...</span>
+              </div>
+            ))
+          )}
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
+                <div className="flex items-center space-x-2">
+                  <ArrowPathIcon className="w-4 h-4 animate-spin text-purple-500" />
+                  <span className="text-sm text-gray-600">Thinking...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input Area */}
+        <div className="bg-white border-t border-gray-200 px-4 py-4 flex-shrink-0">
+          <div className="flex items-end space-x-2">
+            <div className="flex-1">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question about your church data..."
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                rows={1}
+                style={{ minHeight: '48px', maxHeight: '150px' }}
+              />
+            </div>
+            <button
+              onClick={() => sendMessage()}
+              disabled={isLoading || !input.trim()}
+              className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            >
+              <PaperAirplaneIcon className="w-5 h-5" />
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2 text-center">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && deleteTarget && createPortal(
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Confirm Deletion
+                </h3>
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+
+              <div className="text-center mb-6">
+                <p className="text-sm text-gray-500">
+                  Are you sure you want to delete <strong>{deleteTarget.title}</strong>? This action cannot be undone.
+                </p>
+              </div>
+
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowDeleteModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteConversation}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Delete Conversation
+                </button>
               </div>
             </div>
           </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input Area */}
-      <div className="bg-white border-t border-gray-200 rounded-b-lg px-4 py-3 flex-shrink-0">
-        <div className="flex items-end space-x-3">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your attendance data..."
-            rows={1}
-            className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:ring-purple-500 focus:outline-none"
-            disabled={isLoading}
-          />
-          <button
-            onClick={() => sendMessage()}
-            disabled={!input.trim() || isLoading}
-            className="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? (
-              <ArrowPathIcon className="w-5 h-5 animate-spin" />
-            ) : (
-              <PaperAirplaneIcon className="w-5 h-5" />
-            )}
-          </button>
-        </div>
-        <p className="text-xs text-gray-400 mt-1">
-          Press Enter to send, Shift+Enter for new line
-        </p>
-      </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

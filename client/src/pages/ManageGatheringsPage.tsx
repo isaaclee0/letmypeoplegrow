@@ -922,21 +922,43 @@ const ManageGatheringsPage: React.FC = () => {
 
                 {/* Kiosk Mode Toggle - only for standard gatherings */}
                 {editFormData.attendanceType === 'standard' && (
-                  <div>
-                    <label className="flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editFormData.kioskEnabled || false}
-                        onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
-                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                      />
-                      <span className="ml-2 text-sm font-medium text-gray-700">
-                        Allow Self Sign-In (Kiosk Mode)
-                      </span>
-                    </label>
-                    <p className="mt-1 text-xs text-gray-500 ml-6">
-                      Enables a self-service sign-in page where attendees can check themselves in via a shared device.
-                    </p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editFormData.kioskEnabled || false}
+                          onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm font-medium text-gray-700">
+                          Allow Self Sign-In (Kiosk Mode)
+                        </span>
+                      </label>
+                      <p className="mt-1 text-xs text-gray-500 ml-6">
+                        Enables a self-service sign-in page where attendees can check themselves in via a shared device.
+                      </p>
+                    </div>
+
+                    {/* Kiosk Configuration - only show when kiosk is enabled */}
+                    {editFormData.kioskEnabled && (
+                      <div className="ml-6 border-l-2 border-primary-200 pl-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            End Time
+                          </label>
+                          <input
+                            type="time"
+                            value={editFormData.kioskEndTime || ''}
+                            onChange={(e) => setEditFormData({ ...editFormData, kioskEndTime: e.target.value })}
+                            className="w-40 px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">
+                            When should sign-in close? (optional)
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1088,21 +1110,43 @@ const ManageGatheringsPage: React.FC = () => {
 
                   {/* Kiosk Mode Toggle - only for standard gatherings */}
                   {createGatheringData.attendanceType === 'standard' && (
-                    <div>
-                      <label className="flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={createGatheringData.kioskEnabled || false}
-                          onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                        />
-                        <span className="ml-2 text-sm font-medium text-gray-700">
-                          Allow Self Sign-In (Kiosk Mode)
-                        </span>
-                      </label>
-                      <p className="mt-1 text-xs text-gray-500 ml-6">
-                        Enables a self-service sign-in page where attendees can check themselves in via a shared device.
-                      </p>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={createGatheringData.kioskEnabled || false}
+                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <span className="ml-2 text-sm font-medium text-gray-700">
+                            Allow Self Sign-In (Kiosk Mode)
+                          </span>
+                        </label>
+                        <p className="mt-1 text-xs text-gray-500 ml-6">
+                          Enables a self-service sign-in page where attendees can check themselves in via a shared device.
+                        </p>
+                      </div>
+
+                      {/* Kiosk Configuration - only show when kiosk is enabled */}
+                      {createGatheringData.kioskEnabled && (
+                        <div className="ml-6 border-l-2 border-primary-200 pl-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              End Time
+                            </label>
+                            <input
+                              type="time"
+                              value={createGatheringData.kioskEndTime || ''}
+                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEndTime: e.target.value })}
+                              className="w-40 px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                              When should sign-in close? (optional)
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

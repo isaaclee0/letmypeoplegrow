@@ -824,6 +824,439 @@ router.get('/visitors/all', disableCache, async (req, res) => {
   }
 });
 
+// COMBINED ENDPOINT: Get all attendance data in one call (attendance + visitors + recent + all people)
+// This optimizes page load by reducing 5 separate API calls to 1
+router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId, date } = req.params;
+    const { search } = req.query;
+
+    // We'll reuse the logic from the individual endpoints but execute in parallel where possible
+    const results = {};
+
+    try {
+      // PARALLEL BATCH 1: Fetch all church people (doesn't depend on anything)
+      const allPeoplePromise = (async () => {
+        const allFamilies = await Database.query(`
+          SELECT DISTINCT
+            f.id as family_id,
+            f.family_name,
+            f.family_notes,
+            f.family_type,
+            COALESCE(f.last_attended, f.created_at) as last_activity
+          FROM families f
+          JOIN individuals i ON f.id = i.family_id
+          WHERE i.is_active = true
+            AND f.church_id = ?
+          GROUP BY f.id
+          ORDER BY last_activity DESC, f.family_name
+        `, [req.user.church_id]);
+
+        const processedPeople = [];
+        for (const family of allFamilies) {
+          const familyMembers = await Database.query(`
+            SELECT id, first_name, last_name, people_type
+            FROM individuals
+            WHERE family_id = ? AND is_active = true AND church_id = ?
+            ORDER BY first_name
+          `, [family.family_id, req.user.church_id]);
+
+          for (const member of familyMembers) {
+            const isVisitor = ['local_visitor', 'traveller_visitor'].includes(member.people_type);
+            processedPeople.push({
+              id: member.id,
+              name: `${member.first_name} ${member.last_name}`,
+              visitorType: isVisitor ? (member.people_type === 'local_visitor' ? 'potential_regular' : 'temporary_other') : 'regular',
+              visitorFamilyGroup: family.family_id.toString(),
+              notes: family.family_notes,
+              lastAttended: family.last_activity,
+              familyId: family.family_id,
+              familyName: family.family_name
+            });
+          }
+        }
+        return processedPeople;
+      })();
+
+      // PARALLEL BATCH 2: Fetch recent visitors (doesn't depend on main attendance)
+      const recentVisitorsPromise = (async () => {
+        const visitorConfig = await getVisitorConfig(req.user.church_id);
+        const today = new Date().toISOString().split('T')[0];
+        const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
+        const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
+
+        const allVisitorFamilies = await Database.query(`
+          SELECT DISTINCT
+            f.id as family_id,
+            f.family_name,
+            f.family_notes,
+            f.family_type,
+            COALESCE(f.last_attended, f.created_at) as last_activity
+          FROM families f
+          JOIN individuals i ON f.id = i.family_id
+          WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
+            AND i.people_type IN ('local_visitor', 'traveller_visitor')
+            AND i.is_active = true
+            AND f.church_id = ?
+            AND EXISTS (
+              SELECT 1 FROM attendance_records ar2
+              JOIN attendance_sessions s2 ON ar2.session_id = s2.id
+              WHERE ar2.individual_id = i.id AND s2.gathering_type_id = ? AND ar2.church_id = ?
+            )
+          GROUP BY f.id
+          ORDER BY last_activity DESC, f.family_name
+        `, [req.user.church_id, gatheringTypeId, req.user.church_id]);
+
+        const recentVisitorFamilies = allVisitorFamilies.filter(family => {
+          const isLocal = family.family_type === 'local_visitor';
+          const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
+
+          if (!family.last_activity || relevantServiceDates.length === 0) return false;
+
+          const lastActivityDate = new Date(family.last_activity);
+          lastActivityDate.setHours(0, 0, 0, 0);
+          const lastActivityStr = lastActivityDate.toISOString().split('T')[0];
+
+          const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+          if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+
+          const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+          return lastActivityStr >= oldestServiceDateStr;
+        });
+
+        const processedVisitors = [];
+        for (const family of recentVisitorFamilies) {
+          const familyMembers = await Database.query(`
+            SELECT i.id, i.first_name, i.last_name, i.people_type
+            FROM individuals i
+            JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
+            WHERE i.family_id = ? AND i.is_active = true AND i.church_id = ?
+            ORDER BY i.first_name
+          `, [gatheringTypeId, family.family_id, req.user.church_id]);
+
+          for (const member of familyMembers) {
+            const isLocal = member.people_type === 'local_visitor';
+            processedVisitors.push({
+              id: member.id,
+              name: `${member.first_name} ${member.last_name}`,
+              visitorType: isLocal ? 'potential_regular' : 'temporary_other',
+              visitorFamilyGroup: family.family_id.toString(),
+              notes: family.family_notes,
+              lastAttended: family.last_activity,
+              familyId: family.family_id,
+              familyName: family.family_name
+            });
+          }
+        }
+        return processedVisitors;
+      })();
+
+      // Wait for parallel operations
+      const [allChurchPeople, recentVisitors] = await Promise.all([
+        allPeoplePromise,
+        recentVisitorsPromise
+      ]);
+
+      results.allChurchPeople = allChurchPeople;
+      results.recentVisitors = recentVisitors;
+
+    } catch (parallelError) {
+      console.error('Error in parallel data fetch:', parallelError);
+      // Continue execution - we'll fetch main attendance data next
+    }
+
+    // Now fetch main attendance data (this is the bulk of the existing endpoint logic)
+    // NOTE: This duplicates the logic from the main GET endpoint below
+    // We could refactor to share this code, but for now keeping it inline for clarity
+
+    const thresholdDays = 7; // default weekly
+    try {
+      const gt = await Database.query('SELECT frequency FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+      if (gt && gt.length > 0) {
+        const freq = (gt[0].frequency || '').toLowerCase();
+        if (freq === 'biweekly') thresholdDays = 14;
+        else if (freq === 'monthly') thresholdDays = 31;
+      }
+    } catch {}
+
+    const thresholdDate = new Date(date);
+    thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
+    const thresholdDateStr = thresholdDate.toISOString().split('T')[0];
+
+    // Get attendance session
+    const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
+    const sessions = hasSessionsChurchId
+      ? await Database.query(
+          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          [gatheringTypeId, date, req.user.church_id]
+        )
+      : await Database.query(
+          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          [gatheringTypeId, date]
+        );
+
+    let sessionId = null;
+    let visitors = [];
+
+    const visitorConfig = await getVisitorConfig(req.user.church_id);
+    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
+    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
+
+    if (sessions.length > 0) {
+      sessionId = sessions[0].id;
+
+      // Get visitor families (using the fixed query with people_type_at_time)
+      // Include both current visitors AND people who were visitors at that time (even if now regular)
+      const visitorFamilies = await Database.query(`
+        SELECT
+          i.id,
+          i.first_name,
+          i.last_name,
+          i.last_attendance_date,
+          COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+          f.id as family_id,
+          f.family_name,
+          f.family_notes,
+          f.family_type,
+          f.last_attended,
+          COALESCE(ar.present, false) as present
+        FROM individuals i
+        JOIN families f ON i.family_id = f.id
+        JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
+        LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
+        WHERE (
+            f.family_type IN ('local_visitor', 'traveller_visitor')
+            OR ar.people_type_at_time IN ('local_visitor', 'traveller_visitor')
+          )
+          AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
+          AND (
+            COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
+          )
+          AND i.church_id = ?
+        ORDER BY f.family_name, i.first_name
+      `, [gatheringTypeId, sessionId, req.user.church_id]);
+
+      // Group and format visitors
+      const familyGroups = {};
+      visitorFamilies.forEach(individual => {
+        const familyId = individual.family_id;
+        if (!familyGroups[familyId]) {
+          familyGroups[familyId] = {
+            familyId: familyId,
+            familyName: individual.family_name,
+            familyNotes: individual.family_notes,
+            familyType: individual.family_type,
+            lastAttended: individual.last_attended,
+            members: []
+          };
+        }
+
+        familyGroups[familyId].members.push({
+          id: individual.id,
+          name: `${individual.first_name} ${individual.last_name}`,
+          firstName: individual.first_name,
+          lastName: individual.last_name,
+          present: individual.present === 1 || individual.present === true,
+          lastAttendanceDate: individual.last_attendance_date,
+          peopleType: individual.people_type,
+          notes: null
+        });
+      });
+
+      const allVisitors = Object.values(familyGroups).flatMap(family =>
+        family.members.map(member => {
+          const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const notesFromFamily = family.familyNotes || '';
+          const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
+          const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
+          const isInfrequent = isTraveller && lastDate && lastDate < thresholdDateStr;
+
+          return {
+            id: member.id,
+            name: member.name,
+            visitorType: visitorTypeFromFamily,
+            visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
+            visitorFamilyGroup: family.familyId.toString(),
+            notes: notesFromFamily || member.notes,
+            lastAttended: family.lastAttended,
+            familyId: family.familyId,
+            familyName: family.familyName,
+            present: member.present,
+            peopleType: member.peopleType,
+            lastAttendanceDate: member.lastAttendanceDate
+          };
+        })
+      );
+
+      // Apply service-limit filtering
+      visitors = allVisitors.filter(visitor => {
+        if (visitor.present) return true;
+        if (!visitor.lastAttendanceDate) return true;
+
+        const relevantServiceDates = visitor.peopleType === 'local_visitor' ?
+          localServiceDates : travellerServiceDates;
+
+        const lastAttendanceDate = new Date(visitor.lastAttendanceDate);
+        lastAttendanceDate.setHours(0, 0, 0, 0);
+        const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
+
+        if (relevantServiceDates.length === 0) return false;
+
+        const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+        if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+
+        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+        return lastAttendedStr >= oldestServiceDateStr;
+      });
+    }
+
+    // Get regular attendance list
+    const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+    const peopleTypeExpression = hasPeopleTypeAtTime
+      ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
+      : `i.people_type`;
+
+    let attendanceListQuery = `
+      SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
+             COALESCE(ar.present, false) as present,
+             ${peopleTypeExpression},
+             f.family_type AS familyType,
+             f.last_attended AS lastAttended
+      FROM gathering_lists gl
+      JOIN individuals i ON gl.individual_id = i.id
+      LEFT JOIN families f ON i.family_id = f.id
+      LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
+      WHERE gl.gathering_type_id = ?
+        AND (
+          i.is_active = true OR
+          ar.present = 1 OR
+          ar.present = true OR
+          (i.is_active = false AND ar.present = 1)
+        )
+        AND i.church_id = ?
+    `;
+
+    const currentDate = new Date(date);
+    const sixWeeksAgo = new Date(currentDate);
+    sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
+
+    const twoWeeksAgo = new Date(currentDate);
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+
+    let attendanceListParams = [sessionId, gatheringTypeId, req.user.church_id];
+
+    if (search && search.trim()) {
+      if (hasPeopleTypeAtTime) {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular') OR
+          (f.family_type IS NULL AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular')
+        ) AND (
+          i.first_name LIKE ? OR
+          i.last_name LIKE ? OR
+          f.family_name LIKE ?
+        )`;
+      } else {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND i.people_type = 'regular') OR
+          (f.family_type IS NULL AND i.people_type = 'regular')
+        ) AND (
+          i.first_name LIKE ? OR
+          i.last_name LIKE ? OR
+          f.family_name LIKE ?
+        )`;
+      }
+      const searchTerm = `%${search.trim()}%`;
+      attendanceListParams.push(searchTerm, searchTerm, searchTerm);
+    } else {
+      if (hasPeopleTypeAtTime) {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular') OR
+          (f.family_type IS NULL AND COALESCE(ar.people_type_at_time, i.people_type) = 'regular')
+        )`;
+      } else {
+        attendanceListQuery += ` AND (
+          (f.family_type = 'regular' AND i.people_type = 'regular') OR
+          (f.family_type IS NULL AND i.people_type = 'regular')
+        )`;
+      }
+    }
+
+    attendanceListQuery += ` ORDER BY f.family_name, i.first_name`;
+
+    const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+
+    // Get potential visitors (people who haven't been for a while)
+    const potentialVisitors = await Database.query(`
+      SELECT DISTINCT
+        i.id,
+        i.first_name,
+        i.last_name,
+        i.people_type,
+        i.last_attendance_date,
+        f.id as family_id,
+        f.family_name,
+        f.family_notes,
+        f.family_type,
+        f.last_attended,
+        CASE
+          WHEN i.last_attendance_date IS NULL THEN 0
+          WHEN i.last_attendance_date < ? THEN 0
+          WHEN i.last_attendance_date >= ? THEN 1
+          ELSE 0
+        END as within_absence_limit
+      FROM individuals i
+      JOIN families f ON i.family_id = f.id
+      WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
+        AND f.family_type IN ('local_visitor', 'traveller_visitor')
+        AND i.is_active = true
+        AND i.church_id = ?
+      ORDER BY f.family_name, i.first_name
+    `, [sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0], req.user.church_id]);
+
+    // Filter potential visitors by service dates
+    const filteredPotentialVisitors = potentialVisitors.filter(visitor => {
+      if (!visitor.last_attendance_date) return true;
+
+      const relevantServiceDates = visitor.people_type === 'local_visitor' ?
+        localServiceDates : travellerServiceDates;
+
+      const lastAttendanceDate = new Date(visitor.last_attendance_date);
+      lastAttendanceDate.setHours(0, 0, 0, 0);
+      const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
+
+      if (relevantServiceDates.length === 0) return false;
+
+      const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+      if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+
+      const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+      return lastAttendedStr >= oldestServiceDateStr;
+    });
+
+    // Format and return combined response
+    const responseData = processApiResponse({
+      attendanceList: attendanceList.map(attendee => ({
+        ...attendee,
+        present: attendee.present === 1 || attendee.present === true,
+        peopleType: attendee.people_type,
+        lastAttended: attendee.last_attended
+      })),
+      visitors,
+      potentialVisitors: filteredPotentialVisitors.map(visitor => ({
+        ...visitor,
+        withinAbsenceLimit: visitor.within_absence_limit === 1 || visitor.within_absence_limit === true
+      })),
+      recentVisitors: results.recentVisitors || [],
+      allChurchPeople: results.allChurchPeople || []
+    });
+
+    res.json(responseData);
+  } catch (error) {
+    console.error('Get full attendance data error:', error);
+    res.status(500).json({ error: 'Failed to retrieve full attendance data.' });
+  }
+});
+
 // Get attendance for a specific date and gathering
 router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, async (req, res) => {
   try {
@@ -870,13 +1303,14 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       sessionId = sessions[0].id;
       
       // Get visitor families for this session limited to the active gathering (via gathering_lists)
+      // Use people_type_at_time to show historical visitor records even if type has changed
       const visitorFamilies = await Database.query(`
-        SELECT 
+        SELECT
           i.id,
           i.first_name,
           i.last_name,
           i.last_attendance_date,
-          i.people_type,
+          COALESCE(ar.people_type_at_time, i.people_type) as people_type,
           f.id as family_id,
           f.family_name,
           f.family_notes,
@@ -887,9 +1321,11 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         JOIN families f ON i.family_id = f.id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-        WHERE f.family_type IN ('local_visitor', 'traveller_visitor') 
+        WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
           AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
-          AND i.people_type IN ('local_visitor', 'traveller_visitor')
+          AND (
+            COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
+          )
           AND i.church_id = ?
         ORDER BY f.family_name, i.first_name
       `, [gatheringTypeId, sessionId, req.user.church_id]);

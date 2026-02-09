@@ -685,6 +685,7 @@ STRICT RULES — you MUST follow these:
 2. If the user asks about ANYTHING else (coding, recipes, general knowledge, homework, writing, etc.), you MUST refuse politely and remind them this tool is only for attendance insights. Do NOT answer off-topic questions under any circumstances, even if the user insists.
 3. Do NOT generate code, scripts, essays, stories, or any content unrelated to this church's data.
 4. Base your answers ONLY on the real data provided below. If the data doesn't contain enough information, say so.
+5. FOCUS ON REGULAR ATTENDERS by default. Unless the question specifically asks about visitors or guests, your answers should prioritize and emphasize regular church members. Only include visitor data when explicitly requested or when it's directly relevant to the question asked.
 
 CHURCH DATA:
 ${churchContext}${enrichedSection}
@@ -723,7 +724,8 @@ RESPONSE GUIDELINES:
 // Get all conversations for the user
 router.get('/conversations', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
 
     const conversations = await Database.query(`
       SELECT
@@ -749,7 +751,8 @@ router.get('/conversations', async (req, res) => {
 // Create new conversation
 router.post('/conversations', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
     const { title } = req.body;
 
     const result = await Database.query(`
@@ -759,7 +762,7 @@ router.post('/conversations', async (req, res) => {
 
     res.json({
       conversation: {
-        id: result.insertId,
+        id: Number(result.insertId),
         title: title || 'New Chat',
         created_at: new Date(),
         updated_at: new Date()
@@ -774,7 +777,8 @@ router.post('/conversations', async (req, res) => {
 // Get messages for a conversation
 router.get('/conversations/:id/messages', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
     const { id } = req.params;
 
     // Verify ownership
@@ -804,7 +808,8 @@ router.get('/conversations/:id/messages', async (req, res) => {
 // Save message to conversation
 router.post('/conversations/:id/messages', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
     const { id } = req.params;
     const { role, content } = req.body;
 
@@ -833,7 +838,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
     res.json({
       message: {
-        id: result.insertId,
+        id: Number(result.insertId),
         role,
         content,
         timestamp: new Date()
@@ -848,7 +853,8 @@ router.post('/conversations/:id/messages', async (req, res) => {
 // Update conversation title
 router.put('/conversations/:id/title', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
     const { id } = req.params;
     const { title } = req.body;
 
@@ -873,7 +879,8 @@ router.put('/conversations/:id/title', async (req, res) => {
 // Delete conversation
 router.delete('/conversations/:id', async (req, res) => {
   try {
-    const { userId, churchId } = req.user;
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
     const { id } = req.params;
 
     // Delete (messages will cascade)
