@@ -54,12 +54,12 @@ try {
 const loadRoutes = () => {
   const routes = {};
   const routeFiles = [
-    'auth', 'users', 'gatherings', 'families', 'individuals', 
-    'attendance', 'reports', 'notifications', 'onboarding', 
-    'invitations', 'csv-import', 'migrations', 'advancedMigrations', 'test', 
-    'notification_rules', 
+    'auth', 'users', 'gatherings', 'families', 'individuals',
+    'attendance', 'reports', 'notifications', 'onboarding',
+    'invitations', 'csv-import', 'migrations', 'advancedMigrations', 'test',
+    'notification_rules',
     // 'importrange', // Disabled - external data access feature
-    'settings', 'activities', 'visitor-config', 'integrations', 'ai'
+    'settings', 'activities', 'visitor-config', 'integrations', 'ai', 'dataangel'
   ];
 
   // Check external service availability (Crazytel for SMS, Brevo for Email)

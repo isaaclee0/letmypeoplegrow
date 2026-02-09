@@ -24,6 +24,7 @@ import Layout from './components/Layout';
 import ProfilePage from './pages/ProfilePage';
 import WebSocketTestPage from './pages/WebSocketTestPage';
 import ElvantoImportPage from './pages/ElvantoImportPage';
+import DataAngelImportPage from './pages/DataAngelImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import KioskPage from './pages/KioskPage';
 import LoadingSpinner from './components/LoadingSpinner';
@@ -196,13 +197,21 @@ function App() {
                   {/* Advanced Migrations removed */}
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="profile" element={<ProfilePage />} />
-                  <Route 
-                    path="elvanto-import" 
+                  <Route
+                    path="elvanto-import"
                     element={
                       <RoleProtectedRoute allowedRoles={['admin']}>
                         <ElvantoImportPage />
                       </RoleProtectedRoute>
-                    } 
+                    }
+                  />
+                  <Route
+                    path="data-angel"
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <DataAngelImportPage />
+                      </RoleProtectedRoute>
+                    }
                   />
                   <Route
                     path="ai-insights"
