@@ -185,8 +185,8 @@ const KioskPage: React.FC = () => {
   useEffect(() => {
     if (selectedGathering && phase === 'setup') {
       // Pre-populate end time from gathering's kiosk settings
-      if (selectedGathering.kioskEndTime) {
-        setEndTime(selectedGathering.kioskEndTime.substring(0, 5));
+      if (selectedGathering.endTime) {
+        setEndTime(selectedGathering.endTime.substring(0, 5));
       }
       // Pre-populate custom message from gathering's kiosk settings
       if (selectedGathering.kioskMessage) {
@@ -475,7 +475,7 @@ const KioskPage: React.FC = () => {
     // Save kiosk settings (end time and custom message) to gathering for future use
     try {
       await gatheringsAPI.update(selectedGathering.id, {
-        kioskEndTime: endTime,
+        endTime: endTime,
         kioskMessage: customMessage,
       });
       console.log('✅ Kiosk settings saved to gathering');
@@ -858,9 +858,9 @@ const KioskPage: React.FC = () => {
         <div className="text-3xl font-bold text-gray-800 leading-tight whitespace-pre-line">
           {customMessage}
         </div>
-        {selectedGathering?.kioskEndTime && (
+        {selectedGathering?.endTime && (
           <p className="text-sm text-gray-500 mt-2">
-            Sign-in closes at {selectedGathering.kioskEndTime.substring(0, 5)}
+            Sign-in closes at {selectedGathering.endTime.substring(0, 5)}
           </p>
         )}
       </div>
