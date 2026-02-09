@@ -1900,7 +1900,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Floating Action Buttons */}
       {selectedGatherings.length > 0 ? (
-        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
+        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-30">
           {/* Show all options for single selection */}
           {selectedGatherings.length === 1 ? (
             <>
@@ -1973,7 +1973,7 @@ const ManageGatheringsPage: React.FC = () => {
       ) : (
         <button
           onClick={openAddModal}
-          className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-[9999]"
+          className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200 z-30"
           aria-label="Add Gathering"
         >
           <PlusIcon className="h-6 w-6" />

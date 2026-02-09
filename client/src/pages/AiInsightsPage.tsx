@@ -51,9 +51,10 @@ const AiInsightsPage: React.FC = () => {
   // Chat history state
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<number | null>(null);
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false); // Default to false for mobile-first
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; title: string } | null>(null);
+  const [showHistoryMobile, setShowHistoryMobile] = useState(false);
 
   // Check AI status on mount
   useEffect(() => {
@@ -294,10 +295,10 @@ const AiInsightsPage: React.FC = () => {
   }
 
   return (
-    <div className="flex h-full" style={{ height: 'calc(100vh - 10rem)' }}>
-      {/* Sidebar */}
+    <div className="flex flex-col lg:flex-row h-full" style={{ height: 'calc(100vh - 10rem)' }}>
+      {/* Sidebar - Desktop only */}
       {showSidebar && (
-        <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
+        <div className="hidden lg:flex w-64 bg-white border-r border-gray-200 flex-col">
           {/* Sidebar Header */}
           <div className="p-4 border-b border-gray-200">
             <button
@@ -351,16 +352,26 @@ const AiInsightsPage: React.FC = () => {
       )}
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-h-0">
         {/* Header */}
-        <div className="bg-white shadow rounded-t-lg px-6 py-4 border-b border-gray-200 flex-shrink-0">
+        <div className="bg-white shadow rounded-t-lg px-4 lg:px-6 py-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2 lg:space-x-3">
+              {/* Desktop: Toggle sidebar button */}
               <button
                 onClick={() => setShowSidebar(!showSidebar)}
-                className="p-2 hover:bg-gray-100 rounded-md"
+                className="hidden lg:block p-2 hover:bg-gray-100 rounded-md"
+                title="Toggle history sidebar"
               >
                 <Bars3Icon className="w-5 h-5 text-gray-600" />
+              </button>
+              {/* Mobile: New chat button */}
+              <button
+                onClick={createNewChat}
+                className="lg:hidden p-2 hover:bg-gray-100 rounded-md"
+                title="New chat"
+              >
+                <PlusIcon className="w-5 h-5 text-gray-600" />
               </button>
               <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
                 <SparklesIcon className="w-5 h-5 text-purple-600" />
@@ -440,6 +451,65 @@ const AiInsightsPage: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Mobile Chat History - Collapsible section below chat */}
+        <div className="lg:hidden bg-white border-t border-gray-200 flex-shrink-0">
+          <button
+            onClick={() => setShowHistoryMobile(!showHistoryMobile)}
+            className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <span>Chat History ({conversations.length})</span>
+            <svg
+              className={`w-5 h-5 transform transition-transform ${showHistoryMobile ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {showHistoryMobile && (
+            <div className="max-h-64 overflow-y-auto p-2 border-t border-gray-200">
+              {conversations.length === 0 ? (
+                <div className="text-center py-4 text-sm text-gray-500">
+                  No conversations yet
+                </div>
+              ) : (
+                conversations.map((conv) => (
+                  <div
+                    key={conv.id}
+                    onClick={() => {
+                      loadConversation(conv.id);
+                      setShowHistoryMobile(false);
+                    }}
+                    className={`group relative p-3 mb-1 rounded-md cursor-pointer transition-colors ${
+                      currentConversationId === conv.id
+                        ? 'bg-purple-50 border border-purple-200'
+                        : 'hover:bg-gray-50 border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {conv.title}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {conv.message_count} messages
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => openDeleteModal(conv.id, conv.title, e)}
+                        className="opacity-0 group-hover:opacity-100 ml-2 p-1 text-gray-400 hover:text-red-600 transition-opacity"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Input Area */}
         <div className="bg-white border-t border-gray-200 px-4 py-4 flex-shrink-0">
           <div className="flex items-end space-x-2">
@@ -450,9 +520,9 @@ const AiInsightsPage: React.FC = () => {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask a question about your church data..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                rows={1}
-                style={{ minHeight: '48px', maxHeight: '150px' }}
+                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                rows={2}
+                style={{ minHeight: '80px', maxHeight: '200px' }}
               />
             </div>
             <button
