@@ -88,19 +88,19 @@ const sanitizeString = (input) => {
   
   // Trim whitespace
   let sanitized = input.trim();
-  
+
   // Remove null bytes
   sanitized = sanitized.replace(/\0/g, '');
-  
-  // HTML encode dangerous characters
-  sanitized = DOMPurify.sanitize(sanitized, { 
-    ALLOWED_TAGS: [], 
-    ALLOWED_ATTR: [] 
+
+  // HTML encode dangerous characters (strips HTML tags, preserves text and special chars)
+  sanitized = DOMPurify.sanitize(sanitized, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: []
   });
-  
-  // Additional escaping for SQL safety (though we use parameterized queries)
-  sanitized = sanitized.replace(/'/g, "''");
-  
+
+  // NOTE: No manual SQL escaping needed - we use parameterized queries everywhere
+  // This preserves user input like "O'Brien Family" correctly
+
   return sanitized;
 };
 
