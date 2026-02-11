@@ -56,6 +56,19 @@ const SettingsPage: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [showAiDisconnectModal, setShowAiDisconnectModal] = useState(false);
 
+  // Planning Center integration state
+  const [planningCenterStatus, setPlanningCenterStatus] = useState<{
+    connected: boolean;
+    loading: boolean;
+    error?: string | null;
+  }>({ connected: false, loading: true, error: null });
+  const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
+  const [planningCenterImporting, setPlanningCenterImporting] = useState(false);
+  const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
+  const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
+  const [importCheckinsStartDate, setImportCheckinsStartDate] = useState('');
+  const [importCheckinsEndDate, setImportCheckinsEndDate] = useState('');
+
   // Location state
   const [locationName, setLocationName] = useState<string | null>(null);
   const [locationSearch, setLocationSearch] = useState('');
@@ -138,6 +151,88 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  // Fetch Planning Center integration status
+  const fetchPlanningCenterStatus = useCallback(async () => {
+    try {
+      const response = await integrationsAPI.getPlanningCenterStatus();
+      setPlanningCenterStatus({
+        connected: response.data.connected === true,
+        loading: false
+      });
+    } catch (error) {
+      logger.error('Failed to fetch Planning Center status:', error);
+      setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
+    }
+  }, []);
+
+  // Handle Planning Center connect (OAuth flow)
+  const handlePlanningCenterConnect = async () => {
+    try {
+      setPlanningCenterConnecting(true);
+      setPlanningCenterError(null);
+      const response = await integrationsAPI.authorizePlanningCenter();
+      // Redirect to Planning Center OAuth page
+      window.location.href = response.data.authUrl;
+    } catch (error: any) {
+      logger.error('Failed to authorize Planning Center:', error);
+      setPlanningCenterError(error.response?.data?.error || 'Failed to start authorization.');
+      setPlanningCenterConnecting(false);
+    }
+  };
+
+  // Handle Planning Center disconnect
+  const confirmPlanningCenterDisconnect = async () => {
+    setShowPlanningCenterDisconnectModal(false);
+    try {
+      setPlanningCenterStatus(prev => ({ ...prev, loading: true }));
+      await integrationsAPI.disconnectPlanningCenter();
+      setPlanningCenterStatus({ connected: false, loading: false });
+    } catch (error: any) {
+      logger.error('Failed to disconnect Planning Center:', error);
+      setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
+      setPlanningCenterError(error.response?.data?.error || 'Failed to disconnect.');
+    }
+  };
+
+  // Handle Planning Center import people
+  const handlePlanningCenterImportPeople = async () => {
+    try {
+      setPlanningCenterImporting(true);
+      setPlanningCenterError(null);
+      const response = await integrationsAPI.importPeopleFromPlanningCenter();
+      alert(`Successfully imported ${response.data.imported} people from Planning Center!`);
+    } catch (error: any) {
+      logger.error('Failed to import people from Planning Center:', error);
+      setPlanningCenterError(error.response?.data?.error || 'Failed to import people.');
+    } finally {
+      setPlanningCenterImporting(false);
+    }
+  };
+
+  // Handle Planning Center import check-ins
+  const handlePlanningCenterImportCheckins = async () => {
+    if (!importCheckinsStartDate || !importCheckinsEndDate) {
+      setPlanningCenterError('Please select both start and end dates.');
+      return;
+    }
+    try {
+      setPlanningCenterImporting(true);
+      setPlanningCenterError(null);
+      const response = await integrationsAPI.importCheckinsFromPlanningCenter({
+        startDate: importCheckinsStartDate,
+        endDate: importCheckinsEndDate
+      });
+      alert(`Successfully fetched ${response.data.checkins?.length || 0} check-ins from Planning Center!`);
+      setImportCheckinsStartDate('');
+      setImportCheckinsEndDate('');
+    } catch (error: any) {
+      logger.error('Failed to import check-ins from Planning Center:', error);
+      setPlanningCenterError(error.response?.data?.error || 'Failed to import check-ins.');
+    } finally {
+      setPlanningCenterImporting(false);
+    }
+  };
+
   // Fetch church location on mount
   const fetchLocation = useCallback(async () => {
     try {
@@ -214,14 +309,28 @@ const SettingsPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle URL parameters for tab selection
+  // Handle URL parameters for tab selection and OAuth callbacks
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
     if (tabParam && ['general', 'system', 'integrations'].includes(tabParam)) {
       setActiveTab(tabParam as 'general' | 'system' | 'integrations');
     }
-  }, []);
+
+    // Handle Planning Center OAuth callback
+    const pcoSuccess = urlParams.get('pco_success');
+    const pcoError = urlParams.get('pco_error');
+    if (pcoSuccess === 'true') {
+      alert('Successfully connected to Planning Center!');
+      fetchPlanningCenterStatus();
+      // Clean up URL
+      window.history.replaceState({}, '', '/settings?tab=integrations');
+    } else if (pcoError) {
+      setPlanningCenterError(decodeURIComponent(pcoError));
+      // Clean up URL
+      window.history.replaceState({}, '', '/settings?tab=integrations');
+    }
+  }, [fetchPlanningCenterStatus]);
 
   const getSystemInfo = () => {
     return {
@@ -365,12 +474,13 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // Load Elvanto + AI status + location on mount
+  // Load Elvanto + AI + Planning Center status + location on mount
   useEffect(() => {
     fetchElvantoStatus();
     fetchAiStatus();
+    fetchPlanningCenterStatus();
     fetchLocation();
-  }, [fetchElvantoStatus, fetchAiStatus, fetchLocation]);
+  }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus, fetchLocation]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -859,6 +969,205 @@ const SettingsPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {/* Planning Center Integration */}
+                  <div className="border border-gray-200 rounded-lg p-6">
+                    {/* Connection Status Header */}
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0">
+                          <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                            </svg>
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-medium text-gray-900">Planning Center</h4>
+                          <p className="text-sm text-gray-600">
+                            Import people and check-ins from Planning Center Online.
+                          </p>
+                          {planningCenterStatus.connected && (
+                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                              <CheckCircleIcon className="w-3 h-3 mr-1" />
+                              Connected
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        {planningCenterStatus.loading ? (
+                          <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
+                        ) : planningCenterStatus.connected ? (
+                          <>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <ShieldCheckIcon className="w-3 h-3 mr-1" />
+                              Connected
+                            </span>
+                            <button
+                              onClick={() => setShowPlanningCenterDisconnectModal(true)}
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                            >
+                              Disconnect
+                            </button>
+                          </>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                            <ShieldExclamationIcon className="w-3 h-3 mr-1" />
+                            Not Connected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Connection/Import Form */}
+                    {!planningCenterStatus.loading && (
+                      <div className="border-t border-gray-200 pt-6">
+                        {!planningCenterStatus.connected ? (
+                          <div>
+                            <h5 className="text-md font-medium text-gray-900 mb-4">Connect to Planning Center</h5>
+                            <p className="text-sm text-gray-600 mb-4">
+                              You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data.
+                            </p>
+
+                            {planningCenterError && (
+                              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                                <div className="flex">
+                                  <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                  <div className="ml-2">
+                                    <p className="text-sm text-red-700">{planningCenterError}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex justify-end">
+                              <button
+                                onClick={handlePlanningCenterConnect}
+                                disabled={planningCenterConnecting}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {planningCenterConnecting ? (
+                                  <>
+                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                    Connecting...
+                                  </>
+                                ) : (
+                                  <>
+                                    <LinkIcon className="h-4 w-4 mr-2" />
+                                    Connect Planning Center
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-6">
+                            <h5 className="text-md font-medium text-gray-900">Import Data</h5>
+
+                            {planningCenterError && (
+                              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                                <div className="flex">
+                                  <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                  <div className="ml-2">
+                                    <p className="text-sm text-red-700">{planningCenterError}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Import People */}
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h6 className="text-sm font-medium text-gray-900 mb-2">Import People</h6>
+                              <p className="text-sm text-gray-600 mb-3">
+                                Import all people from Planning Center, grouped by household.
+                              </p>
+                              <button
+                                onClick={handlePlanningCenterImportPeople}
+                                disabled={planningCenterImporting}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {planningCenterImporting ? (
+                                  <>
+                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                    Importing...
+                                  </>
+                                ) : (
+                                  'Import People'
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Import Check-ins */}
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h6 className="text-sm font-medium text-gray-900 mb-2">Import Check-ins</h6>
+                              <p className="text-sm text-gray-600 mb-3">
+                                Fetch check-in data for a date range.
+                              </p>
+                              <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div>
+                                  <label htmlFor="checkins-start-date" className="block text-xs font-medium text-gray-700 mb-1">
+                                    Start Date
+                                  </label>
+                                  <input
+                                    type="date"
+                                    id="checkins-start-date"
+                                    value={importCheckinsStartDate}
+                                    onChange={(e) => setImportCheckinsStartDate(e.target.value)}
+                                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 text-sm"
+                                  />
+                                </div>
+                                <div>
+                                  <label htmlFor="checkins-end-date" className="block text-xs font-medium text-gray-700 mb-1">
+                                    End Date
+                                  </label>
+                                  <input
+                                    type="date"
+                                    id="checkins-end-date"
+                                    value={importCheckinsEndDate}
+                                    onChange={(e) => setImportCheckinsEndDate(e.target.value)}
+                                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 text-sm"
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                onClick={handlePlanningCenterImportCheckins}
+                                disabled={planningCenterImporting || !importCheckinsStartDate || !importCheckinsEndDate}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {planningCenterImporting ? (
+                                  <>
+                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                    Importing...
+                                  </>
+                                ) : (
+                                  'Import Check-ins'
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <InformationCircleIcon className="h-5 w-5 text-green-400" />
+                        </div>
+                        <div className="ml-3">
+                          <h4 className="text-sm font-medium text-green-800">What you'll get</h4>
+                          <div className="mt-2 text-sm text-green-700">
+                            <ul className="list-disc list-inside space-y-1">
+                              <li>Import people with household grouping</li>
+                              <li>Sync check-in data for attendance tracking</li>
+                              <li>Seamless integration with Planning Center Online</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1052,11 +1361,11 @@ const SettingsPage: React.FC = () => {
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
-            
+
             <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
               <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
             </div>
-            
+
             <div className="text-center mb-6">
               <p className="text-sm text-gray-600 mb-2">
                 Are you sure you want to disconnect AI Insights?
@@ -1065,7 +1374,7 @@ const SettingsPage: React.FC = () => {
                 Your API key will be removed. You can reconnect at any time.
               </p>
             </div>
-            
+
             <div className="flex space-x-3">
               <button
                 onClick={() => setShowAiDisconnectModal(false)}
@@ -1075,6 +1384,57 @@ const SettingsPage: React.FC = () => {
               </button>
               <button
                 onClick={confirmAiDisconnect}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
+              >
+                <LinkSlashIcon className="h-4 w-4 mr-2" />
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Planning Center Disconnect Confirmation Modal */}
+      <Modal
+        isOpen={showPlanningCenterDisconnectModal}
+        onClose={() => setShowPlanningCenterDisconnectModal(false)}
+      >
+        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Disconnect Planning Center
+              </h3>
+              <button
+                onClick={() => setShowPlanningCenterDisconnectModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
+            </div>
+
+            <div className="text-center mb-6">
+              <p className="text-sm text-gray-600 mb-2">
+                Are you sure you want to disconnect from Planning Center?
+              </p>
+              <p className="text-sm text-gray-500">
+                Your OAuth tokens will be removed. You can reconnect at any time.
+              </p>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowPlanningCenterDisconnectModal(false)}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPlanningCenterDisconnect}
                 className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
               >
                 <LinkSlashIcon className="h-4 w-4 mr-2" />

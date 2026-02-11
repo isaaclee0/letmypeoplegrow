@@ -735,6 +735,14 @@ export const integrationsAPI = {
     api.post('/integrations/elvanto/import-gatherings', data),
   // Debug - dump all available Elvanto data
   debugDumpElvanto: () => api.get('/integrations/elvanto/debug-dump'),
+
+  // Planning Center integration - OAuth based
+  getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
+  authorizePlanningCenter: () => api.get('/integrations/planning-center/authorize'),
+  disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
+  importPeopleFromPlanningCenter: () => api.post('/integrations/planning-center/import-people'),
+  importCheckinsFromPlanningCenter: (data: { startDate: string; endDate: string; eventId?: string }) =>
+    api.post('/integrations/planning-center/import-checkins', data),
 };
 
 // AI Insights API
