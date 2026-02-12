@@ -1594,6 +1594,7 @@ router.post('/elvanto/import', async (req, res) => {
 // Helper function to get Planning Center OAuth tokens
 async function getPlanningCenterTokens(userId, churchId) {
   try {
+    console.log('🔍 Getting Planning Center tokens for:', { userId, churchId });
     const preferences = await Database.query(`
       SELECT preference_value
       FROM user_preferences
@@ -1601,15 +1602,19 @@ async function getPlanningCenterTokens(userId, churchId) {
       LIMIT 1
     `, [userId, churchId]);
 
+    console.log('🔍 Query result:', { rowCount: preferences.length });
+
     if (preferences.length === 0) {
+      console.log('❌ No Planning Center tokens found');
       return null;
     }
 
     const prefValue = preferences[0].preference_value;
     const data = typeof prefValue === 'string' ? JSON.parse(prefValue) : prefValue;
+    console.log('✅ Planning Center tokens found, access_token prefix:', data.access_token?.substring(0, 20) + '...');
     return data;
   } catch (error) {
-    console.error('Error getting Planning Center tokens:', error);
+    console.error('❌ Error getting Planning Center tokens:', error);
     return null;
   }
 }
@@ -1627,7 +1632,7 @@ async function savePlanningCenterTokens(userId, churchId, tokens) {
     await Database.query(`
       INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
       VALUES (?, 'planning_center_tokens', ?, ?)
-    `, [userId, 'planning_center_tokens', JSON.stringify(tokens), churchId]);
+    `, [userId, JSON.stringify(tokens), churchId]);
 
     return true;
   } catch (error) {
@@ -1698,6 +1703,18 @@ async function makePlanningCenterRequest(url, tokens, userId, churchId) {
 // Check Planning Center connection status
 router.get('/planning-center/status', async (req, res) => {
   try {
+    // Check if Planning Center is enabled
+    const isEnabled = process.env.PLANNING_CENTER_ENABLED === 'true';
+
+    if (!isEnabled) {
+      return res.json({
+        enabled: false,
+        configured: false,
+        connected: false,
+        planningCenterAccount: null
+      });
+    }
+
     const userId = req.user.id;
     const churchId = req.user.church_id;
 
@@ -1705,6 +1722,7 @@ router.get('/planning-center/status', async (req, res) => {
 
     if (!tokens || !tokens.access_token) {
       return res.json({
+        enabled: true,
         configured: false,
         connected: false,
         planningCenterAccount: null
@@ -1723,12 +1741,14 @@ router.get('/planning-center/status', async (req, res) => {
       if (response.status === 200) {
         const accountName = response.data?.data?.attributes?.name || 'Connected';
         return res.json({
+          enabled: true,
           configured: true,
           connected: true,
           planningCenterAccount: accountName
         });
       } else {
         return res.json({
+          enabled: true,
           configured: true,
           connected: false,
           planningCenterAccount: null,
@@ -1737,6 +1757,7 @@ router.get('/planning-center/status', async (req, res) => {
       }
     } catch (error) {
       return res.json({
+        enabled: true,
         configured: true,
         connected: false,
         planningCenterAccount: null,
@@ -1755,6 +1776,8 @@ router.get('/planning-center/authorize', (req, res) => {
   const redirectUri = process.env.PLANNING_CENTER_REDIRECT_URI;
   const scope = 'people check_ins'; // Request access to People and Check-ins
 
+  console.log('🔐 Planning Center OAuth - redirect_uri:', redirectUri);
+
   // Generate state parameter for security (optional but recommended)
   const state = Buffer.from(JSON.stringify({
     userId: req.user.id,
@@ -1768,6 +1791,8 @@ router.get('/planning-center/authorize', (req, res) => {
     `response_type=code&` +
     `scope=${encodeURIComponent(scope)}&` +
     `state=${encodeURIComponent(state)}`;
+
+  console.log('🔐 Planning Center OAuth - Full auth URL:', authUrl);
 
   res.json({ authUrl });
 });

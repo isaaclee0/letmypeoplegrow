@@ -58,10 +58,11 @@ const SettingsPage: React.FC = () => {
 
   // Planning Center integration state
   const [planningCenterStatus, setPlanningCenterStatus] = useState<{
+    enabled: boolean;
     connected: boolean;
     loading: boolean;
     error?: string | null;
-  }>({ connected: false, loading: true, error: null });
+  }>({ enabled: false, connected: false, loading: true, error: null });
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterImporting, setPlanningCenterImporting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
@@ -156,6 +157,7 @@ const SettingsPage: React.FC = () => {
     try {
       const response = await integrationsAPI.getPlanningCenterStatus();
       setPlanningCenterStatus({
+        enabled: response.data.enabled === true,
         connected: response.data.connected === true,
         loading: false
       });
@@ -970,7 +972,8 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Planning Center Integration */}
+                  {/* Planning Center Integration - Only show if enabled */}
+                  {planningCenterStatus.enabled && (
                   <div className="border border-gray-200 rounded-lg p-6">
                     {/* Connection Status Header */}
                     <div className="flex items-center justify-between mb-6">
@@ -1168,6 +1171,7 @@ const SettingsPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
+                  )}
                 </div>
               </div>
             </div>
