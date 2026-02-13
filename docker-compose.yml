@@ -57,18 +57,18 @@ services:
       - app-network
 
   # React Frontend Client (also handles API/WebSocket proxying to server)
+  # NPM routes to this container directly on port 3000
   client:
     build:
       context: .
       dockerfile: Dockerfile.client
     container_name: church_attendance_client
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     depends_on:
       - server
     networks:
       - app-network
+      - npm_proxy
 
   # phpMyAdmin
   phpmyadmin:
@@ -123,7 +123,7 @@ services:
   # to the client container on port 3000.
   #
   # NPM configuration:
-  #   - Proxy Host: forward your domain to http://<docker-host>:3000
+  #   - Proxy Host: forward your domain to http://church_attendance_client:3000
   #   - Enable "Websockets Support" toggle
   #   - In Advanced tab, add: proxy_read_timeout 86400; proxy_send_timeout 86400;
 
@@ -133,3 +133,5 @@ volumes:
 networks:
   app-network:
     driver: bridge
+  npm_proxy:
+    external: true
