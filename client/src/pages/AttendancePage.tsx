@@ -1292,12 +1292,21 @@ const AttendancePage: React.FC = () => {
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
-        setVisitors(response.visitors || []);
+        // Normalize visitors: WebSocket returns firstName/lastName, REST returns name
+        setVisitors((response.visitors || []).map((v: any) => ({
+          ...v,
+          name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown'
+        })));
 
         // Initialize visitor state for BOTH WebSocket and REST API paths
         // This ensures the visitor section renders immediately regardless of data source
         if (response.visitors) {
-          const currentVisitors = response.visitors || [];
+          // Normalize visitors: WebSocket returns firstName/lastName, REST returns name
+          // Ensure all visitors have a .name property for consistent rendering
+          const currentVisitors = (response.visitors || []).map((v: any) => ({
+            ...v,
+            name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown'
+          }));
           const recentVisitorsList = response.recentVisitors || [];
           const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
           const combinedVisitors = [
