@@ -249,6 +249,49 @@ async function buildChurchContext(churchId) {
   return sections.join('\n\n');
 }
 
+// ===== Helper: classify AI provider error =====
+function classifyAiError(status, errorData, provider) {
+  const message = errorData?.error?.message || errorData?.error || JSON.stringify(errorData);
+
+  // Quota / billing / credits exhausted
+  if (status === 429 || status === 402) {
+    const isQuota = /quota|billing|exceeded|insufficient|credits|limit.*exceeded|plan|upgrade|payment/i.test(message);
+    if (isQuota || status === 402) {
+      const err = new Error(
+        `Your ${provider} API key has run out of credits or exceeded its usage limit. ` +
+        `Please check your ${provider} billing dashboard and add credits, then try again.`
+      );
+      err.statusCode = 402;
+      err.errorType = 'quota_exceeded';
+      throw err;
+    }
+    // Rate limit (temporary)
+    const err = new Error(
+      `The ${provider} API is temporarily rate-limited. Please wait a minute and try again.`
+    );
+    err.statusCode = 429;
+    err.errorType = 'rate_limited';
+    throw err;
+  }
+
+  // Invalid / revoked API key
+  if (status === 401 || status === 403) {
+    const err = new Error(
+      `Your ${provider} API key is invalid or has been revoked. ` +
+      `Please update your API key in Settings → Integrations.`
+    );
+    err.statusCode = 401;
+    err.errorType = 'invalid_key';
+    throw err;
+  }
+
+  // Generic provider error
+  const err = new Error(`${provider} API error (${status}): ${message}`);
+  err.statusCode = status;
+  err.errorType = 'provider_error';
+  throw err;
+}
+
 // ===== Helper: call OpenAI =====
 async function callOpenAI(apiKey, systemPrompt, userMessage, model) {
   const response = await makeHttpsRequest('https://api.openai.com/v1/chat/completions', {
@@ -269,8 +312,7 @@ async function callOpenAI(apiKey, systemPrompt, userMessage, model) {
   });
 
   if (response.status !== 200) {
-    const errMsg = response.data?.error?.message || JSON.stringify(response.data);
-    throw new Error(`OpenAI API error (${response.status}): ${errMsg}`);
+    classifyAiError(response.status, response.data, 'OpenAI');
   }
 
   return response.data.choices?.[0]?.message?.content || 'No response from AI.';
@@ -296,8 +338,7 @@ async function callAnthropic(apiKey, systemPrompt, userMessage, model) {
   });
 
   if (response.status !== 200) {
-    const errMsg = response.data?.error?.message || JSON.stringify(response.data);
-    throw new Error(`Anthropic API error (${response.status}): ${errMsg}`);
+    classifyAiError(response.status, response.data, 'Anthropic');
   }
 
   return response.data.content?.[0]?.text || 'No response from AI.';
@@ -340,8 +381,13 @@ router.post('/configure', requireRole(['admin']), async (req, res) => {
         await callAnthropic(apiKey.trim(), 'Say OK', 'Test', model || 'claude-haiku-4-5-20251001');
       }
     } catch (validationError) {
-      return res.status(400).json({
-        error: 'API key validation failed. Please check your key.',
+      const errorType = validationError.errorType || 'validation_failed';
+      const statusCode = validationError.statusCode === 402 ? 402 : 400;
+      return res.status(statusCode).json({
+        error: validationError.errorType
+          ? validationError.message
+          : 'API key validation failed. Please check your key.',
+        errorType,
         details: validationError.message
       });
     }
@@ -712,8 +758,16 @@ RESPONSE GUIDELINES:
     res.json({ answer, provider: config.provider });
   } catch (error) {
     console.error('AI ask error:', error);
-    res.status(500).json({
-      error: 'Failed to get AI response.',
+
+    // Return structured error with type for frontend handling
+    const statusCode = error.statusCode || 500;
+    const errorType = error.errorType || 'unknown';
+
+    res.status(statusCode).json({
+      error: error.errorType
+        ? error.message
+        : 'Failed to get AI response. Please try again.',
+      errorType,
       details: error.message
     });
   }

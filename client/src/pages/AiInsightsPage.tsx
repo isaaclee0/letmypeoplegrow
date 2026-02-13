@@ -20,6 +20,7 @@ interface Message {
   role: 'user' | 'assistant' | 'error';
   content: string;
   timestamp: Date;
+  errorType?: string;
 }
 
 interface Conversation {
@@ -204,10 +205,25 @@ const AiInsightsPage: React.FC = () => {
         loadConversations();
       }
     } catch (error: any) {
+      const errorType = error.response?.data?.errorType;
+      const serverMessage = error.response?.data?.error;
+
+      let content: string;
+      if (errorType === 'quota_exceeded') {
+        content = serverMessage || 'Your AI provider has run out of credits. Please top up your account and try again.';
+      } else if (errorType === 'rate_limited') {
+        content = serverMessage || 'The AI provider is temporarily rate-limited. Please wait a minute and try again.';
+      } else if (errorType === 'invalid_key') {
+        content = serverMessage || 'Your AI API key is invalid. Please update it in Settings → Integrations.';
+      } else {
+        content = serverMessage || error.response?.data?.details || 'Failed to get a response. Please try again.';
+      }
+
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'error',
-        content: error.response?.data?.error || error.response?.data?.details || 'Failed to get a response. Please try again.',
+        content,
+        errorType,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMsg]);
@@ -420,14 +436,21 @@ const AiInsightsPage: React.FC = () => {
                     msg.role === 'user'
                       ? 'bg-purple-600 text-white'
                       : msg.role === 'error'
-                      ? 'bg-red-50 border border-red-200 text-red-700'
+                      ? msg.errorType === 'quota_exceeded' || msg.errorType === 'rate_limited'
+                        ? 'bg-amber-50 border border-amber-200 text-amber-800'
+                        : 'bg-red-50 border border-red-200 text-red-700'
                       : 'bg-white border border-gray-200 text-gray-800 shadow-sm'
                   }`}
                 >
                   {msg.role === 'error' && (
                     <div className="flex items-center mb-1">
                       <ExclamationTriangleIcon className="w-4 h-4 mr-2" />
-                      <span className="font-medium text-sm">Error</span>
+                      <span className="font-medium text-sm">
+                        {msg.errorType === 'quota_exceeded' ? 'Out of Credits' :
+                         msg.errorType === 'rate_limited' ? 'Rate Limited' :
+                         msg.errorType === 'invalid_key' ? 'API Key Issue' :
+                         'Error'}
+                      </span>
                     </div>
                   )}
                   <div
