@@ -280,7 +280,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         connectionId: connectionId
       },
       withCredentials: true, // Important: send cookies with WebSocket connection
-      transports: ['websocket', 'polling'], // Try WebSocket first, fallback to polling
+      transports: ['polling', 'websocket'], // Start with polling (works through any proxy), then upgrade to WebSocket
       timeout: 10000, // 10-second timeout to allow retry attempts to complete
       reconnection: true,
       reconnectionAttempts: 5, // Increased attempts for better reliability
@@ -296,10 +296,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         tabId: tabId.current,
         connectionId: connectionId
       },
-      // Optimized stability settings
-      pingTimeout: 30000, // Reduced ping timeout
-      pingInterval: 15000, // Reduced ping interval for faster detection
-      maxReconnectionAttempts: 5
+      // Note: pingTimeout and pingInterval are server-side only settings in socket.io
+      // The client responds to server pings automatically - no client config needed
     };
     
     // Socket configuration optimized for multi-tab support

@@ -305,6 +305,32 @@ CREATE TABLE IF NOT EXISTS audit_log (
   INDEX idx_church_id (church_id)
 ) ENGINE=InnoDB;
 
+-- Create AI chat conversations table
+CREATE TABLE IF NOT EXISTS ai_chat_conversations (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  church_id VARCHAR(255) NOT NULL,
+  title VARCHAR(500) DEFAULT 'New Chat',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_user_church (user_id, church_id),
+  INDEX idx_church_id (church_id),
+  INDEX idx_updated_at (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Create AI chat messages table
+CREATE TABLE IF NOT EXISTS ai_chat_messages (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  conversation_id INT NOT NULL,
+  role ENUM('user', 'assistant', 'system') NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (conversation_id) REFERENCES ai_chat_conversations(id) ON DELETE CASCADE,
+  INDEX idx_conversation (conversation_id),
+  INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Create onboarding progress table
 CREATE TABLE IF NOT EXISTS onboarding_progress (
   id INT AUTO_INCREMENT PRIMARY KEY,

@@ -24,9 +24,9 @@ class WebSocketService {
           methods: ['GET', 'POST'],
           credentials: true
         },
-        // Optimized connection settings for better stability
-        pingTimeout: 30000, // Reduced timeout for faster failure detection
-        pingInterval: 15000, // Reduced interval for more responsive health checks
+        // Connection stability settings - generous timeouts for mobile/background tabs
+        pingTimeout: 60000, // 60s timeout to handle mobile throttling and slow proxies
+        pingInterval: 25000, // 25s interval - less aggressive to reduce unnecessary disconnects
         transports: ['websocket', 'polling'],
         // Additional stability settings
         allowEIO3: true, // Backward compatibility
@@ -921,16 +921,7 @@ class WebSocketService {
       churchId: socket.churchId,
       reason,
       totalConnections: this.io.engine.clientsCount,
-      remainingUserConnections: this.connectedUsers.get(userKey)?.size || 0,
-      remainingUserKeys: Array.from(this.connectedUsers.keys())
-    });
-
-    logger.info('WebSocket client disconnected', {
-      socketId: socket.id,
-      userId: socket.userId,
-      churchId: socket.churchId,
-      reason,
-      totalConnections: this.io.engine.clientsCount
+      remainingUserConnections: this.connectedUsers.get(userKey)?.size || 0
     });
   }
 

@@ -1281,30 +1281,8 @@ const AttendancePage: React.FC = () => {
             setAllChurchVisitors(response.allChurchPeople);
             setIsLoadingAllVisitors(false);
           }
-
-          // Process visitors for the combined list
-          if (response.visitors && response.recentVisitors) {
-            const currentVisitors = response.visitors || [];
-            const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
-            const combinedVisitors = [
-              ...currentVisitors,
-              ...response.recentVisitors.filter((v: Visitor) => !currentVisitorIds.has(v.id))
-            ];
-
-            setAllVisitors(combinedVisitors);
-
-            // Initialize visitor attendance state
-            const presentVisitorIds = new Set(currentVisitors.filter((cv: any) => cv.present).map((cv: any) => cv.id));
-            const initialVisitorAttendance: { [key: number]: boolean } = {};
-            combinedVisitors.forEach((visitor: Visitor) => {
-              if (visitor.id) {
-                initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
-              }
-            });
-            setVisitorAttendance(initialVisitorAttendance);
-          }
         }
-        
+
         // CRITICAL: Check if this request is still relevant before updating state
         // This prevents race conditions when user changes date quickly
         if (isCancelled) {
@@ -1315,6 +1293,30 @@ const AttendancePage: React.FC = () => {
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
         setVisitors(response.visitors || []);
+
+        // Initialize visitor state for BOTH WebSocket and REST API paths
+        // This ensures the visitor section renders immediately regardless of data source
+        if (response.visitors) {
+          const currentVisitors = response.visitors || [];
+          const recentVisitorsList = response.recentVisitors || [];
+          const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
+          const combinedVisitors = [
+            ...currentVisitors,
+            ...recentVisitorsList.filter((v: Visitor) => !currentVisitorIds.has(v.id))
+          ];
+
+          setAllVisitors(combinedVisitors);
+
+          // Initialize visitor attendance state
+          const presentVisitorIds = new Set(currentVisitors.filter((cv: any) => cv.present).map((cv: any) => cv.id));
+          const initialVisitorAttendance: { [key: number]: boolean } = {};
+          combinedVisitors.forEach((visitor: Visitor) => {
+            if (visitor.id) {
+              initialVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
+            }
+          });
+          setVisitorAttendance(initialVisitorAttendance);
+        }
         
         // Initialize presentById from server data directly
         const serverPresentById = syncPresentByIdWithAttendanceList(response.attendanceList || []);
