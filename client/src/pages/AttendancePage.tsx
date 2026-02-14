@@ -2099,7 +2099,9 @@ const AttendancePage: React.FC = () => {
         const allIndividuals = allIndividualsResponse.data.people || [];
         
         // Find all family members and update their people_type to match the family type
-        const familyMembers = allIndividuals.filter((ind: any) => ind.familyId === editingVisitorData.familyId);
+        // Use Number() to ensure consistent comparison (WebSocket may return BigInt IDs)
+        const editFamilyId = Number(editingVisitorData.familyId);
+        const familyMembers = allIndividuals.filter((ind: any) => Number(ind.familyId) === editFamilyId);
         
         // Update each existing family member's people_type and names
         const updatePromises = familyMembers.map(async (member: any, index: number) => {

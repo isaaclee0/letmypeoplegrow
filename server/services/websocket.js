@@ -799,11 +799,43 @@ class WebSocketService {
 
         const rawVisitors = await conn.query(visitorsQuery, visitorsParams);
 
+        // Get visitor config for service-date filtering
+        let localVisitorServiceLimit = 6;
+        let travellerVisitorServiceLimit = 2;
+        try {
+          const vcRows = await conn.query(
+            'SELECT local_visitor_service_limit, traveller_visitor_service_limit FROM visitor_config WHERE church_id = ?',
+            [socket.churchId]
+          );
+          if (vcRows.length > 0) {
+            localVisitorServiceLimit = vcRows[0].local_visitor_service_limit;
+            travellerVisitorServiceLimit = vcRows[0].traveller_visitor_service_limit;
+          }
+        } catch (e) { /* use defaults */ }
+
+        // Get last N service dates for filtering
+        const getServiceDates = async (limit) => {
+          try {
+            const rows = await conn.query(
+              `SELECT DISTINCT session_date FROM attendance_sessions
+               WHERE gathering_type_id = ? AND church_id = ? AND session_date <= ?
+               ORDER BY session_date DESC LIMIT ?`,
+              [gatheringId, socket.churchId, date, limit]
+            );
+            return rows.map(r => r.session_date);
+          } catch (e) { return []; }
+        };
+
+        const localServiceDates = await getServiceDates(localVisitorServiceLimit);
+        const travellerServiceDates = await getServiceDates(travellerVisitorServiceLimit);
+
         // Map WebSocket visitors to match REST API format
-        const visitors = (rawVisitors || []).map(v => {
+        // Note: Convert BigInt IDs to Numbers to match REST API format (processApiResponse)
+        const allVisitors = (rawVisitors || []).map(v => {
           const isLocal = (v.familyType === 'local_visitor') || (v.people_type === 'local_visitor');
+          const familyId = v.familyId ? Number(v.familyId) : null;
           return {
-            id: v.id,
+            id: Number(v.id),
             name: `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
             firstName: v.firstName,
             lastName: v.lastName,
@@ -811,12 +843,33 @@ class WebSocketService {
             lastAttendanceDate: v.lastAttendanceDate,
             peopleType: v.people_type,
             visitorType: isLocal ? 'potential_regular' : 'temporary_other',
-            visitorFamilyGroup: v.familyId ? String(v.familyId) : null,
-            familyId: v.familyId,
+            visitorFamilyGroup: familyId ? String(familyId) : null,
+            familyId: familyId,
             familyName: v.familyName,
             lastAttended: v.familyLastAttended,
             notes: v.familyNotes || null
           };
+        });
+
+        // Apply service-limit filtering (match REST API behavior)
+        const visitors = allVisitors.filter(v => {
+          // Always show present visitors
+          if (v.present) return true;
+          // Show visitors with no attendance date (newly added)
+          if (!v.lastAttendanceDate) return true;
+
+          const relevantDates = v.peopleType === 'local_visitor' ? localServiceDates : travellerServiceDates;
+          if (relevantDates.length === 0) return false;
+
+          const lastDate = new Date(v.lastAttendanceDate);
+          lastDate.setHours(0, 0, 0, 0);
+          const lastDateStr = lastDate.toISOString().split('T')[0];
+
+          const oldestDate = relevantDates[relevantDates.length - 1];
+          if (!oldestDate) return false;
+          const oldestDateStr = new Date(oldestDate).toISOString().split('T')[0];
+
+          return lastDateStr >= oldestDateStr;
         });
 
         // Send successful response
