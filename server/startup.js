@@ -118,7 +118,7 @@ async function initializeDatabase() {
       console.warn('⚠️  Could not ensure church_settings location columns:', e.message);
     }
 
-    // Ensure kiosk_enabled column exists in gathering_types
+    // Ensure kiosk columns exist in gathering_types
     try {
       const kioskCol = await Database.query("SHOW COLUMNS FROM gathering_types LIKE 'kiosk_enabled'");
       if (kioskCol.length === 0) {
@@ -128,6 +128,17 @@ async function initializeDatabase() {
       }
     } catch (e) {
       console.warn('⚠️  Could not ensure gathering_types.kiosk_enabled column:', e.message);
+    }
+
+    try {
+      const kioskMsgCol = await Database.query("SHOW COLUMNS FROM gathering_types LIKE 'kiosk_message'");
+      if (kioskMsgCol.length === 0) {
+        console.log('🛠️  Adding gathering_types.kiosk_message column');
+        await Database.query('ALTER TABLE gathering_types ADD COLUMN kiosk_message TEXT DEFAULT NULL AFTER kiosk_enabled');
+        console.log('✅ gathering_types.kiosk_message added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure gathering_types.kiosk_message column:', e.message);
     }
 
     // Ensure AI chat tables exist (needed for AI Insights chat history)
