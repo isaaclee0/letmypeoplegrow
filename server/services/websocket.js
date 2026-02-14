@@ -746,6 +746,9 @@ class WebSocketService {
               ${visitorPeopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
+              f.family_type as familyType,
+              f.family_notes as familyNotes,
+              f.last_attended as familyLastAttended,
               COALESCE(ar.present, false) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id AND f.church_id = ?
@@ -773,6 +776,9 @@ class WebSocketService {
               ${visitorPeopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
+              f.family_type as familyType,
+              f.family_notes as familyNotes,
+              f.last_attended as familyLastAttended,
               COALESCE(ar.present, false) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id
@@ -791,12 +797,32 @@ class WebSocketService {
           visitorsParams = [gatheringId, date, gatheringId];
         }
 
-        const visitors = await conn.query(visitorsQuery, visitorsParams);
+        const rawVisitors = await conn.query(visitorsQuery, visitorsParams);
+
+        // Map WebSocket visitors to match REST API format
+        const visitors = (rawVisitors || []).map(v => {
+          const isLocal = (v.familyType === 'local_visitor') || (v.people_type === 'local_visitor');
+          return {
+            id: v.id,
+            name: `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
+            firstName: v.firstName,
+            lastName: v.lastName,
+            present: v.present === 1 || v.present === true,
+            lastAttendanceDate: v.lastAttendanceDate,
+            peopleType: v.people_type,
+            visitorType: isLocal ? 'potential_regular' : 'temporary_other',
+            visitorFamilyGroup: v.familyId ? String(v.familyId) : null,
+            familyId: v.familyId,
+            familyName: v.familyName,
+            lastAttended: v.familyLastAttended,
+            notes: v.familyNotes || null
+          };
+        });
 
         // Send successful response
         socket.emit('load_attendance_success', {
           attendanceList: attendanceList || [],
-          visitors: visitors || [],
+          visitors: visitors,
           gatheringId,
           date,
           timestamp: new Date().toISOString()

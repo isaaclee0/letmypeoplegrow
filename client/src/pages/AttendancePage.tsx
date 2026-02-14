@@ -1292,21 +1292,26 @@ const AttendancePage: React.FC = () => {
         
         // Update UI with fresh server data
         setAttendanceList(response.attendanceList || []);
-        // Normalize visitors: WebSocket returns firstName/lastName, REST returns name
-        setVisitors((response.visitors || []).map((v: any) => ({
-          ...v,
-          name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown'
-        })));
+
+        // Normalize visitors from any source (WebSocket or REST) to a consistent format
+        const normalizeVisitor = (v: any) => {
+          const isLocal = v.visitorType === 'potential_regular' ||
+            v.people_type === 'local_visitor' ||
+            v.familyType === 'local_visitor';
+          return {
+            ...v,
+            name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
+            visitorType: v.visitorType || (isLocal ? 'potential_regular' : 'temporary_other'),
+            visitorFamilyGroup: v.visitorFamilyGroup || (v.familyId ? String(v.familyId) : undefined),
+          };
+        };
+
+        setVisitors((response.visitors || []).map(normalizeVisitor));
 
         // Initialize visitor state for BOTH WebSocket and REST API paths
         // This ensures the visitor section renders immediately regardless of data source
         if (response.visitors) {
-          // Normalize visitors: WebSocket returns firstName/lastName, REST returns name
-          // Ensure all visitors have a .name property for consistent rendering
-          const currentVisitors = (response.visitors || []).map((v: any) => ({
-            ...v,
-            name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown'
-          }));
+          const currentVisitors = (response.visitors || []).map(normalizeVisitor);
           const recentVisitorsList = response.recentVisitors || [];
           const currentVisitorIds = new Set(currentVisitors.map((v: Visitor) => v.id));
           const combinedVisitors = [
