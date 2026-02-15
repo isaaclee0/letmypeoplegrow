@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useKiosk } from '../contexts/KioskContext';
 import { WifiIcon, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 
 export const OfflineModeIndicator: React.FC = () => {
   const { isOfflineMode, connectionStatus, retryConnection } = useWebSocket();
   const { user } = useAuth();
+  const kioskCtx = useKiosk();
   const [showDetails, setShowDetails] = useState(false);
   const [cachedDataInfo, setCachedDataInfo] = useState({
     hasUserData: false,
@@ -38,6 +40,11 @@ export const OfflineModeIndicator: React.FC = () => {
       });
     }
   }, [isOfflineMode, connectionStatus]);
+
+  // Hide in kiosk locked mode - kiosk handles its own offline behavior silently
+  if (kioskCtx.isLocked) {
+    return null;
+  }
 
   if (!isOfflineMode && connectionStatus !== 'offline') {
     return null;

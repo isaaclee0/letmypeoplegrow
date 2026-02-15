@@ -9,17 +9,19 @@ interface KioskState {
   gatheringName: string | null;
   startTime: string | null;
   endTime: string | null;
+  customMessage: string | null;
 }
 
 interface KioskContextType {
   isLocked: boolean;
-  lock: (pin: string, gatheringId: number, gatheringName: string, startTime: string, endTime: string) => void;
+  lock: (pin: string, gatheringId: number, gatheringName: string, startTime: string, endTime: string, customMessage: string) => void;
   unlock: (pin: string) => boolean;
   forceUnlock: () => void;
   gatheringId: number | null;
   gatheringName: string | null;
   startTime: string | null;
   endTime: string | null;
+  customMessage: string | null;
 }
 
 const emptyState: KioskState = {
@@ -29,6 +31,7 @@ const emptyState: KioskState = {
   gatheringName: null,
   startTime: null,
   endTime: null,
+  customMessage: null,
 };
 
 function loadState(): KioskState {
@@ -65,6 +68,7 @@ const KioskContext = createContext<KioskContextType>({
   gatheringName: null,
   startTime: null,
   endTime: null,
+  customMessage: null,
 });
 
 export const useKiosk = () => useContext(KioskContext);
@@ -72,8 +76,8 @@ export const useKiosk = () => useContext(KioskContext);
 export const KioskProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<KioskState>(loadState);
 
-  const lock = useCallback((pin: string, gatheringId: number, gatheringName: string, startTime: string, endTime: string) => {
-    const next: KioskState = { isLocked: true, pin, gatheringId, gatheringName, startTime, endTime };
+  const lock = useCallback((pin: string, gatheringId: number, gatheringName: string, startTime: string, endTime: string, customMessage: string) => {
+    const next: KioskState = { isLocked: true, pin, gatheringId, gatheringName, startTime, endTime, customMessage };
     setState(next);
     saveState(next);
   }, []);
@@ -102,6 +106,7 @@ export const KioskProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       gatheringName: state.gatheringName,
       startTime: state.startTime,
       endTime: state.endTime,
+      customMessage: state.customMessage,
     }}>
       {children}
     </KioskContext.Provider>

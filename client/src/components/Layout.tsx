@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useKiosk } from '../contexts/KioskContext';
+import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
 import { integrationsAPI, aiAPI, gatheringsAPI } from '../services/api';
@@ -32,7 +33,9 @@ const Layout: React.FC = () => {
   const [kioskAvailable, setKioskAvailable] = useState(false);
   const { user, logout } = useAuth();
   const kioskCtx = useKiosk();
+  const { isOfflineMode, connectionStatus } = useWebSocket();
   const { updateAvailable, performUpdate } = usePWAUpdate();
+  const isOffline = isOfflineMode || connectionStatus === 'offline';
   const location = useLocation();
   const navigate = useNavigate();
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -162,10 +165,11 @@ const Layout: React.FC = () => {
   };
 
   // Kiosk locked mode: hide sidebar and top bar entirely
+  // Uses fixed positioning to prevent iOS Safari from scrolling the body when inputs are focused
   if (kioskCtx.isLocked) {
     return (
-      <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
-        <main className="h-full overflow-y-auto focus:outline-none">
+      <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 overflow-hidden">
+        <main className="h-full overflow-y-auto overscroll-none focus:outline-none">
           <div className="py-6">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
               <Outlet />
@@ -257,9 +261,15 @@ const Layout: React.FC = () => {
                   GROW
                 </div>
               </div>
-              {/* Version number */}
+              {/* Version and offline status */}
               <div className="mt-4 text-center">
                 <span className="text-white text-xs opacity-60">{getFormattedVersion()}</span>
+                {isOffline && (
+                  <div className="mt-1.5 flex items-center justify-center space-x-1.5">
+                    <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                    <span className="text-amber-200 text-xs">Offline</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -319,9 +329,15 @@ const Layout: React.FC = () => {
                     GROW
                   </div>
                 </div>
-                {/* Version number */}
+                {/* Version and offline status */}
                 <div className="mt-4 text-center">
                   <span className="text-white text-xs opacity-60">{getFormattedVersion()}</span>
+                  {isOffline && (
+                    <div className="mt-1.5 flex items-center justify-center space-x-1.5">
+                      <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                      <span className="text-amber-200 text-xs">Offline</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

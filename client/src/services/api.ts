@@ -177,7 +177,9 @@ export interface GatheringType {
       customDates?: string[];
     };
   };
+  endTime?: string;
   kioskEnabled?: boolean;
+  kioskMessage?: string;
   isActive: boolean;
   memberCount?: number;
   createdAt?: string;
@@ -334,6 +336,9 @@ export const gatheringsAPI = {
     
   delete: (gatheringId: number) => 
     api.delete(`/gatherings/${gatheringId}`),
+
+  updateKioskSettings: (gatheringId: number, data: { endTime?: string; kioskMessage?: string }) =>
+    api.patch(`/gatherings/${gatheringId}/kiosk-settings`, data),
 };
 
 // Attendance API

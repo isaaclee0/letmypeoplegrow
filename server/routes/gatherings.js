@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
     // Admin users can see all gatherings, other users only see their assigned gatherings
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
@@ -34,12 +34,12 @@ router.get('/', async (req, res) => {
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         WHERE gt.is_active = true AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.church_id]);
     } else {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
@@ -57,7 +57,7 @@ router.get('/', async (req, res) => {
         LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE gt.is_active = true AND uga.user_id = ? AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.is_active, gt.created_at
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.id, req.user.church_id]);
     }
@@ -199,6 +199,51 @@ const hasAttendanceRecords = async (gatheringId, churchId) => {
   
   return result[0].count > 0;
 };
+
+// Update kiosk-specific settings (lightweight partial update)
+router.patch('/:id/kiosk-settings', async (req, res) => {
+  try {
+    const gatheringId = parseInt(req.params.id);
+    const { endTime, kioskMessage } = req.body;
+    const churchId = req.user.church_id;
+
+    // Verify user has access to this gathering
+    const assignments = await Database.query(
+      'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ? AND church_id = ?',
+      [req.user.id, gatheringId, churchId]
+    );
+    if (assignments.length === 0) {
+      return res.status(403).json({ error: 'You do not have access to this gathering' });
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (endTime !== undefined) {
+      updates.push('end_time = ?');
+      values.push(endTime || null);
+    }
+    if (kioskMessage !== undefined) {
+      updates.push('kiosk_message = ?');
+      values.push(kioskMessage || null);
+    }
+
+    if (updates.length === 0) {
+      return res.json({ message: 'No changes' });
+    }
+
+    values.push(gatheringId, churchId);
+    await Database.query(
+      `UPDATE gathering_types SET ${updates.join(', ')} WHERE id = ? AND church_id = ?`,
+      values
+    );
+
+    res.json({ message: 'Kiosk settings updated successfully' });
+  } catch (error) {
+    console.error('Update kiosk settings error:', error);
+    res.status(500).json({ error: 'Failed to update kiosk settings.' });
+  }
+});
 
 // Update gathering type (Admin/Coordinator)
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHERING_TYPE'), async (req, res) => {

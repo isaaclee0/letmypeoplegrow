@@ -7,7 +7,6 @@ import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { SmartCacheProvider } from './contexts/SmartCacheContext';
 import { KioskProvider } from './contexts/KioskContext';
-import { OfflineModeIndicator } from './components/OfflineModeIndicator';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -127,7 +126,6 @@ function App() {
             <PWAUpdateProvider>
               <ToastContainer>
               <Router>
-            <OfflineModeIndicator />
             <div className="min-h-screen bg-gray-50">
               <Routes>
                 <Route

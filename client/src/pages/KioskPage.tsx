@@ -3,7 +3,6 @@ import { format, addDays, startOfWeek, addWeeks, startOfDay, isBefore, differenc
 import { useAuth } from '../contexts/AuthContext';
 import { useKiosk } from '../contexts/KioskContext';
 import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../services/api';
-import { generateFamilyName } from '../utils/familyNameUtils';
 import {
   MagnifyingGlassIcon,
   PlusIcon,
@@ -69,6 +68,72 @@ const DAY_MAP: Record<string, number> = {
   'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
   'Thursday': 4, 'Friday': 5, 'Saturday': 6,
 };
+
+// ===== Offline caching helpers =====
+const KIOSK_ATTENDANCE_CACHE_KEY = 'kiosk_attendance_cache';
+const KIOSK_OFFLINE_QUEUE_KEY = 'kiosk_offline_queue';
+
+function cacheAttendanceData(gatheringId: number, date: string, attendanceList: Individual[], familyGroups: FamilyGroup[]) {
+  try {
+    const data = { gatheringId, date, attendanceList, familyGroups, timestamp: Date.now() };
+    localStorage.setItem(KIOSK_ATTENDANCE_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // Storage full or unavailable
+  }
+}
+
+function loadCachedAttendanceData(gatheringId: number, date: string): { attendanceList: Individual[]; familyGroups: FamilyGroup[] } | null {
+  try {
+    const raw = localStorage.getItem(KIOSK_ATTENDANCE_CACHE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data.gatheringId === gatheringId && data.date === date) {
+      return { attendanceList: data.attendanceList, familyGroups: data.familyGroups };
+    }
+  } catch {
+    // Corrupted cache
+  }
+  return null;
+}
+
+interface OfflineSubmission {
+  gatheringId: number;
+  date: string;
+  data: { individualIds: number[]; action: string; signerName?: string };
+  timestamp: number;
+}
+
+function queueOfflineSubmission(gatheringId: number, date: string, data: { individualIds: number[]; action: string; signerName?: string }) {
+  try {
+    const queue: OfflineSubmission[] = JSON.parse(localStorage.getItem(KIOSK_OFFLINE_QUEUE_KEY) || '[]');
+    queue.push({ gatheringId, date, data, timestamp: Date.now() });
+    localStorage.setItem(KIOSK_OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  } catch {
+    // Storage full
+  }
+}
+
+async function syncOfflineQueue(): Promise<number> {
+  let synced = 0;
+  try {
+    const queue: OfflineSubmission[] = JSON.parse(localStorage.getItem(KIOSK_OFFLINE_QUEUE_KEY) || '[]');
+    if (queue.length === 0) return 0;
+
+    const remaining: OfflineSubmission[] = [];
+    for (const item of queue) {
+      try {
+        await kioskAPI.record(item.gatheringId, item.date, item.data as any);
+        synced++;
+      } catch {
+        remaining.push(item);
+      }
+    }
+    localStorage.setItem(KIOSK_OFFLINE_QUEUE_KEY, JSON.stringify(remaining));
+  } catch {
+    // Parse error
+  }
+  return synced;
+}
 
 /**
  * Compute the next upcoming gathering date (today or in the future).
@@ -148,8 +213,6 @@ function getNextGatheringDate(gathering: GatheringType): { date: string; daysAwa
   let daysUntil = targetDay - todayDow;
   if (daysUntil < 0) daysUntil += 7;
 
-  // For biweekly/monthly we still find the next matching day-of-week
-  // (the attendance API will accept the date regardless)
   const nextDate = addDays(today, daysUntil);
   const dateStr = format(nextDate, 'yyyy-MM-dd');
   return { date: dateStr, daysAway: daysUntil };
@@ -167,7 +230,7 @@ const KioskPage: React.FC = () => {
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [startTime, setStartTime] = useState(kiosk.startTime || '10:00');
   const [endTime, setEndTime] = useState(kiosk.endTime || '11:00');
-  const [customMessage, setCustomMessage] = useState('Welcome\nPlease use this to sign in/out');
+  const [customMessage, setCustomMessage] = useState(kiosk.customMessage || 'Welcome\nPlease use this to sign in/out');
   const [isLoading, setIsLoading] = useState(true);
 
   // ===== PIN state =====
@@ -240,6 +303,31 @@ const KioskPage: React.FC = () => {
   const [gatheringDate, setGatheringDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [daysAway, setDaysAway] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // ===== iOS viewport fix: prevent over-scrolling when inputs are focused =====
+  useEffect(() => {
+    if (phase !== 'active') return;
+
+    const handleFocusIn = (e: Event) => {
+      if (!(e.target instanceof HTMLInputElement)) return;
+      // Wait for iOS to finish its scroll adjustment, then correct if no keyboard
+      setTimeout(() => {
+        const vv = window.visualViewport;
+        if (vv) {
+          const keyboardHeight = window.innerHeight - vv.height;
+          // If no substantial keyboard (< 100px), the shift was unwarranted
+          if (keyboardHeight < 100 && scrollContainerRef.current) {
+            // Gently scroll the input into view within our container instead
+            (e.target as HTMLElement).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+        }
+      }, 350);
+    };
+
+    document.addEventListener('focusin', handleFocusIn);
+    return () => document.removeEventListener('focusin', handleFocusIn);
+  }, [phase]);
 
   // ===== Recompute gathering date when gathering changes =====
   useEffect(() => {
@@ -253,11 +341,9 @@ const KioskPage: React.FC = () => {
   // ===== Pre-populate kiosk settings from gathering =====
   useEffect(() => {
     if (selectedGathering && phase === 'setup') {
-      // Pre-populate end time from gathering's kiosk settings
       if (selectedGathering.endTime) {
         setEndTime(selectedGathering.endTime.substring(0, 5));
       }
-      // Pre-populate custom message from gathering's kiosk settings
       if (selectedGathering.kioskMessage) {
         setCustomMessage(selectedGathering.kioskMessage);
       }
@@ -275,7 +361,6 @@ const KioskPage: React.FC = () => {
     const endDate = new Date(now);
     endDate.setHours(eh, em, 0, 0);
 
-    // 15 minutes before end
     const checkoutThreshold = new Date(endDate.getTime() - 15 * 60 * 1000);
 
     if (now >= checkoutThreshold) {
@@ -315,14 +400,29 @@ const KioskPage: React.FC = () => {
           if (g.startTime) {
             const st = g.startTime.substring(0, 5);
             setStartTime(st);
-            // Default end time: start + 1 hour
             const [h, m] = st.split(':').map(Number);
             const endH = (h + 1) % 24;
             setEndTime(`${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
           }
         }
       } catch (err) {
-        setError('Failed to load gatherings.');
+        // If offline in setup mode, try cached gatherings
+        try {
+          const cachedGatherings = localStorage.getItem('gatherings_cached_data');
+          if (cachedGatherings) {
+            const parsed = JSON.parse(cachedGatherings);
+            const all: GatheringType[] = parsed.gatherings || [];
+            const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
+            setKioskGatherings(kioskList);
+            if (kioskList.length === 1) {
+              setSelectedGathering(kioskList[0]);
+            }
+          } else {
+            setError('Failed to load gatherings.');
+          }
+        } catch {
+          setError('Failed to load gatherings.');
+        }
       } finally {
         setIsLoading(false);
       }
@@ -336,7 +436,8 @@ const KioskPage: React.FC = () => {
       setPhase('active');
       if (kiosk.startTime) setStartTime(kiosk.startTime);
       if (kiosk.endTime) setEndTime(kiosk.endTime);
-      // Reload the gathering data
+      if (kiosk.customMessage) setCustomMessage(kiosk.customMessage);
+
       const loadLockedGathering = async () => {
         try {
           const response = await gatheringsAPI.getAll();
@@ -344,7 +445,14 @@ const KioskPage: React.FC = () => {
           const g = all.find(g => g.id === kiosk.gatheringId);
           if (g) setSelectedGathering(g);
         } catch (err) {
-          // Fallback
+          // Offline: create minimal gathering object from kiosk context
+          setSelectedGathering({
+            id: kiosk.gatheringId!,
+            name: kiosk.gatheringName || 'Gathering',
+            attendanceType: 'standard',
+            isActive: true,
+            kioskEnabled: true,
+          } as GatheringType);
         }
       };
       loadLockedGathering();
@@ -358,12 +466,9 @@ const KioskPage: React.FC = () => {
       const response = await attendanceAPI.get(selectedGathering.id, gatheringDate);
       const regulars: Individual[] = response.data.attendanceList || [];
 
-      // Merge visitors and potentialVisitors into the same list
-      // so they appear as searchable people in kiosk mode
       const seenIds = new Set(regulars.map(p => p.id));
       const allPeople = [...regulars];
 
-      // Add visitors (already checked in for this session)
       const visitors: any[] = response.data.visitors || [];
       for (const v of visitors) {
         const id = v.id || v.individualId;
@@ -382,7 +487,6 @@ const KioskPage: React.FC = () => {
         }
       }
 
-      // Add potentialVisitors (assigned to gathering but not yet checked in)
       const potentialVisitors: any[] = response.data.potentialVisitors || [];
       for (const v of potentialVisitors) {
         const id = v.id;
@@ -427,9 +531,20 @@ const KioskPage: React.FC = () => {
           members: [person],
         };
       }
-      setFamilyGroups(Object.values(groups));
+      const familyGroupList = Object.values(groups);
+      setFamilyGroups(familyGroupList);
+
+      // Cache for offline use
+      cacheAttendanceData(selectedGathering.id, gatheringDate, allPeople, familyGroupList);
     } catch (err) {
-      setError('Failed to load attendance data.');
+      // Try loading from cache when offline
+      const cached = loadCachedAttendanceData(selectedGathering.id, gatheringDate);
+      if (cached) {
+        setAttendanceList(cached.attendanceList);
+        setFamilyGroups(cached.familyGroups);
+      } else {
+        setError('Failed to load attendance data.');
+      }
     }
   }, [selectedGathering, gatheringDate]);
 
@@ -437,6 +552,36 @@ const KioskPage: React.FC = () => {
     if (phase === 'active') {
       loadAttendance();
     }
+  }, [phase, loadAttendance]);
+
+  // ===== Offline queue sync interval =====
+  useEffect(() => {
+    if (phase !== 'active') return;
+
+    const doSync = async () => {
+      const synced = await syncOfflineQueue();
+      if (synced > 0) {
+        // Refresh attendance data after successful sync
+        loadAttendance();
+      }
+    };
+
+    // Sync every 30 seconds
+    const syncInterval = setInterval(doSync, 30000);
+
+    // Also sync when coming back online
+    const handleOnline = () => {
+      setTimeout(doSync, 1000);
+    };
+    window.addEventListener('online', handleOnline);
+
+    // Try an initial sync on mount
+    doSync();
+
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('online', handleOnline);
+    };
   }, [phase, loadAttendance]);
 
   // ===== Filter families by search =====
@@ -465,10 +610,8 @@ const KioskPage: React.FC = () => {
     setSearchTerm('');
 
     if (mode === 'checkin') {
-      // Default all unchecked – user explicitly selects who to sign in
       setCheckedMembers(new Set());
     } else {
-      // Checkout: pre-check members that ARE present
       const toCheck = new Set<number>();
       for (const m of group.members) {
         if (m.present) toCheck.add(m.id);
@@ -499,12 +642,37 @@ const KioskPage: React.FC = () => {
       setIsSubmitting(true);
       setError('');
 
-      // Use kiosk API: checkin marks attendance as present, checkout just logs the event
-      await kioskAPI.record(selectedGathering.id, gatheringDate, {
+      const submissionData = {
         individualIds: Array.from(checkedMembers),
-        action: mode === 'checkin' ? 'checkin' : 'checkout',
+        action: mode === 'checkin' ? 'checkin' as const : 'checkout' as const,
         signerName: signerName.trim() || undefined,
-      });
+      };
+
+      try {
+        await kioskAPI.record(selectedGathering.id, gatheringDate, submissionData);
+      } catch (apiError) {
+        // Queue for offline sync - don't show error to user
+        queueOfflineSubmission(selectedGathering.id, gatheringDate, submissionData);
+      }
+
+      // Optimistically update local state
+      if (mode === 'checkin') {
+        const updatedList = attendanceList.map(p =>
+          checkedMembers.has(p.id) ? { ...p, present: true } : p
+        );
+        setAttendanceList(updatedList);
+
+        const updatedGroups = familyGroups.map(fg => ({
+          ...fg,
+          members: fg.members.map(m =>
+            checkedMembers.has(m.id) ? { ...m, present: true } : m
+          ),
+        }));
+        setFamilyGroups(updatedGroups);
+
+        // Update cache with optimistic changes
+        cacheAttendanceData(selectedGathering.id, gatheringDate, updatedList, updatedGroups);
+      }
 
       const names = selectedFamily.members
         .filter(m => checkedMembers.has(m.id))
@@ -552,7 +720,6 @@ const KioskPage: React.FC = () => {
     setSearchTerm('');
     setRefreshCountdown(5);
     loadAttendance();
-    // Focus search input after reset
     setTimeout(() => searchInputRef.current?.focus(), 100);
   };
 
@@ -581,16 +748,14 @@ const KioskPage: React.FC = () => {
       return;
     }
 
-    // Save kiosk settings (end time and custom message) to gathering for future use
+    // Save kiosk settings to gathering for future use via dedicated endpoint
     try {
-      await gatheringsAPI.update(selectedGathering.id, {
+      await gatheringsAPI.updateKioskSettings(selectedGathering.id, {
         endTime: endTime,
         kioskMessage: customMessage,
       });
-      console.log('✅ Kiosk settings saved to gathering');
     } catch (err) {
       console.error('Failed to save kiosk settings:', err);
-      // Don't block entering kiosk mode if save fails
     }
 
     setPhase('pin');
@@ -609,8 +774,8 @@ const KioskPage: React.FC = () => {
       setPinError('PINs do not match.');
       return;
     }
-    // Lock kiosk
-    kiosk.lock(pinInput, selectedGathering!.id, selectedGathering!.name, startTime, endTime);
+    // Lock kiosk - includes customMessage for session persistence
+    kiosk.lock(pinInput, selectedGathering!.id, selectedGathering!.name, startTime, endTime, customMessage);
     setPhase('active');
   };
 
@@ -647,6 +812,12 @@ const KioskPage: React.FC = () => {
       return;
     }
 
+    // Adding visitors requires internet
+    if (!navigator.onLine) {
+      setError('Adding new visitors requires an internet connection. Please check your connection and try again.');
+      return;
+    }
+
     try {
       setIsAddingVisitor(true);
       setError('');
@@ -659,15 +830,11 @@ const KioskPage: React.FC = () => {
         isChild: true,
       }));
 
-      // Parse guardian name into first/last for standard family name format
       const guardianParts = guardianName.trim().split(/\s+/);
       const guardianFirst = guardianParts[0] || '';
       const guardianLast = guardianParts.length > 1 ? guardianParts.slice(1).join(' ') : guardianFirst;
 
-      // Family name in standard format: "LASTNAME, FirstName"
       const familyName = `${guardianLast}, ${guardianFirst}`;
-
-      // Family notes: phone number
       const familyNotes = guardianContact.trim() || undefined;
 
       const familyResponse = await familiesAPI.createVisitorFamily({
@@ -684,7 +851,6 @@ const KioskPage: React.FC = () => {
         await attendanceAPI.addVisitorFamilyToService(selectedGathering.id, gatheringDate, familyId);
       }
 
-      // Log to kiosk checkins with guardian as signer
       if (individualIds.length > 0) {
         try {
           await kioskAPI.record(selectedGathering.id, gatheringDate, {
@@ -693,7 +859,12 @@ const KioskPage: React.FC = () => {
             signerName: guardianName.trim(),
           });
         } catch (err) {
-          console.error('Failed to log visitor kiosk checkin:', err);
+          // Queue for offline sync
+          queueOfflineSubmission(selectedGathering.id, gatheringDate, {
+            individualIds,
+            action: 'checkin',
+            signerName: guardianName.trim(),
+          });
         }
       }
 
@@ -819,7 +990,7 @@ const KioskPage: React.FC = () => {
   }
 
   // ===== RENDER: No kiosk gatherings =====
-  if (kioskGatherings.length === 0) {
+  if (kioskGatherings.length === 0 && phase !== 'active') {
     return (
       <div className="max-w-lg mx-auto mt-12 text-center">
         <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
@@ -1188,7 +1359,7 @@ const KioskPage: React.FC = () => {
 
   // ===== RENDER: Active kiosk mode =====
   return (
-    <div className="max-w-xl mx-auto">
+    <div className="max-w-xl mx-auto" ref={scrollContainerRef}>
       {/* Unlock button (top-left) */}
       <button
         onClick={() => { setShowUnlockModal(true); setUnlockPinInput(''); setUnlockError(''); }}
@@ -1218,7 +1389,7 @@ const KioskPage: React.FC = () => {
         )}
       </div>
 
-      {/* Custom Welcome Message */}
+      {/* Custom Welcome Message - rendered with markdown */}
       <div className="text-center mb-6 px-4">
         <div
           className="text-3xl font-bold text-gray-800 leading-tight [&_h1]:text-4xl [&_h2]:text-2xl [&_h3]:text-xl [&_p]:mb-1 [&_a]:underline [&_a]:text-primary-600"
@@ -1388,7 +1559,6 @@ const KioskPage: React.FC = () => {
                       </label>
                     );
                   } else {
-                    // Checkout: only show present members
                     if (!isPresent) return null;
                     return (
                       <label
