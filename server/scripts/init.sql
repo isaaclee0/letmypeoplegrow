@@ -334,6 +334,25 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
   INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Create kiosk checkins table for tracking check-in/check-out events
+CREATE TABLE IF NOT EXISTS kiosk_checkins (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  gathering_type_id INT NOT NULL,
+  session_date DATE NOT NULL,
+  individual_id INT NOT NULL,
+  action ENUM('checkin', 'checkout') NOT NULL,
+  signer_name VARCHAR(255) DEFAULT NULL,
+  church_id VARCHAR(36) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  INDEX idx_gathering_date (gathering_type_id, session_date),
+  INDEX idx_individual (individual_id),
+  INDEX idx_church_id (church_id),
+  INDEX idx_action (action),
+  INDEX idx_created_at (created_at)
+) ENGINE=InnoDB;
+
 -- Create onboarding progress table
 CREATE TABLE IF NOT EXISTS onboarding_progress (
   id INT AUTO_INCREMENT PRIMARY KEY,

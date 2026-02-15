@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { format, addDays, startOfWeek, addWeeks, startOfDay, isBefore, differenceInCalendarDays } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { useKiosk } from '../contexts/KioskContext';
-import { gatheringsAPI, attendanceAPI, familiesAPI, GatheringType, Individual } from '../services/api';
+import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../services/api';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import {
   MagnifyingGlassIcon,
@@ -14,6 +14,10 @@ import {
   LockClosedIcon,
   LockOpenIcon,
   ArrowRightOnRectangleIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ArrowDownTrayIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
@@ -21,6 +25,41 @@ interface FamilyGroup {
   familyId: number;
   familyName: string;
   members: Individual[];
+}
+
+/**
+ * Lightweight markdown renderer for kiosk welcome messages.
+ * Supports: **bold**, *italic*, # headings (h1-h3), [links](url), line breaks.
+ */
+function renderMarkdown(text: string): string {
+  return text
+    .split('\n')
+    .map(line => {
+      // Headings
+      if (line.startsWith('### ')) return `<h3 class="text-xl font-semibold">${escapeAndInline(line.slice(4))}</h3>`;
+      if (line.startsWith('## ')) return `<h2 class="text-2xl font-bold">${escapeAndInline(line.slice(3))}</h2>`;
+      if (line.startsWith('# ')) return `<h1 class="text-4xl font-bold">${escapeAndInline(line.slice(2))}</h1>`;
+      // Empty line -> spacer
+      if (line.trim() === '') return '<div class="h-2"></div>';
+      // Regular line with inline formatting
+      return `<p>${escapeAndInline(line)}</p>`;
+    })
+    .join('');
+}
+
+function escapeAndInline(text: string): string {
+  // Escape HTML entities
+  let s = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Links: [text](url)
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="underline text-primary-600" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bold: **text**
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic: *text*
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  return s;
 }
 
 type KioskPhase = 'setup' | 'pin' | 'active';
@@ -166,6 +205,35 @@ const KioskPage: React.FC = () => {
   const [visitorPersons, setVisitorPersons] = useState([{ firstName: '', lastName: '' }]);
   const [visitorNotes, setVisitorNotes] = useState('');
   const [isAddingVisitor, setIsAddingVisitor] = useState(false);
+
+  // ===== Past gatherings history =====
+  const [historySessions, setHistorySessions] = useState<Array<{
+    date: string;
+    records: Array<{
+      id: number;
+      individualId: number;
+      action: 'checkin' | 'checkout';
+      signerName: string | null;
+      createdAt: string;
+      firstName: string;
+      lastName: string;
+      familyName: string | null;
+    }>;
+  }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<{
+    date: string;
+    individuals: Array<{
+      individualId: number;
+      firstName: string;
+      lastName: string;
+      familyName: string | null;
+      checkins: Array<{ time: string; signerName: string | null }>;
+      checkouts: Array<{ time: string; signerName: string | null }>;
+    }>;
+  } | null>(null);
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
 
   // Computed gathering date (next upcoming date for this gathering type)
   const [gatheringDate, setGatheringDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
@@ -386,15 +454,11 @@ const KioskPage: React.FC = () => {
       setIsSubmitting(true);
       setError('');
 
-      const present = mode === 'checkin';
-      const records = Array.from(checkedMembers).map(id => ({
-        individualId: id,
-        present,
-      }));
-
-      await attendanceAPI.record(selectedGathering.id, gatheringDate, {
-        attendanceRecords: records,
-        visitors: [],
+      // Use kiosk API: checkin marks attendance as present, checkout just logs the event
+      await kioskAPI.record(selectedGathering.id, gatheringDate, {
+        individualIds: Array.from(checkedMembers),
+        action: mode === 'checkin' ? 'checkin' : 'checkout',
+        signerName: signerName.trim() || undefined,
       });
 
       const names = selectedFamily.members
@@ -584,6 +648,91 @@ const KioskPage: React.FC = () => {
     setVisitorPersons(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // ===== Load kiosk history for selected gathering =====
+  const loadHistory = useCallback(async () => {
+    if (!selectedGathering) return;
+    try {
+      setHistoryLoading(true);
+      const response = await kioskAPI.getHistory(selectedGathering.id, 20);
+      setHistorySessions(response.data.sessions || []);
+    } catch (err) {
+      console.error('Failed to load kiosk history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [selectedGathering]);
+
+  // Load history when gathering is selected in setup mode
+  useEffect(() => {
+    if (phase === 'setup' && selectedGathering) {
+      loadHistory();
+    }
+  }, [phase, selectedGathering, loadHistory]);
+
+  // ===== Load detail for a specific past date =====
+  const loadHistoryDetail = async (date: string) => {
+    if (!selectedGathering) return;
+    if (expandedDate === date) {
+      setExpandedDate(null);
+      setHistoryDetail(null);
+      return;
+    }
+    try {
+      setHistoryDetailLoading(true);
+      setExpandedDate(date);
+      const response = await kioskAPI.getHistoryDetail(selectedGathering.id, date);
+      setHistoryDetail(response.data);
+    } catch (err) {
+      console.error('Failed to load kiosk history detail:', err);
+    } finally {
+      setHistoryDetailLoading(false);
+    }
+  };
+
+  // ===== Export history detail to TSV =====
+  const exportToTSV = () => {
+    if (!historyDetail || !selectedGathering) return;
+
+    const lines: string[] = [];
+    lines.push(['Name', 'Family', 'Check-in Time', 'Checked In By', 'Check-out Time', 'Checked Out By'].join('\t'));
+
+    for (const person of historyDetail.individuals) {
+      const checkinTime = person.checkins.length > 0
+        ? new Date(person.checkins[0].time).toLocaleTimeString()
+        : '';
+      const checkinSigner = person.checkins.length > 0
+        ? (person.checkins[0].signerName || '')
+        : '';
+      const checkoutTime = person.checkouts.length > 0
+        ? new Date(person.checkouts[0].time).toLocaleTimeString()
+        : '';
+      const checkoutSigner = person.checkouts.length > 0
+        ? (person.checkouts[0].signerName || '')
+        : '';
+
+      lines.push([
+        `${person.firstName} ${person.lastName}`,
+        person.familyName || '',
+        checkinTime,
+        checkinSigner,
+        checkoutTime,
+        checkoutSigner,
+      ].join('\t'));
+    }
+
+    const tsv = lines.join('\n');
+    const blob = new Blob([tsv], { type: 'text/tab-separated-values;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const dateFormatted = historyDetail.date;
+    link.download = `kiosk-${selectedGathering.name.replace(/\s+/g, '-')}-${dateFormatted}.tsv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // ===== RENDER: Loading =====
   if (isLoading) {
     return (
@@ -612,7 +761,7 @@ const KioskPage: React.FC = () => {
   // ===== RENDER: Setup phase =====
   if (phase === 'setup') {
     return (
-      <div className="max-w-md mx-auto mt-8">
+      <div className="max-w-2xl mx-auto mt-8">
         <div className="text-center mb-6">
           <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 mb-3">
             <LockClosedIcon className="h-7 w-7 text-primary-600" />
@@ -709,13 +858,23 @@ const KioskPage: React.FC = () => {
               id="kiosk-message"
               value={customMessage}
               onChange={(e) => setCustomMessage(e.target.value)}
-              rows={3}
-              placeholder="Welcome&#10;Please use this to sign in/out"
-              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+              rows={4}
+              placeholder="# Welcome&#10;Please use this to **sign in/out**"
+              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
             />
             <p className="text-xs text-gray-500 mt-1">
-              This message will be displayed prominently on the kiosk screen. Use line breaks for better readability.
+              Supports markdown: <code className="bg-gray-100 px-1 rounded">**bold**</code>, <code className="bg-gray-100 px-1 rounded">*italic*</code>, <code className="bg-gray-100 px-1 rounded"># Heading</code>, <code className="bg-gray-100 px-1 rounded">[link](url)</code>
             </p>
+            {/* Live preview */}
+            {customMessage.trim() && (
+              <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                <p className="text-xs font-medium text-gray-500 mb-2">Preview:</p>
+                <div
+                  className="text-center text-xl font-bold text-gray-800 leading-tight [&_h1]:text-2xl [&_h2]:text-lg [&_h3]:text-base [&_p]:mb-0.5 [&_a]:underline [&_a]:text-primary-600"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(customMessage) }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Show next gathering date info */}
@@ -743,6 +902,139 @@ const KioskPage: React.FC = () => {
             Enter Kiosk Mode
           </button>
         </div>
+
+        {/* Past Gatherings History */}
+        {selectedGathering && (
+          <div className="mt-8">
+            <div className="flex items-center mb-4">
+              <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
+              <h2 className="text-lg font-semibold text-gray-900">Past Kiosk Sessions</h2>
+            </div>
+
+            {historyLoading ? (
+              <div className="text-center py-6">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto"></div>
+                <p className="mt-2 text-sm text-gray-500">Loading history...</p>
+              </div>
+            ) : historySessions.length === 0 ? (
+              <div className="bg-white shadow rounded-lg p-6 text-center">
+                <p className="text-sm text-gray-500">No past kiosk sessions found for this gathering.</p>
+              </div>
+            ) : (
+              <div className="bg-white shadow rounded-lg divide-y divide-gray-200">
+                {historySessions.map(session => {
+                  const isExpanded = expandedDate === session.date;
+                  const checkinCount = session.records.filter(r => r.action === 'checkin').length;
+                  const checkoutCount = session.records.filter(r => r.action === 'checkout').length;
+                  const uniqueIndividuals = new Set(session.records.filter(r => r.action === 'checkin').map(r => r.individualId)).size;
+
+                  return (
+                    <div key={session.date}>
+                      <button
+                        onClick={() => loadHistoryDetail(session.date)}
+                        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <div>
+                          <div className="font-medium text-gray-900">
+                            {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
+                              weekday: 'long',
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                            })}
+                          </div>
+                          <div className="text-sm text-gray-500 mt-0.5">
+                            {uniqueIndividuals} checked in &middot; {checkoutCount} check-out{checkoutCount !== 1 ? 's' : ''}
+                          </div>
+                        </div>
+                        {isExpanded ? (
+                          <ChevronUpIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                        ) : (
+                          <ChevronDownIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                        )}
+                      </button>
+
+                      {isExpanded && (
+                        <div className="px-4 pb-4">
+                          {historyDetailLoading ? (
+                            <div className="text-center py-4">
+                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-600 mx-auto"></div>
+                            </div>
+                          ) : historyDetail ? (
+                            <>
+                              {/* Export button */}
+                              <div className="flex justify-end mb-3">
+                                <button
+                                  onClick={exportToTSV}
+                                  className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                                >
+                                  <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
+                                  Export TSV
+                                </button>
+                              </div>
+
+                              {/* Table */}
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full text-sm">
+                                  <thead>
+                                    <tr className="border-b border-gray-200">
+                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Name</th>
+                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Family</th>
+                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-in</th>
+                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">By</th>
+                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-out</th>
+                                      <th className="text-left py-2 font-medium text-gray-700">By</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {historyDetail.individuals.map(person => (
+                                      <tr key={person.individualId} className="hover:bg-gray-50">
+                                        <td className="py-2 pr-4 text-gray-900">
+                                          {person.firstName} {person.lastName}
+                                        </td>
+                                        <td className="py-2 pr-4 text-gray-500">
+                                          {person.familyName || '-'}
+                                        </td>
+                                        <td className="py-2 pr-4 text-green-600">
+                                          {person.checkins.length > 0
+                                            ? new Date(person.checkins[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                            : '-'}
+                                        </td>
+                                        <td className="py-2 pr-4 text-gray-500">
+                                          {person.checkins.length > 0
+                                            ? (person.checkins[0].signerName || '-')
+                                            : '-'}
+                                        </td>
+                                        <td className="py-2 pr-4 text-orange-600">
+                                          {person.checkouts.length > 0
+                                            ? new Date(person.checkouts[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                            : '-'}
+                                        </td>
+                                        <td className="py-2 text-gray-500">
+                                          {person.checkouts.length > 0
+                                            ? (person.checkouts[0].signerName || '-')
+                                            : '-'}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              {historyDetail.individuals.length === 0 && (
+                                <p className="text-center text-sm text-gray-500 py-3">No records for this date.</p>
+                              )}
+                            </>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -855,9 +1147,10 @@ const KioskPage: React.FC = () => {
 
       {/* Custom Welcome Message */}
       <div className="text-center mb-6 px-4">
-        <div className="text-3xl font-bold text-gray-800 leading-tight whitespace-pre-line">
-          {customMessage}
-        </div>
+        <div
+          className="text-3xl font-bold text-gray-800 leading-tight [&_h1]:text-4xl [&_h2]:text-2xl [&_h3]:text-xl [&_p]:mb-1 [&_a]:underline [&_a]:text-primary-600"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(customMessage) }}
+        />
         {selectedGathering?.endTime && (
           <p className="text-sm text-gray-500 mt-2">
             Sign-in closes at {selectedGathering.endTime.substring(0, 5)}

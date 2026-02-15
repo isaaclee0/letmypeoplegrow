@@ -400,6 +400,22 @@ export const attendanceAPI = {
     api.post(`/attendance/headcount/update-user/${gatheringTypeId}/${date}/${targetUserId}`, { headcount }),
 };
 
+// Kiosk API
+export const kioskAPI = {
+  record: (gatheringTypeId: number, date: string, data: {
+    individualIds: number[];
+    action: 'checkin' | 'checkout';
+    signerName?: string;
+  }) =>
+    api.post(`/kiosk/${gatheringTypeId}/${date}`, data),
+
+  getHistory: (gatheringTypeId: number, limit?: number) =>
+    api.get(`/kiosk/history/${gatheringTypeId}`, { params: { limit: limit || 20 } }),
+
+  getHistoryDetail: (gatheringTypeId: number, date: string) =>
+    api.get(`/kiosk/history/${gatheringTypeId}/${date}`),
+};
+
 // Users API
 export const usersAPI = {
   getAll: () => 
