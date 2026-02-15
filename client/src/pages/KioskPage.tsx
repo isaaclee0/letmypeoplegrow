@@ -1590,7 +1590,7 @@ const KioskPage: React.FC = () => {
                       placeholder="Phone number"
                     />
                     <p className="mt-1 text-xs text-gray-500">
-                      In case we need to reach you during the service.
+                      In case we need to contact you.
                     </p>
                   </div>
                 </div>
