@@ -356,13 +356,57 @@ const KioskPage: React.FC = () => {
     if (!selectedGathering) return;
     try {
       const response = await attendanceAPI.get(selectedGathering.id, gatheringDate);
-      const list: Individual[] = response.data.attendanceList || [];
-      setAttendanceList(list);
+      const regulars: Individual[] = response.data.attendanceList || [];
+
+      // Merge visitors and potentialVisitors into the same list
+      // so they appear as searchable people in kiosk mode
+      const seenIds = new Set(regulars.map(p => p.id));
+      const allPeople = [...regulars];
+
+      // Add visitors (already checked in for this session)
+      const visitors: any[] = response.data.visitors || [];
+      for (const v of visitors) {
+        const id = v.id || v.individualId;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          const nameParts = (v.name || '').split(' ');
+          allPeople.push({
+            id,
+            firstName: v.firstName || nameParts[0] || '',
+            lastName: v.lastName || nameParts.slice(1).join(' ') || '',
+            peopleType: v.peopleType || 'local_visitor',
+            familyId: v.familyId,
+            familyName: v.familyName,
+            present: v.present,
+          });
+        }
+      }
+
+      // Add potentialVisitors (assigned to gathering but not yet checked in)
+      const potentialVisitors: any[] = response.data.potentialVisitors || [];
+      for (const v of potentialVisitors) {
+        const id = v.id;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          const nameParts = (v.name || '').split(' ');
+          allPeople.push({
+            id,
+            firstName: v.firstName || nameParts[0] || '',
+            lastName: v.lastName || nameParts.slice(1).join(' ') || '',
+            peopleType: v.peopleType || 'local_visitor',
+            familyId: v.familyId,
+            familyName: v.familyName,
+            present: false,
+          });
+        }
+      }
+
+      setAttendanceList(allPeople);
 
       // Group by family
       const groups: Record<number, FamilyGroup> = {};
       const noFamily: Individual[] = [];
-      for (const person of list) {
+      for (const person of allPeople) {
         if (person.familyId) {
           if (!groups[person.familyId]) {
             groups[person.familyId] = {
