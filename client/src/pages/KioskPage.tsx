@@ -203,8 +203,9 @@ const KioskPage: React.FC = () => {
   // ===== Add visitor modal =====
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
   const [visitorPersons, setVisitorPersons] = useState([{ firstName: '', lastName: '' }]);
-  const [visitorNotes, setVisitorNotes] = useState('');
   const [isAddingVisitor, setIsAddingVisitor] = useState(false);
+  const [guardianName, setGuardianName] = useState('');
+  const [guardianContact, setGuardianContact] = useState('');
 
   // ===== Past gatherings history =====
   const [historySessions, setHistorySessions] = useState<Array<{
@@ -594,7 +595,11 @@ const KioskPage: React.FC = () => {
     if (!selectedGathering) return;
     const validPersons = visitorPersons.filter(p => p.firstName.trim() && p.lastName.trim());
     if (validPersons.length === 0) {
-      setError('Please enter at least one name.');
+      setError('Please enter at least one child name.');
+      return;
+    }
+    if (!guardianName.trim()) {
+      setError('Please enter the parent/guardian name.');
       return;
     }
 
@@ -607,31 +612,55 @@ const KioskPage: React.FC = () => {
         lastName: p.lastName.trim(),
         firstUnknown: false,
         lastUnknown: false,
-        isChild: false,
+        isChild: true,
       }));
 
-      const familyName = generateFamilyName(people) || 'Visitor';
+      // Parse guardian name into first/last for standard family name format
+      const guardianParts = guardianName.trim().split(/\s+/);
+      const guardianFirst = guardianParts[0] || '';
+      const guardianLast = guardianParts.length > 1 ? guardianParts.slice(1).join(' ') : guardianFirst;
+
+      // Family name in standard format: "LASTNAME, FirstName"
+      const familyName = `${guardianLast}, ${guardianFirst}`;
+
+      // Family notes: phone number
+      const familyNotes = guardianContact.trim() || undefined;
 
       const familyResponse = await familiesAPI.createVisitorFamily({
         familyName,
         peopleType: 'local_visitor',
-        notes: visitorNotes.trim() || undefined,
+        notes: familyNotes,
         people,
       });
 
       const familyId = familyResponse.data.familyId || familyResponse.data.family?.id;
+      const individualIds: number[] = (familyResponse.data.individuals || []).map((i: any) => i.id);
 
       if (familyId) {
         await attendanceAPI.addVisitorFamilyToService(selectedGathering.id, gatheringDate, familyId);
       }
 
+      // Log to kiosk checkins with guardian as signer
+      if (individualIds.length > 0) {
+        try {
+          await kioskAPI.record(selectedGathering.id, gatheringDate, {
+            individualIds,
+            action: 'checkin',
+            signerName: guardianName.trim(),
+          });
+        } catch (err) {
+          console.error('Failed to log visitor kiosk checkin:', err);
+        }
+      }
+
       setShowAddVisitorModal(false);
       setVisitorPersons([{ firstName: '', lastName: '' }]);
-      setVisitorNotes('');
+      setGuardianName('');
+      setGuardianContact('');
       await loadAttendance();
 
       const names = validPersons.map(p => p.firstName).join(' and ');
-      setSuccessMessage(`${names} added and signed in!`);
+      setSuccessMessage(`${names} signed in by ${guardianName.trim()}!`);
       startCountdown();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to add visitor.');
@@ -1389,7 +1418,8 @@ const KioskPage: React.FC = () => {
                 onClick={() => {
                   setShowAddVisitorModal(true);
                   setVisitorPersons([{ firstName: '', lastName: '' }]);
-                  setVisitorNotes('');
+                  setGuardianName('');
+                  setGuardianContact('');
                 }}
                 className="w-full flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-colors"
               >
@@ -1468,75 +1498,102 @@ const KioskPage: React.FC = () => {
         <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Add New Visitor</h3>
+              <h3 className="text-lg font-medium text-gray-900">Check In a New Child</h3>
               <button onClick={() => setShowAddVisitorModal(false)} className="text-gray-400 hover:text-gray-600">
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="space-y-4">
-              {visitorPersons.map((person, idx) => (
-                <div key={idx} className="space-y-2">
-                  {visitorPersons.length > 1 && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">Person {idx + 1}</span>
-                      <button onClick={() => removeVisitorPerson(idx)} className="text-xs text-red-500 hover:text-red-700">
-                        Remove
-                      </button>
+            <div className="space-y-5">
+              {/* Child details section */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Child Details</h4>
+                <div className="space-y-3">
+                  {visitorPersons.map((person, idx) => (
+                    <div key={idx} className="space-y-2">
+                      {visitorPersons.length > 1 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-gray-700">Child {idx + 1}</span>
+                          <button onClick={() => removeVisitorPerson(idx)} className="text-xs text-red-500 hover:text-red-700">
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">First Name</label>
+                          <input
+                            type="text"
+                            value={person.firstName}
+                            onChange={(e) => {
+                              const updated = [...visitorPersons];
+                              updated[idx] = { ...updated[idx], firstName: e.target.value };
+                              setVisitorPersons(updated);
+                            }}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            placeholder="Child's first name"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                          <input
+                            type="text"
+                            value={person.lastName}
+                            onChange={(e) => {
+                              const updated = [...visitorPersons];
+                              updated[idx] = { ...updated[idx], lastName: e.target.value };
+                              setVisitorPersons(updated);
+                            }}
+                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            placeholder="Child's last name"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  )}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700">First Name</label>
-                      <input
-                        type="text"
-                        value={person.firstName}
-                        onChange={(e) => {
-                          const updated = [...visitorPersons];
-                          updated[idx] = { ...updated[idx], firstName: e.target.value };
-                          setVisitorPersons(updated);
-                        }}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                        placeholder="First name"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700">Last Name</label>
-                      <input
-                        type="text"
-                        value={person.lastName}
-                        onChange={(e) => {
-                          const updated = [...visitorPersons];
-                          updated[idx] = { ...updated[idx], lastName: e.target.value };
-                          setVisitorPersons(updated);
-                        }}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                        placeholder="Last name"
-                      />
-                    </div>
+                  ))}
+                  <button type="button" onClick={addVisitorPerson} className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+                    + Add another child
+                  </button>
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="border-t border-gray-200" />
+
+              {/* Parent/Guardian section */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Parent / Guardian</h4>
+                <div className="space-y-3">
+                  <div>
+                    <label htmlFor="guardian-name" className="block text-sm font-medium text-gray-700">
+                      Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="guardian-name"
+                      type="text"
+                      value={guardianName}
+                      onChange={(e) => setGuardianName(e.target.value)}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      placeholder="Parent or guardian's full name"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="guardian-contact" className="block text-sm font-medium text-gray-700">
+                      Contact Number
+                    </label>
+                    <input
+                      id="guardian-contact"
+                      type="tel"
+                      value={guardianContact}
+                      onChange={(e) => setGuardianContact(e.target.value)}
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      placeholder="Phone number"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      In case we need to reach you during the service.
+                    </p>
                   </div>
                 </div>
-              ))}
-
-              <button type="button" onClick={addVisitorPerson} className="text-sm text-primary-600 hover:text-primary-700 font-medium">
-                + Add another person
-              </button>
-
-              <div>
-                <label htmlFor="visitor-notes" className="block text-sm font-medium text-gray-700">
-                  Contact Phone Number
-                </label>
-                <input
-                  id="visitor-notes"
-                  type="tel"
-                  value={visitorNotes}
-                  onChange={(e) => setVisitorNotes(e.target.value)}
-                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                  placeholder="Enter a contact phone number"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  So we can follow up and welcome you properly.
-                </p>
               </div>
             </div>
 
@@ -1549,16 +1606,16 @@ const KioskPage: React.FC = () => {
               </button>
               <button
                 onClick={handleAddVisitor}
-                disabled={isAddingVisitor || visitorPersons.every(p => !p.firstName.trim() || !p.lastName.trim())}
+                disabled={isAddingVisitor || visitorPersons.every(p => !p.firstName.trim() || !p.lastName.trim()) || !guardianName.trim()}
                 className="flex-1 px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isAddingVisitor ? (
                   <>
                     <ArrowPathIcon className="inline h-4 w-4 mr-1 animate-spin" />
-                    Adding...
+                    Checking in...
                   </>
                 ) : (
-                  'Add & Sign In'
+                  'Check In'
                 )}
               </button>
             </div>
