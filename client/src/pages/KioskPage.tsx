@@ -17,6 +17,7 @@ import {
   ChevronUpIcon,
   ArrowDownTrayIcon,
   ClockIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
@@ -977,6 +978,32 @@ const KioskPage: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // ===== Delete a past kiosk session (admin only) =====
+  const [deletingSession, setDeletingSession] = useState<string | null>(null);
+  const handleDeleteSession = async (date: string) => {
+    if (!selectedGathering) return;
+    const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+    if (!window.confirm(`Delete the kiosk session for ${formattedDate}?\n\nThis will permanently remove all kiosk check-in/check-out records for this date. Attendance records will not be affected.`)) {
+      return;
+    }
+    try {
+      setDeletingSession(date);
+      await kioskAPI.deleteSession(selectedGathering.id, date);
+      setHistorySessions(prev => prev.filter(s => s.date !== date));
+      if (expandedDate === date) {
+        setExpandedDate(null);
+        setHistoryDetail(null);
+      }
+    } catch (err) {
+      console.error('Failed to delete kiosk session:', err);
+      alert('Failed to delete kiosk session. Please try again.');
+    } finally {
+      setDeletingSession(null);
+    }
+  };
+
   // ===== RENDER: Loading =====
   if (isLoading) {
     return (
@@ -1174,29 +1201,45 @@ const KioskPage: React.FC = () => {
 
                   return (
                     <div key={session.date}>
-                      <button
-                        onClick={() => loadHistoryDetail(session.date)}
-                        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
-                      >
-                        <div>
-                          <div className="font-medium text-gray-900">
-                            {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
-                              weekday: 'long',
-                              year: 'numeric',
-                              month: 'long',
-                              day: 'numeric',
-                            })}
+                      <div className="flex items-center">
+                        <button
+                          onClick={() => loadHistoryDetail(session.date)}
+                          className="flex-1 flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
+                        >
+                          <div>
+                            <div className="font-medium text-gray-900">
+                              {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
+                                weekday: 'long',
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric',
+                              })}
+                            </div>
+                            <div className="text-sm text-gray-500 mt-0.5">
+                              {uniqueIndividuals} checked in &middot; {checkoutCount} check-out{checkoutCount !== 1 ? 's' : ''}
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-500 mt-0.5">
-                            {uniqueIndividuals} checked in &middot; {checkoutCount} check-out{checkoutCount !== 1 ? 's' : ''}
-                          </div>
-                        </div>
-                        {isExpanded ? (
-                          <ChevronUpIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                        ) : (
-                          <ChevronDownIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          {isExpanded ? (
+                            <ChevronUpIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          ) : (
+                            <ChevronDownIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          )}
+                        </button>
+                        {user?.role === 'admin' && (
+                          <button
+                            onClick={() => handleDeleteSession(session.date)}
+                            disabled={deletingSession === session.date}
+                            className="p-2 mr-2 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 flex-shrink-0"
+                            title="Delete session"
+                          >
+                            {deletingSession === session.date ? (
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
+                            ) : (
+                              <TrashIcon className="h-4 w-4" />
+                            )}
+                          </button>
                         )}
-                      </button>
+                      </div>
 
                       {isExpanded && (
                         <div className="px-4 pb-4">

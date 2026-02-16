@@ -419,6 +419,9 @@ export const kioskAPI = {
 
   getHistoryDetail: (gatheringTypeId: number, date: string) =>
     api.get(`/kiosk/history/${gatheringTypeId}/${date}`),
+
+  deleteSession: (gatheringTypeId: number, date: string) =>
+    api.delete(`/kiosk/history/${gatheringTypeId}/${date}`),
 };
 
 // Users API

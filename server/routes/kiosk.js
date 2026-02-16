@@ -338,4 +338,38 @@ router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => 
   }
 });
 
+// ===== Delete a kiosk session (admin only) =====
+// DELETE /api/kiosk/history/:gatheringTypeId/:date
+router.delete('/history/:gatheringTypeId/:date', requireGatheringAccess, async (req, res) => {
+  try {
+    // Only admins can delete kiosk sessions
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only admins can delete kiosk sessions.' });
+    }
+
+    await ensureTable();
+
+    const { gatheringTypeId, date } = req.params;
+    const churchId = req.user.church_id;
+
+    const result = await Database.query(`
+      DELETE FROM kiosk_checkins
+      WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+    `, [gatheringTypeId, date, churchId]);
+
+    const deletedCount = Number(result.affectedRows || 0);
+
+    if (deletedCount === 0) {
+      return res.status(404).json({ error: 'No kiosk session found for that date.' });
+    }
+
+    logger.info(`Admin ${req.user.id} deleted kiosk session: gathering=${gatheringTypeId}, date=${date}, church=${churchId}, records=${deletedCount}`);
+
+    res.json({ message: `Deleted ${deletedCount} kiosk record(s) for ${date}.`, deletedCount });
+  } catch (error) {
+    console.error('Kiosk session delete error:', error);
+    res.status(500).json({ error: 'Failed to delete kiosk session.', details: error.message });
+  }
+});
+
 module.exports = router;
