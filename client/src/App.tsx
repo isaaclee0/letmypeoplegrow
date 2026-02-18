@@ -22,7 +22,7 @@ import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
 import ProfilePage from './pages/ProfilePage';
 import WebSocketTestPage from './pages/WebSocketTestPage';
-import ElvantoImportPage from './pages/ElvantoImportPage';
+import ImportPage from './pages/ImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import KioskPage from './pages/KioskPage';
 import LoadingSpinner from './components/LoadingSpinner';
@@ -195,10 +195,10 @@ function App() {
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route
-                    path="elvanto-import"
+                    path="import"
                     element={
                       <RoleProtectedRoute allowedRoles={['admin']}>
-                        <ElvantoImportPage />
+                        <ImportPage />
                       </RoleProtectedRoute>
                     }
                   />

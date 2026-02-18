@@ -14,6 +14,8 @@ import {
   CalendarDaysIcon,
   UsersIcon,
   InformationCircleIcon,
+  LinkIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 
 interface ElvantoPerson {
@@ -70,9 +72,13 @@ interface ServiceType {
 }
 
 type TabType = 'people' | 'gatherings';
+type SourceTab = 'elvanto' | 'planning-center';
 
-const ElvantoImportPage: React.FC = () => {
-  // Tab state
+const ImportPage: React.FC = () => {
+  // Source tab state (top-level)
+  const [sourceTab, setSourceTab] = useState<SourceTab>('elvanto');
+
+  // Elvanto tab state
   const [activeTab, setActiveTab] = useState<TabType>('people');
 
   // People tab state
@@ -141,12 +147,33 @@ const ElvantoImportPage: React.FC = () => {
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
   const [skippedGatherings, setSkippedGatherings] = useState<Set<string>>(new Set());
 
-  // Check connection status
+  // Elvanto connection status
   const [isConnected, setIsConnected] = useState(false);
   const [checkingConnection, setCheckingConnection] = useState(true);
 
+  // Planning Center state
+  const [planningCenterStatus, setPlanningCenterStatus] = useState<{
+    enabled: boolean;
+    connected: boolean;
+    loading: boolean;
+  }>({ enabled: false, connected: false, loading: true });
+  const [pcActiveTab, setPcActiveTab] = useState<'people' | 'checkins'>('people');
+  const [pcPeople, setPcPeople] = useState<any[]>([]);
+  const [pcPeopleLoading, setPcPeopleLoading] = useState(false);
+  const [pcPeopleLoaded, setPcPeopleLoaded] = useState(false);
+  const [pcCheckins, setPcCheckins] = useState<any[]>([]);
+  const [pcCheckinsLoading, setPcCheckinsLoading] = useState(false);
+  const [pcCheckinsLoaded, setPcCheckinsLoaded] = useState(false);
+  const [pcCheckinsStartDate, setPcCheckinsStartDate] = useState('');
+  const [pcCheckinsEndDate, setPcCheckinsEndDate] = useState('');
+  const [pcError, setPcError] = useState<string | null>(null);
+  const [pcImporting, setPcImporting] = useState(false);
+  const [pcExpandedFamilies, setPcExpandedFamilies] = useState<Set<string>>(new Set());
+  const [pcSearchTerm, setPcSearchTerm] = useState('');
+
   useEffect(() => {
     checkConnection();
+    fetchPlanningCenterStatus();
   }, []);
 
   const checkConnection = async () => {
@@ -163,6 +190,85 @@ const ElvantoImportPage: React.FC = () => {
     } finally {
       setCheckingConnection(false);
     }
+  };
+
+  // Planning Center handlers
+  const fetchPlanningCenterStatus = async () => {
+    try {
+      const response = await integrationsAPI.getPlanningCenterStatus();
+      setPlanningCenterStatus({
+        enabled: response.data.enabled === true,
+        connected: response.data.connected === true,
+        loading: false
+      });
+    } catch (error) {
+      logger.error('Failed to fetch Planning Center status:', error);
+      setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const loadPcPeople = async () => {
+    try {
+      setPcPeopleLoading(true);
+      setPcError(null);
+      const response = await integrationsAPI.getPlanningCenterPeople();
+      setPcPeople(response.data.families || []);
+      setPcPeopleLoaded(true);
+    } catch (error: any) {
+      logger.error('Failed to fetch Planning Center people:', error);
+      setPcError(error.response?.data?.error || 'Failed to fetch people from Planning Center.');
+    } finally {
+      setPcPeopleLoading(false);
+    }
+  };
+
+  const loadPcCheckins = async () => {
+    if (!pcCheckinsStartDate || !pcCheckinsEndDate) {
+      setPcError('Please select both start and end dates.');
+      return;
+    }
+    try {
+      setPcCheckinsLoading(true);
+      setPcError(null);
+      const response = await integrationsAPI.getPlanningCenterCheckins({
+        startDate: pcCheckinsStartDate,
+        endDate: pcCheckinsEndDate
+      });
+      setPcCheckins(response.data.checkIns || []);
+      setPcCheckinsLoaded(true);
+    } catch (error: any) {
+      logger.error('Failed to fetch Planning Center check-ins:', error);
+      setPcError(error.response?.data?.error || 'Failed to fetch check-ins from Planning Center.');
+    } finally {
+      setPcCheckinsLoading(false);
+    }
+  };
+
+  const handlePcImportPeople = async () => {
+    try {
+      setPcImporting(true);
+      setPcError(null);
+      const response = await integrationsAPI.importPeopleFromPlanningCenter();
+      const data = response.data;
+      alert(`Successfully imported ${data.imported?.families || 0} families and ${data.imported?.individuals || 0} people from Planning Center!`);
+    } catch (error: any) {
+      logger.error('Failed to import people from Planning Center:', error);
+      setPcError(error.response?.data?.error || 'Failed to import people.');
+    } finally {
+      setPcImporting(false);
+    }
+  };
+
+  const togglePcFamily = (householdId: string) => {
+    setPcExpandedFamilies(prev => {
+      const next = new Set(prev);
+      if (next.has(householdId)) {
+        next.delete(householdId);
+      } else {
+        next.add(householdId);
+      }
+      return next;
+    });
   };
 
   const loadFamilies = useCallback(async () => {
@@ -744,23 +850,62 @@ const ElvantoImportPage: React.FC = () => {
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Import from Elvanto</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Import</h1>
               <p className="mt-1 text-sm text-gray-500">
-                Import people, families, and gatherings from Elvanto
+                Import people, families, and gatherings from external services
               </p>
             </div>
+            {sourceTab === 'elvanto' && (
               <button
-              onClick={activeTab === 'people' ? loadFamilies : loadGatherings}
-              disabled={loading || loadingGatherings}
-              className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
-            >
-              <ArrowPathIcon className={`h-4 w-4 mr-2 ${(loading || loadingGatherings) ? 'animate-spin' : ''}`} />
-              Refresh
+                onClick={activeTab === 'people' ? loadFamilies : loadGatherings}
+                disabled={loading || loadingGatherings}
+                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                <ArrowPathIcon className={`h-4 w-4 mr-2 ${(loading || loadingGatherings) ? 'animate-spin' : ''}`} />
+                Refresh
               </button>
+            )}
           </div>
 
-        {/* Tabs */}
+          {/* Source Tabs */}
           <div className="mt-6 border-b border-gray-200">
+            <nav className="-mb-px flex space-x-8">
+              <button
+                onClick={() => setSourceTab('elvanto')}
+                className={`${
+                  sourceTab === 'elvanto'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+              >
+                <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+                Elvanto
+              </button>
+              {import.meta.env.DEV && (
+              <button
+                onClick={() => setSourceTab('planning-center')}
+                className={`${
+                  sourceTab === 'planning-center'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+              >
+                <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+                Planning Center
+              </button>
+              )}
+            </nav>
+          </div>
+        </div>
+      </div>
+
+      {/* Elvanto Tab Content */}
+      {sourceTab === 'elvanto' && (
+        <>
+      <div className="bg-white overflow-hidden shadow rounded-lg">
+        <div className="px-4 py-5 sm:p-6">
+          {/* Elvanto Sub-tabs */}
+          <div className="border-b border-gray-200">
             <nav className="-mb-px flex space-x-8">
             <button
                 onClick={() => setActiveTab('people')}
@@ -1527,8 +1672,350 @@ const ElvantoImportPage: React.FC = () => {
         </div>,
         document.body
       )}
+      </>
+      )}
+
+      {/* Planning Center Tab Content (dev only) */}
+      {import.meta.env.DEV && sourceTab === 'planning-center' && (
+        <>
+        {planningCenterStatus.loading ? (
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="flex items-center justify-center py-12">
+                <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
+                <span className="ml-3 text-gray-500">Checking connection status...</span>
+              </div>
+            </div>
+          </div>
+        ) : !planningCenterStatus.enabled ? (
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="text-center py-12">
+                <InformationCircleIcon className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">Planning Center Not Available</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Planning Center integration has not been enabled for this installation.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : !planningCenterStatus.connected ? (
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="text-center py-12">
+                <LinkIcon className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">Planning Center Not Connected</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Connect to Planning Center in{' '}
+                  <a href="/app/settings?tab=integrations" className="text-primary-600 hover:text-primary-500 font-medium">
+                    Settings → Integrations
+                  </a>{' '}
+                  to start importing data.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+          {/* Sub-tabs: People / Check-ins */}
+          <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-4 py-5 sm:p-6">
+              <div className="border-b border-gray-200">
+                <nav className="-mb-px flex space-x-8">
+                  <button
+                    onClick={() => setPcActiveTab('people')}
+                    className={`${
+                      pcActiveTab === 'people'
+                        ? 'border-primary-500 text-primary-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+                  >
+                    <UsersIcon className="h-5 w-5 mr-2" />
+                    People
+                  </button>
+                  <button
+                    onClick={() => setPcActiveTab('checkins')}
+                    className={`${
+                      pcActiveTab === 'checkins'
+                        ? 'border-primary-500 text-primary-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+                  >
+                    <CalendarDaysIcon className="h-5 w-5 mr-2" />
+                    Check-ins
+                  </button>
+                </nav>
+              </div>
+            </div>
+          </div>
+
+          {/* People Sub-tab */}
+          {pcActiveTab === 'people' && (
+            <div className="bg-white overflow-hidden shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900">People from Planning Center</h3>
+                    <p className="text-sm text-gray-500">
+                      {pcPeopleLoaded
+                        ? `${pcPeople.reduce((sum, f) => sum + f.members.length, 0)} people in ${pcPeople.length} families`
+                        : 'Load people from your Planning Center account to preview before importing.'}
+                    </p>
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={loadPcPeople}
+                      disabled={pcPeopleLoading}
+                      className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcPeopleLoading ? 'animate-spin' : ''}`} />
+                      {pcPeopleLoaded ? 'Refresh' : 'Load People'}
+                    </button>
+                    {pcPeopleLoaded && pcPeople.length > 0 && (
+                      <button
+                        onClick={handlePcImportPeople}
+                        disabled={pcImporting}
+                        className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {pcImporting ? (
+                          <>
+                            <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                            Importing...
+                          </>
+                        ) : (
+                          <>
+                            <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                            Import All
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {pcError && (
+                  <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div className="flex">
+                      <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                      <div className="ml-2">
+                        <p className="text-sm text-red-700">{pcError}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {pcPeopleLoading && (
+                  <div className="flex items-center justify-center py-12">
+                    <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
+                    <span className="ml-3 text-gray-500">Loading people from Planning Center...</span>
+                  </div>
+                )}
+
+                {pcPeopleLoaded && !pcPeopleLoading && (
+                  <>
+                    {/* Search */}
+                    {pcPeople.length > 0 && (
+                      <div className="mb-4">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={pcSearchTerm}
+                            onChange={(e) => setPcSearchTerm(e.target.value)}
+                            placeholder="Filter families..."
+                            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
+                          />
+                          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Family list */}
+                    <div className="space-y-2 max-h-[600px] overflow-y-auto">
+                      {pcPeople.length === 0 ? (
+                        <p className="text-center text-sm text-gray-500 py-8">No people found in Planning Center.</p>
+                      ) : (
+                        pcPeople
+                          .filter(family => {
+                            if (!pcSearchTerm) return true;
+                            const term = pcSearchTerm.toLowerCase();
+                            return family.familyName.toLowerCase().includes(term) ||
+                              family.members.some((m: any) =>
+                                `${m.firstName} ${m.lastName}`.toLowerCase().includes(term)
+                              );
+                          })
+                          .map((family) => (
+                            <div key={family.householdId} className="border border-gray-200 rounded-lg">
+                              <button
+                                onClick={() => togglePcFamily(family.householdId)}
+                                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50"
+                              >
+                                <div className="flex items-center">
+                                  {pcExpandedFamilies.has(family.householdId) ? (
+                                    <ChevronDownIcon className="h-4 w-4 text-gray-400 mr-2" />
+                                  ) : (
+                                    <ChevronRightIcon className="h-4 w-4 text-gray-400 mr-2" />
+                                  )}
+                                  <UserGroupIcon className="h-5 w-5 text-gray-400 mr-2" />
+                                  <span className="text-sm font-medium text-gray-900">{family.familyName}</span>
+                                </div>
+                                <span className="text-xs text-gray-500">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
+                              </button>
+                              {pcExpandedFamilies.has(family.householdId) && (
+                                <div className="border-t border-gray-100 px-4 py-2 bg-gray-50">
+                                  {family.members.map((member: any) => (
+                                    <div key={member.id} className="flex items-center justify-between py-1.5">
+                                      <div className="flex items-center">
+                                        <span className="text-sm text-gray-700">
+                                          {member.firstName} {member.lastName}
+                                        </span>
+                                        {member.child && (
+                                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                                            Child
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-xs text-gray-400">{member.email || member.phone || ''}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {!pcPeopleLoaded && !pcPeopleLoading && !pcError && (
+                  <div className="text-center py-12">
+                    <UsersIcon className="mx-auto h-12 w-12 text-gray-300" />
+                    <p className="mt-2 text-sm text-gray-500">Click "Load People" to fetch data from Planning Center.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Check-ins Sub-tab */}
+          {pcActiveTab === 'checkins' && (
+            <div className="bg-white overflow-hidden shadow rounded-lg">
+              <div className="px-4 py-5 sm:p-6">
+                <div className="mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">Check-ins from Planning Center</h3>
+                  <p className="text-sm text-gray-500">
+                    Select a date range to view check-in data from Planning Center.
+                  </p>
+                </div>
+
+                {pcError && (
+                  <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div className="flex">
+                      <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                      <div className="ml-2">
+                        <p className="text-sm text-red-700">{pcError}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Date Range Picker */}
+                <div className="flex items-end space-x-3 mb-6">
+                  <div>
+                    <label htmlFor="pc-checkins-start" className="block text-xs font-medium text-gray-700 mb-1">
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      id="pc-checkins-start"
+                      value={pcCheckinsStartDate}
+                      onChange={(e) => setPcCheckinsStartDate(e.target.value)}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="pc-checkins-end" className="block text-xs font-medium text-gray-700 mb-1">
+                      End Date
+                    </label>
+                    <input
+                      type="date"
+                      id="pc-checkins-end"
+                      value={pcCheckinsEndDate}
+                      onChange={(e) => setPcCheckinsEndDate(e.target.value)}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={loadPcCheckins}
+                    disabled={pcCheckinsLoading || !pcCheckinsStartDate || !pcCheckinsEndDate}
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcCheckinsLoading ? 'animate-spin' : ''}`} />
+                    {pcCheckinsLoaded ? 'Refresh' : 'Load Check-ins'}
+                  </button>
+                </div>
+
+                {pcCheckinsLoading && (
+                  <div className="flex items-center justify-center py-12">
+                    <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
+                    <span className="ml-3 text-gray-500">Loading check-ins from Planning Center...</span>
+                  </div>
+                )}
+
+                {pcCheckinsLoaded && !pcCheckinsLoading && (
+                  <div>
+                    <p className="text-sm text-gray-600 mb-3">
+                      {pcCheckins.length} check-in{pcCheckins.length !== 1 ? 's' : ''} found
+                    </p>
+                    {pcCheckins.length > 0 ? (
+                      <div className="overflow-hidden border border-gray-200 rounded-lg">
+                        <div className="max-h-[500px] overflow-y-auto">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50 sticky top-0">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Person</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Event</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Checked In</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {pcCheckins.map((checkin: any) => (
+                                <tr key={checkin.id} className="hover:bg-gray-50">
+                                  <td className="px-4 py-3 text-sm text-gray-900">
+                                    {checkin.person?.name || 'Unknown'}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-600">
+                                    {checkin.event?.name || 'Unknown Event'}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-500">
+                                    {checkin.checkedInAt ? new Date(checkin.checkedInAt).toLocaleString() : '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-center text-sm text-gray-500 py-8">No check-ins found for this date range.</p>
+                    )}
+                  </div>
+                )}
+
+                {!pcCheckinsLoaded && !pcCheckinsLoading && !pcError && (
+                  <div className="text-center py-12">
+                    <CalendarDaysIcon className="mx-auto h-12 w-12 text-gray-300" />
+                    <p className="mt-2 text-sm text-gray-500">Select a date range and click "Load Check-ins" to view data.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          </>
+        )}
+        </>
+      )}
     </div>
   );
 };
 
-export default ElvantoImportPage;
+export default ImportPage;

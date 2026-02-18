@@ -1028,7 +1028,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             f.family_type IN ('local_visitor', 'traveller_visitor')
             OR ar.people_type_at_time IN ('local_visitor', 'traveller_visitor')
           )
-          AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
+          AND i.is_active = true
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1127,12 +1127,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       WHERE gl.gathering_type_id = ?
-        AND (
-          i.is_active = true OR
-          ar.present = 1 OR
-          ar.present = true OR
-          (i.is_active = false AND ar.present = 1)
-        )
+        AND i.is_active = true
         AND i.church_id = ?
     `;
 
@@ -1322,7 +1317,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
-          AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
+          AND i.is_active = true
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1431,15 +1426,8 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       JOIN individuals i ON gl.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-      -- Removed old visitors table reference - now using unified individuals/families system
       WHERE gl.gathering_type_id = ? 
-        AND (
-          i.is_active = true OR 
-          ar.present = 1 OR 
-          ar.present = true OR
-          -- Include archived people only if they have attendance records for past gatherings
-          (i.is_active = false AND ar.present = 1)
-        )
+        AND i.is_active = true
         AND i.church_id = ?
     `;
 

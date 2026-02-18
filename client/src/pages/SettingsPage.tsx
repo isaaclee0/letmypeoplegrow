@@ -61,14 +61,10 @@ const SettingsPage: React.FC = () => {
     enabled: boolean;
     connected: boolean;
     loading: boolean;
-    error?: string | null;
-  }>({ enabled: false, connected: false, loading: true, error: null });
+  }>({ enabled: false, connected: false, loading: true });
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
-  const [planningCenterImporting, setPlanningCenterImporting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
-  const [importCheckinsStartDate, setImportCheckinsStartDate] = useState('');
-  const [importCheckinsEndDate, setImportCheckinsEndDate] = useState('');
 
   // Location state
   const [locationName, setLocationName] = useState<string | null>(null);
@@ -84,7 +80,7 @@ const SettingsPage: React.FC = () => {
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
-    { id: 'integrations', name: 'Integrations', icon: LinkIcon },
+    ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
   ];
 
   // Fetch Elvanto integration status
@@ -152,7 +148,7 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // Fetch Planning Center integration status
+  // Fetch Planning Center status
   const fetchPlanningCenterStatus = useCallback(async () => {
     try {
       const response = await integrationsAPI.getPlanningCenterStatus();
@@ -173,7 +169,6 @@ const SettingsPage: React.FC = () => {
       setPlanningCenterConnecting(true);
       setPlanningCenterError(null);
       const response = await integrationsAPI.authorizePlanningCenter();
-      // Redirect to Planning Center OAuth page
       window.location.href = response.data.authUrl;
     } catch (error: any) {
       logger.error('Failed to authorize Planning Center:', error);
@@ -188,50 +183,11 @@ const SettingsPage: React.FC = () => {
     try {
       setPlanningCenterStatus(prev => ({ ...prev, loading: true }));
       await integrationsAPI.disconnectPlanningCenter();
-      setPlanningCenterStatus({ connected: false, loading: false });
+      setPlanningCenterStatus({ enabled: true, connected: false, loading: false });
     } catch (error: any) {
       logger.error('Failed to disconnect Planning Center:', error);
       setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
       setPlanningCenterError(error.response?.data?.error || 'Failed to disconnect.');
-    }
-  };
-
-  // Handle Planning Center import people
-  const handlePlanningCenterImportPeople = async () => {
-    try {
-      setPlanningCenterImporting(true);
-      setPlanningCenterError(null);
-      const response = await integrationsAPI.importPeopleFromPlanningCenter();
-      alert(`Successfully imported ${response.data.imported} people from Planning Center!`);
-    } catch (error: any) {
-      logger.error('Failed to import people from Planning Center:', error);
-      setPlanningCenterError(error.response?.data?.error || 'Failed to import people.');
-    } finally {
-      setPlanningCenterImporting(false);
-    }
-  };
-
-  // Handle Planning Center import check-ins
-  const handlePlanningCenterImportCheckins = async () => {
-    if (!importCheckinsStartDate || !importCheckinsEndDate) {
-      setPlanningCenterError('Please select both start and end dates.');
-      return;
-    }
-    try {
-      setPlanningCenterImporting(true);
-      setPlanningCenterError(null);
-      const response = await integrationsAPI.importCheckinsFromPlanningCenter({
-        startDate: importCheckinsStartDate,
-        endDate: importCheckinsEndDate
-      });
-      alert(`Successfully fetched ${response.data.checkins?.length || 0} check-ins from Planning Center!`);
-      setImportCheckinsStartDate('');
-      setImportCheckinsEndDate('');
-    } catch (error: any) {
-      logger.error('Failed to import check-ins from Planning Center:', error);
-      setPlanningCenterError(error.response?.data?.error || 'Failed to import check-ins.');
-    } finally {
-      setPlanningCenterImporting(false);
     }
   };
 
@@ -323,14 +279,14 @@ const SettingsPage: React.FC = () => {
     const pcoSuccess = urlParams.get('pco_success');
     const pcoError = urlParams.get('pco_error');
     if (pcoSuccess === 'true') {
+      setActiveTab('integrations');
       alert('Successfully connected to Planning Center!');
       fetchPlanningCenterStatus();
-      // Clean up URL
-      window.history.replaceState({}, '', '/settings?tab=integrations');
+      window.history.replaceState({}, '', '/app/settings?tab=integrations');
     } else if (pcoError) {
+      setActiveTab('integrations');
       setPlanningCenterError(decodeURIComponent(pcoError));
-      // Clean up URL
-      window.history.replaceState({}, '', '/settings?tab=integrations');
+      window.history.replaceState({}, '', '/app/settings?tab=integrations');
     }
   }, [fetchPlanningCenterStatus]);
 
@@ -684,7 +640,7 @@ const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'integrations' && (
+          {activeTab === 'integrations' && user?.role === 'admin' && (
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-medium text-gray-900">External Integrations</h3>
@@ -972,10 +928,9 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Planning Center Integration - Only show if enabled */}
-                  {planningCenterStatus.enabled && (
+                  {/* Planning Center Integration - Only show in dev mode */}
+                  {import.meta.env.DEV && planningCenterStatus.enabled && (
                   <div className="border border-gray-200 rounded-lg p-6">
-                    {/* Connection Status Header */}
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
                         <div className="flex-shrink-0">
@@ -988,7 +943,7 @@ const SettingsPage: React.FC = () => {
                         <div>
                           <h4 className="text-lg font-medium text-gray-900">Planning Center</h4>
                           <p className="text-sm text-gray-600">
-                            Import people and check-ins from Planning Center Online.
+                            Connect to Planning Center Online to import people and check-ins.
                           </p>
                           {planningCenterStatus.connected && (
                             <p className="text-xs text-green-600 mt-1 flex items-center">
@@ -1023,133 +978,44 @@ const SettingsPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Connection/Import Form */}
-                    {!planningCenterStatus.loading && (
+                    {/* Connection Form - Only show when not connected */}
+                    {!planningCenterStatus.connected && !planningCenterStatus.loading && (
                       <div className="border-t border-gray-200 pt-6">
-                        {!planningCenterStatus.connected ? (
-                          <div>
-                            <h5 className="text-md font-medium text-gray-900 mb-4">Connect to Planning Center</h5>
-                            <p className="text-sm text-gray-600 mb-4">
-                              You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data.
-                            </p>
+                        <h5 className="text-md font-medium text-gray-900 mb-4">Connect to Planning Center</h5>
+                        <p className="text-sm text-gray-600 mb-4">
+                          You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data.
+                        </p>
 
-                            {planningCenterError && (
-                              <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
-                                <div className="flex">
-                                  <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
-                                  <div className="ml-2">
-                                    <p className="text-sm text-red-700">{planningCenterError}</p>
-                                  </div>
-                                </div>
+                        {planningCenterError && (
+                          <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="flex">
+                              <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                              <div className="ml-2">
+                                <p className="text-sm text-red-700">{planningCenterError}</p>
                               </div>
-                            )}
-
-                            <div className="flex justify-end">
-                              <button
-                                onClick={handlePlanningCenterConnect}
-                                disabled={planningCenterConnecting}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {planningCenterConnecting ? (
-                                  <>
-                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                                    Connecting...
-                                  </>
-                                ) : (
-                                  <>
-                                    <LinkIcon className="h-4 w-4 mr-2" />
-                                    Connect Planning Center
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-6">
-                            <h5 className="text-md font-medium text-gray-900">Import Data</h5>
-
-                            {planningCenterError && (
-                              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                                <div className="flex">
-                                  <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
-                                  <div className="ml-2">
-                                    <p className="text-sm text-red-700">{planningCenterError}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Import People */}
-                            <div className="bg-gray-50 rounded-lg p-4">
-                              <h6 className="text-sm font-medium text-gray-900 mb-2">Import People</h6>
-                              <p className="text-sm text-gray-600 mb-3">
-                                Import all people from Planning Center, grouped by household.
-                              </p>
-                              <button
-                                onClick={handlePlanningCenterImportPeople}
-                                disabled={planningCenterImporting}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {planningCenterImporting ? (
-                                  <>
-                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                                    Importing...
-                                  </>
-                                ) : (
-                                  'Import People'
-                                )}
-                              </button>
-                            </div>
-
-                            {/* Import Check-ins */}
-                            <div className="bg-gray-50 rounded-lg p-4">
-                              <h6 className="text-sm font-medium text-gray-900 mb-2">Import Check-ins</h6>
-                              <p className="text-sm text-gray-600 mb-3">
-                                Fetch check-in data for a date range.
-                              </p>
-                              <div className="grid grid-cols-2 gap-3 mb-3">
-                                <div>
-                                  <label htmlFor="checkins-start-date" className="block text-xs font-medium text-gray-700 mb-1">
-                                    Start Date
-                                  </label>
-                                  <input
-                                    type="date"
-                                    id="checkins-start-date"
-                                    value={importCheckinsStartDate}
-                                    onChange={(e) => setImportCheckinsStartDate(e.target.value)}
-                                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 text-sm"
-                                  />
-                                </div>
-                                <div>
-                                  <label htmlFor="checkins-end-date" className="block text-xs font-medium text-gray-700 mb-1">
-                                    End Date
-                                  </label>
-                                  <input
-                                    type="date"
-                                    id="checkins-end-date"
-                                    value={importCheckinsEndDate}
-                                    onChange={(e) => setImportCheckinsEndDate(e.target.value)}
-                                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 text-sm"
-                                  />
-                                </div>
-                              </div>
-                              <button
-                                onClick={handlePlanningCenterImportCheckins}
-                                disabled={planningCenterImporting || !importCheckinsStartDate || !importCheckinsEndDate}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {planningCenterImporting ? (
-                                  <>
-                                    <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                                    Importing...
-                                  </>
-                                ) : (
-                                  'Import Check-ins'
-                                )}
-                              </button>
                             </div>
                           </div>
                         )}
+
+                        <div className="flex justify-end">
+                          <button
+                            onClick={handlePlanningCenterConnect}
+                            disabled={planningCenterConnecting}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {planningCenterConnecting ? (
+                              <>
+                                <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                                Connecting...
+                              </>
+                            ) : (
+                              <>
+                                <LinkIcon className="h-4 w-4 mr-2" />
+                                Connect Planning Center
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -1172,6 +1038,7 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </div>
                   )}
+
                 </div>
               </div>
             </div>
@@ -1448,8 +1315,9 @@ const SettingsPage: React.FC = () => {
           </div>
         </div>
       </Modal>
+
     </div>
   );
 };
 
-export default SettingsPage; 
+export default SettingsPage;

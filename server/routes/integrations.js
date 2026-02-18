@@ -1843,7 +1843,7 @@ router.get('/planning-center/callback', async (req, res) => {
     await savePlanningCenterTokens(userId, churchId, tokens);
 
     // Redirect to settings page with success message
-    res.redirect('/app/settings?tab=integrations&pco=connected');
+    res.redirect('/app/settings?tab=integrations&pco_success=true');
   } catch (error) {
     console.error('Planning Center OAuth callback error:', error);
     res.status(500).send('OAuth callback failed');
@@ -1869,6 +1869,173 @@ router.post('/planning-center/disconnect', async (req, res) => {
 });
 
 // Import people from Planning Center
+// Browse people from Planning Center (without importing)
+router.get('/planning-center/people', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
+
+    const tokens = await getPlanningCenterTokens(userId, churchId);
+
+    if (!tokens || !tokens.access_token) {
+      return res.status(400).json({ error: 'Planning Center not connected.' });
+    }
+
+    // Fetch all people from Planning Center
+    let allPeople = [];
+    let nextUrl = 'https://api.planningcenteronline.com/people/v2/people?per_page=100';
+
+    while (nextUrl) {
+      const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
+
+      if (response.status !== 200) {
+        throw new Error('Failed to fetch people from Planning Center');
+      }
+
+      const data = response.data;
+      allPeople = allPeople.concat(data.data || []);
+      nextUrl = data.links?.next || null;
+    }
+
+    // Group people by household
+    const households = {};
+    for (const person of allPeople) {
+      const householdId = person.relationships?.household?.data?.id || `individual_${person.id}`;
+
+      if (!households[householdId]) {
+        households[householdId] = [];
+      }
+      households[householdId].push(person);
+    }
+
+    // Format response
+    const families = Object.entries(households).map(([householdId, members]) => {
+      const lastNames = [...new Set(members.map(m => m.attributes.last_name).filter(Boolean))];
+      const familyName = lastNames.length === 1
+        ? `${lastNames[0]} Family`
+        : lastNames.length === 2
+        ? `${lastNames[0]} & ${lastNames[1]}`
+        : lastNames.length > 0
+        ? `${lastNames[0]} Family`
+        : 'Unknown Family';
+
+      return {
+        householdId,
+        familyName,
+        members: members.map(m => ({
+          id: m.id,
+          firstName: m.attributes.first_name || '',
+          lastName: m.attributes.last_name || '',
+          email: m.attributes.emails?.[0] || null,
+          phone: m.attributes.phone_numbers?.[0] || null,
+          birthdate: m.attributes.birthdate || null,
+          child: m.attributes.child || false,
+          status: m.attributes.status || null,
+          avatar: m.attributes.avatar || null,
+        }))
+      };
+    });
+
+    res.json({
+      success: true,
+      totalPeople: allPeople.length,
+      totalFamilies: families.length,
+      families
+    });
+  } catch (error) {
+    console.error('Browse Planning Center people error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch people from Planning Center.',
+      details: error.message
+    });
+  }
+});
+
+// Browse check-ins from Planning Center (without importing)
+router.get('/planning-center/checkins', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
+    const { startDate, endDate } = req.query;
+
+    const tokens = await getPlanningCenterTokens(userId, churchId);
+
+    if (!tokens || !tokens.access_token) {
+      return res.status(400).json({ error: 'Planning Center not connected.' });
+    }
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Start date and end date are required.' });
+    }
+
+    let url = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
+      `filter=checked_in_at&where[checked_in_at][gte]=${startDate}&where[checked_in_at][lte]=${endDate}&` +
+      `per_page=100&include=event,person`;
+
+    let allCheckIns = [];
+    let included = [];
+    let nextUrl = url;
+
+    while (nextUrl) {
+      const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
+
+      if (response.status !== 200) {
+        throw new Error('Failed to fetch check-ins from Planning Center');
+      }
+
+      const data = response.data;
+      allCheckIns = allCheckIns.concat(data.data || []);
+      included = included.concat(data.included || []);
+      nextUrl = data.links?.next || null;
+    }
+
+    // Build lookup maps for included resources
+    const people = {};
+    const events = {};
+    for (const item of included) {
+      if (item.type === 'Person') {
+        people[item.id] = {
+          id: item.id,
+          name: item.attributes.name || `${item.attributes.first_name || ''} ${item.attributes.last_name || ''}`.trim(),
+        };
+      } else if (item.type === 'Event') {
+        events[item.id] = {
+          id: item.id,
+          name: item.attributes.name || 'Unknown Event',
+        };
+      }
+    }
+
+    // Format check-ins
+    const checkIns = allCheckIns.map(ci => {
+      const personId = ci.relationships?.person?.data?.id;
+      const eventId = ci.relationships?.event?.data?.id;
+
+      return {
+        id: ci.id,
+        checkedInAt: ci.attributes.checked_in_at,
+        kind: ci.attributes.kind,
+        person: personId ? people[personId] : null,
+        event: eventId ? events[eventId] : null,
+      };
+    });
+
+    res.json({
+      success: true,
+      totalCheckIns: checkIns.length,
+      checkIns
+    });
+  } catch (error) {
+    console.error('Browse Planning Center check-ins error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch check-ins from Planning Center.',
+      details: error.message
+    });
+  }
+});
+
 router.post('/planning-center/import-people', async (req, res) => {
   try {
     const userId = req.user.id;

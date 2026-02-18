@@ -5,7 +5,7 @@ import { useKiosk } from '../contexts/KioskContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
-import { integrationsAPI, aiAPI, gatheringsAPI } from '../services/api';
+import { aiAPI, gatheringsAPI } from '../services/api';
 import logger from '../utils/logger';
 import {
   Bars3Icon,
@@ -28,7 +28,6 @@ import {
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [elvantoConnected, setElvantoConnected] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
   const [kioskAvailable, setKioskAvailable] = useState(false);
   const { user, logout } = useAuth();
@@ -39,38 +38,6 @@ const Layout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const notificationsRef = useRef<HTMLDivElement>(null);
-
-  // Load Elvanto connection status from cache immediately, then fetch from API
-  useEffect(() => {
-    if (user?.role !== 'admin') {
-      setElvantoConnected(false);
-      return;
-    }
-
-    // Load from cache immediately to prevent flash
-    const cachedStatus = localStorage.getItem('elvanto_connected');
-    if (cachedStatus !== null) {
-      setElvantoConnected(cachedStatus === 'true');
-    }
-
-    // Fetch fresh status from API in the background
-    const fetchElvantoStatus = async () => {
-      try {
-        const response = await integrationsAPI.getElvantoStatus();
-        const connected = response.data.connected === true;
-        setElvantoConnected(connected);
-        // Update cache
-        localStorage.setItem('elvanto_connected', connected.toString());
-      } catch (error) {
-        logger.error('Failed to fetch Elvanto status:', error);
-        const connected = false;
-        setElvantoConnected(connected);
-        localStorage.setItem('elvanto_connected', connected.toString());
-      }
-    };
-
-    fetchElvantoStatus();
-  }, [user?.role]);
 
   // Load AI configuration status
   useEffect(() => {
@@ -148,8 +115,8 @@ const Layout: React.FC = () => {
     ...(kioskAvailable ? [
       { name: 'Kiosk', href: '/app/kiosk', icon: ComputerDesktopIcon }
     ] : []),
-    ...(user?.role === 'admin' && elvantoConnected ? [
-      { name: 'Import from Elvanto', href: '/app/elvanto-import', icon: ArrowDownTrayIcon }
+    ...(user?.role === 'admin' ? [
+      { name: 'Import', href: '/app/import', icon: ArrowDownTrayIcon }
     ] : []),
     { name: 'Settings', href: '/app/settings', icon: PencilIcon },
   ];

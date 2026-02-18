@@ -764,6 +764,9 @@ export const integrationsAPI = {
   getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
   authorizePlanningCenter: () => api.get('/integrations/planning-center/authorize'),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
+  getPlanningCenterPeople: () => api.get('/integrations/planning-center/people'),
+  getPlanningCenterCheckins: (params: { startDate: string; endDate: string }) =>
+    api.get('/integrations/planning-center/checkins', { params }),
   importPeopleFromPlanningCenter: () => api.post('/integrations/planning-center/import-people'),
   importCheckinsFromPlanningCenter: (data: { startDate: string; endDate: string; eventId?: string }) =>
     api.post('/integrations/planning-center/import-checkins', data),
