@@ -1013,6 +1013,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           i.first_name,
           i.last_name,
           i.last_attendance_date,
+          i.created_at as individual_created_at,
           COALESCE(ar.people_type_at_time, i.people_type) as people_type,
           f.id as family_id,
           f.family_name,
@@ -1050,7 +1051,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             members: []
           };
         }
-
+        
         familyGroups[familyId].members.push({
           id: individual.id,
           name: `${individual.first_name} ${individual.last_name}`,
@@ -1058,6 +1059,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           lastName: individual.last_name,
           present: individual.present === 1 || individual.present === true,
           lastAttendanceDate: individual.last_attendance_date,
+          createdAt: individual.individual_created_at,
           peopleType: individual.people_type,
           notes: null
         });
@@ -1083,7 +1085,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             familyName: family.familyName,
             present: member.present,
             peopleType: member.peopleType,
-            lastAttendanceDate: member.lastAttendanceDate
+            lastAttendanceDate: member.lastAttendanceDate,
+            createdAt: member.createdAt
           };
         })
       );
@@ -1091,14 +1094,17 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       // Apply service-limit filtering
       visitors = allVisitors.filter(visitor => {
         if (visitor.present) return true;
-        if (!visitor.lastAttendanceDate) return true;
+
+        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
+        const effectiveDate = visitor.lastAttendanceDate || visitor.createdAt;
+        if (!effectiveDate) return true;
 
         const relevantServiceDates = visitor.peopleType === 'local_visitor' ?
           localServiceDates : travellerServiceDates;
 
-        const lastAttendanceDate = new Date(visitor.lastAttendanceDate);
-        lastAttendanceDate.setHours(0, 0, 0, 0);
-        const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
+        const parsedDate = new Date(effectiveDate);
+        parsedDate.setHours(0, 0, 0, 0);
+        const effectiveDateStr = parsedDate.toISOString().split('T')[0];
 
         if (relevantServiceDates.length === 0) return false;
 
@@ -1106,7 +1112,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
 
         const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-        return lastAttendedStr >= oldestServiceDateStr;
+        return effectiveDateStr >= oldestServiceDateStr;
       });
     }
 
@@ -1188,6 +1194,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         i.last_name,
         i.people_type,
         i.last_attendance_date,
+        i.created_at as individual_created_at,
         f.id as family_id,
         f.family_name,
         f.family_notes,
@@ -1210,14 +1217,16 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
     // Filter potential visitors by service dates
     const filteredPotentialVisitors = potentialVisitors.filter(visitor => {
-      if (!visitor.last_attendance_date) return true;
+      // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
+      const effectiveDate = visitor.last_attendance_date || visitor.individual_created_at;
+      if (!effectiveDate) return true;
 
       const relevantServiceDates = visitor.people_type === 'local_visitor' ?
         localServiceDates : travellerServiceDates;
 
-      const lastAttendanceDate = new Date(visitor.last_attendance_date);
-      lastAttendanceDate.setHours(0, 0, 0, 0);
-      const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
+      const parsedDate = new Date(effectiveDate);
+      parsedDate.setHours(0, 0, 0, 0);
+      const effectiveDateStr = parsedDate.toISOString().split('T')[0];
 
       if (relevantServiceDates.length === 0) return false;
 
@@ -1225,7 +1234,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
 
       const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-      return lastAttendedStr >= oldestServiceDateStr;
+      return effectiveDateStr >= oldestServiceDateStr;
     });
 
     // Format and return combined response
@@ -1306,6 +1315,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           i.first_name,
           i.last_name,
           i.last_attendance_date,
+          i.created_at as individual_created_at,
           COALESCE(ar.people_type_at_time, i.people_type) as people_type,
           f.id as family_id,
           f.family_name,
@@ -1348,8 +1358,9 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           lastName: individual.last_name,
           present: individual.present === 1 || individual.present === true,
           lastAttendanceDate: individual.last_attendance_date,
+          createdAt: individual.individual_created_at,
           peopleType: individual.people_type,
-          notes: null // Notes are not stored in attendance_records in current schema
+          notes: null
         });
       });
 
@@ -1374,37 +1385,34 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             familyName: family.familyName,
             present: member.present,
             peopleType: member.peopleType,
-            lastAttendanceDate: member.lastAttendanceDate
+            lastAttendanceDate: member.lastAttendanceDate,
+            createdAt: member.createdAt
           };
         })
       );
       
-      // Apply service-limit filtering to visitors array (same logic as potentialVisitors)
+      // Apply service-limit filtering to visitors array
       visitors = allVisitors.filter(visitor => {
-        // Always show visitors who are marked present on this date
         if (visitor.present) return true;
         
-        // For visitors not marked present, apply service-limit filtering
-        if (!visitor.lastAttendanceDate) return true; // Include visitors who have never attended
+        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
+        const effectiveDate = visitor.lastAttendanceDate || visitor.createdAt;
+        if (!effectiveDate) return true;
         
         const relevantServiceDates = visitor.peopleType === 'local_visitor' ? 
           localServiceDates : travellerServiceDates;
         
-        // Check if visitor's last attendance was within the relevant service dates
-        const lastAttendanceDate = new Date(visitor.lastAttendanceDate);
-        lastAttendanceDate.setHours(0, 0, 0, 0);
-        const lastAttendedStr = lastAttendanceDate.toISOString().split('T')[0];
+        const parsedDate = new Date(effectiveDate);
+        parsedDate.setHours(0, 0, 0, 0);
+        const effectiveDateStr = parsedDate.toISOString().split('T')[0];
         
-        // Check if visitor's last attendance is within the time window (on or after the oldest service date)
-        // This checks if they attended within the last N services relative to the viewed date
         if (relevantServiceDates.length === 0) return false;
         
-        // Get the oldest service date (last in the array since they're ordered DESC)
         const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
         if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
         
         const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-        return lastAttendedStr >= oldestServiceDateStr;
+        return effectiveDateStr >= oldestServiceDateStr;
       });
     }
 
@@ -1507,6 +1515,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         f.id as visitor_family_group,
         f.family_notes as notes,
         i.last_attendance_date as last_attended,
+        i.created_at as individual_created_at,
         f.family_name,
         f.id as family_id,
         i.id,
@@ -1556,30 +1565,19 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           return false;
         }
         
-        // For active visitors: apply normal service date filtering
-        if (!visitor.last_attended) return true; // Include visitors who have never attended
+        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
+        const effectiveDate = visitor.last_attended || visitor.individual_created_at;
+        if (!effectiveDate) return true;
         
         // Use historical people_type if available, otherwise use current type
         const historicalPeopleType = visitor.people_type || (hasPeopleTypeAtTime ? null : 'regular');
         const relevantServiceDates = historicalPeopleType === 'local_visitor' ? 
           localServiceDates : travellerServiceDates;
         
-        // Check if visitor's last attendance was within the relevant service dates
-        const lastAttendedStr = visitor.last_attended.toISOString().split('T')[0];
-        
-        // Debug logging for specific families
-        if (visitor.name && (visitor.name.includes('REMMINGA') || visitor.name.includes('JARVELA') || visitor.name.includes('Vanderschoor'))) {
-          console.log('🔍 Visitor filtering debug:', {
-            name: visitor.name,
-            people_type: visitor.people_type,
-            last_attended: lastAttendedStr,
-            relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
-            shouldAppear: relevantServiceDates.some(serviceDate => {
-              const serviceDateStr = serviceDate.session_date ? serviceDate.session_date.toISOString().split('T')[0] : 'undefined';
-              return lastAttendedStr >= serviceDateStr;
-            })
-          });
-        }
+        // Check if effective date is within the relevant service dates
+        const parsedEffective = new Date(effectiveDate);
+        parsedEffective.setHours(0, 0, 0, 0);
+        const effectiveDateStr = parsedEffective.toISOString().split('T')[0];
         
         // Check if visitor's last attendance is within the time window (on or after the oldest service date)
         if (relevantServiceDates.length === 0) return false;
@@ -1589,7 +1587,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
         
         const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-        return lastAttendedStr >= oldestServiceDateStr;
+        return effectiveDateStr >= oldestServiceDateStr;
       });
 
     // Use systematic conversion utility to handle BigInt and snake_case to camelCase conversion

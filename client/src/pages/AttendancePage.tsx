@@ -1949,7 +1949,7 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // Convert visitor data to form format
+    // Convert visitor data to form format, preserving isChild from DB
     const persons = familyGroup.members.map((member: any) => {
       const nameParts = member.name.trim().split(' ');
       const firstName = nameParts[0] || '';
@@ -1958,7 +1958,8 @@ const AttendancePage: React.FC = () => {
       return {
         firstName,
         lastName,
-        fillLastNameFromAbove: false
+        fillLastNameFromAbove: false,
+        isChild: Boolean(member.isChild)
       };
     });
 
@@ -2105,15 +2106,15 @@ const AttendancePage: React.FC = () => {
         const editFamilyId = Number(editingVisitorData.familyId);
         const familyMembers = allIndividuals.filter((ind: any) => Number(ind.familyId) === editFamilyId);
         
-        // Update each existing family member's people_type and names
+        // Update each existing family member's people_type, names, and isChild
         const updatePromises = familyMembers.map(async (member: any, index: number) => {
-          // If there's a corresponding form entry, update with form data
           const formPerson = people[index];
           return individualsAPI.update(member.id, {
             firstName: formPerson ? formPerson.firstName : member.firstName,
             lastName: formPerson ? formPerson.lastName : member.lastName,
             familyId: editingVisitorData.familyId,
-            peopleType: personType
+            peopleType: personType,
+            isChild: formPerson ? formPerson.isChild : Boolean(member.isChild)
           });
         });
         
@@ -2130,7 +2131,8 @@ const AttendancePage: React.FC = () => {
               firstName: person.firstName,
               lastName: person.lastName,
               familyId: editingVisitorData.familyId,
-              peopleType: personType
+              peopleType: personType,
+              isChild: person.isChild
             });
           });
           
@@ -4076,6 +4078,19 @@ const AttendancePage: React.FC = () => {
                           placeholder="First name"
                           required
                         />
+                        {/* Child checkbox - directly below first name */}
+                        <div className="flex items-center mt-1">
+                          <input
+                            id={`inlineVisitorIsChild-${index}`}
+                            type="checkbox"
+                            checked={person.isChild || false}
+                            onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor={`inlineVisitorIsChild-${index}`} className="ml-2 block text-sm text-gray-900">
+                            Child
+                          </label>
+                        </div>
                       </div>
                       <div className="relative">
                         <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700">
@@ -4090,23 +4105,21 @@ const AttendancePage: React.FC = () => {
                           className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
                           placeholder="Last name (optional)"
                         />
-                        <div className="flex flex-col space-y-1 mt-1">
-                          {/* For person 2+: Fill from above checkbox */}
-                          {index > 0 && (
-                            <div className="flex items-center">
-                              <input
-                                id={`personFillLastName-${index}`}
-                                type="checkbox"
-                                checked={person.fillLastNameFromAbove}
-                                onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
-                                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                              />
-                              <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
-                                Fill from above
-                              </label>
-                            </div>
-                          )}
-                        </div>
+                        {/* For person 2+: Fill from above checkbox */}
+                        {index > 0 && (
+                          <div className="flex items-center mt-1">
+                            <input
+                              id={`personFillLastName-${index}`}
+                              type="checkbox"
+                              checked={person.fillLastNameFromAbove}
+                              onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                              Fill from above
+                            </label>
+                          </div>
+                        )}
                         {index > 0 && (
                           <button
                             type="button"
@@ -4116,19 +4129,6 @@ const AttendancePage: React.FC = () => {
                             Remove
                           </button>
                         )}
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="flex items-center">
-                          <input
-                            id={`inlineVisitorIsChild-${index}`}
-                            type="checkbox"
-                            checked={person.isChild || false}
-                            onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                          />
-                          <span className="ml-2 text-sm text-gray-700">Child</span>
-                          <span className="ml-1 text-xs text-gray-400">(excluded from family name)</span>
-                        </label>
                       </div>
                     </div>
                   ))}

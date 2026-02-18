@@ -905,7 +905,6 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                         />
                         <span className="ml-2 text-sm text-gray-700">Child</span>
-                        <span className="ml-1 text-xs text-gray-400">(excluded from family name)</span>
                       </label>
                     </div>
                   </div>
