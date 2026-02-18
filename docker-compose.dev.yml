@@ -146,6 +146,21 @@ services:
     networks:
       - app-network-dev
 
+  # Cloudflare Tunnel - exposes local dev to dev.letmypeoplegrow.com.au
+  # Requires CLOUDFLARETUNNEL_TOKEN in client/.env
+  # Shares network with nginx so localhost:80 reaches nginx
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    network_mode: "service:nginx"
+    restart: unless-stopped
+    env_file:
+      - ./client/.env
+    command: ["sh", "-c", "cloudflared tunnel run --token $${CLOUDFLARETUNNEL_TOKEN}"]
+    depends_on:
+      - nginx
+    profiles:
+      - tunnel
+
   # phpMyAdmin (Development)
   phpmyadmin:
     image: phpmyadmin:latest

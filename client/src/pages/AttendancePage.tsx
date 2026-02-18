@@ -58,6 +58,7 @@ const AttendancePage: React.FC = () => {
   const [attendanceList, setAttendanceList] = useState<Individual[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [headcountValue, setHeadcountValue] = useState<number>(0);
+  const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -691,11 +692,8 @@ const AttendancePage: React.FC = () => {
       return dates.sort((a, b) => b.localeCompare(a)); // Sort newest first
     }
 
-    // Handle standard gatherings with dayOfWeek
-    // Skip if this is a headcount gathering (should have been handled above)
-    if (selectedGathering.attendanceType === 'headcount') {
-      return [];
-    }
+    // Headcount gatherings without a customSchedule fall through to standard
+    // dayOfWeek-based date generation below (they use the same weekly pattern).
 
     const dayMap: { [key: string]: number } = {
       'Sunday': 0,
@@ -3470,10 +3468,10 @@ const AttendancePage: React.FC = () => {
       {selectedGathering && validDates.length > 0 && (
         <>
           {selectedGathering.attendanceType === 'headcount' ? (
-            <div className="bg-white shadow rounded-lg">
+            <div className="bg-white shadow rounded-lg overflow-visible">
               <div className="px-4 py-5 sm:p-6">
-                {/* Navigation Section - At the very top */}
-                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100 -mt-6 -mx-6 px-6 rounded-t-lg">
+                {/* Navigation Section */}
+                <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100">
                   <div className="flex items-center space-x-4">
                     <button
                       onClick={navigateToPreviousDate}
@@ -3515,19 +3513,15 @@ const AttendancePage: React.FC = () => {
                     Headcount - {selectedGathering.name}
                   </h3>
                   
-                  <div className="flex items-center space-x-2">
-                    {/* Connection Status Indicator */}
-                    <div
-                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getConnectionStatusStyle().containerClass}`}
-                      title={getConnectionStatusStyle().tooltip}
-                    >
-                      <div className={`w-2 h-2 rounded-full mr-1.5 ${getConnectionStatusStyle().dotClass}`}></div>
-                      {getConnectionStatusStyle().label}
-                    </div>
-
-                    {/* Active Users Indicator */}
-                    <ActiveUsersIndicator activeUsers={[]} />
-                  </div>
+                  <button
+                    onClick={() => setHeadcountFullscreen(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                    </svg>
+                    Fullscreen
+                  </button>
                 </div>
                 
                 <HeadcountAttendanceInterface
@@ -3535,6 +3529,8 @@ const AttendancePage: React.FC = () => {
                   date={selectedDate}
                   gatheringName={selectedGathering.name}
                   onHeadcountChange={setHeadcountValue}
+                  isFullscreen={headcountFullscreen}
+                  onExitFullscreen={() => setHeadcountFullscreen(false)}
                   socket={socket}
                   isConnected={isWebSocketConnected}
                   sendHeadcountUpdate={sendHeadcountUpdate}
