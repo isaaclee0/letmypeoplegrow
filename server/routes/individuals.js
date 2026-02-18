@@ -158,6 +158,7 @@ router.get('/', async (req, res) => {
         i.first_name,
         i.last_name,
         i.people_type,
+        i.is_child,
         i.family_id,
         f.family_name,
         i.is_active,
@@ -177,6 +178,7 @@ router.get('/', async (req, res) => {
     const processedIndividuals = individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
+      isChild: Boolean(individual.is_child),
       peopleType: individual.people_type,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
@@ -202,6 +204,7 @@ router.get('/archived', async (req, res) => {
         i.first_name,
         i.last_name,
         i.people_type,
+        i.is_child,
         i.family_id,
         f.family_name,
         i.is_active,
@@ -220,6 +223,7 @@ router.get('/archived', async (req, res) => {
     const processedIndividuals = individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
+      isChild: Boolean(individual.is_child),
       peopleType: individual.people_type,
       gatheringAssignments: individual.gathering_ids ? 
         individual.gathering_ids.split(',').map((id, index) => ({
@@ -239,12 +243,12 @@ router.get('/archived', async (req, res) => {
 // Create individual (Admin/Coordinator)
 router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVIDUAL'), async (req, res) => {
   try {
-    const { firstName, lastName, familyId } = req.body;
+    const { firstName, lastName, familyId, isChild } = req.body;
     
     const result = await Database.query(`
-      INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
-      VALUES (?, ?, ?, ?, ?)
-    `, [firstName, lastName, familyId || null, req.user.id, req.user.church_id]);
+      INSERT INTO individuals (first_name, last_name, family_id, is_child, created_by, church_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [firstName, lastName, familyId || null, isChild ? true : false, req.user.id, req.user.church_id]);
 
     res.status(201).json({ 
       message: 'Individual created successfully',
@@ -284,9 +288,9 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, familyId, peopleType } = req.body;
+    const { firstName, lastName, familyId, peopleType, isChild } = req.body;
 
-    console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType });
+    console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType, isChild });
 
     // Get current family_id before update (to sync old family if familyId is changing)
     const currentIndividual = await Database.query(
@@ -314,6 +318,11 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     if (peopleType && ['regular', 'local_visitor', 'traveller_visitor'].includes(peopleType)) {
       fields.push('people_type = ?');
       values.push(peopleType);
+    }
+
+    if (isChild !== undefined) {
+      fields.push('is_child = ?');
+      values.push(isChild ? true : false);
     }
 
     values.push(id, req.user.church_id);

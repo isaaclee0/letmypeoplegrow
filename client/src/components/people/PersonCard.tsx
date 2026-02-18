@@ -5,6 +5,7 @@ interface Person {
   firstName: string;
   lastName: string;
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
+  isChild?: boolean;
   familyId?: number;
   familyName?: string;
   gatheringAssignments?: Array<{
@@ -67,6 +68,11 @@ const PersonCard: React.FC<PersonCardProps> = ({
                 <span className="text-sm font-medium text-gray-900 truncate">
                   {displayName}
                 </span>
+                {person.isChild && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 flex-shrink-0">
+                    Child
+                  </span>
+                )}
                 {AttendanceInfoButton && (
                   <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                 )}
@@ -89,6 +95,11 @@ const PersonCard: React.FC<PersonCardProps> = ({
           ) : (
             <>
               <span className="text-sm font-medium text-gray-900">{displayName}</span>
+              {person.isChild && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 flex-shrink-0">
+                  Child
+                </span>
+              )}
               {standardGatherings.length > 0 && (
                 <div className="flex items-center space-x-1">
                   {standardGatherings.map(gathering => (

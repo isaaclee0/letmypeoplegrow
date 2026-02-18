@@ -659,6 +659,7 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
+              i.is_child as isChild,
               i.last_attendance_date as lastAttendanceDate,
               ${peopleTypeExpression},
               f.family_name as familyName,
@@ -694,6 +695,7 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
+              i.is_child as isChild,
               i.last_attendance_date as lastAttendanceDate,
               ${peopleTypeExpression},
               f.family_name as familyName,
@@ -742,6 +744,7 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
+              i.is_child as isChild,
               i.last_attendance_date as lastAttendanceDate,
               ${visitorPeopleTypeExpression},
               f.family_name as familyName,
@@ -772,6 +775,7 @@ class WebSocketService {
               i.id,
               i.first_name as firstName,
               i.last_name as lastName,
+              i.is_child as isChild,
               i.last_attendance_date as lastAttendanceDate,
               ${visitorPeopleTypeExpression},
               f.family_name as familyName,
@@ -839,6 +843,7 @@ class WebSocketService {
             name: `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
             firstName: v.firstName,
             lastName: v.lastName,
+            isChild: Boolean(v.isChild),
             present: v.present === 1 || v.present === true,
             lastAttendanceDate: v.lastAttendanceDate,
             peopleType: v.people_type,
@@ -872,9 +877,18 @@ class WebSocketService {
           return lastDateStr >= oldestDateStr;
         });
 
+        // Convert isChild from DB 0/1 to boolean
+        const processedAttendanceList = (attendanceList || []).map(a => ({
+          ...a,
+          id: Number(a.id),
+          familyId: a.familyId ? Number(a.familyId) : null,
+          isChild: Boolean(a.isChild),
+          present: a.present === 1 || a.present === true
+        }));
+
         // Send successful response
         socket.emit('load_attendance_success', {
-          attendanceList: attendanceList || [],
+          attendanceList: processedAttendanceList,
           visitors: visitors,
           gatheringId,
           date,

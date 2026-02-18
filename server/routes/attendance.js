@@ -1117,7 +1117,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       : `i.people_type`;
 
     let attendanceListQuery = `
-      SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
+      SELECT i.id, i.first_name, i.last_name, i.is_child, f.family_name, f.id as family_id,
              COALESCE(ar.present, false) as present,
              ${peopleTypeExpression},
              f.family_type AS familyType,
@@ -1233,6 +1233,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
+        isChild: Boolean(attendee.is_child),
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
       })),
@@ -1417,7 +1418,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       : `i.people_type`;
     
     let attendanceListQuery = `
-      SELECT i.id, i.first_name, i.last_name, f.family_name, f.id as family_id,
+      SELECT i.id, i.first_name, i.last_name, i.is_child, f.family_name, f.id as family_id,
              COALESCE(ar.present, false) as present,
              ${peopleTypeExpression},
              f.family_type AS familyType,
@@ -1596,6 +1597,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
+        isChild: Boolean(attendee.is_child),
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
       })),
@@ -2111,9 +2113,9 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
         if (existingIndividual.length === 0) {
           // Create new individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, people_type, created_by, church_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `, [firstName, lastName, familyId, visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor', req.user.id, req.user.church_id]);
+            INSERT INTO individuals (first_name, last_name, family_id, is_child, people_type, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `, [firstName, lastName, familyId, isChild ? true : false, visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor', req.user.id, req.user.church_id]);
 
           individualId = Number(individualResult.insertId);
         } else {
@@ -2341,8 +2343,8 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
 
         // Create or reuse individual as a visitor type
         const individualResult = await conn.query(
-          'INSERT INTO individuals (first_name, last_name, family_id, people_type, created_by, church_id) VALUES (?, ?, ?, ?, ?, ?)',
-          [firstName, lastName, familyId, visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor', req.user.id, req.user.church_id]
+          'INSERT INTO individuals (first_name, last_name, family_id, is_child, people_type, created_by, church_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [firstName, lastName, familyId, isChild ? true : false, visitorType === 'potential_regular' ? 'local_visitor' : 'traveller_visitor', req.user.id, req.user.church_id]
         );
         const individualId = Number(individualResult.insertId);
 

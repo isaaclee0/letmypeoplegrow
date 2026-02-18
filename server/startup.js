@@ -141,6 +141,18 @@ async function initializeDatabase() {
       console.warn('⚠️  Could not ensure gathering_types.kiosk_message column:', e.message);
     }
 
+    // Ensure is_child column exists in individuals
+    try {
+      const isChildCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'is_child'");
+      if (isChildCol.length === 0) {
+        console.log('🛠️  Adding individuals.is_child column');
+        await Database.query('ALTER TABLE individuals ADD COLUMN is_child BOOLEAN DEFAULT false AFTER family_id');
+        console.log('✅ individuals.is_child added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure individuals.is_child column:', e.message);
+    }
+
     // Ensure AI chat tables exist (needed for AI Insights chat history)
     try {
       const chatTables = await Database.query("SHOW TABLES LIKE 'ai_chat_conversations'");

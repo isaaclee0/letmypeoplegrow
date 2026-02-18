@@ -169,9 +169,9 @@ router.post('/upload/:gatheringId',
 
           // Create individual
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
-            VALUES (?, ?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
+            INSERT INTO individuals (first_name, last_name, family_id, is_child, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, false, req.user.id, req.user.church_id]);
 
           // Add to gathering list
           await conn.query(`
@@ -227,22 +227,20 @@ router.get('/template', verifyToken, async (req, res) => {
     const gatheringNames = gatherings.map(g => g.name);
     
     // Generate template content with actual gatherings
-    let tsvContent = 'FIRST NAME\tLAST NAME\tFAMILY NAME\tGATHERINGS\n';
+    let tsvContent = 'FIRST NAME\tLAST NAME\tFAMILY NAME\tGATHERINGS\tADULT/CHILD\n';
     
     if (gatheringNames.length > 0) {
-      // Create example rows with actual gathering names
       const exampleGatherings1 = gatheringNames.slice(0, 2).join(', ');
       const exampleGatherings2 = gatheringNames[0] || 'Sunday Service';
       const exampleGatherings3 = gatheringNames.length > 1 ? gatheringNames[1] : gatheringNames[0] || 'Bible Study';
       
-      tsvContent += `John\tSmith\tSmith, John and Jane\t${exampleGatherings1}\n`;
-      tsvContent += `Jane\tSmith\tSmith, John and Jane\t${exampleGatherings2}\n`;
-      tsvContent += `Michael\tJohnson\tJohnson, Michael\t${exampleGatherings3}`;
+      tsvContent += `John\tSmith\tSmith, John and Jane\t${exampleGatherings1}\tAdult\n`;
+      tsvContent += `Jane\tSmith\tSmith, John and Jane\t${exampleGatherings2}\tAdult\n`;
+      tsvContent += `Michael\tJohnson\tJohnson, Michael\t${exampleGatherings3}\tChild`;
     } else {
-      // Fallback if no gatherings exist
-      tsvContent += 'John\tSmith\tSmith, John and Jane\tSunday Service, Bible Study\n';
-      tsvContent += 'Jane\tSmith\tSmith, John and Jane\tSunday Service\n';
-      tsvContent += 'Michael\tJohnson\tJohnson, Michael\tBible Study';
+      tsvContent += 'John\tSmith\tSmith, John and Jane\tSunday Service, Bible Study\tAdult\n';
+      tsvContent += 'Jane\tSmith\tSmith, John and Jane\tSunday Service\tAdult\n';
+      tsvContent += 'Michael\tJohnson\tJohnson, Michael\tBible Study\tChild';
     }
     
     res.setHeader('Content-Type', 'text/tab-separated-values');
@@ -344,19 +342,22 @@ router.post('/copy-paste/:gatheringId?',
           const lastName = cleanColumns[1];
           const familyName = cleanColumns[2] || '';
           const gatherings = cleanColumns[3] || '';
+          const adultChild = cleanColumns[4] || '';
           
           // Ensure any remaining quotes are stripped
           const cleanFamilyName = familyName.replace(/^["']+|["']+$/g, '').trim();
           const cleanGatherings = gatherings.replace(/^["']+|["']+$/g, '').trim();
+          const cleanAdultChild = adultChild.replace(/^["']+|["']+$/g, '').trim().toLowerCase();
           
-          console.log('Parsed row:', { firstName, lastName, familyName: cleanFamilyName, gatherings: cleanGatherings });
+          console.log('Parsed row:', { firstName, lastName, familyName: cleanFamilyName, gatherings: cleanGatherings, adultChild: cleanAdultChild });
           
           if (firstName && lastName) {
             results.push({
               'FIRST NAME': firstName,
               'LAST NAME': lastName,
               'FAMILY NAME': cleanFamilyName,
-              'GATHERINGS': cleanGatherings
+              'GATHERINGS': cleanGatherings,
+              'IS_CHILD': cleanAdultChild === 'child' || cleanAdultChild === 'yes' || cleanAdultChild === 'true' || cleanAdultChild === 'y'
             });
           } else {
             console.log('Skipping row - missing first or last name');
@@ -467,10 +468,11 @@ router.post('/copy-paste/:gatheringId?',
           }
 
           // Create individual
+          const isChild = row['IS_CHILD'] || false;
           const individualResult = await conn.query(`
-            INSERT INTO individuals (first_name, last_name, family_id, created_by, church_id)
-            VALUES (?, ?, ?, ?, ?)
-          `, [firstName.trim(), lastName.trim(), familyId, req.user.id, req.user.church_id]);
+            INSERT INTO individuals (first_name, last_name, family_id, is_child, created_by, church_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [firstName.trim(), lastName.trim(), familyId, isChild ? true : false, req.user.id, req.user.church_id]);
 
           // Add to gathering list if gatheringId provided (legacy support)
           if (gatheringId) {
@@ -910,6 +912,9 @@ router.post('/update-existing',
         const lastName = cleanColumns[1];
         const familyName = cleanColumns[2];
         const gatherings = cleanColumns[3];
+        const adultChild = (cleanColumns[4] || '').trim().toLowerCase();
+        const hasChildColumn = cleanColumns.length >= 5 && cleanColumns[4] !== undefined && cleanColumns[4].trim() !== '';
+        const isChild = adultChild === 'child' || adultChild === 'yes' || adultChild === 'true' || adultChild === 'y';
         
         if (!firstName || !lastName) {
           console.log(`Line ${i + 1} missing first or last name:`, { firstName, lastName });
@@ -1013,7 +1018,7 @@ router.post('/update-existing',
           continue;
         }
         
-        // Update gathering assignments
+        // Update gathering assignments and optionally is_child
         await Database.transaction(async (conn) => {
           // Remove existing assignments
           await conn.query(`
@@ -1027,6 +1032,14 @@ router.post('/update-existing',
               INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
               VALUES (?, ?, ?, ?)
             `, [gatheringId, individual.id, req.user.id, req.user.church_id]);
+          }
+
+          // Update is_child if the column was provided in the TSV
+          if (hasChildColumn) {
+            await conn.query(
+              'UPDATE individuals SET is_child = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+              [isChild ? true : false, individual.id, req.user.church_id]
+            );
           }
         });
         

@@ -10,6 +10,7 @@ interface PersonForm {
   lastName: string;
   lastNameUnknown: boolean;
   fillLastNameFromAbove: boolean;
+  isChild: boolean;
 }
 
 interface AddPeopleFormState {
@@ -64,7 +65,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       firstName: '',
       lastName: '',
       lastNameUnknown: false,
-      fillLastNameFromAbove: false
+      fillLastNameFromAbove: false,
+      isChild: false
     }],
     selectedGatherings: {}
   });
@@ -371,7 +373,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
     };
   }, [isOpen]);
 
-  // Memoized family name computation
+  // Memoized family name computation using utility that excludes children
   const computedFamilyName = useMemo(() => {
     const validMembers = addPeopleForm.persons.filter(member =>
       member.firstName.trim() &&
@@ -382,34 +384,22 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       return '';
     }
 
-    if (validMembers.length === 1) {
-      const lastName = validMembers[0].lastNameUnknown ? 'Unknown' : validMembers[0].lastName;
-      return `${lastName}, ${validMembers[0].firstName}`;
-    }
-
-    const surname = validMembers[0].lastNameUnknown ? 'Unknown' : validMembers[0].lastName;
-    const firstNames = validMembers.slice(0, 2).map(member => member.firstName);
-
-    try {
-      const listFormatter = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' });
-      const formattedNames = listFormatter.format(firstNames);
-      return `${surname}, ${formattedNames}`;
-    } catch (error) {
-      if (firstNames.length === 1) {
-        return `${surname}, ${firstNames[0]}`;
-      } else {
-        return `${surname}, ${firstNames[0]} and ${firstNames[1]}`;
-      }
-    }
+    return generateFamilyName(validMembers.map(member => ({
+      firstName: member.firstName.trim(),
+      lastName: member.lastNameUnknown ? '' : member.lastName.trim(),
+      lastUnknown: member.lastNameUnknown,
+      isChild: member.isChild
+    })));
   }, [addPeopleForm.persons]);
 
   const addPerson = () => {
     setAddPeopleForm(prev => {
-      const newPerson = {
+      const newPerson: PersonForm = {
         firstName: '',
         lastName: '',
         lastNameUnknown: false,
-        fillLastNameFromAbove: true
+        fillLastNameFromAbove: true,
+        isChild: false
       };
 
       if (prev.persons.length > 0) {
@@ -488,7 +478,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         lastName: person.lastNameUnknown ? 'Unknown' : person.lastName.trim(),
         firstUnknown: false,
         lastUnknown: person.lastNameUnknown,
-        isChild: false
+        isChild: person.isChild
       }));
 
       const notes = addPeopleForm.notes.trim();
@@ -503,7 +493,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           individualsAPI.create({
             firstName: person.firstName,
             lastName: person.lastName,
-            familyId: familyResponse.data.id
+            familyId: familyResponse.data.id,
+            isChild: person.isChild
           })
         );
 
@@ -536,7 +527,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           firstName: '',
           lastName: '',
           lastNameUnknown: false,
-          fillLastNameFromAbove: false
+          fillLastNameFromAbove: false,
+          isChild: false
         }],
         selectedGatherings: {}
       });
@@ -903,6 +895,19 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         </button>
                       )}
                     </div>
+                    <div className="md:col-span-2">
+                      <label className="flex items-center">
+                        <input
+                          id={`personIsChild-${index}`}
+                          type="checkbox"
+                          checked={person.isChild}
+                          onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Child</span>
+                        <span className="ml-1 text-xs text-gray-400">(excluded from family name)</span>
+                      </label>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1201,6 +1206,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         <th className="text-left py-1 px-2 font-semibold text-gray-700">LAST NAME</th>
                         <th className="text-left py-1 px-2 font-semibold text-gray-700">FAMILY NAME</th>
                         <th className="text-left py-1 px-2 font-semibold text-gray-700">GATHERINGS</th>
+                        <th className="text-left py-1 px-2 font-semibold text-gray-400">ADULT/CHILD</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1216,6 +1222,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                               : 'Sunday Service, Bible Study'
                           }
                         </td>
+                        <td className="py-1 px-2 text-gray-400">Adult</td>
                       </tr>
                       <tr>
                         <td className="py-1 px-2">Sarah</td>
@@ -1227,6 +1234,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                             : 'Sunday Service'
                           }
                         </td>
+                        <td className="py-1 px-2 text-gray-400">Child</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1302,7 +1310,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FIRST NAME</th>
                         <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">LAST NAME</th>
                         <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FAMILY NAME</th>
-                        <th className="px-2 py-1 text-left font-medium text-gray-700">GATHERINGS</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">GATHERINGS</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-400">ADULT/CHILD</th>
                       </tr>
                     </thead>
                     <tbody className="font-mono">
@@ -1310,7 +1319,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         <td className="px-2 py-1 border-r border-gray-200">John</td>
                         <td className="px-2 py-1 border-r border-gray-200">Smith</td>
                         <td className="px-2 py-1 border-r border-gray-200">Smith, John and Sarah</td>
-                        <td className="px-2 py-1">
+                        <td className="px-2 py-1 border-r border-gray-200">
                           {gatheringTypes.length >= 2
                             ? `${gatheringTypes[0].name}, ${gatheringTypes[1].name}`
                             : gatheringTypes.length === 1
@@ -1318,22 +1327,24 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                               : 'Sunday Service, Bible Study'
                           }
                         </td>
+                        <td className="px-2 py-1 text-gray-400">Adult</td>
                       </tr>
                       <tr>
                         <td className="px-2 py-1 border-r border-gray-200">Sarah</td>
                         <td className="px-2 py-1 border-r border-gray-200">Smith</td>
                         <td className="px-2 py-1 border-r border-gray-200">Smith, John and Sarah</td>
-                        <td className="px-2 py-1">
+                        <td className="px-2 py-1 border-r border-gray-200">
                           {gatheringTypes.length >= 1
                             ? gatheringTypes[0].name
                             : 'Sunday Service'
                           }
                         </td>
+                        <td className="px-2 py-1 text-gray-400">Child</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
-                <p className="mt-2 text-xs">Copy rows from Excel/Google Sheets with columns: FIRST NAME, LAST NAME, FAMILY NAME, GATHERINGS.</p>
+                <p className="mt-2 text-xs">Copy rows from Excel/Google Sheets with columns: FIRST NAME, LAST NAME, FAMILY NAME, GATHERINGS, ADULT/CHILD (optional).</p>
               </div>
 
 

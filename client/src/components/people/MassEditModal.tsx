@@ -19,7 +19,9 @@ interface MassEditData {
   firstName: string;
   lastName: string;
   peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
+  isChild: '' | 'true' | 'false';
   assignments: { [key: number]: boolean };
+  initialAssignments: { [key: number]: boolean };
   originalAssignments: { [key: number]: Set<number> };
   applyToWholeFamily: boolean;
 }
@@ -156,19 +158,34 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700">People Type</label>
-              <select 
-                value={massEdit.peopleType} 
-                onChange={(e) => setMassEdit(d => ({ ...d, peopleType: e.target.value as any }))} 
-                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="">Do not change</option>
-                <option value="regular">Regular</option>
-                <option value="local_visitor">Local Visitor</option>
-                <option value="traveller_visitor">Traveller Visitor</option>
-              </select>
-              <div className="text-xs text-gray-500 mt-1">Select a type to change all selected people to that type</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">People Type</label>
+                <select 
+                  value={massEdit.peopleType} 
+                  onChange={(e) => setMassEdit(d => ({ ...d, peopleType: e.target.value as any }))} 
+                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                >
+                  <option value="">Do not change</option>
+                  <option value="regular">Regular</option>
+                  <option value="local_visitor">Local Visitor</option>
+                  <option value="traveller_visitor">Traveller Visitor</option>
+                </select>
+                <div className="text-xs text-gray-500 mt-1">Select a type to change all selected people to that type</div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Adult / Child</label>
+                <select 
+                  value={massEdit.isChild} 
+                  onChange={(e) => setMassEdit(d => ({ ...d, isChild: e.target.value as '' | 'true' | 'false' }))} 
+                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                >
+                  <option value="">Do not change</option>
+                  <option value="false">Adult</option>
+                  <option value="true">Child</option>
+                </select>
+                <div className="text-xs text-gray-500 mt-1">Set adult or child status for selected people</div>
+              </div>
             </div>
 
             {gatheringTypes.length > 0 && (

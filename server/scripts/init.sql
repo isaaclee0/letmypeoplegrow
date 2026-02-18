@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   last_name VARCHAR(100) NOT NULL,
   family_id INT,
   date_of_birth DATE,
+  is_child BOOLEAN DEFAULT false,
   is_regular_attendee BOOLEAN DEFAULT true,
   is_visitor BOOLEAN DEFAULT false,
   notes TEXT,

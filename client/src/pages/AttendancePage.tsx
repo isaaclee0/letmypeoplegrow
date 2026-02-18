@@ -33,6 +33,7 @@ interface PersonForm {
   firstName: string;
   lastName: string;
   fillLastNameFromAbove: boolean;
+  isChild?: boolean;
 }
 
 interface VisitorFormState {
@@ -457,12 +458,13 @@ const AttendancePage: React.FC = () => {
   useEffect(() => { lastUserModificationRef.current = lastUserModification; }, [lastUserModification]);
 
   const [visitorForm, setVisitorForm] = useState<VisitorFormState>({
-    personType: 'local_visitor', // 'local_visitor' or 'traveller_visitor'
+    personType: 'local_visitor',
     notes: '',
     persons: [{
       firstName: '',
       lastName: '',
-      fillLastNameFromAbove: false
+      fillLastNameFromAbove: false,
+      isChild: false
     }],
     autoFillSurname: false,
     familyName: ''
@@ -1924,7 +1926,8 @@ const AttendancePage: React.FC = () => {
       persons: [{
         firstName: '',
         lastName: '',
-        fillLastNameFromAbove: false
+        fillLastNameFromAbove: false,
+        isChild: false
       }],
       autoFillSurname: false,
       familyName: ''
@@ -1987,10 +1990,11 @@ const AttendancePage: React.FC = () => {
   // Add functions to manage persons array
   const addPerson = () => {
     setVisitorForm(prev => {
-      const newPerson = { 
+      const newPerson: PersonForm = { 
         firstName: '', 
         lastName: '', 
-        fillLastNameFromAbove: true // Default to checked for subsequent people
+        fillLastNameFromAbove: true,
+        isChild: false
       };
       
       // Auto-fill surname from first person if they have one
@@ -2064,10 +2068,10 @@ const AttendancePage: React.FC = () => {
       // Build people array - use empty string for missing surnames (not 'Unknown')
       const people = visitorForm.persons.map(person => ({
         firstName: person.firstName.trim(),
-        lastName: person.lastName.trim(), // Can be empty string
-        firstUnknown: false, // Always false - we accept whatever is entered
-        lastUnknown: !person.lastName.trim(), // true if surname is empty
-        isChild: false // No distinction
+        lastName: person.lastName.trim(),
+        firstUnknown: false,
+        lastUnknown: !person.lastName.trim(),
+        isChild: person.isChild || false
       }));
 
       const notes = visitorForm.notes.trim();
@@ -2213,7 +2217,8 @@ const AttendancePage: React.FC = () => {
         persons: [{
           firstName: '',
           lastName: '',
-          fillLastNameFromAbove: false
+          fillLastNameFromAbove: false,
+          isChild: false
         }],
         autoFillSurname: false,
         familyName: ''
@@ -2306,8 +2311,11 @@ const AttendancePage: React.FC = () => {
     const sortedGroups = Object.values(grouped)
       .sort((a, b) => a.firstSeenIndex - b.firstSeenIndex)
       .map(group => {
-        // Sort family members by their original order in the input array
+        // Sort family members: adults first, then by original order
         const sortedMembers = group.members.sort((a, b) => {
+          const aChild = a.isChild ? 1 : 0;
+          const bChild = b.isChild ? 1 : 0;
+          if (aChild !== bChild) return aChild - bChild;
           const indexA = visitorsInput.findIndex(v => v.id === a.id);
           const indexB = visitorsInput.findIndex(v => v.id === b.id);
           return indexA - indexB;
@@ -2362,6 +2370,9 @@ const AttendancePage: React.FC = () => {
     });
     filtered.forEach((group: any) => {
       group.members = [...group.members].sort((a: Individual, b: Individual) => {
+        const aChild = a.isChild ? 1 : 0;
+        const bChild = b.isChild ? 1 : 0;
+        if (aChild !== bChild) return aChild - bChild;
         const lastNameComparison = a.lastName.localeCompare(b.lastName);
         if (lastNameComparison !== 0) return lastNameComparison;
         return a.firstName.localeCompare(b.firstName);
@@ -2391,10 +2402,12 @@ const AttendancePage: React.FC = () => {
     return groupVisitors(availableChurchPeople);
   }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors]);
 
-  // Sort members within each group
+  // Sort members within each group: adults first, then by name
   filteredGroupedAttendees.forEach((group: any) => {
     group.members.sort((a: Individual, b: Individual) => {
-      // Sort by last name, then first name
+      const aChild = a.isChild ? 1 : 0;
+      const bChild = b.isChild ? 1 : 0;
+      if (aChild !== bChild) return aChild - bChild;
       const lastNameComparison = a.lastName.localeCompare(b.lastName);
       if (lastNameComparison !== 0) return lastNameComparison;
       return a.firstName.localeCompare(b.firstName);
@@ -2626,9 +2639,9 @@ const AttendancePage: React.FC = () => {
     
     return generateFamilyName(validMembers.map(person => ({
       firstName: person.firstName.trim(),
-      lastName: person.lastName.trim(), // Can be empty string
-      lastUnknown: !person.lastName.trim(), // true if surname is empty
-      isChild: false // No distinction
+      lastName: person.lastName.trim(),
+      lastUnknown: !person.lastName.trim(),
+      isChild: person.isChild || false
     })));
   }, [visitorForm.persons]);
 
@@ -2691,7 +2704,8 @@ const AttendancePage: React.FC = () => {
       firstName: person.firstName && person.firstName !== 'Unknown' ? person.firstName : '',
       lastName: !person.lastUnknown && person.lastName && person.lastName !== 'Unknown' ? person.lastName : '',
       firstUnknown: person.firstUnknown,
-      lastUnknown: person.lastUnknown
+      lastUnknown: person.lastUnknown,
+      isChild: person.isChild
     }));
   };
 
@@ -3674,6 +3688,9 @@ const AttendancePage: React.FC = () => {
                             </div>
                             <span className="ml-3 text-sm font-medium text-gray-900">
                               {displayName}
+                              {person.isChild && (
+                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
+                              )}
                               {isSaving && (
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
                               )}
@@ -3817,6 +3834,9 @@ const AttendancePage: React.FC = () => {
                           <div className="ml-3 flex-1">
                             <span className="text-sm font-medium text-gray-900">
                               {displayName}
+                              {person.isChild && (
+                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
+                              )}
                             </span>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
@@ -3931,7 +3951,12 @@ const AttendancePage: React.FC = () => {
                                 title={isAttendanceLocked ? 'Editing locked' : `Click to add ${displayName} to this service`}
                               >
                                 <div className="flex items-center justify-between">
-                                  <div className="text-sm font-medium text-gray-900">{displayName}</div>
+                                  <div className="text-sm font-medium text-gray-900">
+                                    {displayName}
+                                    {person.isChild && (
+                                      <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
+                                    )}
+                                  </div>
                                   <PlusIcon className={`h-4 w-4 flex-shrink-0 ml-2 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
                                 </div>
                                 {!groupByFamily && group.familyId && (
@@ -4095,6 +4120,19 @@ const AttendancePage: React.FC = () => {
                             Remove
                           </button>
                         )}
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="flex items-center">
+                          <input
+                            id={`inlineVisitorIsChild-${index}`}
+                            type="checkbox"
+                            checked={person.isChild || false}
+                            onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <span className="ml-2 text-sm text-gray-700">Child</span>
+                          <span className="ml-1 text-xs text-gray-400">(excluded from family name)</span>
+                        </label>
                       </div>
                     </div>
                   ))}

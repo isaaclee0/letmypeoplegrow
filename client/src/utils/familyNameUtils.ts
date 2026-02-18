@@ -20,8 +20,12 @@ export interface PersonForFamilyName {
  * @returns Formatted family name string
  */
 export const generateFamilyName = (people: PersonForFamilyName[]): string => {
+  // Exclude children from family name generation - only adults contribute to the family name
+  const adults = people.filter(person => !person.isChild);
+  const candidates = adults.length > 0 ? adults : people;
+
   // Filter people with valid first names
-  const peopleWithFirstNames = people.filter(person => 
+  const peopleWithFirstNames = candidates.filter(person => 
     person.firstName.trim() && !person.firstUnknown
   );
   

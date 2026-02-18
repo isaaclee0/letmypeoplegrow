@@ -35,6 +35,7 @@ interface Person {
   firstName: string;
   lastName: string;
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
+  isChild?: boolean;
   familyId?: number;
   familyName?: string;
   lastAttendanceDate?: string;
@@ -248,6 +249,7 @@ const PeoplePage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedFamily, setSelectedFamily] = useState<number | null>(null);
   const [selectedGathering, setSelectedGathering] = useState<number | null>(null);
+  const [ageFilter, setAgeFilter] = useState<'all' | 'adult' | 'child'>('all');
   // Removed selectedPerson state - no longer used
   // Removed showPersonDetails - not used anymore
   const [showAddModal, setShowAddModal] = useState(false);
@@ -279,10 +281,12 @@ const PeoplePage: React.FC = () => {
     firstName: string;
     lastName: string;
     peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
+    isChild: '' | 'true' | 'false';
     assignments: { [key: number]: boolean };
+    initialAssignments: { [key: number]: boolean };
     originalAssignments: { [key: number]: Set<number> };
     applyToWholeFamily: boolean;
-  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', firstName: '', lastName: '', peopleType: '', assignments: {}, originalAssignments: {}, applyToWholeFamily: false });
+  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', firstName: '', lastName: '', peopleType: '', isChild: '', assignments: {}, initialAssignments: {}, originalAssignments: {}, applyToWholeFamily: false });
   
   // Add a separate state for the modal's selected count to avoid race conditions
   const [modalSelectedCount, setModalSelectedCount] = useState(0);
@@ -715,26 +719,31 @@ const PeoplePage: React.FC = () => {
     }, {} as any);
   }, [people]);
 
-  // Filter groups based on search term and family selection
+  // Filter groups based on search term, family selection, and age filter
   const filteredGroupedPeople = Object.values(groupedPeople).filter((group: any) => {
     // Filter by gathering selection
     if (selectedGathering !== null) {
-      // Only show families that have at least one member assigned to the selected gathering
       const hasMemberInGathering = group.members.some((member: Person) => 
         member.gatheringAssignments?.some(gathering => gathering.id === selectedGathering)
       );
       if (!hasMemberInGathering) return false;
       
-      // Filter members within the family to only show those assigned to the selected gathering
       group.members = group.members.filter((member: Person) => 
         member.gatheringAssignments?.some(gathering => gathering.id === selectedGathering)
       );
       
-      // Don't show empty families
+      if (group.members.length === 0) return false;
+    }
+
+    // Filter by age (adult/child)
+    if (ageFilter !== 'all') {
+      group.members = group.members.filter((member: Person) =>
+        ageFilter === 'child' ? member.isChild : !member.isChild
+      );
       if (group.members.length === 0) return false;
     }
     
-    // Filter by family selection (if still using this)
+    // Filter by family selection
     if (selectedFamily !== null) {
       return group.familyId === selectedFamily;
     }
@@ -744,7 +753,6 @@ const PeoplePage: React.FC = () => {
     
     const searchLower = searchTerm.toLowerCase();
     
-    // Check if any family member's name contains the search term
     return group.members.some((member: Person) => {
       const fullName = `${member.firstName} ${member.lastName}`.toLowerCase();
       const familyName = member.familyName?.toLowerCase() || '';
@@ -752,10 +760,12 @@ const PeoplePage: React.FC = () => {
     });
   });
 
-  // Sort members within each group
+  // Sort members within each group: adults first, then by last name, then first name
   filteredGroupedPeople.forEach((group: any) => {
     group.members.sort((a: Person, b: Person) => {
-      // Sort by last name, then first name
+      const aChild = a.isChild ? 1 : 0;
+      const bChild = b.isChild ? 1 : 0;
+      if (aChild !== bChild) return aChild - bChild;
       const lastNameComparison = a.lastName.localeCompare(b.lastName);
       if (lastNameComparison !== 0) return lastNameComparison;
       return a.firstName.localeCompare(b.firstName);
@@ -800,9 +810,12 @@ const PeoplePage: React.FC = () => {
       
       return true;
     });
-    // Sort members in each group
+    // Sort members in each group: adults first
     result.forEach((group: any) => {
       group.members.sort((a: Person, b: Person) => {
+        const aChild = a.isChild ? 1 : 0;
+        const bChild = b.isChild ? 1 : 0;
+        if (aChild !== bChild) return aChild - bChild;
         const ln = a.lastName.localeCompare(b.lastName);
         if (ln !== 0) return ln;
         return a.firstName.localeCompare(b.firstName);
@@ -932,10 +945,13 @@ const PeoplePage: React.FC = () => {
 
   // Create individual people list (not grouped by family)
   const filteredIndividualPeople = people.filter((person: Person) => {
-    // Only include regular attendees in this main list
     if (person.peopleType !== 'regular') {
       return false;
     }
+    
+    // Filter by age (adult/child)
+    if (ageFilter === 'child' && !person.isChild) return false;
+    if (ageFilter === 'adult' && person.isChild) return false;
     
     // Filter by gathering selection
     if (selectedGathering !== null) {
@@ -943,7 +959,7 @@ const PeoplePage: React.FC = () => {
       if (!hasGatheringAssignment) return false;
     }
     
-    // Filter by family selection (if still using this)
+    // Filter by family selection
     if (selectedFamily !== null) {
       return person.familyId === selectedFamily;
     }
@@ -956,7 +972,9 @@ const PeoplePage: React.FC = () => {
     const familyName = person.familyName?.toLowerCase() || '';
     return fullName.includes(searchLower) || familyName.includes(searchLower);
   }).sort((a: Person, b: Person) => {
-    // Sort by last name, then first name
+    const aChild = a.isChild ? 1 : 0;
+    const bChild = b.isChild ? 1 : 0;
+    if (aChild !== bChild) return aChild - bChild;
     const lastNameComparison = a.lastName.localeCompare(b.lastName);
     if (lastNameComparison !== 0) return lastNameComparison;
     return a.firstName.localeCompare(b.firstName);
@@ -1130,7 +1148,9 @@ const PeoplePage: React.FC = () => {
       firstName: person.firstName,
       lastName: person.lastName,
       peopleType: person.peopleType,
+      isChild: person.isChild ? 'true' as const : 'false' as const,
       assignments: gatheringAssignments,
+      initialAssignments: { ...gatheringAssignments },
       originalAssignments,
       applyToWholeFamily: false
     };
@@ -1174,14 +1194,15 @@ const PeoplePage: React.FC = () => {
   const downloadPeopleTSV = () => {
     try {
       // Create TSV content
-      const headers = ['First Name', 'Last Name', 'Family Name', 'Gatherings'];
+      const headers = ['First Name', 'Last Name', 'Family Name', 'Gatherings', 'Adult/Child'];
       const rows = people.map(person => {
         const gatherings = person.gatheringAssignments?.map(g => g.name).join(', ') || '';
         return [
           person.firstName,
           person.lastName,
           person.familyName || '',
-          gatherings
+          gatherings,
+          person.isChild ? 'Child' : 'Adult'
         ];
       });
 
@@ -1304,16 +1325,15 @@ const PeoplePage: React.FC = () => {
               const p = peopleMap.get(personId);
               if (!p) continue;
 
-              // Check if we need to update individual data (firstName, family, lastName, peopleType)
-              const hasIndividualChanges = massEdit.firstName.trim() || massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType;
+              // Check if we need to update individual data (firstName, family, lastName, peopleType, isChild)
+              const hasIndividualChanges = massEdit.firstName.trim() || massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType || massEdit.isChild;
               
               if (hasIndividualChanges) {
                 const payload: any = {
-                  firstName: p.firstName, // Always include firstName as it's required
-                  lastName: p.lastName, // Always include lastName as it's required
+                  firstName: p.firstName,
+                  lastName: p.lastName,
                 };
                 
-                // Only update fields that are actually changed
                 if (massEdit.firstName.trim()) {
                   payload.firstName = massEdit.firstName.trim();
                 }
@@ -1323,18 +1343,21 @@ const PeoplePage: React.FC = () => {
                 if (familyIdToUse !== undefined) {
                   payload.familyId = familyIdToUse;
                 }
-                // Note: If familyIdToUse is undefined and no family input provided, 
-                // we don't include familyId in payload, preserving existing family association
                 if (massEdit.peopleType) {
                   payload.peopleType = massEdit.peopleType;
+                }
+                if (massEdit.isChild) {
+                  payload.isChild = massEdit.isChild === 'true';
                 }
 
                 await individualsAPI.update(personId, payload);
               }
 
-              // Handle gathering assignments - only apply changes
+              // Handle gathering assignments - only process checkboxes the user actually toggled
               for (const g of gatheringTypes) {
                 const want = !!massEdit.assignments[g.id];
+                const initial = !!massEdit.initialAssignments[g.id];
+                if (want === initial) continue;
                 const had = massEdit.originalAssignments[personId]?.has(g.id) || false;
                 if (want && !had) {
                   await individualsAPI.assignToGathering(personId, g.id);
@@ -1484,8 +1507,8 @@ const PeoplePage: React.FC = () => {
             </div>
           </div>
           
-          {/* Grouping Toggle */}
-          <div className="mt-4 pt-4 border-t border-gray-200">
+          {/* Grouping Toggle & Age Filter */}
+          <div className="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center space-x-3">
               <input
                 type="checkbox"
@@ -1493,7 +1516,6 @@ const PeoplePage: React.FC = () => {
                 checked={groupByFamily}
                 onChange={(e) => {
                   setGroupByFamily(e.target.checked);
-                  // Clear selection when switching views to avoid confusion
                   setSelectedPeople([]);
                 }}
                 className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
@@ -1504,6 +1526,21 @@ const PeoplePage: React.FC = () => {
               <span className="text-xs text-gray-500">
                 (Uncheck for individual view with easier multi-select)
               </span>
+            </div>
+            <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-0.5">
+              {(['all', 'adult', 'child'] as const).map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setAgeFilter(value)}
+                  className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                    ageFilter === value
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -2558,6 +2595,13 @@ const PeoplePage: React.FC = () => {
                     peopleType = Array.from(peopleTypes)[0];
                   }
                   
+                  // Determine common isChild status
+                  const childStatuses = new Set(selectedPeopleData.map(p => !!p.isChild));
+                  let isChild: '' | 'true' | 'false' = '';
+                  if (childStatuses.size === 1) {
+                    isChild = Array.from(childStatuses)[0] ? 'true' : 'false';
+                  }
+                  
                   // Determine common last name (only if all have same last name)
                   const lastNames = new Set(selectedPeopleData.map(p => p.lastName));
                   let lastName = '';
@@ -2569,10 +2613,12 @@ const PeoplePage: React.FC = () => {
                     familyInput, 
                     selectedFamilyId, 
                     newFamilyName: '', 
-                    firstName: selectedPeople.length === 1 ? selectedPeopleData[0].firstName : '', // Only show for single person
-                    lastName, // Show if all have same last name
-                    peopleType, // Show if all have same type
+                    firstName: selectedPeople.length === 1 ? selectedPeopleData[0].firstName : '',
+                    lastName,
+                    peopleType,
+                    isChild,
                     assignments,
+                    initialAssignments: { ...assignments },
                     originalAssignments,
                     applyToWholeFamily: false
                   });

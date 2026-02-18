@@ -225,9 +225,9 @@ router.post('/visitor', requireRole(['admin', 'coordinator', 'attendance_taker']
 
         // Create individual with the new peopleType
         const individualResult = await conn.query(`
-          INSERT INTO individuals (first_name, last_name, family_id, people_type, created_by, church_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [firstName, lastName, familyId, peopleType, req.user.id, req.user.church_id]);
+          INSERT INTO individuals (first_name, last_name, family_id, is_child, people_type, created_by, church_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [firstName, lastName, familyId, isChild ? true : false, peopleType, req.user.id, req.user.church_id]);
 
         createdIndividuals.push({
           id: Number(individualResult.insertId),

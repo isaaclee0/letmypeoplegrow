@@ -9,6 +9,7 @@ interface PersonForm {
   firstName: string;
   lastName: string;
   fillLastNameFromAbove: boolean;
+  isChild: boolean;
 }
 
 interface VisitorFormState {
@@ -56,7 +57,8 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
     persons: [{
       firstName: '',
       lastName: '',
-      fillLastNameFromAbove: false
+      fillLastNameFromAbove: false,
+      isChild: false
     }],
     autoFillSurname: false,
     familyName: ''
@@ -70,16 +72,18 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
     return people.map(p => ({
       firstName: p.firstName,
       lastName: p.lastName,
-      lastUnknown: p.lastUnknown
+      lastUnknown: p.lastUnknown,
+      isChild: p.isChild
     }));
   };
 
   const addPerson = () => {
     setVisitorForm(prev => {
-      const newPerson = {
+      const newPerson: PersonForm = {
         firstName: '',
         lastName: '',
-        fillLastNameFromAbove: false
+        fillLastNameFromAbove: false,
+        isChild: false
       };
 
       // Auto-fill last name from first person if checkbox enabled
@@ -138,7 +142,8 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
     return generateFamilyName(validMembers.map(person => ({
       firstName: person.firstName.trim(),
       lastName: person.lastName.trim(),
-      lastUnknown: !person.lastName.trim()
+      lastUnknown: !person.lastName.trim(),
+      isChild: person.isChild
     })));
   }, [visitorForm.persons]);
 
@@ -184,7 +189,7 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
         lastName: person.lastName.trim(),
         firstUnknown: false,
         lastUnknown: !person.lastName.trim(),
-        isChild: false
+        isChild: person.isChild
       }));
 
       const notes = visitorForm.notes.trim();
@@ -217,7 +222,8 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
             firstName: formPerson ? formPerson.firstName : member.firstName,
             lastName: formPerson ? formPerson.lastName : member.lastName,
             familyId: editingVisitorData.familyId,
-            peopleType: personType
+            peopleType: personType,
+            isChild: formPerson ? formPerson.isChild : member.isChild
           });
         });
 
@@ -233,7 +239,8 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
               firstName: person.firstName,
               lastName: person.lastName,
               familyId: editingVisitorData.familyId,
-              peopleType: personType
+              peopleType: personType,
+              isChild: person.isChild
             });
           });
 
@@ -309,7 +316,8 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
         persons: [{
           firstName: '',
           lastName: '',
-          fillLastNameFromAbove: false
+          fillLastNameFromAbove: false,
+          isChild: false
         }],
         autoFillSurname: false,
         familyName: ''
@@ -448,6 +456,19 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
                         Remove
                       </button>
                     )}
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="flex items-center">
+                      <input
+                        id={`visitorIsChild-${index}`}
+                        type="checkbox"
+                        checked={person.isChild}
+                        onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
+                        className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                      />
+                      <span className="ml-2 text-sm text-gray-700">Child</span>
+                      <span className="ml-1 text-xs text-gray-400">(excluded from family name)</span>
+                    </label>
                   </div>
                 </div>
               ))}

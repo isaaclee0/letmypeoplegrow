@@ -139,6 +139,7 @@ const createTables = async () => {
         first_name VARCHAR(100) NOT NULL,
         last_name VARCHAR(100) NOT NULL,
         family_id INT,
+        is_child BOOLEAN DEFAULT false,
         is_active BOOLEAN DEFAULT true,
         created_by INT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

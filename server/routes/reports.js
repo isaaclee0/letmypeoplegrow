@@ -568,7 +568,8 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
           WHEN i.people_type = 'traveller_visitor' THEN 'Traveller Visitor'
           ELSE 'Regular Attender'
         END as people_type,
-        i.people_type as raw_people_type
+        i.people_type as raw_people_type,
+        i.is_child
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
       WHERE i.is_active = true 
@@ -637,7 +638,7 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     };
     
     // Create TSV headers
-    const tsvHeaders = ['First Name', 'Last Name', 'Family Name', 'People Type', ...sessions.map(s => formatDateHeader(s.session_date))];
+    const tsvHeaders = ['First Name', 'Last Name', 'Family Name', 'People Type', 'Adult/Child', ...sessions.map(s => formatDateHeader(s.session_date))];
     
     // Create TSV rows
     const tsvRows = allPeople.map(person => {
@@ -645,7 +646,8 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
         person.first_name || '',
         person.last_name || '',
         person.family_name || '',
-        person.people_type || ''
+        person.people_type || '',
+        person.is_child ? 'Child' : 'Adult'
       ];
       
       // Add attendance data for each session

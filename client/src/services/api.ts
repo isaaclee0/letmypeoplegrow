@@ -190,6 +190,7 @@ export interface Individual {
   firstName: string;
   lastName: string;
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
+  isChild?: boolean;
   familyId?: number;
   familyName?: string;
   present?: boolean;
@@ -563,6 +564,8 @@ export const individualsAPI = {
     firstName: string;
     lastName: string;
     familyId?: number;
+    isChild?: boolean;
+    peopleType?: 'regular' | 'local_visitor' | 'traveller_visitor';
   }) => 
     api.post('/individuals', data),
     
@@ -571,6 +574,7 @@ export const individualsAPI = {
     lastName: string;
     familyId?: number;
     peopleType?: 'regular' | 'local_visitor' | 'traveller_visitor';
+    isChild?: boolean;
   }) => 
     api.put(`/individuals/${id}`, data),
     
