@@ -246,14 +246,11 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
 
   const shouldShowTotal = useMemo(() => headcount > 0, [headcount]);
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-        <span className="ml-2 text-gray-600">Loading headcount...</span>
-      </div>
-    );
-  }
+  // Only show You/Total breakdown when multiple people are counting and total differs from current user's count
+  const shouldShowOtherUsersAndTotal = useMemo(
+    () => otherUsers.length > 1 && headcount !== userHeadcount,
+    [otherUsers.length, headcount, userHeadcount]
+  );
 
   // ── Fullscreen mode (rendered via portal to escape stacking contexts) ──
   if (isFullscreen) {
@@ -317,27 +314,35 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
     return ReactDOM.createPortal(fullscreenUI, document.body);
   }
 
-  // ── Standard mode ────────────────────────────────────────────────
+  // ── Standard mode (same layout during loading to prevent layout shift) ──
   return (
-    <div className="space-y-6 transition-all duration-300 ease-in-out">
+    <div className="space-y-6 transition-all duration-300 ease-in-out pb-12 relative">
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 rounded-lg" aria-hidden="true">
+          <div className="flex flex-col items-center gap-2">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+            <span className="text-sm text-gray-500">Loading...</span>
+          </div>
+        </div>
+      )}
       <div className="text-center">
         <div className="flex flex-col items-center space-y-6">
-          {/* Desktop Layout - Horizontal */}
-          <div className="hidden md:flex items-start justify-center space-x-6">
+          {/* Desktop Layout - Horizontal (smaller buttons on md+) */}
+          <div className="hidden md:flex items-center justify-center space-x-6">
             <button
               onClick={handleDecrement}
               disabled={headcount <= 0}
-              className="flex items-center justify-center w-28 h-28 rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors mt-4"
+              className="flex items-center justify-center w-[84px] h-[84px] rounded-full bg-green-100 hover:bg-green-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
             >
-              <MinusIcon className="h-14 w-14 text-green-600" />
+              <MinusIcon className="h-[42px] w-[42px] text-green-600" />
             </button>
 
-            <div className="flex flex-col items-center">
+            <div className="flex items-center justify-center min-h-[84px]">
               <input
                 type="number"
                 value={userHeadcount}
                 onChange={(e) => handleDirectInput(e.target.value)}
-                className="font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-80 px-2 disabled:cursor-not-allowed [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
+                className="font-bold text-center bg-transparent border-none outline-none min-w-20 max-w-80 px-2 disabled:cursor-not-allowed leading-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]"
                 style={{
                   width: `${Math.max(userHeadcount.toString().length * 0.8, 2)}em`,
                   fontSize: userHeadcount.toString().length > 4 ? '2.5rem' : userHeadcount.toString().length > 3 ? '3rem' : '4rem'
@@ -348,9 +353,9 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
 
             <button
               onClick={handleIncrement}
-              className="flex items-center justify-center w-28 h-28 rounded-full bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors mt-4"
+              className="flex items-center justify-center w-[84px] h-[84px] rounded-full bg-purple-100 hover:bg-purple-200 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
             >
-              <PlusIcon className="h-14 w-14 text-purple-600" />
+              <PlusIcon className="h-[42px] w-[42px] text-purple-600" />
             </button>
           </div>
 
@@ -393,8 +398,8 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         </div>
       </div>
 
-      {/* Other Users + Total */}
-      {otherUsers.length > 0 && (
+      {/* Other Users + Total (only when multiple people counting and total differs from user's count) */}
+      {shouldShowOtherUsersAndTotal && (
         <div className="text-center">
           <div className="flex flex-wrap justify-center gap-2">
             {otherUsers.map((userData) => (

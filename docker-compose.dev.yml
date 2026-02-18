@@ -76,7 +76,7 @@ services:
       context: .
       dockerfile: Dockerfile.client.dev
       args:
-        - VERSION=${VERSION:-1.5.3}
+        - VERSION=${VERSION:-1.7.0}
     container_name: church_attendance_client_dev
     restart: unless-stopped
     ports:
@@ -92,7 +92,7 @@ services:
       - FAST_REFRESH=false
       - VITE_HMR=false
       - VITE_USE_WEBSOCKETS=true
-      - VITE_APP_VERSION=${VERSION:-1.5.3}
+      - VITE_APP_VERSION=${VERSION:-1.7.0}
     depends_on:
       - server
     networks:
@@ -147,15 +147,15 @@ services:
       - app-network-dev
 
   # Cloudflare Tunnel - exposes local dev to dev.letmypeoplegrow.com.au
-  # Requires CLOUDFLARETUNNEL_TOKEN in client/.env
+  # Requires TUNNEL_TOKEN in server/.env
   # Shares network with nginx so localhost:80 reaches nginx
   cloudflared:
     image: cloudflare/cloudflared:latest
     network_mode: "service:nginx"
     restart: unless-stopped
     env_file:
-      - ./client/.env
-    command: ["sh", "-c", "cloudflared tunnel run --token $${CLOUDFLARETUNNEL_TOKEN}"]
+      - ./server/.env
+    command: tunnel run
     depends_on:
       - nginx
     profiles:
