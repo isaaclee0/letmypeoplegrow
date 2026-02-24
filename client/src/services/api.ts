@@ -191,8 +191,12 @@ export interface Individual {
   lastName: string;
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   isChild?: boolean;
+  badgeText?: string | null;
+  badgeColor?: string | null;
+  badgeIcon?: string | null;
   familyId?: number;
   familyName?: string;
+  familyNotes?: string | null;
   present?: boolean;
   isSaving?: boolean;
 }
@@ -207,6 +211,7 @@ export interface Visitor {
   lastAttended?: string;
   familyId?: number;
   familyName?: string;
+  isChild?: boolean;
 }
 
 export interface AttendanceData {
@@ -273,8 +278,11 @@ export const authAPI = {
     api.post('/auth/clear-expired-token'),
     
 
-  checkUsers: () => 
+  checkUsers: () =>
     api.get('/auth/check-users'),
+
+  getServerTime: () =>
+    api.get('/auth/server-time'),
 };
 
 // Gatherings API
@@ -723,6 +731,7 @@ export const notificationRulesAPI = {
 // Settings API
 export const settingsAPI = {
   getAll: () => api.get('/settings'),
+  getBadgeDefaults: () => api.get('/settings/badge-defaults'),
   // DISABLED: External data access feature is currently disabled
   // getDataAccess: () => api.get('/settings/data-access'),
   // updateDataAccess: (enabled: boolean) => api.put('/settings/data-access', { enabled }),
@@ -736,6 +745,8 @@ export const settingsAPI = {
   // Location
   searchLocation: (q: string) => api.get('/settings/location-search', { params: { q } }),
   updateLocation: (data: { name: string; lat: number; lng: number }) => api.put('/settings/location', data),
+  updateChildFlairColor: (color: string) => api.put('/settings/child-flair-color', { color }),
+  updateDefaultBadge: (data: { text?: string; color?: string }) => api.put('/settings/default-badge', data),
 };
 
 // Integrations API
@@ -782,7 +793,8 @@ export const aiAPI = {
   configure: (data: { apiKey: string; provider: 'openai' | 'anthropic'; model?: string }) =>
     api.post('/ai/configure', data),
   disconnect: () => api.post('/ai/disconnect'),
-  ask: (question: string) => api.post('/ai/ask', { question }, { timeout: 60000 }),
+  ask: (question: string, conversationId?: number | null) =>
+    api.post('/ai/ask', { question, conversationId }, { timeout: 60000 }),
 
   // Chat history
   getConversations: () => api.get('/ai/conversations'),

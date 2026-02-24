@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import BadgeEditor from './BadgeEditor';
 
 interface Family {
   id: number;
@@ -20,6 +21,9 @@ interface MassEditData {
   lastName: string;
   peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
   isChild: '' | 'true' | 'false';
+  badgeText: string;
+  badgeColor: string;
+  badgeIcon: string;
   assignments: { [key: number]: boolean };
   initialAssignments: { [key: number]: boolean };
   originalAssignments: { [key: number]: Set<number> };
@@ -37,6 +41,7 @@ interface MassEditModalProps {
   onSave: () => Promise<void>;
   error?: string;
   isLoading?: boolean;
+  allSameAgeGroup?: boolean; // true when all selected people are either all adults or all children
 }
 
 const MassEditModal: React.FC<MassEditModalProps> = ({
@@ -49,8 +54,14 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
   gatheringTypes,
   onSave,
   error,
-  isLoading = false
+  isLoading = false,
+  allSameAgeGroup = false
 }) => {
+  // Determine if this is a child (for showing badge editor)
+  const isEditingChild = massEdit.isChild === 'true';
+  // Show badge editor for single person, or for multiple people who are all the same age group
+  const showBadgeSection = selectedCount === 1 || (selectedCount > 1 && allSameAgeGroup);
+
   if (!isOpen) return null;
 
   return createPortal(
@@ -187,6 +198,19 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 <div className="text-xs text-gray-500 mt-1">Set adult or child status for selected people</div>
               </div>
             </div>
+
+            {/* Badge Editor - single person or multi-person when all same age group */}
+            {showBadgeSection && (
+              <BadgeEditor
+                badgeData={{
+                  badgeText: massEdit.badgeText,
+                  badgeColor: massEdit.badgeColor,
+                  badgeIcon: massEdit.badgeIcon
+                }}
+                onBadgeChange={(updates) => setMassEdit(d => ({ ...d, ...updates }))}
+                isChild={isEditingChild}
+              />
+            )}
 
             {gatheringTypes.length > 0 && (
               <div className="space-y-2">

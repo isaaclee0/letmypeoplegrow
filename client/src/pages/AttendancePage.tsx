@@ -14,6 +14,7 @@ import { useWebSocket } from '../contexts/WebSocketContext';
 import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import logger from '../utils/logger';
+import { useBadgeSettings } from '../hooks/useBadgeSettings';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -28,6 +29,7 @@ import {
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { Bars3Icon } from '@heroicons/react/24/outline';
+import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 
 interface PersonForm {
   firstName: string;
@@ -48,6 +50,7 @@ const AttendancePage: React.FC = () => {
   const { user, updateUser, refreshUserData } = useAuth();
   const { showSuccess, showToast } = useToast();
   const navigate = useNavigate();
+  const { getBadgeInfo, isLoading: badgeSettingsLoading } = useBadgeSettings();
   // Initialize selectedDate to today - will be updated by gathering selection logic
   const [selectedDate, setSelectedDate] = useState(() => {
     logger.log('📅 Initializing selectedDate to today:', format(new Date(), 'yyyy-MM-dd'));
@@ -88,7 +91,11 @@ const AttendancePage: React.FC = () => {
   
   // Trigger for refreshing regular attendance data (similar to how visitors work)
   const [attendanceRefreshTrigger, setAttendanceRefreshTrigger] = useState(0);
-  
+
+  // Time sync for conflict detection
+  const [serverTimeOffset, setServerTimeOffset] = useState(0); // Difference between server and client time
+  const [attendanceTimestamps, setAttendanceTimestamps] = useState<Record<number, number>>({}); // Track when each record was changed
+
   // Helper functions for localStorage (legacy support)
   const saveLastViewed = async (gatheringId: number, date: string) => {
     const lastViewed = {
@@ -309,6 +316,7 @@ const AttendancePage: React.FC = () => {
 
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   const [isSubmittingVisitor, setIsSubmittingVisitor] = useState(false);
+  const [activeStatBubble, setActiveStatBubble] = useState<string | null>(null);
   
   // Smart truncation function for gathering names
   const getSmartTruncatedName = useCallback((name: string, allNames: string[], maxLength: number = 17) => {
@@ -485,6 +493,15 @@ const AttendancePage: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showDatePicker]);
+
+  // Dismiss stat breakdown bubble on outside click
+  useEffect(() => {
+    if (!activeStatBubble) return;
+    const handler = () => setActiveStatBubble(null);
+    // Use setTimeout so the current click doesn't immediately close it
+    const id = setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => { clearTimeout(id); document.removeEventListener('click', handler); };
+  }, [activeStatBubble]);
 
 
   // Tab slider drag handlers
@@ -789,6 +806,21 @@ const AttendancePage: React.FC = () => {
     }
   }, [user]);
 
+  // Sync time with server for conflict detection
+  const syncTimeWithServer = useCallback(async () => {
+    try {
+      const clientTime = Date.now();
+      const response = await authAPI.getServerTime();
+      const serverTime = response.data.serverTime;
+      const offset = serverTime - clientTime;
+      setServerTimeOffset(offset);
+      logger.log('⏰ Time synced with server', { offset: offset + 'ms', serverTime, clientTime });
+    } catch (error) {
+      logger.warn('Failed to sync time with server:', error);
+      setServerTimeOffset(0); // Fallback to no offset
+    }
+  }, []);
+
   useEffect(() => {
     const refreshUserDataOnMount = async () => {
       try {
@@ -797,9 +829,10 @@ const AttendancePage: React.FC = () => {
         logger.warn('Failed to refresh user data on mount:', error);
       }
     };
-    
+
     refreshUserDataOnMount();
-  }, []); // Run only on mount
+    syncTimeWithServer(); // Sync time on mount
+  }, [syncTimeWithServer]); // Run only on mount
 
   // Auto-refresh gatherings when user data changes (including gathering assignments)
   useEffect(() => {
@@ -1166,6 +1199,23 @@ const AttendancePage: React.FC = () => {
         if (isWebSocketConnected) {
           try {
             response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
+            // WebSocket only returns attendanceList + gathering-assigned visitors.
+            // Fetch supplementary data (recentVisitors, allChurchPeople) via REST
+            // so the visitor list is consistent regardless of data path.
+            try {
+              const [recentRes, allPeopleRes] = await Promise.all([
+                attendanceAPI.getRecentVisitors(selectedGathering.id),
+                attendanceAPI.getAllPeople(),
+              ]);
+              response.recentVisitors = recentRes.data.visitors || [];
+              response.allChurchPeople = allPeopleRes.data.visitors || [];
+              setRecentVisitors(response.recentVisitors);
+              setAllRecentVisitorsPool(response.recentVisitors);
+              setAllChurchVisitors(response.allChurchPeople);
+              setIsLoadingAllVisitors(false);
+            } catch (supplementaryErr) {
+              logger.warn('⚠️ Failed to fetch supplementary visitor data:', supplementaryErr);
+            }
           } catch (wsError) {
             logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
             throw wsError; // Re-throw to trigger REST API fallback
@@ -1399,8 +1449,8 @@ const AttendancePage: React.FC = () => {
 
   // Helper function to send attendance updates based on configuration
   const sendAttendanceChange = async (
-    gatheringId: number, 
-    date: string, 
+    gatheringId: number,
+    date: string,
     records: Array<{ individualId: number; present: boolean }>
   ) => {
     logger.log('🔍 sendAttendanceChange called:', {
@@ -1411,27 +1461,35 @@ const AttendancePage: React.FC = () => {
       date,
       recordsCount: records.length
     });
-    
+
+    // Add timestamps to records for conflict detection
+    const recordsWithTimestamps = records.map(record => ({
+      ...record,
+      clientTimestamp: attendanceTimestamps[record.individualId] || (Date.now() + serverTimeOffset)
+    }));
+
+    let response;
+
     if (!webSocketMode.enabled) {
       logger.log('📡 Using REST API (WebSocket disabled)');
       // WebSocket disabled - use API directly
-      await attendanceAPI.record(gatheringId, date, {
-        attendanceRecords: records,
+      response = await attendanceAPI.record(gatheringId, date, {
+        attendanceRecords: recordsWithTimestamps,
         visitors: []
       });
-      return;
+      return response.data;
     }
 
     // Check if WebSocket is available and connected
     const shouldUseWebSocket = isWebSocketConnected && connectionStatus === 'connected';
-    
+
     if (!shouldUseWebSocket && webSocketMode.fallbackAllowed) {
       logger.log('📡 WebSocket not available, using REST API fallback');
-      await attendanceAPI.record(gatheringId, date, {
-        attendanceRecords: records,
+      response = await attendanceAPI.record(gatheringId, date, {
+        attendanceRecords: recordsWithTimestamps,
         visitors: []
       });
-      return;
+      return response.data;
     }
 
     // WebSocket enabled and connected - try WebSocket first
@@ -1444,16 +1502,18 @@ const AttendancePage: React.FC = () => {
         isPWAMode: isPWA,
         connectionStatus
       });
-      await sendAttendanceUpdate(gatheringId, date, records);
+      await sendAttendanceUpdate(gatheringId, date, recordsWithTimestamps);
       logger.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Successfully sent attendance via WebSocket`);
+      return null; // WebSocket doesn't return response data
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
         logger.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);
-        await attendanceAPI.record(gatheringId, date, {
-          attendanceRecords: records,
+        response = await attendanceAPI.record(gatheringId, date, {
+          attendanceRecords: recordsWithTimestamps,
           visitors: []
         });
         logger.log(`✅ Successfully saved attendance via API fallback`);
+        return response.data;
       } else {
         // Pure WebSocket mode - no fallback allowed
         console.error(`❌ WebSocket failed in pure mode:`, wsError);
@@ -1498,6 +1558,9 @@ const AttendancePage: React.FC = () => {
     logger.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
     
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
+    // Track timestamp for conflict detection (adjusted for server time)
+    const clientTimestamp = Date.now() + serverTimeOffset;
+    setAttendanceTimestamps(prev => ({ ...prev, [individualId]: clientTimestamp }));
     // Compute new present using refs to avoid stale state reads
     const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
     const newPresent = !currentPresent;
@@ -1540,11 +1603,21 @@ const AttendancePage: React.FC = () => {
           present: newPresent,
           personName: `${person?.firstName} ${person?.lastName}`
         });
-        
-        await sendAttendanceChange(selectedGathering.id, selectedDate, [
+
+        const response = await sendAttendanceChange(selectedGathering.id, selectedDate, [
           { individualId, present: newPresent }
         ]);
-        
+
+        // Check for conflicts and auto-refresh if needed
+        if (response && response.hasConflicts && response.skippedRecords?.length > 0) {
+          logger.log('⚠️ Conflicts detected, refreshing attendance data:', response.skippedRecords);
+          // Trigger refresh to get latest data
+          setAttendanceRefreshTrigger(prev => prev + 1);
+          // Show notification to user
+          setError(`Attendance updated by another user. Refreshing...`);
+          setTimeout(() => setError(''), 3000); // Clear message after 3 seconds
+        }
+
         setSavingById(prev => ({ ...prev, [individualId]: false }));
       } catch (err) {
         console.error(`❌ Failed to save attendance change for ${person?.firstName} ${person?.lastName}:`, err);
@@ -1758,12 +1831,13 @@ const AttendancePage: React.FC = () => {
     };
   }, [selectedGathering, selectedDate, isWebSocketConnected, onAttendanceUpdate, onVisitorUpdate]);
 
-  // Refresh gatherings when WebSocket reconnects (user might have been assigned/unassigned while offline)
+  // Refresh gatherings and sync time when WebSocket reconnects (user might have been assigned/unassigned while offline)
   useEffect(() => {
     if (isWebSocketConnected && user) {
       refreshGatherings();
+      syncTimeWithServer(); // Re-sync time on reconnect to handle clock drift
     }
-  }, [isWebSocketConnected, user?.id, refreshGatherings]);
+  }, [isWebSocketConnected, user?.id, refreshGatherings, syncTimeWithServer]);
 
   // WebSocket attendance updates using global context
   const attendanceWebSocket = {
@@ -2535,6 +2609,30 @@ const AttendancePage: React.FC = () => {
     }).length;
   }, [allVisitors, visitorAttendance]);
 
+  // Adult/child breakdown for attendance summary bubbles
+  const attendanceBreakdown = useMemo(() => {
+    // Regular attendees breakdown
+    const regularPresent = attendanceList.filter(p => presentById[p.id] ?? p.present);
+    const regularAdults = regularPresent.filter(p => !p.isChild).length;
+    const regularChildren = regularPresent.filter(p => p.isChild).length;
+
+    const regularAbsent = attendanceList.filter(p => !(presentById[p.id] ?? p.present));
+    const absentAdults = regularAbsent.filter(p => !p.isChild).length;
+    const absentChildren = regularAbsent.filter(p => p.isChild).length;
+
+    // Visitor breakdown
+    const presentVisitors = allVisitors.filter(v => v.id && visitorAttendance[v.id!]);
+    const visitorAdults = presentVisitors.filter(v => !v.isChild).length;
+    const visitorChildren = presentVisitors.filter(v => v.isChild).length;
+
+    return {
+      regular: { adults: regularAdults, children: regularChildren },
+      visitors: { adults: visitorAdults, children: visitorChildren },
+      absent: { adults: absentAdults, children: absentChildren },
+      total: { adults: regularAdults + visitorAdults, children: regularChildren + visitorChildren },
+    };
+  }, [attendanceList, presentById, allVisitors, visitorAttendance]);
+
   // Memoized family name computation for visitor form
   const computedVisitorFamilyName = useMemo(() => {
     const validMembers = visitorForm.persons.filter(member => 
@@ -3298,29 +3396,89 @@ const AttendancePage: React.FC = () => {
               </div>
             )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-gray-900">
-                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
-                </div>
-                <div className="text-sm text-gray-500">Total Present</div>
+              {/* Total Present */}
+              <div className="text-center relative">
+                <button
+                  onClick={() => setActiveStatBubble(activeStatBubble === 'total' ? null : 'total')}
+                  className="w-full focus:outline-none active:scale-95 transition-transform"
+                >
+                  <div className="text-2xl font-bold text-gray-900">
+                    {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
+                  </div>
+                  <div className="text-sm text-gray-500">Total Present</div>
+                </button>
+                {activeStatBubble === 'total' && (
+                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                    <div className="flex gap-3">
+                      <span>Adults: {attendanceBreakdown.total.adults}</span>
+                      <span>Children: {attendanceBreakdown.total.children}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-primary-600">
-                  {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                </div>
-                <div className="text-sm text-gray-500">Regular Attendees</div>
+              {/* Regular Attendees */}
+              <div className="text-center relative">
+                <button
+                  onClick={() => setActiveStatBubble(activeStatBubble === 'regular' ? null : 'regular')}
+                  className="w-full focus:outline-none active:scale-95 transition-transform"
+                >
+                  <div className="text-2xl font-bold text-primary-600">
+                    {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
+                  </div>
+                  <div className="text-sm text-gray-500">Regular Attendees</div>
+                </button>
+                {activeStatBubble === 'regular' && (
+                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                    <div className="flex gap-3">
+                      <span>Adults: {attendanceBreakdown.regular.adults}</span>
+                      <span>Children: {attendanceBreakdown.regular.children}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-600">
-                  {getVisitorPeopleCount}
-                </div>
-                <div className="text-sm text-gray-500">Visitors</div>
+              {/* Visitors */}
+              <div className="text-center relative">
+                <button
+                  onClick={() => setActiveStatBubble(activeStatBubble === 'visitors' ? null : 'visitors')}
+                  className="w-full focus:outline-none active:scale-95 transition-transform"
+                >
+                  <div className="text-2xl font-bold text-green-600">
+                    {getVisitorPeopleCount}
+                  </div>
+                  <div className="text-sm text-gray-500">Visitors</div>
+                </button>
+                {activeStatBubble === 'visitors' && (
+                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                    <div className="flex gap-3">
+                      <span>Adults: {attendanceBreakdown.visitors.adults}</span>
+                      <span>Children: {attendanceBreakdown.visitors.children}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-gray-400">
-                  {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
-                </div>
-                <div className="text-sm text-gray-500">Absent</div>
+              {/* Absent */}
+              <div className="text-center relative">
+                <button
+                  onClick={() => setActiveStatBubble(activeStatBubble === 'absent' ? null : 'absent')}
+                  className="w-full focus:outline-none active:scale-95 transition-transform"
+                >
+                  <div className="text-2xl font-bold text-gray-400">
+                    {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
+                  </div>
+                  <div className="text-sm text-gray-500">Absent</div>
+                </button>
+                {activeStatBubble === 'absent' && (
+                  <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
+                    <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-800 rotate-45"></div>
+                    <div className="flex gap-3">
+                      <span>Adults: {attendanceBreakdown.absent.adults}</span>
+                      <span>Children: {attendanceBreakdown.absent.children}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -3563,19 +3721,20 @@ const AttendancePage: React.FC = () => {
                         </button>
                       </div>
                     )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                       {group.members.map((person: Individual) => {
                         // Use presentById first (like visitor system), fallback to person.present
                         const isPresent = presentById[person.id] !== undefined ? presentById[person.id] : Boolean(person.present);
                         const isSaving = Boolean(savingById[person.id] || person.isSaving);
                         const displayName = getPersonDisplayName(person, group.familyName);
                         const needsWideLayout = shouldUseWideLayout(displayName);
-                        
+                        const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
+
                         return (
                           <label
                             key={person.id}
-                            className={`flex items-center cursor-pointer transition-colors ${
-                              groupByFamily 
+                            className={`relative flex items-center cursor-pointer transition-colors ${
+                              groupByFamily
                                 ? `p-3 rounded-md border-2 ${
                                     isPresent
                                       ? 'border-primary-500 bg-primary-50'
@@ -3604,13 +3763,27 @@ const AttendancePage: React.FC = () => {
                             </div>
                             <span className="ml-3 text-sm font-medium text-gray-900">
                               {displayName}
-                              {person.isChild && (
-                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
-                              )}
                               {isSaving && (
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
                               )}
                             </span>
+
+                            {/* Floating Badge at Top Right */}
+                            {badgeInfo && (
+                              <span
+                                className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                  badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                                }`}
+                                style={badgeInfo.styles}
+                              >
+                                {badgeInfo.icon && (
+                                  <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                                )}
+                                {badgeInfo.text && (
+                                  <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
+                                )}
+                              </span>
+                            )}
                           </label>
                         );
                       })}
@@ -3700,7 +3873,7 @@ const AttendancePage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                     {group.members.map((person: any, index: number) => {
                       const parts = person.name.trim().split(' ');
                       const firstName = parts[0];
@@ -3709,13 +3882,14 @@ const AttendancePage: React.FC = () => {
                       const isPresent = person.id ? visitorAttendance[person.id] || false : false;
                       const displayName = getPersonDisplayName(person, group.familyName);
                       const needsWideLayout = shouldUseWideLayout(displayName);
+                      const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
 
                       const isHighlighted = shouldHighlightVisitor(person, index);
-                      
+
                       return (
                         <label
                           key={person.id || `visitor_${index}`}
-                          className={`flex items-center cursor-pointer transition-colors ${
+                          className={`relative flex items-center cursor-pointer transition-colors ${
                             groupByFamily && group.familyName
                               ? `p-3 rounded-md border-2 ${
                                   isPresent
@@ -3747,20 +3921,17 @@ const AttendancePage: React.FC = () => {
                               <CheckIcon className="h-3 w-3 text-white" />
                             )}
                           </div>
-                          <div className="ml-3 flex-1">
+                          <div className="ml-3 flex-1 min-w-0">
                             <span className="text-sm font-medium text-gray-900">
                               {displayName}
-                              {person.isChild && (
-                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
-                              )}
                             </span>
                             {/* Show visitor type and edit for groups without header */}
                             {(!groupByFamily || !group.familyName) && (
                               <div className="flex items-center space-x-2 mt-1">
                                 {person.visitorType !== 'regular' && (
                                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                    person.visitorType === 'potential_regular' 
-                                      ? 'bg-green-100 text-green-800' 
+                                    person.visitorType === 'potential_regular'
+                                      ? 'bg-green-100 text-green-800'
                                       : 'bg-gray-100 text-gray-800'
                                   }`}>
                                     {person.visitorType === 'potential_regular' ? 'Local' : 'Traveller'}
@@ -3783,6 +3954,23 @@ const AttendancePage: React.FC = () => {
                               </div>
                             )}
                           </div>
+
+                          {/* Floating Badge at Top Right */}
+                          {badgeInfo && (
+                            <span
+                              className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                              }`}
+                              style={badgeInfo.styles}
+                            >
+                              {badgeInfo.icon && (
+                                <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4" />
+                              )}
+                              {badgeInfo.text && (
+                                <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
+                              )}
+                            </span>
+                          )}
                         </label>
                       );
                     })}
@@ -3846,7 +4034,7 @@ const AttendancePage: React.FC = () => {
                             )}
                           </div>
                         )}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                           {group.members.map((person: any, idx: number) => {
                             const parts = person.name.trim().split(' ');
                             const firstName = parts[0];
@@ -3854,14 +4042,15 @@ const AttendancePage: React.FC = () => {
                             const cleanName = (lastName === 'Unknown' || !lastName) ? firstName : person.name;
                             const displayName = getPersonDisplayName(person, group.familyName);
                             const needsWideLayout = shouldUseWideLayout(displayName);
-                            
+                            const badgeInfo = !badgeSettingsLoading ? getBadgeInfo(person) : null;
+
                             return (
-                              <div 
-                                key={person.id || `all_${idx}`} 
+                              <div
+                                key={person.id || `all_${idx}`}
                                 onClick={() => !isAttendanceLocked && person.id && addIndividualFromAll(person.id, displayName)}
-                                className={`p-3 rounded-md ${groupByFamily && group.familyName ? 'border-2' : 'border'} ${
-                                  isAttendanceLocked 
-                                    ? 'border-gray-200 cursor-not-allowed opacity-50' 
+                                className={`relative p-3 rounded-md ${groupByFamily && group.familyName ? 'border-2' : 'border'} ${
+                                  isAttendanceLocked
+                                    ? 'border-gray-200 cursor-not-allowed opacity-50'
                                     : 'border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer transition-all'
                                 } ${needsWideLayout ? 'col-span-2' : ''}`}
                                 title={isAttendanceLocked ? 'Editing locked' : `Click to add ${displayName} to this service`}
@@ -3869,12 +4058,26 @@ const AttendancePage: React.FC = () => {
                                 <div className="flex items-center justify-between">
                                   <div className="text-sm font-medium text-gray-900">
                                     {displayName}
-                                    {person.isChild && (
-                                      <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Child</span>
-                                    )}
                                   </div>
-                                  <PlusIcon className={`h-4 w-4 flex-shrink-0 ml-2 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
+                                  <PlusIcon className={`h-4 w-4 flex-shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
                                 </div>
+
+                                {/* Floating Badge at Top Right */}
+                                {badgeInfo && (
+                                  <span
+                                    className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                      badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                                    }`}
+                                    style={badgeInfo.styles}
+                                  >
+                                    {badgeInfo.icon && (
+                                      <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4" />
+                                    )}
+                                    {badgeInfo.text && (
+                                      <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
+                                    )}
+                                  </span>
+                                )}
                                 {!groupByFamily && group.familyId && (
                                   <div className="mt-2 pt-2 border-t border-gray-200">
                                     <button

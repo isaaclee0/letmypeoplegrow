@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useKiosk } from '../contexts/KioskContext';
+import { useCheckIns } from '../contexts/CheckInsContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
@@ -22,16 +22,16 @@ import {
   ArrowPathIcon,
   ArrowDownTrayIcon,
   SparklesIcon,
-  ComputerDesktopIcon,
+  ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
 
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
-  const [kioskAvailable, setKioskAvailable] = useState(false);
+  const [checkInsAvailable, setCheckInsAvailable] = useState(false);
   const { user, logout } = useAuth();
-  const kioskCtx = useKiosk();
+  const checkInsCtx = useCheckIns();
   const { isOfflineMode, connectionStatus } = useWebSocket();
   const { updateAvailable, performUpdate } = usePWAUpdate();
   const isOffline = isOfflineMode || connectionStatus === 'offline';
@@ -63,26 +63,26 @@ const Layout: React.FC = () => {
     fetchAiStatus();
   }, []);
 
-  // Load kiosk availability (any gathering has kiosk_enabled)
+  // Load check-ins availability (any gathering has kiosk_enabled)
   useEffect(() => {
-    const cached = localStorage.getItem('kiosk_available');
+    const cached = localStorage.getItem('checkins_available');
     if (cached !== null) {
-      setKioskAvailable(cached === 'true');
+      setCheckInsAvailable(cached === 'true');
     }
 
-    const fetchKioskStatus = async () => {
+    const fetchCheckInsStatus = async () => {
       try {
         const response = await gatheringsAPI.getAll();
         const gatherings = response.data.gatherings || [];
-        const hasKiosk = gatherings.some((g: any) => g.kioskEnabled);
-        setKioskAvailable(hasKiosk);
-        localStorage.setItem('kiosk_available', hasKiosk.toString());
+        const hasCheckIns = gatherings.some((g: any) => g.kioskEnabled);
+        setCheckInsAvailable(hasCheckIns);
+        localStorage.setItem('checkins_available', hasCheckIns.toString());
       } catch (error) {
         // Non-critical
       }
     };
 
-    fetchKioskStatus();
+    fetchCheckInsStatus();
   }, []);
 
   // Close notifications when clicking outside
@@ -112,8 +112,8 @@ const Layout: React.FC = () => {
     ...(aiConfigured && user?.role === 'admin' ? [
       { name: 'AI Insights', href: '/app/ai-insights', icon: SparklesIcon }
     ] : []),
-    ...(kioskAvailable ? [
-      { name: 'Kiosk', href: '/app/kiosk', icon: ComputerDesktopIcon }
+    ...(checkInsAvailable ? [
+      { name: 'Check-ins', href: '/app/checkins', icon: ClipboardDocumentCheckIcon }
     ] : []),
     ...(user?.role === 'admin' ? [
       { name: 'Import', href: '/app/import', icon: ArrowDownTrayIcon }
@@ -131,9 +131,9 @@ const Layout: React.FC = () => {
     navigate('/app/profile');
   };
 
-  // Kiosk locked mode: hide sidebar and top bar entirely
+  // Check-in locked mode: hide sidebar and top bar entirely
   // Uses fixed positioning to prevent iOS Safari from scrolling the body when inputs are focused
-  if (kioskCtx.isLocked) {
+  if (checkInsCtx.isLocked) {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 overflow-hidden">
         <main className="h-full overflow-y-auto overscroll-none focus:outline-none">
@@ -150,7 +150,7 @@ const Layout: React.FC = () => {
   return (
     <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
       {/* Update notification bar removed with migrations */}
-      
+
       <div className="flex overflow-hidden h-full">
         {/* Mobile sidebar */}
       <div className={`fixed inset-0 flex z-40 md:hidden ${sidebarOpen ? '' : 'hidden'}`}>
@@ -164,7 +164,7 @@ const Layout: React.FC = () => {
               <XMarkIcon className="h-6 w-6 text-white" />
             </button>
           </div>
-          <div className="flex-1 h-0 pt-5 pb-4 overflow-y-auto flex flex-col">
+          <div className="flex-1 h-0 pt-5 pb-4 overflow-y-auto scrollbar-hide flex flex-col">
             {/* User Profile Section */}
             <div className="px-4 py-3 border-b border-primary-400">
               <div className="flex items-center">
@@ -247,7 +247,7 @@ const Layout: React.FC = () => {
       <div className="hidden md:flex md:flex-shrink-0">
         <div className="flex flex-col w-64">
           <div className="flex flex-col h-0 flex-1 border-r border-primary-700 bg-primary-500">
-                        <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto">
+                        <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto scrollbar-hide">
               <nav className="flex-1 px-2 bg-primary-500 space-y-1">
                 {navigation.map((item) => (
                   <Link
@@ -413,7 +413,7 @@ const Layout: React.FC = () => {
         </div>
 
         {/* Page content */}
-        <main className="flex-1 relative overflow-y-auto focus:outline-none">
+        <main className="flex-1 relative overflow-y-auto scrollbar-thin focus:outline-none">
           <div className="py-6">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
               <Outlet />

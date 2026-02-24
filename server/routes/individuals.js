@@ -153,12 +153,15 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 router.get('/', async (req, res) => {
   try {
     const individuals = await Database.query(`
-      SELECT 
+      SELECT
         i.id,
         i.first_name,
         i.last_name,
         i.people_type,
         i.is_child,
+        i.badge_text,
+        i.badge_color,
+        i.badge_icon,
         i.family_id,
         f.family_name,
         i.is_active,
@@ -199,12 +202,15 @@ router.get('/', async (req, res) => {
 router.get('/archived', async (req, res) => {
   try {
     const individuals = await Database.query(`
-      SELECT 
+      SELECT
         i.id,
         i.first_name,
         i.last_name,
         i.people_type,
         i.is_child,
+        i.badge_text,
+        i.badge_color,
+        i.badge_icon,
         i.family_id,
         f.family_name,
         i.is_active,
@@ -288,9 +294,9 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, familyId, peopleType, isChild } = req.body;
+    const { firstName, lastName, familyId, peopleType, isChild, badgeText, badgeColor, badgeIcon } = req.body;
 
-    console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType, isChild });
+    console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType, isChild, badgeText, badgeColor, badgeIcon });
 
     // Get current family_id before update (to sync old family if familyId is changing)
     const currentIndividual = await Database.query(
@@ -323,6 +329,22 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     if (isChild !== undefined) {
       fields.push('is_child = ?');
       values.push(isChild ? true : false);
+    }
+
+    if (badgeText !== undefined) {
+      fields.push('badge_text = ?');
+      // Keep null as null (use default), empty string as empty string (no text), value as value (custom)
+      values.push(badgeText);
+    }
+
+    if (badgeColor !== undefined) {
+      fields.push('badge_color = ?');
+      values.push(badgeColor || null);
+    }
+
+    if (badgeIcon !== undefined) {
+      fields.push('badge_icon = ?');
+      values.push(badgeIcon || null);
     }
 
     values.push(id, req.user.church_id);

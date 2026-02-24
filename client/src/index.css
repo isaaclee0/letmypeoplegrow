@@ -75,6 +75,25 @@ code {
   animation-iteration-count: 1, 3;
 }
 
+/* Consistent thin scrollbar */
+.scrollbar-thin {
+  scrollbar-width: thin;  /* Firefox */
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;  /* Firefox */
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
 /* Hide scrollbars for tab slider */
 .scrollbar-hide {
   -ms-overflow-style: none;  /* Internet Explorer 10+ */

@@ -954,7 +954,7 @@ const ManageGatheringsPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Kiosk Mode Toggle - only for standard gatherings */}
+                {/* Check-ins Toggle - only for standard gatherings */}
                 {editFormData.attendanceType === 'standard' && (
                   <div className="space-y-4">
                     <div>
@@ -966,11 +966,11 @@ const ManageGatheringsPage: React.FC = () => {
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                         />
                         <span className="ml-2 text-sm font-medium text-gray-700">
-                          Allow Self Sign-In (Kiosk Mode)
+                          Enable Check-ins
                         </span>
                       </label>
                       <p className="mt-1 text-xs text-gray-500 ml-6">
-                        Enables a self-service sign-in page where attendees can check themselves in via a shared device. Uses the gathering's end time to close sign-in.
+                        Enables the check-ins page with self-service and leader check-in modes. Uses the gathering's end time to close sign-in.
                       </p>
                     </div>
                   </div>
@@ -1122,7 +1122,7 @@ const ManageGatheringsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Kiosk Mode Toggle - only for standard gatherings */}
+                  {/* Check-ins Toggle - only for standard gatherings */}
                   {createGatheringData.attendanceType === 'standard' && (
                     <div className="space-y-4">
                       <div>
@@ -1134,11 +1134,11 @@ const ManageGatheringsPage: React.FC = () => {
                             className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                           />
                           <span className="ml-2 text-sm font-medium text-gray-700">
-                            Allow Self Sign-In (Kiosk Mode)
+                            Enable Check-ins
                           </span>
                         </label>
                         <p className="mt-1 text-xs text-gray-500 ml-6">
-                          Enables a self-service sign-in page where attendees can check themselves in via a shared device. Uses the gathering's end time to close sign-in.
+                          Enables the check-ins page with self-service and leader check-in modes. Uses the gathering's end time to close sign-in.
                         </p>
                       </div>
                     </div>

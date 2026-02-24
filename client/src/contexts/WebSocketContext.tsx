@@ -252,7 +252,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     setTimeout(() => {
       createSocketConnection(serverUrl, authData, tabId, initializingRef, connectionAttemptsRef, lastConnectionAttemptRef);
     }, 100);
-  }, [user?.id]); // Trigger connection when user becomes available (use stable user.id to prevent unnecessary reconnects)
+  }, [user?.id, user?.church_id]); // Trigger connection when user becomes available or church_id is populated
 
   // Separate function for socket creation to avoid closure issues
   const createSocketConnection = (serverUrl: string, authData: any, tabId: React.MutableRefObject<string>, initializingRef: React.MutableRefObject<boolean>, connectionAttemptsRef: React.MutableRefObject<number>, lastConnectionAttemptRef: React.MutableRefObject<number>) => {
@@ -369,7 +369,30 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     newSocket.on('connect_error', async (error: Error) => {
       console.error(`❌ [Tab ${tabId.current}] WebSocket connection error:`, error.message);
-      
+
+      // Check if this is an authentication error (no token or expired token)
+      // This commonly happens on first login when the cookie may not be ready yet
+      if (error.message && (
+        error.message.includes('Authentication required') ||
+        error.message.includes('Token expired') ||
+        error.message.includes('Invalid token')
+      )) {
+        console.log(`🔑 [Tab ${tabId.current}] WebSocket auth error: ${error.message} - will refresh token and retry`);
+        try {
+          const refreshSuccess = await refreshTokenAndUserData();
+          if (refreshSuccess) {
+            console.log(`✅ [Tab ${tabId.current}] Token refreshed - socket.io will retry with fresh cookie`);
+          } else {
+            console.log(`⚠️ [Tab ${tabId.current}] Token refresh failed - socket.io will still retry`);
+          }
+        } catch (refreshError) {
+          console.log(`⚠️ [Tab ${tabId.current}] Token refresh error - socket.io will still retry`);
+        }
+        // Let socket.io's built-in reconnection handle the retry
+        setConnectionStatus('connecting');
+        return;
+      }
+
       // Check if this is a church ID mismatch error and try to fix it
       if (error.message && error.message.includes('Church ID mismatch')) {
         console.log(`🔧 [Tab ${tabId.current}] Detected church ID mismatch - attempting to refresh token and user data`);
@@ -377,8 +400,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
           const refreshSuccess = await refreshTokenAndUserData();
           if (refreshSuccess) {
             console.log(`✅ [Tab ${tabId.current}] Token and user data refreshed successfully - will retry connection on next attempt`);
-            // The WebSocket will automatically retry and should work with the fresh token
-            // Don't reset initializingRef here - let socket.io handle the retry
           } else {
             console.log(`❌ [Tab ${tabId.current}] Failed to refresh token and user data - falling back to page refresh`);
             window.location.reload();
@@ -391,25 +412,22 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
           return;
         }
       }
-      
+
       // Check if this is a server unavailable error (timeout, connection refused, etc.)
       if (error.message && (
-        error.message.includes('timeout') || 
+        error.message.includes('timeout') ||
         error.message.includes('ECONNREFUSED') ||
         error.message.includes('Network Error') ||
         error.message.includes('Failed to fetch')
       )) {
         console.log(`🌐 [Tab ${tabId.current}] Server appears to be unavailable - socket.io will retry automatically`);
-        // Keep status as 'connecting' to show retry is in progress
         setConnectionStatus('connecting');
-        // Don't reset initializingRef - let socket.io handle retries
         return;
       }
-      
+
       // For other errors, still allow socket.io to retry
       setIsConnected(false);
-      setConnectionStatus('connecting'); // Keep as 'connecting' to allow retries
-      // Don't reset initializingRef on error - let socket.io handle retries
+      setConnectionStatus('connecting');
     });
 
     newSocket.on('reconnect_attempt', (attemptNumber: number) => {
@@ -457,21 +475,20 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
     newSocket.on('reconnect_failed', () => {
       console.error(`❌ [Tab ${tabId.current}] WebSocket reconnection failed after all attempts`);
-      
+
       // Check if browser is offline - if so, enter offline mode immediately
       if (!navigator.onLine) {
         console.log(`📴 Browser is offline - entering offline mode`);
         setIsOfflineMode(true);
         setConnectionStatus('offline');
         initializingRef.current = false;
-        return; // Don't retry if browser is offline
+        return;
       }
-      
+
       setConnectionStatus('error');
-      initializingRef.current = false; // Allow manual retry after all automatic retries fail
-      
-      // Set up a delayed retry mechanism - wait 10 seconds then try again
-      // Only if browser is still online
+      initializingRef.current = false;
+
+      // Retry after 5 seconds - disconnect old socket and let the effect create a fresh one
       setTimeout(() => {
         if (!navigator.onLine) {
           console.log(`📴 Browser went offline during delayed retry - entering offline mode`);
@@ -479,18 +496,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
           setConnectionStatus('offline');
           return;
         }
-        
+
         if (!newSocket.connected && userRef.current) {
           console.log(`🔄 [Tab ${tabId.current}] Attempting delayed retry after reconnect_failed...`);
-          // Reset flags to allow retry
           initializingRef.current = false;
           connectionAttemptsRef.current = 0;
           lastConnectionAttemptRef.current = 0;
-          // Trigger reconnection by disconnecting and reconnecting
           newSocket.disconnect();
           newSocket.connect();
         }
-      }, 10000); // Wait 10 seconds before delayed retry
+      }, 5000);
     });
 
     // Event handlers for real-time updates

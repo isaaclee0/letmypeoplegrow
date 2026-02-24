@@ -6,7 +6,7 @@ import { PWAUpdateProvider, usePWAUpdate } from './contexts/PWAUpdateContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { SmartCacheProvider } from './contexts/SmartCacheContext';
-import { KioskProvider } from './contexts/KioskContext';
+import { CheckInsProvider } from './contexts/CheckInsContext';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AttendancePage from './pages/AttendancePage';
@@ -24,7 +24,7 @@ import ProfilePage from './pages/ProfilePage';
 import WebSocketTestPage from './pages/WebSocketTestPage';
 import ImportPage from './pages/ImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
-import KioskPage from './pages/KioskPage';
+import CheckInsPage from './pages/CheckInsPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -122,7 +122,7 @@ function App() {
       <WebSocketProvider>
         <SettingsProvider>
           <SmartCacheProvider>
-            <KioskProvider>
+            <CheckInsProvider>
             <PWAUpdateProvider>
               <ToastContainer>
               <Router>
@@ -210,7 +210,8 @@ function App() {
                       </RoleProtectedRoute>
                     }
                   />
-                  <Route path="kiosk" element={<KioskPage />} />
+                  <Route path="checkins" element={<CheckInsPage />} />
+                  <Route path="kiosk" element={<Navigate to="/app/checkins" replace />} />
                   <Route path="websocket-test" element={<WebSocketTestPage />} />
                   <Route path="notification-rules" element={
                     <RoleProtectedRoute allowedRoles={['admin', 'coordinator']}>
@@ -224,7 +225,7 @@ function App() {
               </Router>
               </ToastContainer>
             </PWAUpdateProvider>
-            </KioskProvider>
+            </CheckInsProvider>
           </SmartCacheProvider>
         </SettingsProvider>
       </WebSocketProvider>

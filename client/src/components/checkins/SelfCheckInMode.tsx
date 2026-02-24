@@ -1,25 +1,18 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { format, addDays, startOfWeek, addWeeks, startOfDay, isBefore, differenceInCalendarDays } from 'date-fns';
-import { useAuth } from '../contexts/AuthContext';
-import { useKiosk } from '../contexts/KioskContext';
-import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../services/api';
+import { useAuth } from '../../contexts/AuthContext';
+import { useCheckIns } from '../../contexts/CheckInsContext';
+import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../../services/api';
 import {
   MagnifyingGlassIcon,
   PlusIcon,
   CheckCircleIcon,
   XMarkIcon,
   ArrowPathIcon,
-  UserGroupIcon,
   LockClosedIcon,
   LockOpenIcon,
   ArrowRightOnRectangleIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  ArrowDownTrayIcon,
-  ClockIcon,
-  TrashIcon,
 } from '@heroicons/react/24/outline';
-import Modal from '../components/Modal';
+import Modal from '../Modal';
 
 interface FamilyGroup {
   familyId: number;
@@ -28,7 +21,7 @@ interface FamilyGroup {
 }
 
 /**
- * Lightweight markdown renderer for kiosk welcome messages.
+ * Lightweight markdown renderer for welcome messages.
  * Supports: **bold**, *italic*, # headings (h1-h3), [links](url), line breaks.
  */
 function renderMarkdown(text: string): string {
@@ -64,11 +57,6 @@ function escapeAndInline(text: string): string {
 
 type KioskPhase = 'setup' | 'pin' | 'active';
 type KioskMode = 'checkin' | 'checkout';
-
-const DAY_MAP: Record<string, number> = {
-  'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
-  'Thursday': 4, 'Friday': 5, 'Saturday': 6,
-};
 
 // ===== Offline caching helpers =====
 const KIOSK_ATTENDANCE_CACHE_KEY = 'kiosk_attendance_cache';
@@ -136,103 +124,45 @@ async function syncOfflineQueue(): Promise<number> {
   return synced;
 }
 
-/**
- * Compute the next upcoming gathering date (today or in the future).
- * Returns the date string (yyyy-MM-dd) and the number of days away.
- */
-function getNextGatheringDate(gathering: GatheringType): { date: string; daysAway: number } {
-  const today = startOfDay(new Date());
-  const todayStr = format(today, 'yyyy-MM-dd');
-
-  // Custom schedule handling
-  if (gathering.customSchedule) {
-    const cs = gathering.customSchedule;
-    if (cs.type === 'one_off') {
-      const diff = differenceInCalendarDays(new Date(cs.startDate), today);
-      return { date: cs.startDate, daysAway: Math.max(diff, 0) };
-    }
-    if (cs.type === 'recurring' && cs.pattern) {
-      const endDate = cs.endDate ? new Date(cs.endDate) : addWeeks(today, 8);
-      const dates: string[] = [];
-      const startDate = new Date(cs.startDate);
-
-      if (cs.pattern.frequency === 'daily') {
-        if (cs.pattern.customDates?.length) {
-          dates.push(...cs.pattern.customDates);
-        } else {
-          let cur = startDate;
-          while (isBefore(cur, endDate)) {
-            dates.push(format(cur, 'yyyy-MM-dd'));
-            cur = addDays(cur, cs.pattern.interval || 1);
-          }
-        }
-      } else if (cs.pattern.frequency === 'weekly' || cs.pattern.frequency === 'biweekly') {
-        const targetDays = (cs.pattern.daysOfWeek || []).map(d => DAY_MAP[d]).filter(d => d !== undefined);
-        let cur = startDate;
-        let weekCount = 0;
-        while (isBefore(cur, endDate)) {
-          const skip = cs.pattern.frequency === 'biweekly' && weekCount % 2 !== 0;
-          if (!skip) {
-            const ws = startOfWeek(cur, { weekStartsOn: 0 });
-            for (const td of targetDays) {
-              const eventDate = addDays(ws, td);
-              if (!isBefore(eventDate, startDate) && isBefore(eventDate, endDate)) {
-                dates.push(format(eventDate, 'yyyy-MM-dd'));
-              }
-            }
-          }
-          cur = addWeeks(cur, 1);
-          weekCount++;
-        }
-      } else if (cs.pattern.frequency === 'monthly' && cs.pattern.dayOfMonth) {
-        let cur = startDate;
-        while (isBefore(cur, endDate)) {
-          const eventDate = new Date(cur.getFullYear(), cur.getMonth(), cs.pattern.dayOfMonth);
-          if (!isBefore(eventDate, startDate) && isBefore(eventDate, endDate)) {
-            dates.push(format(eventDate, 'yyyy-MM-dd'));
-          }
-          cur = addWeeks(cur, 4);
-        }
-      }
-
-      const sorted = dates.sort();
-      const next = sorted.find(d => d >= todayStr) || sorted[sorted.length - 1];
-      if (next) {
-        const diff = differenceInCalendarDays(new Date(next), today);
-        return { date: next, daysAway: Math.max(diff, 0) };
-      }
-    }
-  }
-
-  // Standard weekly-type gatherings
-  const targetDay = DAY_MAP[gathering.dayOfWeek || ''];
-  if (targetDay === undefined) {
-    return { date: todayStr, daysAway: 0 };
-  }
-
-  const todayDow = today.getDay();
-  let daysUntil = targetDay - todayDow;
-  if (daysUntil < 0) daysUntil += 7;
-
-  const nextDate = addDays(today, daysUntil);
-  const dateStr = format(nextDate, 'yyyy-MM-dd');
-  return { date: dateStr, daysAway: daysUntil };
+interface SelfCheckInModeProps {
+  selectedGathering: GatheringType;
+  gatheringDate: string;
+  daysAway: number;
+  onBack: () => void;
 }
 
-const KioskPage: React.FC = () => {
-  const { user, logout } = useAuth();
-  const kiosk = useKiosk();
+const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
+  selectedGathering,
+  gatheringDate,
+  daysAway,
+  onBack,
+}) => {
+  const { logout } = useAuth();
+  const checkIns = useCheckIns();
 
   // ===== Phase management =====
-  const [phase, setPhase] = useState<KioskPhase>(kiosk.isLocked ? 'active' : 'setup');
+  const [phase, setPhase] = useState<KioskPhase>(checkIns.isLocked ? 'active' : 'setup');
 
   // ===== Setup phase state =====
-  const [kioskGatherings, setKioskGatherings] = useState<GatheringType[]>([]);
-  const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
-  const [startTime, setStartTime] = useState(kiosk.startTime || '10:00');
-  const [endTime, setEndTime] = useState(kiosk.endTime || '11:00');
-  const [customMessage, setCustomMessage] = useState(kiosk.customMessage || 'Welcome\nPlease use this to sign in/out');
-  const [isLoading, setIsLoading] = useState(true);
+  const [startTime, setStartTime] = useState(() => {
+    if (checkIns.startTime) return checkIns.startTime;
+    if (selectedGathering.startTime) return selectedGathering.startTime.substring(0, 5);
+    return '10:00';
+  });
+  const [endTime, setEndTime] = useState(() => {
+    if (checkIns.endTime) return checkIns.endTime;
+    if (selectedGathering.endTime) return selectedGathering.endTime.substring(0, 5);
+    // Default: 1 hour after start
+    const st = selectedGathering.startTime ? selectedGathering.startTime.substring(0, 5) : '10:00';
+    const [h, m] = st.split(':').map(Number);
+    const endH = (h + 1) % 24;
+    return `${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  });
+  const [customMessage, setCustomMessage] = useState(() => {
+    if (checkIns.customMessage) return checkIns.customMessage;
+    if (selectedGathering.kioskMessage) return selectedGathering.kioskMessage;
+    return 'Welcome\nPlease use this to sign in/out';
+  });
 
   // ===== PIN state =====
   const [pinInput, setPinInput] = useState('');
@@ -271,38 +201,6 @@ const KioskPage: React.FC = () => {
   const [guardianName, setGuardianName] = useState('');
   const [guardianContact, setGuardianContact] = useState('');
 
-  // ===== Past gatherings history =====
-  const [historySessions, setHistorySessions] = useState<Array<{
-    date: string;
-    records: Array<{
-      id: number;
-      individualId: number;
-      action: 'checkin' | 'checkout';
-      signerName: string | null;
-      createdAt: string;
-      firstName: string;
-      lastName: string;
-      familyName: string | null;
-    }>;
-  }>>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [expandedDate, setExpandedDate] = useState<string | null>(null);
-  const [historyDetail, setHistoryDetail] = useState<{
-    date: string;
-    individuals: Array<{
-      individualId: number;
-      firstName: string;
-      lastName: string;
-      familyName: string | null;
-      checkins: Array<{ time: string; signerName: string | null }>;
-      checkouts: Array<{ time: string; signerName: string | null }>;
-    }>;
-  } | null>(null);
-  const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
-
-  // Computed gathering date (next upcoming date for this gathering type)
-  const [gatheringDate, setGatheringDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [daysAway, setDaysAway] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -330,18 +228,9 @@ const KioskPage: React.FC = () => {
     return () => document.removeEventListener('focusin', handleFocusIn);
   }, [phase]);
 
-  // ===== Recompute gathering date when gathering changes =====
+  // ===== Pre-populate settings from gathering (only in setup phase) =====
   useEffect(() => {
-    if (selectedGathering) {
-      const { date, daysAway: da } = getNextGatheringDate(selectedGathering);
-      setGatheringDate(date);
-      setDaysAway(da);
-    }
-  }, [selectedGathering]);
-
-  // ===== Pre-populate kiosk settings from gathering =====
-  useEffect(() => {
-    if (selectedGathering && phase === 'setup') {
+    if (phase === 'setup') {
       if (selectedGathering.endTime) {
         setEndTime(selectedGathering.endTime.substring(0, 5));
       }
@@ -386,79 +275,15 @@ const KioskPage: React.FC = () => {
     };
   }, [phase, computeDefaultMode]);
 
-  // ===== Load kiosk-enabled gatherings =====
-  useEffect(() => {
-    const loadGatherings = async () => {
-      try {
-        setIsLoading(true);
-        const response = await gatheringsAPI.getAll();
-        const all: GatheringType[] = response.data.gatherings || [];
-        const kioskList = all.filter(g => g.kioskEnabled && g.attendanceType === 'standard');
-        setKioskGatherings(kioskList);
-        if (kioskList.length === 1) {
-          const g = kioskList[0];
-          setSelectedGathering(g);
-          if (g.startTime) {
-            const st = g.startTime.substring(0, 5);
-            setStartTime(st);
-            const [h, m] = st.split(':').map(Number);
-            const endH = (h + 1) % 24;
-            setEndTime(`${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-          }
-        }
-      } catch (err) {
-        // If offline in setup mode, try cached gatherings
-        try {
-          const cachedGatherings = localStorage.getItem('gatherings_cached_data');
-          if (cachedGatherings) {
-            const parsed = JSON.parse(cachedGatherings);
-            const all: GatheringType[] = parsed.gatherings || [];
-            const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
-            setKioskGatherings(kioskList);
-            if (kioskList.length === 1) {
-              setSelectedGathering(kioskList[0]);
-            }
-          } else {
-            setError('Failed to load gatherings.');
-          }
-        } catch {
-          setError('Failed to load gatherings.');
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadGatherings();
-  }, []);
-
   // If we're already locked (e.g., page reload), restore state from context
   useEffect(() => {
-    if (kiosk.isLocked && kiosk.gatheringId) {
+    if (checkIns.isLocked && checkIns.gatheringId) {
       setPhase('active');
-      if (kiosk.startTime) setStartTime(kiosk.startTime);
-      if (kiosk.endTime) setEndTime(kiosk.endTime);
-      if (kiosk.customMessage) setCustomMessage(kiosk.customMessage);
-
-      const loadLockedGathering = async () => {
-        try {
-          const response = await gatheringsAPI.getAll();
-          const all: GatheringType[] = response.data.gatherings || [];
-          const g = all.find(g => g.id === kiosk.gatheringId);
-          if (g) setSelectedGathering(g);
-        } catch (err) {
-          // Offline: create minimal gathering object from kiosk context
-          setSelectedGathering({
-            id: kiosk.gatheringId!,
-            name: kiosk.gatheringName || 'Gathering',
-            attendanceType: 'standard',
-            isActive: true,
-            kioskEnabled: true,
-          } as GatheringType);
-        }
-      };
-      loadLockedGathering();
+      if (checkIns.startTime) setStartTime(checkIns.startTime);
+      if (checkIns.endTime) setEndTime(checkIns.endTime);
+      if (checkIns.customMessage) setCustomMessage(checkIns.customMessage);
     }
-  }, [kiosk.isLocked, kiosk.gatheringId]);
+  }, [checkIns.isLocked, checkIns.gatheringId]);
 
   // ===== Load attendance list when gathering selected and active =====
   const loadAttendance = useCallback(async () => {
@@ -730,25 +555,8 @@ const KioskPage: React.FC = () => {
     };
   }, []);
 
-  // ===== Setup: select gathering =====
-  const handleGatheringSelect = (g: GatheringType) => {
-    setSelectedGathering(g);
-    if (g.startTime) {
-      const st = g.startTime.substring(0, 5);
-      setStartTime(st);
-      const [h, m] = st.split(':').map(Number);
-      const endH = (h + 1) % 24;
-      setEndTime(`${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
-  };
-
-  // ===== Setup: enter kiosk mode -> go to PIN =====
-  const handleEnterKioskMode = async () => {
-    if (!selectedGathering) {
-      setError('Please select a gathering.');
-      return;
-    }
-
+  // ===== Setup: enter check-in mode -> go to PIN =====
+  const handleEnterCheckInMode = async () => {
     // Save kiosk settings to gathering for future use via dedicated endpoint
     try {
       await gatheringsAPI.updateKioskSettings(selectedGathering.id, {
@@ -756,7 +564,7 @@ const KioskPage: React.FC = () => {
         kioskMessage: customMessage,
       });
     } catch (err) {
-      console.error('Failed to save kiosk settings:', err);
+      console.error('Failed to save check-in settings:', err);
     }
 
     setPhase('pin');
@@ -775,14 +583,14 @@ const KioskPage: React.FC = () => {
       setPinError('PINs do not match.');
       return;
     }
-    // Lock kiosk - includes customMessage for session persistence
-    kiosk.lock(pinInput, selectedGathering!.id, selectedGathering!.name, startTime, endTime, customMessage);
+    // Lock - includes customMessage for session persistence
+    checkIns.lock(pinInput, selectedGathering.id, selectedGathering.name, startTime, endTime, customMessage);
     setPhase('active');
   };
 
   // ===== Unlock =====
   const handleUnlock = () => {
-    const success = kiosk.unlock(unlockPinInput);
+    const success = checkIns.unlock(unlockPinInput);
     if (success) {
       setShowUnlockModal(false);
       setUnlockPinInput('');
@@ -794,7 +602,7 @@ const KioskPage: React.FC = () => {
   };
 
   const handleForceUnlockAndLogout = async () => {
-    kiosk.forceUnlock();
+    checkIns.forceUnlock();
     setShowUnlockModal(false);
     await logout();
     window.location.href = '/login';
@@ -893,142 +701,6 @@ const KioskPage: React.FC = () => {
     setVisitorPersons(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // ===== Load kiosk history for selected gathering =====
-  const loadHistory = useCallback(async () => {
-    if (!selectedGathering) return;
-    try {
-      setHistoryLoading(true);
-      const response = await kioskAPI.getHistory(selectedGathering.id, 20);
-      setHistorySessions(response.data.sessions || []);
-    } catch (err) {
-      console.error('Failed to load kiosk history:', err);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [selectedGathering]);
-
-  // Load history when gathering is selected in setup mode
-  useEffect(() => {
-    if (phase === 'setup' && selectedGathering) {
-      loadHistory();
-    }
-  }, [phase, selectedGathering, loadHistory]);
-
-  // ===== Load detail for a specific past date =====
-  const loadHistoryDetail = async (date: string) => {
-    if (!selectedGathering) return;
-    if (expandedDate === date) {
-      setExpandedDate(null);
-      setHistoryDetail(null);
-      return;
-    }
-    try {
-      setHistoryDetailLoading(true);
-      setExpandedDate(date);
-      const response = await kioskAPI.getHistoryDetail(selectedGathering.id, date);
-      setHistoryDetail(response.data);
-    } catch (err) {
-      console.error('Failed to load kiosk history detail:', err);
-    } finally {
-      setHistoryDetailLoading(false);
-    }
-  };
-
-  // ===== Export history detail to TSV =====
-  const exportToTSV = () => {
-    if (!historyDetail || !selectedGathering) return;
-
-    const lines: string[] = [];
-    lines.push(['Name', 'Family', 'Check-in Time', 'Checked In By', 'Check-out Time', 'Checked Out By'].join('\t'));
-
-    for (const person of historyDetail.individuals) {
-      const checkinTime = person.checkins.length > 0
-        ? new Date(person.checkins[0].time).toLocaleTimeString()
-        : '';
-      const checkinSigner = person.checkins.length > 0
-        ? (person.checkins[0].signerName || '')
-        : '';
-      const checkoutTime = person.checkouts.length > 0
-        ? new Date(person.checkouts[0].time).toLocaleTimeString()
-        : '';
-      const checkoutSigner = person.checkouts.length > 0
-        ? (person.checkouts[0].signerName || '')
-        : '';
-
-      lines.push([
-        `${person.firstName} ${person.lastName}`,
-        person.familyName || '',
-        checkinTime,
-        checkinSigner,
-        checkoutTime,
-        checkoutSigner,
-      ].join('\t'));
-    }
-
-    const tsv = lines.join('\n');
-    const blob = new Blob([tsv], { type: 'text/tab-separated-values;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    const dateFormatted = historyDetail.date;
-    link.download = `kiosk-${selectedGathering.name.replace(/\s+/g, '-')}-${dateFormatted}.tsv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  // ===== Delete a past kiosk session (admin only) =====
-  const [deletingSession, setDeletingSession] = useState<string | null>(null);
-  const handleDeleteSession = async (date: string) => {
-    if (!selectedGathering) return;
-    const formattedDate = new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    });
-    if (!window.confirm(`Delete the kiosk session for ${formattedDate}?\n\nThis will permanently remove all kiosk check-in/check-out records for this date. Attendance records will not be affected.`)) {
-      return;
-    }
-    try {
-      setDeletingSession(date);
-      await kioskAPI.deleteSession(selectedGathering.id, date);
-      setHistorySessions(prev => prev.filter(s => s.date !== date));
-      if (expandedDate === date) {
-        setExpandedDate(null);
-        setHistoryDetail(null);
-      }
-    } catch (err) {
-      console.error('Failed to delete kiosk session:', err);
-      alert('Failed to delete kiosk session. Please try again.');
-    } finally {
-      setDeletingSession(null);
-    }
-  };
-
-  // ===== RENDER: Loading =====
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-3 text-gray-500">Loading kiosk...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // ===== RENDER: No kiosk gatherings =====
-  if (kioskGatherings.length === 0 && phase !== 'active') {
-    return (
-      <div className="max-w-lg mx-auto mt-12 text-center">
-        <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h2 className="mt-4 text-lg font-medium text-gray-900">No Kiosk Gatherings</h2>
-        <p className="mt-2 text-sm text-gray-600">
-          No gatherings have self sign-in (kiosk mode) enabled. An admin can enable this in Gatherings settings.
-        </p>
-      </div>
-    );
-  }
-
   // ===== RENDER: Setup phase =====
   if (phase === 'setup') {
     return (
@@ -1037,7 +709,7 @@ const KioskPage: React.FC = () => {
           <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 mb-3">
             <LockClosedIcon className="h-7 w-7 text-primary-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Kiosk Setup</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Self Check-in Setup</h1>
           <p className="text-sm text-gray-500 mt-1">Configure self sign-in for your gathering</p>
         </div>
 
@@ -1048,54 +720,25 @@ const KioskPage: React.FC = () => {
         )}
 
         <div className="bg-white shadow rounded-lg p-6 space-y-5">
-          {/* Gathering selection */}
+          {/* Gathering display (already selected via props) */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Gathering</label>
-            {kioskGatherings.length === 1 ? (
-              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="font-medium text-gray-900">{kioskGatherings[0].name}</div>
-                {kioskGatherings[0].dayOfWeek && (
-                  <div className="text-sm text-gray-500">{kioskGatherings[0].dayOfWeek}</div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {kioskGatherings.map(g => (
-                  <label
-                    key={g.id}
-                    className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                      selectedGathering?.id === g.id
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="gathering"
-                      checked={selectedGathering?.id === g.id}
-                      onChange={() => handleGatheringSelect(g)}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-                    />
-                    <div className="ml-3">
-                      <div className="font-medium text-gray-900">{g.name}</div>
-                      {g.dayOfWeek && g.startTime && (
-                        <div className="text-sm text-gray-500">{g.dayOfWeek} at {g.startTime}</div>
-                      )}
-                    </div>
-                  </label>
-                ))}
-              </div>
-            )}
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="font-medium text-gray-900">{selectedGathering.name}</div>
+              {selectedGathering.dayOfWeek && (
+                <div className="text-sm text-gray-500">{selectedGathering.dayOfWeek}</div>
+              )}
+            </div>
           </div>
 
           {/* Times */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="kiosk-start" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="checkin-start" className="block text-sm font-medium text-gray-700 mb-1">
                 Start Time
               </label>
               <input
-                id="kiosk-start"
+                id="checkin-start"
                 type="time"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
@@ -1103,11 +746,11 @@ const KioskPage: React.FC = () => {
               />
             </div>
             <div>
-              <label htmlFor="kiosk-end" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="checkin-end" className="block text-sm font-medium text-gray-700 mb-1">
                 End Time
               </label>
               <input
-                id="kiosk-end"
+                id="checkin-end"
                 type="time"
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
@@ -1117,16 +760,16 @@ const KioskPage: React.FC = () => {
           </div>
 
           <p className="text-xs text-gray-500">
-            The kiosk will default to Check In before the gathering and switch to Check Out 15 minutes before the end time.
+            The check-in will default to Check In before the gathering and switch to Check Out 15 minutes before the end time.
           </p>
 
           {/* Custom Welcome Message */}
           <div>
-            <label htmlFor="kiosk-message" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="checkin-message" className="block text-sm font-medium text-gray-700 mb-1">
               Custom Welcome Message
             </label>
             <textarea
-              id="kiosk-message"
+              id="checkin-message"
               value={customMessage}
               onChange={(e) => setCustomMessage(e.target.value)}
               rows={4}
@@ -1149,7 +792,7 @@ const KioskPage: React.FC = () => {
           </div>
 
           {/* Show next gathering date info */}
-          {selectedGathering && daysAway > 0 && (
+          {daysAway > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
               Next gathering is on{' '}
               <span className="font-medium">
@@ -1163,165 +806,23 @@ const KioskPage: React.FC = () => {
             </div>
           )}
 
-          {/* Enter Kiosk Mode */}
-          <button
-            onClick={handleEnterKioskMode}
-            disabled={!selectedGathering}
-            className="w-full py-3 px-4 text-base font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-          >
-            <LockClosedIcon className="h-5 w-5 mr-2" />
-            Enter Kiosk Mode
-          </button>
-        </div>
-
-        {/* Past Gatherings History */}
-        {selectedGathering && (
-          <div className="mt-8">
-            <div className="flex items-center mb-4">
-              <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
-              <h2 className="text-lg font-semibold text-gray-900">Past Kiosk Sessions</h2>
-            </div>
-
-            {historyLoading ? (
-              <div className="text-center py-6">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto"></div>
-                <p className="mt-2 text-sm text-gray-500">Loading history...</p>
-              </div>
-            ) : historySessions.length === 0 ? (
-              <div className="bg-white shadow rounded-lg p-6 text-center">
-                <p className="text-sm text-gray-500">No past kiosk sessions found for this gathering.</p>
-              </div>
-            ) : (
-              <div className="bg-white shadow rounded-lg divide-y divide-gray-200">
-                {historySessions.map(session => {
-                  const isExpanded = expandedDate === session.date;
-                  const checkinCount = session.records.filter(r => r.action === 'checkin').length;
-                  const checkoutCount = session.records.filter(r => r.action === 'checkout').length;
-                  const uniqueIndividuals = new Set(session.records.filter(r => r.action === 'checkin').map(r => r.individualId)).size;
-
-                  return (
-                    <div key={session.date}>
-                      <div className="flex items-center">
-                        <button
-                          onClick={() => loadHistoryDetail(session.date)}
-                          className="flex-1 flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
-                        >
-                          <div>
-                            <div className="font-medium text-gray-900">
-                              {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
-                                weekday: 'long',
-                                year: 'numeric',
-                                month: 'long',
-                                day: 'numeric',
-                              })}
-                            </div>
-                            <div className="text-sm text-gray-500 mt-0.5">
-                              {uniqueIndividuals} checked in &middot; {checkoutCount} check-out{checkoutCount !== 1 ? 's' : ''}
-                            </div>
-                          </div>
-                          {isExpanded ? (
-                            <ChevronUpIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                          ) : (
-                            <ChevronDownIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                          )}
-                        </button>
-                        {user?.role === 'admin' && (
-                          <button
-                            onClick={() => handleDeleteSession(session.date)}
-                            disabled={deletingSession === session.date}
-                            className="p-2 mr-2 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 flex-shrink-0"
-                            title="Delete session"
-                          >
-                            {deletingSession === session.date ? (
-                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-400 border-t-transparent" />
-                            ) : (
-                              <TrashIcon className="h-4 w-4" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-
-                      {isExpanded && (
-                        <div className="px-4 pb-4">
-                          {historyDetailLoading ? (
-                            <div className="text-center py-4">
-                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-600 mx-auto"></div>
-                            </div>
-                          ) : historyDetail ? (
-                            <>
-                              {/* Export button */}
-                              <div className="flex justify-end mb-3">
-                                <button
-                                  onClick={exportToTSV}
-                                  className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-                                >
-                                  <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
-                                  Export TSV
-                                </button>
-                              </div>
-
-                              {/* Table */}
-                              <div className="overflow-x-auto">
-                                <table className="min-w-full text-sm">
-                                  <thead>
-                                    <tr className="border-b border-gray-200">
-                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Name</th>
-                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Family</th>
-                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-in</th>
-                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">By</th>
-                                      <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-out</th>
-                                      <th className="text-left py-2 font-medium text-gray-700">By</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-gray-100">
-                                    {historyDetail.individuals.map(person => (
-                                      <tr key={person.individualId} className="hover:bg-gray-50">
-                                        <td className="py-2 pr-4 text-gray-900">
-                                          {person.firstName} {person.lastName}
-                                        </td>
-                                        <td className="py-2 pr-4 text-gray-500">
-                                          {person.familyName || '-'}
-                                        </td>
-                                        <td className="py-2 pr-4 text-green-600">
-                                          {person.checkins.length > 0
-                                            ? new Date(person.checkins[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                            : '-'}
-                                        </td>
-                                        <td className="py-2 pr-4 text-gray-500">
-                                          {person.checkins.length > 0
-                                            ? (person.checkins[0].signerName || '-')
-                                            : '-'}
-                                        </td>
-                                        <td className="py-2 pr-4 text-orange-600">
-                                          {person.checkouts.length > 0
-                                            ? new Date(person.checkouts[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                            : '-'}
-                                        </td>
-                                        <td className="py-2 text-gray-500">
-                                          {person.checkouts.length > 0
-                                            ? (person.checkouts[0].signerName || '-')
-                                            : '-'}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-
-                              {historyDetail.individuals.length === 0 && (
-                                <p className="text-center text-sm text-gray-500 py-3">No records for this date.</p>
-                              )}
-                            </>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+          {/* Enter Self Check-in Mode */}
+          <div className="flex space-x-3">
+            <button
+              onClick={onBack}
+              className="py-3 px-4 text-base font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Back
+            </button>
+            <button
+              onClick={handleEnterCheckInMode}
+              className="flex-1 py-3 px-4 text-base font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors flex items-center justify-center"
+            >
+              <LockClosedIcon className="h-5 w-5 mr-2" />
+              Enter Self Check-in Mode
+            </button>
           </div>
-        )}
+        </div>
       </div>
     );
   }
@@ -1336,7 +837,7 @@ const KioskPage: React.FC = () => {
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Set a PIN</h1>
           <p className="text-sm text-gray-500 mt-1">
-            This PIN will be required to exit kiosk mode
+            This PIN will be required to exit check-in mode
           </p>
         </div>
 
@@ -1400,14 +901,14 @@ const KioskPage: React.FC = () => {
     );
   }
 
-  // ===== RENDER: Active kiosk mode =====
+  // ===== RENDER: Active check-in mode =====
   return (
     <div className="max-w-xl mx-auto" ref={scrollContainerRef}>
       {/* Unlock button (top-left) */}
       <button
         onClick={() => { setShowUnlockModal(true); setUnlockPinInput(''); setUnlockError(''); }}
         className="fixed top-4 left-4 z-50 p-2 text-gray-300 hover:text-gray-500 transition-colors"
-        title="Unlock kiosk"
+        title="Unlock"
       >
         <LockOpenIcon className="h-5 w-5" />
       </button>
@@ -1415,7 +916,7 @@ const KioskPage: React.FC = () => {
       {/* Header */}
       <div className="text-center mb-4">
         <h1 className="text-2xl font-bold text-gray-900">
-          {selectedGathering?.name || kiosk.gatheringName}
+          {selectedGathering?.name || checkIns.gatheringName}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
           {new Date(gatheringDate + 'T00:00:00').toLocaleDateString('en-US', {
@@ -1696,7 +1197,7 @@ const KioskPage: React.FC = () => {
         <div className="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Unlock Kiosk</h3>
+              <h3 className="text-lg font-medium text-gray-900">Unlock</h3>
               <button onClick={() => setShowUnlockModal(false)} className="text-gray-400 hover:text-gray-600">
                 <XMarkIcon className="h-6 w-6" />
               </button>
@@ -1883,4 +1384,4 @@ const KioskPage: React.FC = () => {
   );
 };
 
-export default KioskPage;
+export default SelfCheckInMode;

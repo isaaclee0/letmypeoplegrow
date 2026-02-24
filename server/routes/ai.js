@@ -293,7 +293,15 @@ function classifyAiError(status, errorData, provider) {
 }
 
 // ===== Helper: call OpenAI =====
-async function callOpenAI(apiKey, systemPrompt, userMessage, model) {
+// chatHistory: array of { role: 'user'|'assistant', content: string } (excluding current question)
+// currentQuestion: the new user message
+async function callOpenAI(apiKey, systemPrompt, chatHistory, currentQuestion, model) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...chatHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: currentQuestion }
+  ];
+
   const response = await makeHttpsRequest('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -302,10 +310,7 @@ async function callOpenAI(apiKey, systemPrompt, userMessage, model) {
     },
     body: JSON.stringify({
       model: model || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
+      messages,
       temperature: 0.3,
       max_tokens: 2000
     })
@@ -319,7 +324,14 @@ async function callOpenAI(apiKey, systemPrompt, userMessage, model) {
 }
 
 // ===== Helper: call Anthropic =====
-async function callAnthropic(apiKey, systemPrompt, userMessage, model) {
+// chatHistory: array of { role: 'user'|'assistant', content: string } (excluding current question)
+// currentQuestion: the new user message
+async function callAnthropic(apiKey, systemPrompt, chatHistory, currentQuestion, model) {
+  const messages = [
+    ...chatHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: currentQuestion }
+  ];
+
   const response = await makeHttpsRequest('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -331,9 +343,7 @@ async function callAnthropic(apiKey, systemPrompt, userMessage, model) {
       model: model || 'claude-haiku-4-5-20251001',
       max_tokens: 2000,
       system: systemPrompt,
-      messages: [
-        { role: 'user', content: userMessage }
-      ]
+      messages
     })
   });
 
@@ -376,9 +386,9 @@ router.post('/configure', requireRole(['admin']), async (req, res) => {
     // Quick validation: try a tiny request
     try {
       if (provider === 'openai') {
-        await callOpenAI(apiKey.trim(), 'Say OK', 'Test', model || 'gpt-4o-mini');
+        await callOpenAI(apiKey.trim(), 'Say OK', [], 'Test', model || 'gpt-4o-mini');
       } else {
-        await callAnthropic(apiKey.trim(), 'Say OK', 'Test', model || 'claude-haiku-4-5-20251001');
+        await callAnthropic(apiKey.trim(), 'Say OK', [], 'Test', model || 'claude-haiku-4-5-20251001');
       }
     } catch (validationError) {
       const errorType = validationError.errorType || 'validation_failed';
@@ -669,10 +679,13 @@ async function buildEnrichedContext(churchId) {
   return { enrichedContext: sections.join('\n\n'), hasLocation: true };
 }
 
+// Max conversation history messages to include (avoid token overflow)
+const MAX_CHAT_HISTORY_MESSAGES = 20;
+
 // Ask a question
 router.post('/ask', async (req, res) => {
   try {
-    const { question } = req.body;
+    const { question, conversationId } = req.body;
 
     if (!question || !question.trim()) {
       return res.status(400).json({ error: 'Question is required.' });
@@ -683,8 +696,26 @@ router.post('/ask', async (req, res) => {
       return res.status(400).json({ error: 'Question is too long. Please keep it under 1000 characters.' });
     }
 
-    // Server-side topic filter
-    if (!isOnTopic(question.trim())) {
+    // Server-side topic filter (only for first message; follow-ups may be brief like "Tell me more")
+    let chatHistory = [];
+    if (conversationId) {
+      const conv = await Database.query(`
+        SELECT id FROM ai_chat_conversations
+        WHERE id = ? AND user_id = ? AND church_id = ?
+      `, [conversationId, req.user.id, req.user.church_id]);
+      if (conv.length > 0) {
+        const rows = await Database.query(`
+          SELECT role, content FROM ai_chat_messages
+          WHERE conversation_id = ?
+          ORDER BY created_at ASC
+        `, [conversationId]);
+        // Take last N messages to stay within token limits
+        const recent = rows.slice(-MAX_CHAT_HISTORY_MESSAGES);
+        chatHistory = recent.map(r => ({ role: r.role, content: r.content }));
+      }
+    }
+    const hasHistory = chatHistory.length > 0;
+    if (!hasHistory && !isOnTopic(question.trim())) {
       return res.json({ answer: OFF_TOPIC_MESSAGE, provider: 'system', filtered: true });
     }
 
@@ -748,9 +779,9 @@ RESPONSE GUIDELINES:
 
     let answer;
     if (config.provider === 'openai') {
-      answer = await callOpenAI(config.api_key, systemPrompt, question.trim(), config.model);
+      answer = await callOpenAI(config.api_key, systemPrompt, chatHistory, question.trim(), config.model);
     } else if (config.provider === 'anthropic') {
-      answer = await callAnthropic(config.api_key, systemPrompt, question.trim(), config.model);
+      answer = await callAnthropic(config.api_key, systemPrompt, chatHistory, question.trim(), config.model);
     } else {
       return res.status(400).json({ error: `Unknown provider: ${config.provider}` });
     }

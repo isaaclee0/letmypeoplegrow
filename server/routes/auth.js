@@ -546,6 +546,7 @@ router.post('/verify-code',
           role: user.role,
           firstName: user.first_name,
           lastName: user.last_name,
+          church_id: user.church_id,
           isFirstLogin: isFirstLogin,
           defaultGatheringId: user.default_gathering_id,
           gatheringAssignments: assignmentsWithNumbers
@@ -884,6 +885,14 @@ router.get('/debug-cookies', (req, res) => {
                  /Safari/.test(headers['user-agent']) && 
                  !/Chrome/.test(headers['user-agent']),
     cookieHeader: headers.cookie
+  });
+});
+
+// Server time sync endpoint for clock offset calculation
+router.get('/server-time', (req, res) => {
+  res.json({
+    serverTime: Date.now(),
+    iso: new Date().toISOString()
   });
 });
 

@@ -10,7 +10,7 @@ router.use(verifyToken);
 router.get('/', requireRole(['admin']), async (req, res) => {
   try {
     const settings = await Database.query(`
-      SELECT 
+      SELECT
         cs.id,
         cs.church_name,
         cs.country_code,
@@ -21,6 +21,12 @@ router.get('/', requireRole(['admin']), async (req, res) => {
         cs.location_name,
         cs.location_lat,
         cs.location_lng,
+        cs.child_flair_color,
+        cs.default_badge_text,
+        cs.default_child_badge_icon,
+        cs.default_adult_badge_text,
+        cs.default_adult_badge_color,
+        cs.default_adult_badge_icon,
         cs.created_at,
         cs.updated_at
       FROM church_settings cs
@@ -36,6 +42,33 @@ router.get('/', requireRole(['admin']), async (req, res) => {
   } catch (error) {
     console.error('Get church settings error:', error);
     res.status(500).json({ error: 'Failed to retrieve church settings.' });
+  }
+});
+
+// Get badge defaults (accessible to all authenticated users)
+router.get('/badge-defaults', async (req, res) => {
+  try {
+    const settings = await Database.query(`
+      SELECT
+        default_badge_text,
+        child_flair_color,
+        default_child_badge_icon,
+        default_adult_badge_text,
+        default_adult_badge_color,
+        default_adult_badge_icon
+      FROM church_settings
+      WHERE church_id = ?
+      LIMIT 1
+    `, [req.user.church_id]);
+
+    if (settings.length === 0) {
+      return res.status(404).json({ error: 'Church settings not found' });
+    }
+
+    res.json({ settings: settings[0] });
+  } catch (error) {
+    console.error('Get badge defaults error:', error);
+    res.status(500).json({ error: 'Failed to retrieve badge defaults.' });
   }
 });
 
@@ -272,6 +305,114 @@ router.put('/location', requireRole(['admin']), async (req, res) => {
   } catch (error) {
     console.error('Update location error:', error);
     res.status(500).json({ error: 'Failed to update location.' });
+  }
+});
+
+// Update child flair color
+router.put('/child-flair-color', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { color } = req.body;
+
+    // Validate hex color format
+    if (!color || !/^#[0-9A-F]{6}$/i.test(color)) {
+      return res.status(400).json({ error: 'Invalid color format. Must be a hex color (e.g., #fef3c7)' });
+    }
+
+    await Database.query(`
+      UPDATE church_settings
+      SET child_flair_color = ?
+      WHERE church_id = ?
+    `, [color, req.user.church_id]);
+
+    res.json({
+      message: 'Child flair color updated successfully.',
+      color
+    });
+  } catch (error) {
+    console.error('Update child flair color error:', error);
+    res.status(500).json({ error: 'Failed to update child flair color.' });
+  }
+});
+
+// Update default badge settings (text, color, icon for both child and adult)
+router.put('/default-badge', requireRole(['admin']), async (req, res) => {
+  try {
+    const {
+      child_text,
+      child_color,
+      child_icon,
+      adult_text,
+      adult_color,
+      adult_icon
+    } = req.body;
+
+    // Validate inputs
+    if (child_text !== undefined && (typeof child_text !== 'string' || child_text.length > 50)) {
+      return res.status(400).json({ error: 'Child badge text must be a string (max 50 characters)' });
+    }
+    if (child_color !== undefined && !/^#[0-9A-F]{6}$/i.test(child_color)) {
+      return res.status(400).json({ error: 'Invalid child color format. Must be a hex color (e.g., #fef3c7)' });
+    }
+    if (child_icon !== undefined && (typeof child_icon !== 'string' || child_icon.length > 50)) {
+      return res.status(400).json({ error: 'Child badge icon must be a string (max 50 characters)' });
+    }
+    if (adult_text !== undefined && adult_text !== null && adult_text !== '' && (typeof adult_text !== 'string' || adult_text.length > 50)) {
+      return res.status(400).json({ error: 'Adult badge text must be a string (max 50 characters)' });
+    }
+    if (adult_color !== undefined && adult_color !== null && adult_color !== '' && !/^#[0-9A-F]{6}$/i.test(adult_color)) {
+      return res.status(400).json({ error: 'Invalid adult color format. Must be a hex color (e.g., #fef3c7)' });
+    }
+    if (adult_icon !== undefined && adult_icon !== null && adult_icon !== '' && (typeof adult_icon !== 'string' || adult_icon.length > 50)) {
+      return res.status(400).json({ error: 'Adult badge icon must be a string (max 50 characters)' });
+    }
+
+    // Build update query dynamically based on provided fields
+    const updates = [];
+    const values = [];
+
+    if (child_text !== undefined) {
+      updates.push('default_badge_text = ?');
+      values.push(child_text);
+    }
+    if (child_color !== undefined) {
+      updates.push('child_flair_color = ?');
+      values.push(child_color);
+    }
+    if (child_icon !== undefined) {
+      updates.push('default_child_badge_icon = ?');
+      values.push(child_icon);
+    }
+    if (adult_text !== undefined) {
+      updates.push('default_adult_badge_text = ?');
+      values.push(adult_text);
+    }
+    if (adult_color !== undefined) {
+      updates.push('default_adult_badge_color = ?');
+      values.push(adult_color);
+    }
+    if (adult_icon !== undefined) {
+      updates.push('default_adult_badge_icon = ?');
+      values.push(adult_icon);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    values.push(req.user.church_id);
+
+    await Database.query(`
+      UPDATE church_settings
+      SET ${updates.join(', ')}
+      WHERE church_id = ?
+    `, values);
+
+    res.json({
+      message: 'Default badge settings updated successfully.'
+    });
+  } catch (error) {
+    console.error('Update default badge error:', error);
+    res.status(500).json({ error: 'Failed to update default badge settings.' });
   }
 });
 

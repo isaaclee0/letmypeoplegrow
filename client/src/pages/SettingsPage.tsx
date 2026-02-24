@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { integrationsAPI, aiAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
+import { getChildBadgeStyles } from '../utils/colorUtils';
+import BadgeIcon, { BADGE_ICON_OPTIONS, BadgeIconType } from '../components/icons/BadgeIcon';
 
 import {
   PencilIcon,
@@ -76,6 +78,39 @@ const SettingsPage: React.FC = () => {
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Default badge state - child
+  const [childBadgeText, setChildBadgeText] = useState<string>('');
+  const [childBadgeColor, setChildBadgeColor] = useState<string>('#c5aefb');
+  const [childBadgeIcon, setChildBadgeIcon] = useState<string>('person');
+
+  // Default badge state - adult
+  const [adultBadgeText, setAdultBadgeText] = useState<string>('');
+  const [adultBadgeColor, setAdultBadgeColor] = useState<string>('');
+  const [adultBadgeIcon, setAdultBadgeIcon] = useState<string>('');
+
+  // Track original values to detect changes
+  const [originalBadgeSettings, setOriginalBadgeSettings] = useState({
+    childText: '',
+    childColor: '#c5aefb',
+    childIcon: 'person',
+    adultText: '',
+    adultColor: '',
+    adultIcon: ''
+  });
+
+  const [defaultBadgeSaving, setDefaultBadgeSaving] = useState(false);
+  const [defaultBadgeError, setDefaultBadgeError] = useState<string | null>(null);
+  const [defaultBadgeSuccess, setDefaultBadgeSuccess] = useState(false);
+
+  // Check if badge settings have unsaved changes
+  const hasUnsavedBadgeChanges =
+    childBadgeText !== originalBadgeSettings.childText ||
+    childBadgeColor !== originalBadgeSettings.childColor ||
+    childBadgeIcon !== originalBadgeSettings.childIcon ||
+    adultBadgeText !== originalBadgeSettings.adultText ||
+    adultBadgeColor !== originalBadgeSettings.adultColor ||
+    adultBadgeIcon !== originalBadgeSettings.adultIcon;
 
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
@@ -191,7 +226,7 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  // Fetch church location on mount
+  // Fetch church settings on mount
   const fetchLocation = useCallback(async () => {
     try {
       const response = await settingsAPI.getAll();
@@ -199,6 +234,35 @@ const SettingsPage: React.FC = () => {
       if (settings?.location_name) {
         setLocationName(settings.location_name);
       }
+
+      // Child badge settings
+      const childText = settings?.default_badge_text || '';
+      const childColor = settings?.child_flair_color || '#c5aefb';
+      // Allow empty string for "None" - only default to 'person' if null/undefined
+      const childIcon = settings?.default_child_badge_icon !== null && settings?.default_child_badge_icon !== undefined
+        ? settings.default_child_badge_icon
+        : 'person';
+      setChildBadgeText(childText);
+      setChildBadgeColor(childColor);
+      setChildBadgeIcon(childIcon);
+
+      // Adult badge settings
+      const adultText = settings?.default_adult_badge_text || '';
+      const adultColor = settings?.default_adult_badge_color || '';
+      const adultIcon = settings?.default_adult_badge_icon || '';
+      setAdultBadgeText(adultText);
+      setAdultBadgeColor(adultColor);
+      setAdultBadgeIcon(adultIcon);
+
+      // Store original values for change detection
+      setOriginalBadgeSettings({
+        childText,
+        childColor,
+        childIcon,
+        adultText,
+        adultColor,
+        adultIcon
+      });
     } catch (error) {
       // Non-critical, ignore
     }
@@ -266,6 +330,53 @@ const SettingsPage: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Save badge settings
+  const handleSaveBadgeSettings = async () => {
+    setDefaultBadgeError(null);
+    setDefaultBadgeSuccess(false);
+    setDefaultBadgeSaving(true);
+    try {
+      await settingsAPI.updateDefaultBadge({
+        child_text: childBadgeText,
+        child_color: childBadgeColor,
+        child_icon: childBadgeIcon,
+        adult_text: adultBadgeText,
+        adult_color: adultBadgeColor,
+        adult_icon: adultBadgeIcon
+      });
+
+      // Update original values to reflect saved state
+      setOriginalBadgeSettings({
+        childText: childBadgeText,
+        childColor: childBadgeColor,
+        childIcon: childBadgeIcon,
+        adultText: adultBadgeText,
+        adultColor: adultBadgeColor,
+        adultIcon: adultBadgeIcon
+      });
+
+      setDefaultBadgeSuccess(true);
+      setTimeout(() => setDefaultBadgeSuccess(false), 3000);
+    } catch (error: any) {
+      logger.error('Failed to save default badge:', error);
+      setDefaultBadgeError(error.response?.data?.error || 'Failed to save badge settings.');
+    } finally {
+      setDefaultBadgeSaving(false);
+    }
+  };
+
+  const handleResetChildBadge = () => {
+    setChildBadgeText('');
+    setChildBadgeColor('#c5aefb');
+    setChildBadgeIcon('person');
+  };
+
+  const handleResetAdultBadge = () => {
+    setAdultBadgeText('');
+    setAdultBadgeColor('');
+    setAdultBadgeIcon('');
+  };
 
   // Handle URL parameters for tab selection and OAuth callbacks
   useEffect(() => {
@@ -571,6 +682,287 @@ const SettingsPage: React.FC = () => {
                       <p className="mt-2 text-sm text-red-600">{locationError}</p>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Default Badge Settings */}
+              {user?.role === 'admin' && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900">Default Badge Settings</h3>
+                    <p className="mt-1 text-sm text-gray-600">
+                      Configure default badges for children and adults. Badges show an icon by default, with optional text.
+                    </p>
+                  </div>
+
+                  {/* Child Badge Settings */}
+                  <div className="bg-blue-50 rounded-lg p-4">
+                    <h4 className="text-md font-medium text-gray-900 mb-3">Default Child Badge</h4>
+                    <p className="text-sm text-gray-600 mb-4">
+                      Select "None" to remove badges from children unless they have custom text.
+                    </p>
+                    <div className="space-y-4">
+                      {/* Badge Icon */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Badge Icon</label>
+                        <div className="grid grid-cols-6 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setChildBadgeIcon('')}
+                            disabled={defaultBadgeSaving}
+                            className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
+                              !childBadgeIcon
+                                ? 'border-primary-500 bg-primary-50'
+                                : 'border-gray-200 hover:border-gray-300'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            title="None"
+                          >
+                            <XMarkIcon className="w-5 h-5 text-gray-400" />
+                            <span className="text-xs mt-1 text-gray-600">None</span>
+                          </button>
+                          {BADGE_ICON_OPTIONS.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setChildBadgeIcon(option.value)}
+                              disabled={defaultBadgeSaving}
+                              className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
+                                childBadgeIcon === option.value
+                                  ? 'border-primary-500 bg-primary-50'
+                                  : 'border-gray-200 hover:border-gray-300'
+                              } disabled:opacity-50 disabled:cursor-not-allowed`}
+                              title={option.label}
+                            >
+                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700" />
+                              <span className="text-xs mt-1 text-gray-600 truncate w-full text-center">{option.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Badge Text (Optional) */}
+                      <div>
+                        <label htmlFor="child-badge-text" className="block text-sm font-medium text-gray-700 mb-2">
+                          Badge Text (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          id="child-badge-text"
+                          value={childBadgeText}
+                          onChange={(e) => setChildBadgeText(e.target.value)}
+                          disabled={defaultBadgeSaving}
+                          className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          placeholder="Leave empty for icon only"
+                          maxLength={50}
+                        />
+                      </div>
+
+                      {/* Badge Color */}
+                      <div>
+                        <label htmlFor="child-badge-color" className="block text-sm font-medium text-gray-700 mb-2">
+                          Background Color
+                        </label>
+                        <div className="flex items-center space-x-3">
+                          <input
+                            type="color"
+                            id="child-badge-color"
+                            value={childBadgeColor}
+                            onChange={(e) => setChildBadgeColor(e.target.value)}
+                            disabled={defaultBadgeSaving}
+                            className="h-10 w-20 rounded border border-gray-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          <input
+                            type="text"
+                            value={childBadgeColor}
+                            onChange={(e) => setChildBadgeColor(e.target.value)}
+                            disabled={defaultBadgeSaving}
+                            className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
+                            placeholder="#RRGGBB"
+                            maxLength={7}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleResetChildBadge}
+                            disabled={defaultBadgeSaving}
+                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Preview */}
+                      {(childBadgeIcon || childBadgeText) && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-gray-700 font-medium">Preview:</span>
+                          <span
+                            className={`flex items-center space-x-1 shadow-sm ${
+                              childBadgeText ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                            }`}
+                            style={getChildBadgeStyles(childBadgeColor)}
+                          >
+                            {childBadgeIcon && (
+                              <BadgeIcon type={childBadgeIcon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                            )}
+                            {childBadgeText && (
+                              <span className="text-xs font-medium whitespace-nowrap">{childBadgeText}</span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Adult Badge Settings */}
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <h4 className="text-md font-medium text-gray-900 mb-3">Default Adult Badge (Optional)</h4>
+                    <p className="text-sm text-gray-600 mb-4">
+                      By default, adults have no badge. You can optionally configure a default adult badge.
+                    </p>
+                    <div className="space-y-4">
+                      {/* Badge Icon */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Badge Icon</label>
+                        <div className="grid grid-cols-6 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAdultBadgeIcon('')}
+                            disabled={defaultBadgeSaving}
+                            className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
+                              !adultBadgeIcon
+                                ? 'border-primary-500 bg-primary-50'
+                                : 'border-gray-200 hover:border-gray-300'
+                            } disabled:opacity-50 disabled:cursor-not-allowed`}
+                            title="None"
+                          >
+                            <XMarkIcon className="w-5 h-5 text-gray-400" />
+                            <span className="text-xs mt-1 text-gray-600">None</span>
+                          </button>
+                          {BADGE_ICON_OPTIONS.filter(option => option.value !== 'person').map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setAdultBadgeIcon(option.value)}
+                              disabled={defaultBadgeSaving}
+                              className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
+                                adultBadgeIcon === option.value
+                                  ? 'border-primary-500 bg-primary-50'
+                                  : 'border-gray-200 hover:border-gray-300'
+                              } disabled:opacity-50 disabled:cursor-not-allowed`}
+                              title={option.label}
+                            >
+                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700" />
+                              <span className="text-xs mt-1 text-gray-600 truncate w-full text-center">{option.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Badge Text (Optional) */}
+                      {adultBadgeIcon && (
+                        <div>
+                          <label htmlFor="adult-badge-text" className="block text-sm font-medium text-gray-700 mb-2">
+                            Badge Text (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            id="adult-badge-text"
+                            value={adultBadgeText}
+                            onChange={(e) => setAdultBadgeText(e.target.value)}
+                            disabled={defaultBadgeSaving}
+                            className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            placeholder="Leave empty for icon only"
+                            maxLength={50}
+                          />
+                        </div>
+                      )}
+
+                      {/* Badge Color */}
+                      <div>
+                        <label htmlFor="adult-badge-color" className="block text-sm font-medium text-gray-700 mb-2">
+                          Background Color
+                        </label>
+                        <div className="flex items-center space-x-3">
+                          <input
+                            type="color"
+                            id="adult-badge-color"
+                            value={adultBadgeColor || '#c5aefb'}
+                            onChange={(e) => setAdultBadgeColor(e.target.value)}
+                            disabled={defaultBadgeSaving}
+                            className="h-10 w-20 rounded border border-gray-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          <input
+                            type="text"
+                            value={adultBadgeColor}
+                            onChange={(e) => setAdultBadgeColor(e.target.value)}
+                            disabled={defaultBadgeSaving}
+                            className="block w-32 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed uppercase font-mono"
+                            placeholder="#RRGGBB"
+                            maxLength={7}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleResetAdultBadge}
+                            disabled={defaultBadgeSaving}
+                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Preview */}
+                      {adultBadgeIcon && (
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-gray-700 font-medium">Preview:</span>
+                          <span
+                            className={`flex items-center space-x-1 shadow-sm ${
+                              adultBadgeText ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                            }`}
+                            style={getChildBadgeStyles(adultBadgeColor || '#c5aefb')}
+                          >
+                            <BadgeIcon type={adultBadgeIcon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                            {adultBadgeText && (
+                              <span className="text-xs font-medium whitespace-nowrap">{adultBadgeText}</span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Save Button */}
+                  {hasUnsavedBadgeChanges && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <button
+                        type="button"
+                        onClick={handleSaveBadgeSettings}
+                        disabled={defaultBadgeSaving}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {defaultBadgeSaving ? (
+                          <>
+                            <ArrowPathIcon className="h-4 w-4 animate-spin mr-2" />
+                            Saving...
+                          </>
+                        ) : (
+                          'Save Badge Settings'
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Status messages */}
+                  {defaultBadgeSuccess && (
+                    <p className="text-sm text-green-600 flex items-center">
+                      <CheckCircleIcon className="h-4 w-4 mr-1" />
+                      Badge settings saved successfully!
+                    </p>
+                  )}
+
+                  {defaultBadgeError && (
+                    <p className="text-sm text-red-600">{defaultBadgeError}</p>
+                  )}
                 </div>
               )}
             </div>

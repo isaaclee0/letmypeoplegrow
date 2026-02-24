@@ -34,13 +34,15 @@ async function ensureTable() {
       individual_id INT NOT NULL,
       action ENUM('checkin', 'checkout') NOT NULL,
       signer_name VARCHAR(255) DEFAULT NULL,
+      user_id INT DEFAULT NULL,
       church_id VARCHAR(36) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_gathering_date (gathering_type_id, session_date),
       INDEX idx_individual (individual_id),
       INDEX idx_church_id (church_id),
       INDEX idx_action (action),
-      INDEX idx_created_at (created_at)
+      INDEX idx_created_at (created_at),
+      INDEX idx_user_id (user_id)
     ) ENGINE=InnoDB
   `);
   tableEnsured = true;
@@ -67,11 +69,12 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
 
     await Database.transaction(async (conn) => {
       // Insert kiosk checkin/checkout records
+      const userId = req.user.id || null;
       for (const individualId of individualIds) {
         await conn.query(`
-          INSERT INTO kiosk_checkins (gathering_type_id, session_date, individual_id, action, signer_name, church_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `, [gatheringTypeId, date, individualId, action, signerName || null, churchId]);
+          INSERT INTO kiosk_checkins (gathering_type_id, session_date, individual_id, action, signer_name, user_id, church_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [gatheringTypeId, date, individualId, action, signerName || null, userId, churchId]);
       }
 
       // If check-in, also mark attendance as present
@@ -274,18 +277,22 @@ router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => 
     const churchId = req.user.church_id;
 
     const records = await Database.query(`
-      SELECT 
+      SELECT
         kc.id,
         kc.individual_id,
         kc.action,
         kc.signer_name,
+        kc.user_id,
         kc.created_at,
         i.first_name,
         i.last_name,
-        f.family_name
+        f.family_name,
+        u.first_name as user_first_name,
+        u.last_name as user_last_name
       FROM kiosk_checkins kc
       LEFT JOIN individuals i ON kc.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
+      LEFT JOIN users u ON kc.user_id = u.id
       WHERE kc.gathering_type_id = ? AND kc.session_date = ? AND kc.church_id = ?
       ORDER BY kc.created_at ASC
     `, [gatheringTypeId, date, churchId]);
@@ -304,9 +311,13 @@ router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => 
           checkouts: [],
         };
       }
+      const userName = r.user_first_name && r.user_last_name
+        ? `${r.user_first_name} ${r.user_last_name}`
+        : null;
       const entry = {
         time: r.created_at,
         signerName: r.signer_name,
+        userName,
       };
       if (r.action === 'checkin') {
         individualsMap[id].checkins.push(entry);
@@ -326,6 +337,9 @@ router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => 
         individualId: Number(r.individual_id),
         action: r.action,
         signerName: r.signer_name,
+        userName: r.user_first_name && r.user_last_name
+          ? `${r.user_first_name} ${r.user_last_name}`
+          : null,
         createdAt: r.created_at,
         firstName: r.first_name,
         lastName: r.last_name,

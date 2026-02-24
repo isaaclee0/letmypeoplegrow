@@ -186,8 +186,8 @@ const AiInsightsPage: React.FC = () => {
         setCurrentConversationId(conversationId);
       }
 
-      // Get AI response
-      const response = await aiAPI.ask(text);
+      // Get AI response (pass conversationId so server can include chat history for follow-up context)
+      const response = await aiAPI.ask(text, conversationId);
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',

@@ -15,6 +15,8 @@ import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import logger from '../utils/logger';
+import { useBadgeSettings } from '../hooks/useBadgeSettings';
+import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 import {
   UserGroupIcon,
   MagnifyingGlassIcon,
@@ -36,6 +38,9 @@ interface Person {
   lastName: string;
   peopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   isChild?: boolean;
+  badgeText?: string | null;
+  badgeColor?: string | null;
+  badgeIcon?: string | null;
   familyId?: number;
   familyName?: string;
   lastAttendanceDate?: string;
@@ -239,6 +244,7 @@ const PeoplePage: React.FC = () => {
 
   const { showSuccess } = useToast();
   const { user } = useAuth();
+  const { badgeConfig, getBadgeInfo } = useBadgeSettings();
   const isAdmin = user?.role === 'admin';
   const [people, setPeople] = useState<Person[]>([]);
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
@@ -271,6 +277,7 @@ const PeoplePage: React.FC = () => {
   const [gatheringTypes, setGatheringTypes] = useState<GatheringType[]>([]);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
+  const savedScrollPositionRef = useRef<number | null>(null);
   // Removed individual person editor - using mass edit modal for all edits
 
   const [showMassEditModal, setShowMassEditModal] = useState(false);
@@ -282,11 +289,14 @@ const PeoplePage: React.FC = () => {
     lastName: string;
     peopleType: '' | 'regular' | 'local_visitor' | 'traveller_visitor';
     isChild: '' | 'true' | 'false';
+    badgeText: string;
+    badgeColor: string;
+    badgeIcon: string;
     assignments: { [key: number]: boolean };
     initialAssignments: { [key: number]: boolean };
     originalAssignments: { [key: number]: Set<number> };
     applyToWholeFamily: boolean;
-  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', firstName: '', lastName: '', peopleType: '', isChild: '', assignments: {}, initialAssignments: {}, originalAssignments: {}, applyToWholeFamily: false });
+  }>({ familyInput: '', selectedFamilyId: null, newFamilyName: '', firstName: '', lastName: '', peopleType: '', isChild: '', badgeText: '', badgeColor: '', badgeIcon: 'person', assignments: {}, initialAssignments: {}, originalAssignments: {}, applyToWholeFamily: false });
   
   // Add a separate state for the modal's selected count to avoid race conditions
   const [modalSelectedCount, setModalSelectedCount] = useState(0);
@@ -1124,6 +1134,8 @@ const PeoplePage: React.FC = () => {
   */
 
   const handleEditPerson = (person: Person) => {
+    // Save scroll position to restore after save
+    savedScrollPositionRef.current = window.scrollY;
     // Use mass edit modal for single person editing
     logger.log('handleEditPerson called with:', person);
     
@@ -1149,6 +1161,11 @@ const PeoplePage: React.FC = () => {
       lastName: person.lastName,
       peopleType: person.peopleType,
       isChild: person.isChild ? 'true' as const : 'false' as const,
+      // Pre-fill with effective badge text: use custom if set, otherwise default
+      // This matches getBadgeInfo display logic (falsy badgeText = use default)
+      badgeText: person.badgeText || (person.isChild ? badgeConfig.child.defaultText : (badgeConfig.adult.defaultText || '')),
+      badgeColor: person.badgeColor || (person.isChild ? badgeConfig.child.defaultColor : (badgeConfig.adult.defaultColor || '')),
+      badgeIcon: person.badgeIcon || (person.isChild ? badgeConfig.child.defaultIcon : (badgeConfig.adult.defaultIcon || '')),
       assignments: gatheringAssignments,
       initialAssignments: { ...gatheringAssignments },
       originalAssignments,
@@ -1273,7 +1290,7 @@ const PeoplePage: React.FC = () => {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-3 sm:px-6">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Gathering Assignments</h3>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-x-3 gap-y-6">
               {gatheringTypes
                 .filter(gathering => gathering.attendanceType !== 'headcount')
                 .map((gathering) => (
@@ -1300,6 +1317,7 @@ const PeoplePage: React.FC = () => {
         setMassEdit={setMassEdit}
         families={families}
         gatheringTypes={gatheringTypes}
+        allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
         onSave={async () => {
           try {
             setIsLoading(true);
@@ -1325,15 +1343,18 @@ const PeoplePage: React.FC = () => {
               const p = peopleMap.get(personId);
               if (!p) continue;
 
-              // Check if we need to update individual data (firstName, family, lastName, peopleType, isChild)
-              const hasIndividualChanges = massEdit.firstName.trim() || massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType || massEdit.isChild;
-              
+              // Check if we need to update individual data (firstName, family, lastName, peopleType, isChild, badge)
+              const allSameAgeGroup = massEdit.isChild === 'true' || massEdit.isChild === 'false';
+              const canEditBadge = selectedPeople.length === 1 || (selectedPeople.length > 1 && allSameAgeGroup);
+              const hasBadgeChanges = canEditBadge && (massEdit.badgeText !== (p.badgeText || '') || massEdit.badgeColor !== (p.badgeColor || '') || massEdit.badgeIcon !== (p.badgeIcon || ''));
+              const hasIndividualChanges = massEdit.firstName.trim() || massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType || massEdit.isChild || hasBadgeChanges;
+
               if (hasIndividualChanges) {
                 const payload: any = {
                   firstName: p.firstName,
                   lastName: p.lastName,
                 };
-                
+
                 if (massEdit.firstName.trim()) {
                   payload.firstName = massEdit.firstName.trim();
                 }
@@ -1348,6 +1369,26 @@ const PeoplePage: React.FC = () => {
                 }
                 if (massEdit.isChild) {
                   payload.isChild = massEdit.isChild === 'true';
+                }
+                // Badge fields (single person or multi-person when all same age group)
+                if (canEditBadge) {
+                  const trimmedText = massEdit.badgeText.trim();
+                  const trimmedColor = massEdit.badgeColor.trim();
+                  const defaultText = massEdit.isChild === 'true' ? badgeConfig.child.defaultText : (badgeConfig.adult.defaultText || '');
+                  const defaultColor = massEdit.isChild === 'true' ? badgeConfig.child.defaultColor : (badgeConfig.adult.defaultColor || '');
+                  const defaultIcon = massEdit.isChild === 'true' ? badgeConfig.child.defaultIcon : (badgeConfig.adult.defaultIcon || '');
+
+                  // If text matches default or is empty, save as null (use default)
+                  // Only save custom text that differs from the default
+                  payload.badgeText = (!trimmedText || trimmedText === defaultText)
+                    ? null
+                    : trimmedText;
+
+                  // If color matches default or is empty, save as null (use default)
+                  payload.badgeColor = (trimmedColor === defaultColor || !trimmedColor) ? null : trimmedColor;
+
+                  // If icon matches default or is empty, save as null (use default)
+                  payload.badgeIcon = (massEdit.badgeIcon === defaultIcon || !massEdit.badgeIcon) ? null : massEdit.badgeIcon;
                 }
 
                 await individualsAPI.update(personId, payload);
@@ -1372,6 +1413,13 @@ const PeoplePage: React.FC = () => {
             setShowMassEditModal(false);
             await loadPeople();
             await loadFamilies();
+            // Restore scroll position after data reloads
+            if (savedScrollPositionRef.current !== null) {
+              requestAnimationFrame(() => {
+                window.scrollTo(0, savedScrollPositionRef.current!);
+                savedScrollPositionRef.current = null;
+              });
+            }
           } catch (err: any) {
             setError(err.response?.data?.error || 'Failed to update selected people');
           } finally {
@@ -1508,7 +1556,7 @@ const PeoplePage: React.FC = () => {
           </div>
           
           {/* Grouping Toggle & Age Filter */}
-          <div className="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-6">
             <div className="flex items-center space-x-3">
               <input
                 type="checkbox"
@@ -1532,13 +1580,16 @@ const PeoplePage: React.FC = () => {
                 <button
                   key={value}
                   onClick={() => setAgeFilter(value)}
-                  className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                  className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                     ageFilter === value
                       ? 'bg-white text-gray-900 shadow-sm'
                       : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  {value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}
+                  {value === 'child' && badgeConfig.child.defaultIcon && (
+                    <BadgeIcon type={badgeConfig.child.defaultIcon as BadgeIconType} className="w-4 h-4" />
+                  )}
+                  <span>{value === 'all' ? 'All' : value === 'adult' ? 'Adults' : 'Children'}</span>
                 </button>
               ))}
             </div>
@@ -1643,14 +1694,14 @@ const PeoplePage: React.FC = () => {
                             });
                             setShowFamilyEditorModal(true);
                           }}
-                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                          className="hidden sm:inline-flex p-1 text-gray-400 hover:text-gray-600 transition-colors"
                           title="Family Settings"
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="text-sm text-gray-500">
+                        <span className="hidden sm:inline text-sm text-gray-500">
                           {group.members.length} member{group.members.length !== 1 ? 's' : ''}
                         </span>
                         <input
@@ -1669,7 +1720,7 @@ const PeoplePage: React.FC = () => {
                       </div>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-6">
                                                  {group.members.map((person: Person) => {
 
                                                    const displayName = getPersonDisplayName(person, group.familyName);
@@ -1696,7 +1747,7 @@ const PeoplePage: React.FC = () => {
 
                                                        getStandardGatheringAssignments={getStandardGatheringAssignments}
 
-                                                       AttendanceInfoButton={AttendanceInfoButton}
+                                                       getBadgeInfo={getBadgeInfo}
 
                                                        variant="grouped"
 
@@ -1711,7 +1762,7 @@ const PeoplePage: React.FC = () => {
             </div>
           ) : (
             // Individual view (not grouped by family)
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                                      {filteredIndividualPeople.map((person: Person) => {
 
                                        const displayName = getPersonDisplayName(person);
@@ -1737,6 +1788,8 @@ const PeoplePage: React.FC = () => {
                                            getGatheringColor={getGatheringColor}
 
                                            getStandardGatheringAssignments={getStandardGatheringAssignments}
+
+                                           getBadgeInfo={getBadgeInfo}
 
                                            variant="individual"
 
@@ -1897,14 +1950,14 @@ const PeoplePage: React.FC = () => {
                                       setShowFamilyEditorModal(true);
                                     }
                                   }}
-                                  className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                  className="hidden sm:inline-flex p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                   title="Family Settings"
                                 >
                                   <PencilIcon className="h-4 w-4" />
                                 </button>
                               </div>
                               <div className="flex items-center space-x-2">
-                                <span className="text-sm text-gray-500">
+                                <span className="hidden sm:inline text-sm text-gray-500">
                                   {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
                                 </span>
                                 <input
@@ -1923,7 +1976,7 @@ const PeoplePage: React.FC = () => {
                               </div>
                             </div>
                           )}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                             {group.members.map((person: Person) => {
 
                               const displayName = getPersonDisplayName(person, group.familyName);
@@ -1950,7 +2003,7 @@ const PeoplePage: React.FC = () => {
 
                                   getStandardGatheringAssignments={getStandardGatheringAssignments}
 
-                                  AttendanceInfoButton={AttendanceInfoButton}
+                                  getBadgeInfo={getBadgeInfo}
 
                                   variant="grouped"
 
@@ -1965,7 +2018,7 @@ const PeoplePage: React.FC = () => {
                     </div>
                   ) : (
                     // Individual view
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                       {recentVisitorGroups.flatMap((group: any) => 
                         group.members.map((person: Person) => {
                           const displayName = getFullPersonDisplayName(person);
@@ -2005,7 +2058,6 @@ const PeoplePage: React.FC = () => {
                                       </div>
                                     );
                                   })()}
-                                  <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                 </div>
                               </div>
                             </div>
@@ -2070,14 +2122,14 @@ const PeoplePage: React.FC = () => {
                                         setShowFamilyEditorModal(true);
                                       }
                                     }}
-                                    className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    className="hidden sm:inline-flex p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                     title="Family Settings"
                                   >
                                     <PencilIcon className="h-4 w-4" />
                                   </button>
                                 </div>
                                 <div className="flex items-center space-x-2">
-                                  <span className="text-sm text-gray-500">
+                                  <span className="hidden sm:inline text-sm text-gray-500">
                                     {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
                                   </span>
                                   <input
@@ -2096,7 +2148,7 @@ const PeoplePage: React.FC = () => {
                                 </div>
                               </div>
                             )}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
                               {group.members.map((person: Person) => {
 
                                 const displayName = getPersonDisplayName(person, group.familyName);
@@ -2123,7 +2175,7 @@ const PeoplePage: React.FC = () => {
 
                                     getStandardGatheringAssignments={getStandardGatheringAssignments}
 
-                                    AttendanceInfoButton={AttendanceInfoButton}
+                                    getBadgeInfo={getBadgeInfo}
 
                                     variant="grouped"
 
@@ -2138,7 +2190,7 @@ const PeoplePage: React.FC = () => {
                       </div>
                     ) : (
                       // Individual view
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 mt-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6 mt-3">
                         {olderVisitorGroups.flatMap((group: any) => 
                           group.members.map((person: Person) => {
                             const displayName = getFullPersonDisplayName(person);
@@ -2178,7 +2230,6 @@ const PeoplePage: React.FC = () => {
                                         </div>
                                       );
                                     })()}
-                                    <AttendanceInfoButton personId={person.id} createdAt={person.createdAt} />
                                   </div>
                                 </div>
                               </div>
@@ -2210,7 +2261,7 @@ const PeoplePage: React.FC = () => {
               </button>
             </div>
             {showArchivedPeople && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 gap-y-6">
                 {archivedPeople.map((person: Person) => {
                   const displayName = getPersonDisplayName(person); // No family context for archived
                   const needsWideLayout = shouldUseWideLayout(displayName);
@@ -2609,14 +2660,35 @@ const PeoplePage: React.FC = () => {
                     lastName = Array.from(lastNames)[0];
                   }
                   
-                  setMassEdit({ 
-                    familyInput, 
-                    selectedFamilyId, 
-                    newFamilyName: '', 
+                  // Pre-fill badge fields
+                  let badgeText = '';
+                  let badgeColor = '';
+                  let badgeIcon = '';
+                  if (selectedPeople.length === 1) {
+                    const p = selectedPeopleData[0];
+                    const isChildBool = !!p.isChild;
+                    badgeText = p.badgeText || (isChildBool ? badgeConfig.child.defaultText : (badgeConfig.adult.defaultText || ''));
+                    badgeColor = p.badgeColor || (isChildBool ? badgeConfig.child.defaultColor : (badgeConfig.adult.defaultColor || ''));
+                    badgeIcon = p.badgeIcon || (isChildBool ? badgeConfig.child.defaultIcon : (badgeConfig.adult.defaultIcon || ''));
+                  } else if (selectedPeople.length > 1 && childStatuses.size === 1) {
+                    // All same age group - pre-fill with defaults so user can customize
+                    const allChildren = Array.from(childStatuses)[0];
+                    badgeText = allChildren ? badgeConfig.child.defaultText : (badgeConfig.adult.defaultText || '');
+                    badgeColor = allChildren ? badgeConfig.child.defaultColor : (badgeConfig.adult.defaultColor || '');
+                    badgeIcon = allChildren ? badgeConfig.child.defaultIcon : (badgeConfig.adult.defaultIcon || '');
+                  }
+
+                  setMassEdit({
+                    familyInput,
+                    selectedFamilyId,
+                    newFamilyName: '',
                     firstName: selectedPeople.length === 1 ? selectedPeopleData[0].firstName : '',
                     lastName,
                     peopleType,
                     isChild,
+                    badgeText,
+                    badgeColor,
+                    badgeIcon,
                     assignments,
                     initialAssignments: { ...assignments },
                     originalAssignments,
