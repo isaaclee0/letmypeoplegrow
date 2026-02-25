@@ -194,6 +194,21 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
       }
     }
 
+    // Broadcast checkout event for real-time updates
+    if (action === 'checkout') {
+      try {
+        const websocketBroadcast = require('../utils/websocketBroadcast');
+        websocketBroadcast.broadcastToChurch(req.user.church_id, 'kiosk:checkout', {
+          gatheringId: gatheringTypeId,
+          date,
+          individualIds,
+          timestamp: new Date().toISOString()
+        });
+      } catch (broadcastError) {
+        console.error('Error broadcasting kiosk checkout update:', broadcastError);
+      }
+    }
+
     const verb = action === 'checkin' ? 'checked in' : 'checked out';
     res.json({ message: `Successfully ${verb} ${individualIds.length} person(s).` });
   } catch (error) {

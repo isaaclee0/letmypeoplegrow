@@ -153,7 +153,7 @@ const Layout: React.FC = () => {
 
       <div className="flex overflow-hidden h-full">
         {/* Mobile sidebar */}
-      <div className={`fixed inset-0 flex z-40 md:hidden ${sidebarOpen ? '' : 'hidden'}`}>
+      <div className={`fixed inset-0 flex z-40 lg:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-primary-900 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
         <div className="relative flex-1 flex flex-col max-w-xs w-full bg-primary-500">
           <div className="absolute top-0 right-0 -mr-12 pt-2">
@@ -244,7 +244,7 @@ const Layout: React.FC = () => {
       </div>
 
       {/* Desktop sidebar */}
-      <div className="hidden md:flex md:flex-shrink-0">
+      <div className="hidden lg:flex lg:flex-shrink-0">
         <div className="flex flex-col w-64">
           <div className="flex flex-col h-0 flex-1 border-r border-primary-700 bg-primary-500">
                         <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto scrollbar-hide">
@@ -265,7 +265,7 @@ const Layout: React.FC = () => {
                 ))}
               </nav>
               {/* Profile Actions - Desktop */}
-              <div className="px-2 space-y-1 mt-2 hidden md:block">
+              <div className="px-2 space-y-1 mt-2 hidden lg:block">
                 <button
                   onClick={handleMyProfile}
                   className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
@@ -317,14 +317,14 @@ const Layout: React.FC = () => {
         {/* Top bar */}
         <div className="relative z-10 flex-shrink-0 flex h-16 bg-white shadow-lg">
           <button
-            className="px-4 border-r border-primary-200 text-primary-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500 md:hidden"
+            className="px-4 border-r border-primary-200 text-primary-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500 lg:hidden"
             onClick={() => setSidebarOpen(true)}
           >
             <Bars3Icon className="h-6 w-6" />
           </button>
           <div className="flex-1 px-4 flex justify-between">
             <div className="flex-1 flex">
-              <div className="w-full flex md:ml-0">
+              <div className="w-full flex lg:ml-0">
                 <div className="relative w-full text-gray-400 focus-within:text-gray-600">
                   <div className="absolute inset-y-0 left-0 flex items-center">
                     <h2 className="text-lg font-bold text-primary-700 ml-2 font-title">
@@ -334,7 +334,7 @@ const Layout: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="ml-4 flex items-center md:ml-6">
+            <div className="ml-4 flex items-center lg:ml-6">
 
               {/* Notifications - show for all users, includes app updates */}
               <div className="relative" ref={notificationsRef}>

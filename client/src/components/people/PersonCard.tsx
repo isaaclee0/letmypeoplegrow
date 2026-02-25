@@ -98,10 +98,10 @@ const PersonCard: React.FC<PersonCardProps> = ({
         </div>
       </div>
 
-      {/* Badge: inside tile middle-right on mobile, floating top-right on sm+ */}
+      {/* Badge: inline right-aligned on mobile, floating top-right on sm+ */}
       {badgeInfo && (
         <span
-          className={`absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+          className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
             badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
           }`}
           style={badgeInfo.styles}

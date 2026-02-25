@@ -266,6 +266,48 @@ class WebSocketService {
       this.handleLoadHeadcount(socket, data);
     });
 
+    // Handle kiosk check-in/check-out actions via WebSocket
+    socket.on('record_kiosk_action', (data) => {
+      this.handleRecordKioskAction(socket, data);
+    });
+
+    // Relay kiosk selection awareness events (no DB writes, just relay to other church sockets)
+    socket.on('kiosk:selection_changed', (data) => {
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          if (socketId !== socket.id) {
+            const client = this.io.sockets.sockets.get(socketId);
+            if (client) {
+              client.emit('kiosk:selection_changed', {
+                ...data,
+                userId: socket.userId,
+                socketId: socket.id
+              });
+            }
+          }
+        });
+      }
+    });
+
+    socket.on('kiosk:selection_cleared', (data) => {
+      const churchSocketIds = this.churchSockets.get(socket.churchId);
+      if (churchSocketIds) {
+        churchSocketIds.forEach((socketId) => {
+          if (socketId !== socket.id) {
+            const client = this.io.sockets.sockets.get(socketId);
+            if (client) {
+              client.emit('kiosk:selection_cleared', {
+                ...data,
+                userId: socket.userId,
+                socketId: socket.id
+              });
+            }
+          }
+        });
+      }
+    });
+
     // Handle ping for connection health
     socket.on('ping', () => {
       socket.emit('pong');
@@ -981,7 +1023,23 @@ class WebSocketService {
    */
   handleDisconnection(socket, reason) {
     const userKey = `${socket.churchId}:${socket.userId}`;
-    
+
+    // Broadcast selection cleared so other leaders see selections disappear
+    const churchSocketIds = this.churchSockets.get(socket.churchId);
+    if (churchSocketIds) {
+      churchSocketIds.forEach((socketId) => {
+        if (socketId !== socket.id) {
+          const client = this.io.sockets.sockets.get(socketId);
+          if (client) {
+            client.emit('kiosk:selection_cleared', {
+              userId: socket.userId,
+              socketId: socket.id
+            });
+          }
+        }
+      });
+    }
+
     // Remove from user tracking
     if (this.connectedUsers.has(userKey)) {
       this.connectedUsers.get(userKey).delete(socket.id);
@@ -1821,6 +1879,230 @@ class WebSocketService {
         data
       });
       socket.emit('headcount_mode_update_error', { message: 'Failed to update headcount mode' });
+    }
+  }
+
+  /**
+   * Handle recording kiosk check-in/check-out via WebSocket
+   * @param {Socket} socket - Socket instance
+   * @param {Object} data - Kiosk action data {gatheringId, date, individualIds, action, signerName}
+   */
+  async handleRecordKioskAction(socket, data) {
+    let gatheringId, date, individualIds, action, signerName;
+
+    try {
+      ({ gatheringId, date, individualIds, action, signerName } = data);
+
+      if (!gatheringId || !date || !individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
+        socket.emit('kiosk_action_error', { message: 'Invalid kiosk action data' });
+        return;
+      }
+      if (!['checkin', 'checkout'].includes(action)) {
+        socket.emit('kiosk_action_error', { message: 'action must be "checkin" or "checkout"' });
+        return;
+      }
+
+      logger.info('WebSocket kiosk action received', {
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        action,
+        individualCount: individualIds.length
+      });
+
+      const Database = require('../config/database');
+      const { columnExists } = require('../utils/databaseSchema');
+
+      // Ensure kiosk_checkins table exists
+      await Database.query(`
+        CREATE TABLE IF NOT EXISTS kiosk_checkins (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          gathering_type_id INT NOT NULL,
+          session_date DATE NOT NULL,
+          individual_id INT NOT NULL,
+          action ENUM('checkin', 'checkout') NOT NULL,
+          signer_name VARCHAR(255) DEFAULT NULL,
+          user_id INT DEFAULT NULL,
+          church_id VARCHAR(36) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_gathering_date (gathering_type_id, session_date),
+          INDEX idx_individual (individual_id),
+          INDEX idx_church_id (church_id),
+          INDEX idx_action (action),
+          INDEX idx_created_at (created_at),
+          INDEX idx_user_id (user_id)
+        ) ENGINE=InnoDB
+      `);
+
+      await Database.transaction(async (conn) => {
+        // Insert kiosk checkin/checkout records
+        for (const individualId of individualIds) {
+          await conn.query(`
+            INSERT INTO kiosk_checkins (gathering_type_id, session_date, individual_id, action, signer_name, user_id, church_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `, [gatheringId, date, individualId, action, signerName || null, socket.userId, socket.churchId]);
+        }
+
+        // If check-in, also mark attendance as present
+        if (action === 'checkin') {
+          const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
+          const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
+          const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
+          const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
+
+          // Create or get attendance session
+          let sessionResult;
+          if (hasSessionsChurchId) {
+            sessionResult = await conn.query(`
+              INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+              VALUES (?, ?, ?, ?)
+              ON DUPLICATE KEY UPDATE updated_at = NOW()
+            `, [gatheringId, date, socket.userId, socket.churchId]);
+          } else {
+            sessionResult = await conn.query(`
+              INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
+              VALUES (?, ?, ?)
+              ON DUPLICATE KEY UPDATE updated_at = NOW()
+            `, [gatheringId, date, socket.userId]);
+          }
+
+          let sessionId;
+          if (sessionResult.insertId) {
+            sessionId = Number(sessionResult.insertId);
+          } else {
+            const sessions = hasSessionsChurchId
+              ? await conn.query(
+                  'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+                  [gatheringId, date, socket.churchId]
+                )
+              : await conn.query(
+                  'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+                  [gatheringId, date]
+                );
+            if (sessions.length === 0) {
+              throw new Error('Failed to create or retrieve attendance session');
+            }
+            sessionId = Number(sessions[0].id);
+          }
+
+          // Mark each individual as present
+          for (const individualId of individualIds) {
+            let peopleTypeAtTime = null;
+            if (hasPeopleTypeAtTime) {
+              const individualResult = hasIndividualsChurchId
+                ? await conn.query('SELECT people_type FROM individuals WHERE id = ? AND church_id = ?', [individualId, socket.churchId])
+                : await conn.query('SELECT people_type FROM individuals WHERE id = ?', [individualId]);
+              if (individualResult.length > 0 && individualResult[0].people_type) {
+                peopleTypeAtTime = individualResult[0].people_type;
+              }
+            }
+
+            if (hasAttendanceRecordsChurchId) {
+              if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+                await conn.query(`
+                  INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+                  VALUES (?, ?, true, ?, ?)
+                  ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                `, [sessionId, individualId, socket.churchId, peopleTypeAtTime]);
+              } else {
+                await conn.query(`
+                  INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+                  VALUES (?, ?, true, ?)
+                  ON DUPLICATE KEY UPDATE present = true
+                `, [sessionId, individualId, socket.churchId]);
+              }
+            } else {
+              if (hasPeopleTypeAtTime && peopleTypeAtTime) {
+                await conn.query(`
+                  INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
+                  VALUES (?, ?, true, ?)
+                  ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                `, [sessionId, individualId, peopleTypeAtTime]);
+              } else {
+                await conn.query(`
+                  INSERT INTO attendance_records (session_id, individual_id, present)
+                  VALUES (?, ?, true)
+                  ON DUPLICATE KEY UPDATE present = true
+                `, [sessionId, individualId]);
+              }
+            }
+
+            // Update last_attendance_date
+            if (hasIndividualsChurchId) {
+              await conn.query(`
+                UPDATE individuals SET last_attendance_date = ? WHERE id = ? AND church_id = ?
+              `, [date, individualId, socket.churchId]);
+            } else {
+              await conn.query(`
+                UPDATE individuals SET last_attendance_date = ? WHERE id = ?
+              `, [date, individualId]);
+            }
+          }
+        }
+      });
+
+      // Broadcast results
+      if (action === 'checkin') {
+        // Broadcast attendance update (same as existing pattern)
+        const records = individualIds.map(id => ({ individualId: id, present: true }));
+        const broadcastData = {
+          type: 'attendance_records',
+          gatheringId,
+          date,
+          records,
+          updatedBy: socket.userId,
+          updatedAt: new Date().toISOString(),
+          timestamp: new Date().toISOString()
+        };
+
+        const churchSocketIds = this.churchSockets.get(socket.churchId);
+        if (churchSocketIds) {
+          churchSocketIds.forEach((socketId) => {
+            const clientSocket = this.io.sockets.sockets.get(socketId);
+            if (clientSocket) {
+              clientSocket.emit('attendance_update', broadcastData);
+            }
+          });
+        }
+      } else {
+        // Broadcast checkout event
+        this.broadcastToChurch(socket.churchId, 'kiosk:checkout', {
+          gatheringId,
+          date,
+          individualIds,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Send success to sender
+      socket.emit('kiosk_action_success');
+
+      logger.info('WebSocket kiosk action processed successfully', {
+        userId: socket.userId,
+        gatheringId,
+        date,
+        action,
+        individualCount: individualIds.length
+      });
+
+    } catch (error) {
+      logger.error('Error processing WebSocket kiosk action', {
+        error: error.message,
+        stack: error.stack,
+        userId: socket.userId,
+        churchId: socket.churchId,
+        gatheringId,
+        date,
+        action,
+        data
+      });
+
+      const errorMessage = process.env.NODE_ENV === 'development'
+        ? `Failed to process kiosk action: ${error.message}`
+        : 'Failed to process kiosk action';
+
+      socket.emit('kiosk_action_error', { message: errorMessage });
     }
   }
 

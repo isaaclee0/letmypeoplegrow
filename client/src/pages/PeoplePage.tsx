@@ -57,6 +57,7 @@ interface Family {
   memberCount: number;
   familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
   lastAttended?: string;
+  familyNotes?: string;
 }
 
 interface GatheringType {
@@ -633,8 +634,14 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const handleOpenNotes = (family: any) => {
-    setSelectedFamilyForNotes(family);
+  const handleOpenNotes = (group: any) => {
+    // Merge familyNotes from families state since group objects don't carry it
+    const fam = families.find(f => f.id === group.familyId);
+    setSelectedFamilyForNotes({
+      ...group,
+      id: group.familyId,
+      familyNotes: fam?.familyNotes || '',
+    });
     setShowNotesModal(true);
   };
 

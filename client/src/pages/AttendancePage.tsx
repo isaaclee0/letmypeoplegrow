@@ -365,7 +365,8 @@ const AttendancePage: React.FC = () => {
     sendHeadcountUpdate,
     loadAttendanceData: loadAttendanceDataWebSocket,
     onAttendanceUpdate,
-    onVisitorUpdate
+    onVisitorUpdate,
+    onReconnect
   } = useWebSocket();
   const webSocketMode = useMemo(() => getWebSocketMode(), []);
   const useWebSocketForUpdates = webSocketMode.enabled;
@@ -1376,6 +1377,13 @@ const AttendancePage: React.FC = () => {
       isCancelled = true;
     };
   }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, attendanceRefreshTrigger, validDates]);
+
+  // Refresh data when WebSocket reconnects (device woke up, network restored, etc.)
+  useEffect(() => {
+    return onReconnect(() => {
+      setAttendanceRefreshTrigger(prev => prev + 1);
+    });
+  }, [onReconnect]);
 
   // Function to quickly add a recent visitor
   const quickAddRecentVisitor = async (recentVisitor: Visitor) => {
@@ -3771,7 +3779,7 @@ const AttendancePage: React.FC = () => {
                             {/* Floating Badge at Top Right */}
                             {badgeInfo && (
                               <span
-                                className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                   badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                                 }`}
                                 style={badgeInfo.styles}
@@ -3958,7 +3966,7 @@ const AttendancePage: React.FC = () => {
                           {/* Floating Badge at Top Right */}
                           {badgeInfo && (
                             <span
-                              className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                              className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                 badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                               }`}
                               style={badgeInfo.styles}
@@ -4065,7 +4073,7 @@ const AttendancePage: React.FC = () => {
                                 {/* Floating Badge at Top Right */}
                                 {badgeInfo && (
                                   <span
-                                    className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                    className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                       badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                                     }`}
                                     style={badgeInfo.styles}

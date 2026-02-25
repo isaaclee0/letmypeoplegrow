@@ -36,6 +36,30 @@ export interface VisitorUpdate {
   timestamp: string;
 }
 
+export interface KioskCheckout {
+  gatheringId: number;
+  date: string;
+  individualIds: number[];
+  timestamp: string;
+}
+
+export interface KioskSelectionUpdate {
+  gatheringId: number;
+  date: string;
+  selectedIds: number[];
+  userId: number;
+  userName: string;
+  mode: string;
+  socketId: string;
+}
+
+export interface KioskSelectionCleared {
+  gatheringId?: number;
+  date?: string;
+  userId: number;
+  socketId: string;
+}
+
 export interface UserActivity {
   userId: number;
   userEmail: string;
@@ -64,9 +88,16 @@ interface WebSocketContextType {
   activeUsers: ActiveUser[];
   sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
   sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
+  sendKioskAction: (gatheringId: number, date: string, individualIds: number[], action: 'checkin' | 'checkout', signerName: string) => Promise<void>;
   loadAttendanceData: (gatheringId: number, date: string) => Promise<{ attendanceList: any[]; visitors: any[] }>;
   onAttendanceUpdate: (callback: (update: AttendanceUpdate) => void) => () => void;
   onVisitorUpdate: (callback: (update: VisitorUpdate) => void) => () => void;
+  onKioskCheckout: (callback: (update: KioskCheckout) => void) => () => void;
+  broadcastKioskSelection: (gatheringId: number, date: string, selectedIds: number[], userName: string, mode: string) => void;
+  clearKioskSelection: (gatheringId: number, date: string) => void;
+  onKioskSelectionChanged: (callback: (update: KioskSelectionUpdate) => void) => () => void;
+  onKioskSelectionCleared: (callback: (update: KioskSelectionCleared) => void) => () => void;
+  onReconnect: (callback: () => void) => () => void;
   onUserActivity: (callback: (activity: UserActivity) => void) => () => void;
   onRoomUsersUpdate: (callback: (update: RoomUsersUpdate) => void) => () => void;
   getCurrentRoom: () => string | null;
@@ -108,8 +139,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   // Refs to store callbacks to avoid dependency issues
   const attendanceCallbacks = useRef<Set<(update: AttendanceUpdate) => void>>(new Set());
   const visitorCallbacks = useRef<Set<(update: VisitorUpdate) => void>>(new Set());
+  const kioskCheckoutCallbacks = useRef<Set<(update: KioskCheckout) => void>>(new Set());
+  const kioskSelectionChangedCallbacks = useRef<Set<(update: KioskSelectionUpdate) => void>>(new Set());
+  const kioskSelectionClearedCallbacks = useRef<Set<(update: KioskSelectionCleared) => void>>(new Set());
   const userActivityCallbacks = useRef<Set<(activity: UserActivity) => void>>(new Set());
   const roomUsersCallbacks = useRef<Set<(update: RoomUsersUpdate) => void>>(new Set());
+  const reconnectCallbacks = useRef<Set<() => void>>(new Set());
   
   // Connection management with stable user reference
   const userRef = useRef(user);
@@ -459,12 +494,15 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       connectionState.hasEverConnected = true;
       setConnectionStatus('connected');
       connectionState.reconnectAttemptCount = 0;
-      
+
       // Clear the offline timeout since we're connected
       if (connectionTimeoutRef.current) {
         clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
       }
+
+      // Notify subscribers so they can refresh stale data
+      reconnectCallbacks.current.forEach(cb => cb());
     });
 
     newSocket.on('reconnect_error', (error: Error) => {
@@ -536,6 +574,36 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       });
     });
 
+    newSocket.on('kiosk:checkout', (update: KioskCheckout) => {
+      console.log('🚪 Received kiosk checkout update:', update);
+      kioskCheckoutCallbacks.current.forEach(callback => {
+        try {
+          callback(update);
+        } catch (error) {
+          console.error('Error in kiosk checkout callback:', error);
+        }
+      });
+    });
+
+    newSocket.on('kiosk:selection_changed', (update: KioskSelectionUpdate) => {
+      kioskSelectionChangedCallbacks.current.forEach(callback => {
+        try {
+          callback(update);
+        } catch (error) {
+          console.error('Error in kiosk selection changed callback:', error);
+        }
+      });
+    });
+
+    newSocket.on('kiosk:selection_cleared', (update: KioskSelectionCleared) => {
+      kioskSelectionClearedCallbacks.current.forEach(callback => {
+        try {
+          callback(update);
+        } catch (error) {
+          console.error('Error in kiosk selection cleared callback:', error);
+        }
+      });
+    });
 
     newSocket.on('user_joined', (activity: UserActivity) => {
       console.log('👋 User joined room:', activity);
@@ -709,6 +777,46 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
   };
 
+  // Send kiosk action (check-in/check-out) via WebSocket
+  const sendKioskAction = async (gatheringId: number, date: string, individualIds: number[], action: 'checkin' | 'checkout', signerName: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!socket || !isConnected) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      console.log(`📤 Sending kiosk ${action} via WebSocket: gathering ${gatheringId}, date ${date}, individuals: ${individualIds.length}`);
+
+      const handleSuccess = () => {
+        socket.off('kiosk_action_error', handleError);
+        resolve();
+      };
+
+      const handleError = (error: { message?: string }) => {
+        socket.off('kiosk_action_success', handleSuccess);
+        reject(new Error(error.message || 'Failed to process kiosk action'));
+      };
+
+      socket.once('kiosk_action_success', handleSuccess);
+      socket.once('kiosk_action_error', handleError);
+
+      socket.emit('record_kiosk_action', {
+        gatheringId,
+        date,
+        individualIds,
+        action,
+        signerName
+      });
+
+      // Timeout to prevent hanging
+      setTimeout(() => {
+        socket.off('kiosk_action_success', handleSuccess);
+        socket.off('kiosk_action_error', handleError);
+        reject(new Error('WebSocket kiosk action timeout'));
+      }, 10000);
+    });
+  };
+
   // Load attendance data via WebSocket
   const loadAttendanceData = async (gatheringId: number, date: string): Promise<{ attendanceList: any[]; visitors: any[] }> => {
     return new Promise((resolve, reject) => {
@@ -771,6 +879,52 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   }, []);
 
+
+  // Subscribe to kiosk checkout updates
+  const onKioskCheckout = useCallback((callback: (update: KioskCheckout) => void): (() => void) => {
+    kioskCheckoutCallbacks.current.add(callback);
+    return () => {
+      kioskCheckoutCallbacks.current.delete(callback);
+    };
+  }, []);
+
+  // Broadcast kiosk selection (fire-and-forget)
+  const broadcastKioskSelection = useCallback((gatheringId: number, date: string, selectedIds: number[], userName: string, mode: string) => {
+    if (socket && isConnected) {
+      socket.emit('kiosk:selection_changed', { gatheringId, date, selectedIds, userName, mode });
+    }
+  }, [socket, isConnected]);
+
+  // Clear kiosk selection (fire-and-forget)
+  const clearKioskSelection = useCallback((gatheringId: number, date: string) => {
+    if (socket && isConnected) {
+      socket.emit('kiosk:selection_cleared', { gatheringId, date });
+    }
+  }, [socket, isConnected]);
+
+  // Subscribe to kiosk selection changed
+  const onKioskSelectionChanged = useCallback((callback: (update: KioskSelectionUpdate) => void): (() => void) => {
+    kioskSelectionChangedCallbacks.current.add(callback);
+    return () => {
+      kioskSelectionChangedCallbacks.current.delete(callback);
+    };
+  }, []);
+
+  // Subscribe to kiosk selection cleared
+  const onKioskSelectionCleared = useCallback((callback: (update: KioskSelectionCleared) => void): (() => void) => {
+    kioskSelectionClearedCallbacks.current.add(callback);
+    return () => {
+      kioskSelectionClearedCallbacks.current.delete(callback);
+    };
+  }, []);
+
+  // Subscribe to reconnection events (so pages can refresh stale data)
+  const onReconnect = useCallback((callback: () => void): (() => void) => {
+    reconnectCallbacks.current.add(callback);
+    return () => {
+      reconnectCallbacks.current.delete(callback);
+    };
+  }, []);
 
   // Subscribe to user activity
   const onUserActivity = useCallback((callback: (activity: UserActivity) => void): (() => void) => {
@@ -853,9 +1007,16 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     activeUsers,
     sendAttendanceUpdate,
     sendHeadcountUpdate,
+    sendKioskAction,
     loadAttendanceData,
     onAttendanceUpdate,
     onVisitorUpdate,
+    onKioskCheckout,
+    broadcastKioskSelection,
+    clearKioskSelection,
+    onKioskSelectionChanged,
+    onKioskSelectionCleared,
+    onReconnect,
     onUserActivity,
     onRoomUsersUpdate,
     getCurrentRoom,

@@ -148,6 +148,19 @@ function isConnected() {
   return webSocketService !== null;
 }
 
+/**
+ * Broadcast an event to all clients in a specific church
+ * @param {string} churchId - Church ID
+ * @param {string} event - Event name
+ * @param {Object} data - Data to broadcast
+ */
+function broadcastToChurch(churchId, event, data) {
+  if (!webSocketService) {
+    return;
+  }
+  webSocketService.broadcastToChurch(churchId, event, data);
+}
+
 module.exports = {
   initialize,
   broadcastAttendanceRecords,
@@ -155,6 +168,7 @@ module.exports = {
   broadcastVisitorFamilyAdded,
   broadcastVisitorFamilyUpdated,
   broadcastFullRefresh,
+  broadcastToChurch,
   websocketBroadcast,
   isConnected
 };

@@ -25,6 +25,8 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
   const [error, setError] = useState('');
   const { getBadgeInfo } = useBadgeSettings();
 
+  const hasChildren = useMemo(() => selectedPeople.some(p => p.isChild), [selectedPeople]);
+
   const uniqueFamilyNotes = useMemo(() => {
     const seen = new Set<string>();
     const notes: Array<{ familyName: string; notes: string }> = [];
@@ -47,14 +49,14 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
   }, [uniqueFamilyNotes.length]);
 
   const handleSubmit = async () => {
-    if (!signerName.trim()) {
+    if (hasChildren && !signerName.trim()) {
       setError('Please enter the authorised person\'s name.');
       return;
     }
     try {
       setIsSubmitting(true);
       setError('');
-      await onConfirm(signerName.trim());
+      await onConfirm(signerName.trim() || '');
       setSignerName('');
       setShowNotes(false);
     } catch (err: any) {
@@ -106,23 +108,25 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
               </div>
             </div>
 
-            {/* Signer name */}
-            <div>
-              <label htmlFor="leader-signer-name" className="block text-sm font-medium text-gray-700 mb-1">
-                Authorised person name <span className="text-red-500">*</span>
-              </label>
-              <input
-                id="leader-signer-name"
-                type="text"
-                value={signerName}
-                onChange={(e) => { setSignerName(e.target.value); setError(''); }}
-                onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-                className="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 px-3 py-2"
-                placeholder="Name of person authorising this action..."
-                autoFocus
-                autoComplete="off"
-              />
-            </div>
+            {/* Signer name — only required when children are being checked in/out */}
+            {hasChildren && (
+              <div>
+                <label htmlFor="leader-signer-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Authorised person name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="leader-signer-name"
+                  type="text"
+                  value={signerName}
+                  onChange={(e) => { setSignerName(e.target.value); setError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+                  className="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 px-3 py-2"
+                  placeholder="Name of person authorising this action..."
+                  autoFocus
+                  autoComplete="off"
+                />
+              </div>
+            )}
 
             {/* Family notes (expandable) */}
             {uniqueFamilyNotes.length > 0 && (
@@ -139,11 +143,11 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
                   Family Notes
                 </button>
                 {showNotes && (
-                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                  <div className="mt-2 p-3 bg-white border border-gray-300 rounded-lg text-sm">
                     {uniqueFamilyNotes.map((note, idx) => (
-                      <div key={idx} className={idx > 0 ? 'mt-2 pt-2 border-t border-amber-200' : ''}>
-                        <span className="font-medium text-amber-900">{note.familyName}:</span>{' '}
-                        <span className="text-amber-800">{note.notes}</span>
+                      <div key={idx} className={idx > 0 ? 'mt-2 pt-2 border-t border-gray-200' : ''}>
+                        <span className="text-gray-800 whitespace-pre-wrap">{note.notes}</span>
+                        <p className="text-xs text-gray-400 mt-0.5">{note.familyName}</p>
                       </div>
                     ))}
                   </div>
@@ -165,7 +169,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
             </button>
             <button
               onClick={handleSubmit}
-              disabled={isSubmitting || !signerName.trim()}
+              disabled={isSubmitting || (hasChildren && !signerName.trim())}
               className={`flex-1 px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white disabled:opacity-50 disabled:cursor-not-allowed ${
                 isCheckin
                   ? 'bg-primary-600 hover:bg-primary-700'

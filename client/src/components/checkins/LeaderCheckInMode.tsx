@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { attendanceAPI, kioskAPI, familiesAPI, GatheringType, Individual } from '../../services/api';
-import { useWebSocket } from '../../contexts/WebSocketContext';
+import { useWebSocket, KioskSelectionUpdate, KioskSelectionCleared } from '../../contexts/WebSocketContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useBadgeSettings } from '../../hooks/useBadgeSettings';
 import BadgeIcon, { BadgeIconType } from '../icons/BadgeIcon';
 import LeaderCheckInModal from './LeaderCheckInModal';
@@ -33,7 +34,8 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   onBack,
 }) => {
   const { getBadgeInfo } = useBadgeSettings();
-  const { socket, isConnected } = useWebSocket();
+  const { socket, isConnected, sendAttendanceUpdate, sendKioskAction, onAttendanceUpdate, onKioskCheckout, onReconnect, broadcastKioskSelection, clearKioskSelection, onKioskSelectionChanged, onKioskSelectionCleared } = useWebSocket();
+  const { user } = useAuth();
 
   // Mode
   const [mode, setMode] = useState<'checkin' | 'present' | 'checkout' | 'checkedout'>('checkin');
@@ -49,6 +51,8 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
   // Modal
   const [showModal, setShowModal] = useState(false);
+  const [showUndoModal, setShowUndoModal] = useState(false);
+  const [isUndoing, setIsUndoing] = useState(false);
 
   // Visitor
   const [showAddVisitorModal, setShowAddVisitorModal] = useState(false);
@@ -59,6 +63,13 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
   // Checked-out tracking
   const [checkedOutIds, setCheckedOutIds] = useState<Set<number>>(new Set());
+
+  // Other leaders' selections: userId → { userName, selectedIds }
+  const [otherSelections, setOtherSelections] = useState<Map<number, { userName: string; selectedIds: Set<number> }>>(new Map());
+
+  // Toast for soft warning
+  const [selectionToast, setSelectionToast] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Feedback
   const [error, setError] = useState('');
@@ -142,39 +153,46 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   }, [loadAttendance]);
 
   // Load kiosk checkout records to identify checked-out people
-  useEffect(() => {
-    const loadCheckoutData = async () => {
-      try {
-        const response = await kioskAPI.getHistoryDetail(selectedGathering.id, gatheringDate);
-        const individuals: any[] = response.data.individuals || [];
-        const ids = new Set<number>();
-        for (const ind of individuals) {
-          if (ind.checkouts && ind.checkouts.length > 0) {
-            // Person has been checked out if their last action was checkout
-            const lastCheckin = ind.checkins?.[ind.checkins.length - 1]?.time;
-            const lastCheckout = ind.checkouts[ind.checkouts.length - 1]?.time;
-            if (!lastCheckin || new Date(lastCheckout) > new Date(lastCheckin)) {
-              ids.add(ind.individualId);
-            }
+  const loadCheckoutData = useCallback(async () => {
+    try {
+      const response = await kioskAPI.getHistoryDetail(selectedGathering.id, gatheringDate);
+      const individuals: any[] = response.data.individuals || [];
+      const ids = new Set<number>();
+      for (const ind of individuals) {
+        if (ind.checkouts && ind.checkouts.length > 0) {
+          const lastCheckin = ind.checkins?.[ind.checkins.length - 1]?.time;
+          const lastCheckout = ind.checkouts[ind.checkouts.length - 1]?.time;
+          if (!lastCheckin || new Date(lastCheckout) > new Date(lastCheckin)) {
+            ids.add(ind.individualId);
           }
         }
-        setCheckedOutIds(ids);
-      } catch {
-        // Not critical if this fails
       }
-    };
-    loadCheckoutData();
+      setCheckedOutIds(ids);
+    } catch {
+      // Not critical if this fails
+    }
   }, [selectedGathering.id, gatheringDate]);
 
-  // WebSocket: subscribe to attendance updates
   useEffect(() => {
-    if (!socket || !isConnected) return;
+    loadCheckoutData();
+  }, [loadCheckoutData]);
 
-    const handleUpdate = (data: any) => {
-      if (!data?.records) return;
+  // Refresh all data when WebSocket reconnects (device woke up, network restored, etc.)
+  useEffect(() => {
+    return onReconnect(() => {
+      loadAttendance();
+      loadCheckoutData();
+    });
+  }, [onReconnect, loadAttendance, loadCheckoutData]);
+
+  // WebSocket: subscribe to attendance updates via context callback
+  useEffect(() => {
+    const unsub = onAttendanceUpdate((data) => {
+      if (String(data.gatheringId) !== String(selectedGathering.id) || data.date !== gatheringDate) return;
+      if (!data.records) return;
       setAttendanceList(prev =>
         prev.map(p => {
-          const rec = data.records.find((r: any) => r.individualId === p.id);
+          const rec = data.records!.find(r => r.individualId === p.id);
           return rec ? { ...p, present: Boolean(rec.present) } : p;
         })
       );
@@ -182,18 +200,87 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         prev.map(fg => ({
           ...fg,
           members: fg.members.map(m => {
-            const rec = data.records.find((r: any) => r.individualId === m.id);
+            const rec = data.records!.find(r => r.individualId === m.id);
             return rec ? { ...m, present: Boolean(rec.present) } : m;
           }),
         }))
       );
-    };
+    });
+    return unsub;
+  }, [onAttendanceUpdate, selectedGathering.id, gatheringDate]);
 
-    socket.on('attendance:update', handleUpdate);
+  // WebSocket: subscribe to kiosk checkout events from other leaders
+  useEffect(() => {
+    const unsub = onKioskCheckout((data) => {
+      if (String(data.gatheringId) === String(selectedGathering.id) && data.date === gatheringDate) {
+        setCheckedOutIds(prev => {
+          const next = new Set(prev);
+          data.individualIds.forEach(id => next.add(id));
+          return next;
+        });
+      }
+    });
+    return unsub;
+  }, [onKioskCheckout, selectedGathering.id, gatheringDate]);
+
+  // Broadcast selection changes to other leaders
+  useEffect(() => {
+    const userName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || '' : '';
+    broadcastKioskSelection(selectedGathering.id, gatheringDate, Array.from(checkedMembers), userName, mode);
+  }, [checkedMembers, broadcastKioskSelection, selectedGathering.id, gatheringDate, mode, user]);
+
+  // Listen for other leaders' selection changes
+  useEffect(() => {
+    const unsubChanged = onKioskSelectionChanged((update: KioskSelectionUpdate) => {
+      if (String(update.gatheringId) === String(selectedGathering.id) && update.date === gatheringDate) {
+        setOtherSelections(prev => {
+          const next = new Map(prev);
+          if (update.selectedIds.length === 0) {
+            next.delete(update.userId);
+          } else {
+            next.set(update.userId, {
+              userName: update.userName,
+              selectedIds: new Set(update.selectedIds),
+            });
+          }
+          return next;
+        });
+      }
+    });
+
+    const unsubCleared = onKioskSelectionCleared((update: KioskSelectionCleared) => {
+      setOtherSelections(prev => {
+        const next = new Map(prev);
+        next.delete(update.userId);
+        return next;
+      });
+    });
+
     return () => {
-      socket.off('attendance:update', handleUpdate);
+      unsubChanged();
+      unsubCleared();
     };
-  }, [socket, isConnected]);
+  }, [onKioskSelectionChanged, onKioskSelectionCleared, selectedGathering.id, gatheringDate]);
+
+  // Clear selection on unmount
+  useEffect(() => {
+    return () => {
+      clearKioskSelection(selectedGathering.id, gatheringDate);
+    };
+  }, [clearKioskSelection, selectedGathering.id, gatheringDate]);
+
+  // Compute which people are selected by other leaders: individualId → list of names
+  const selectedByOthers = useMemo(() => {
+    const map = new Map<number, string[]>();
+    otherSelections.forEach(({ userName, selectedIds }) => {
+      selectedIds.forEach(id => {
+        const names = map.get(id) || [];
+        names.push(userName);
+        map.set(id, names);
+      });
+    });
+    return map;
+  }, [otherSelections]);
 
   // Display name helper - matches AttendancePage logic
   const getPersonDisplayName = useCallback((person: Individual, familyName?: string) => {
@@ -270,8 +357,19 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   const toggleMember = (id: number) => {
     setCheckedMembers(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        // Show soft warning if another leader has this person selected
+        const otherNames = selectedByOthers.get(id);
+        if (otherNames && otherNames.length > 0) {
+          const names = otherNames.join(', ');
+          setSelectionToast(`Also being selected by ${names}`);
+          if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+          toastTimeoutRef.current = setTimeout(() => setSelectionToast(null), 2500);
+        }
+      }
       return next;
     });
   };
@@ -283,14 +381,24 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
   // Handle confirm from modal
   const handleConfirm = async (signerName: string) => {
+    const ids = Array.from(checkedMembers);
     const apiAction = mode === 'checkout' ? 'checkout' : 'checkin';
-    const submissionData = {
-      individualIds: Array.from(checkedMembers),
-      action: apiAction as 'checkin' | 'checkout',
-      signerName,
-    };
 
-    await kioskAPI.record(selectedGathering.id, gatheringDate, submissionData);
+    // Try WebSocket first, fall back to REST
+    if (isConnected && socket) {
+      try {
+        await sendKioskAction(selectedGathering.id, gatheringDate, ids, apiAction, signerName);
+      } catch {
+        // Fallback to REST
+        await kioskAPI.record(selectedGathering.id, gatheringDate, {
+          individualIds: ids, action: apiAction, signerName,
+        });
+      }
+    } else {
+      await kioskAPI.record(selectedGathering.id, gatheringDate, {
+        individualIds: ids, action: apiAction, signerName,
+      });
+    }
 
     // Optimistic update
     if (mode === 'checkin') {
@@ -324,9 +432,85 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
     const verb = mode === 'checkin' ? 'checked in' : 'checked out';
     setSuccessMessage(`Successfully ${verb}: ${names}`);
     setCheckedMembers(new Set());
+    clearKioskSelection(selectedGathering.id, gatheringDate);
     setShowModal(false);
 
     setTimeout(() => setSuccessMessage(null), 4000);
+  };
+
+  // Handle undo check-in or undo check-out
+  const handleUndo = async () => {
+    const ids = Array.from(checkedMembers);
+    try {
+      setIsUndoing(true);
+      setError('');
+
+      if (mode === 'present') {
+        // Undo check-in: mark as not present
+        const records = ids.map(id => ({ individualId: id, present: false }));
+        if (isConnected && socket) {
+          try {
+            await sendAttendanceUpdate(selectedGathering.id, gatheringDate, records);
+          } catch {
+            await attendanceAPI.record(selectedGathering.id, gatheringDate, {
+              attendanceRecords: records,
+              visitors: [],
+            });
+          }
+        } else {
+          await attendanceAPI.record(selectedGathering.id, gatheringDate, {
+            attendanceRecords: records,
+            visitors: [],
+          });
+        }
+
+        // Optimistic update: mark as not present
+        setAttendanceList(prev =>
+          prev.map(p => checkedMembers.has(p.id) ? { ...p, present: false } : p)
+        );
+        setFamilyGroups(prev =>
+          prev.map(fg => ({
+            ...fg,
+            members: fg.members.map(m =>
+              checkedMembers.has(m.id) ? { ...m, present: false } : m
+            ),
+          }))
+        );
+      } else if (mode === 'checkedout') {
+        // Undo check-out: re-checkin so the checkout record is superseded
+        if (isConnected && socket) {
+          try {
+            await sendKioskAction(selectedGathering.id, gatheringDate, ids, 'checkin', '');
+          } catch {
+            await kioskAPI.record(selectedGathering.id, gatheringDate, {
+              individualIds: ids, action: 'checkin', signerName: '',
+            });
+          }
+        } else {
+          await kioskAPI.record(selectedGathering.id, gatheringDate, {
+            individualIds: ids, action: 'checkin', signerName: '',
+          });
+        }
+
+        // Optimistic update: remove from checked-out set (person goes back to present)
+        setCheckedOutIds(prev => {
+          const next = new Set(prev);
+          checkedMembers.forEach(id => next.delete(id));
+          return next;
+        });
+      }
+
+      const names = selectedPeople.map(p => p.firstName).join(', ');
+      const verb = mode === 'present' ? 'check-in undone' : 'check-out undone';
+      setSuccessMessage(`${verb}: ${names}`);
+      setCheckedMembers(new Set());
+      setShowUndoModal(false);
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to undo.');
+    } finally {
+      setIsUndoing(false);
+    }
   };
 
   // Add visitor
@@ -445,7 +629,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       <div className="flex items-center justify-center mb-4">
         <div className="bg-gray-100 rounded-full p-1 flex">
           <button
-            onClick={() => { setMode('checkin'); setCheckedMembers(new Set()); }}
+            onClick={() => { setMode('checkin'); setCheckedMembers(new Set()); clearKioskSelection(selectedGathering.id, gatheringDate); }}
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkin'
                 ? 'bg-primary-600 text-white shadow-sm'
@@ -455,7 +639,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             Check In{notCheckedInCount > 0 ? ` (${notCheckedInCount})` : ''}
           </button>
           <button
-            onClick={() => { setMode('present'); setCheckedMembers(new Set()); }}
+            onClick={() => { setMode('present'); setCheckedMembers(new Set()); clearKioskSelection(selectedGathering.id, gatheringDate); }}
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'present'
                 ? 'bg-green-600 text-white shadow-sm'
@@ -465,7 +649,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             Present{presentCount > 0 ? ` (${presentCount})` : ''}
           </button>
           <button
-            onClick={() => { setMode('checkout'); setCheckedMembers(new Set()); }}
+            onClick={() => { setMode('checkout'); setCheckedMembers(new Set()); clearKioskSelection(selectedGathering.id, gatheringDate); }}
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkout'
                 ? 'bg-orange-500 text-white shadow-sm'
@@ -475,7 +659,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             Check Out
           </button>
           <button
-            onClick={() => { setMode('checkedout'); setCheckedMembers(new Set()); }}
+            onClick={() => { setMode('checkedout'); setCheckedMembers(new Set()); clearKioskSelection(selectedGathering.id, gatheringDate); }}
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkedout'
                 ? 'bg-gray-600 text-white shadow-sm'
@@ -486,6 +670,15 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Selection toast */}
+      {selectionToast && (
+        <div className="mb-3 flex justify-center">
+          <div className="rounded-lg px-3 py-1.5 text-xs animate-pulse" style={{ backgroundColor: '#fce4ef', border: '1px solid #ec75a6', color: '#b5446e' }}>
+            {selectionToast}
+          </div>
+        </div>
+      )}
 
       {/* Success */}
       {successMessage && (
@@ -551,14 +744,47 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               }
               return group.familyName;
             })();
-            const isActionTab = mode === 'checkin' || mode === 'checkout';
+            const isUndoTab = mode === 'present' || mode === 'checkedout';
+
+            // Check if any member in this family is selected by another leader
+            const familyOtherLeaders = new Set<string>();
+            group.members.forEach(m => {
+              const names = selectedByOthers.get(m.id);
+              if (names) names.forEach(n => familyOtherLeaders.add(n));
+            });
+            const isFamilySelectedByOther = familyOtherLeaders.size > 0;
+
+            let familyCardClasses = '';
+            if (isRealFamily) {
+              familyCardClasses = isFamilySelectedByOther
+                ? 'relative rounded-lg p-4 pb-5 mb-1'
+                : 'bg-white border border-gray-200 rounded-lg p-4';
+            }
 
             return (
-              <div key={group.familyId} className={isRealFamily ? "bg-white border border-gray-200 rounded-lg p-4" : ""}>
+              <div
+                key={group.familyId}
+                className={familyCardClasses}
+                style={isRealFamily && isFamilySelectedByOther ? { backgroundColor: '#fce4ef', border: '2px solid #ec75a6' } : undefined}
+              >
+                {/* Other-leader name bump — sits on the bottom border, centered */}
+                {isRealFamily && isFamilySelectedByOther && (
+                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 whitespace-nowrap text-white text-[9px] font-medium px-1.5 py-0.5 rounded-full shadow-sm z-10" style={{ backgroundColor: '#ec75a6' }}>
+                    {Array.from(familyOtherLeaders).join(', ')}
+                  </div>
+                )}
+                {/* For solo (non-family) tiles selected by another leader */}
+                {!isRealFamily && isFamilySelectedByOther && (
+                  <div className="relative">
+                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 translate-y-1/2 whitespace-nowrap text-white text-[9px] font-medium px-1.5 py-0.5 rounded-full shadow-sm z-10" style={{ backgroundColor: '#ec75a6' }}>
+                      {Array.from(familyOtherLeaders).join(', ')}
+                    </div>
+                  </div>
+                )}
                 {isRealFamily && (
                   <div className="flex justify-between items-center mb-3">
                     <h4 className="text-md font-medium text-gray-900">{familyDisplayName}</h4>
-                    {isActionTab && group.members.length > 1 && (
+                    {group.members.length > 1 && (
                       <button
                         onClick={() => {
                           const allSelected = group.members.every(m => checkedMembers.has(m.id));
@@ -584,17 +810,20 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                     const isChecked = checkedMembers.has(member.id);
                     const badgeInfo = getBadgeInfo(member);
                     const displayName = getPersonDisplayName(member, isRealFamily ? group.familyName : undefined);
+                    const otherLeaderNames = selectedByOthers.get(member.id);
+                    const isSelectedByOther = otherLeaderNames && otherLeaderNames.length > 0;
 
                     // Card styling matching AttendancePage
-                    let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white';
-                    if (mode === 'present') {
-                      // Present tab: highlighted like attendance page
+                    let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white cursor-pointer';
+                    if (mode === 'present' && isChecked) {
+                      cardClasses += ' border-red-400 bg-red-50';
+                    } else if (mode === 'present') {
                       cardClasses += ' border-primary-500 bg-primary-50';
+                    } else if (mode === 'checkedout' && isChecked) {
+                      cardClasses += ' border-red-400 bg-red-50';
                     } else if (mode === 'checkedout') {
-                      // Checked out tab: neutral
                       cardClasses += ' border-gray-200';
                     } else if (isChecked) {
-                      // Selected for batch action
                       cardClasses += mode === 'checkin'
                         ? ' border-primary-500 bg-primary-50 cursor-pointer'
                         : ' border-orange-500 bg-orange-50 cursor-pointer';
@@ -602,40 +831,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                       cardClasses += ' border-gray-200 hover:border-gray-300 cursor-pointer';
                     }
 
-                    // Read-only tabs (present, checkedout)
-                    if (!isActionTab) {
-                      return (
-                        <div key={member.id} className={cardClasses}>
-                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                            mode === 'present'
-                              ? 'bg-primary-600 border-primary-600'
-                              : 'bg-gray-400 border-gray-400'
-                          }`}>
-                            <CheckIcon className="h-3 w-3 text-white" />
-                          </div>
-                          <span className="ml-3 text-sm font-medium text-gray-900">
-                            {displayName}
-                          </span>
-                          {badgeInfo && (
-                            <span
-                              className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
-                                badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
-                              }`}
-                              style={badgeInfo.styles}
-                            >
-                              {badgeInfo.icon && (
-                                <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
-                              )}
-                              {badgeInfo.text && (
-                                <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
-                              )}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    // Action tabs (checkin, checkout) - selectable
+                    // All tabs are selectable
                     return (
                       <label key={member.id} className={cardClasses}>
                         <input
@@ -644,13 +840,31 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                           onChange={() => toggleMember(member.id)}
                           className="sr-only"
                         />
-                        <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                          isChecked
-                            ? (mode === 'checkin' ? 'bg-primary-600 border-primary-600' : 'bg-orange-500 border-orange-500')
-                            : 'border-gray-300'
-                        }`}>
-                          {isChecked && (
+                        <div
+                          className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                            isUndoTab
+                              ? (isChecked
+                                  ? 'bg-red-500 border-red-500'
+                                  : (mode === 'present' ? 'bg-primary-600 border-primary-600' : 'bg-gray-400 border-gray-400'))
+                              : isChecked
+                                ? (mode === 'checkin' ? 'bg-primary-600 border-primary-600' : 'bg-orange-500 border-orange-500')
+                                : !isSelectedByOther
+                                  ? 'border-gray-300'
+                                  : ''
+                          }`}
+                          style={!isChecked && isSelectedByOther && !isUndoTab ? { backgroundColor: '#f8c8da', borderColor: '#ec75a6' } : undefined}
+                        >
+                          {isUndoTab && !isChecked && (
                             <CheckIcon className="h-3 w-3 text-white" />
+                          )}
+                          {isUndoTab && isChecked && (
+                            <XMarkIcon className="h-3 w-3 text-white" />
+                          )}
+                          {!isUndoTab && isChecked && (
+                            <CheckIcon className="h-3 w-3 text-white" />
+                          )}
+                          {!isUndoTab && !isChecked && isSelectedByOther && (
+                            <CheckIcon className="h-3 w-3 opacity-50" style={{ color: '#ec75a6' }} />
                           )}
                         </div>
                         <span className="ml-3 text-sm font-medium text-gray-900">
@@ -658,7 +872,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                         </span>
                         {badgeInfo && (
                           <span
-                            className={`absolute right-3 top-0 transform -translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                            className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                               badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                             }`}
                             style={badgeInfo.styles}
@@ -703,16 +917,25 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       {/* Floating action button */}
       {checkedMembers.size > 0 && (
         <div className="fixed bottom-6 right-6 z-40">
-          <button
-            onClick={() => setShowModal(true)}
-            className={`px-6 py-3 rounded-full text-white font-medium shadow-lg transition-colors ${
-              mode === 'checkin'
-                ? 'bg-primary-600 hover:bg-primary-700'
-                : 'bg-orange-500 hover:bg-orange-600'
-            }`}
-          >
-            {mode === 'checkin' ? 'Check In' : 'Check Out'} ({checkedMembers.size})
-          </button>
+          {(mode === 'checkin' || mode === 'checkout') ? (
+            <button
+              onClick={() => setShowModal(true)}
+              className={`px-6 py-3 rounded-full text-white font-medium shadow-lg transition-colors ${
+                mode === 'checkin'
+                  ? 'bg-primary-600 hover:bg-primary-700'
+                  : 'bg-orange-500 hover:bg-orange-600'
+              }`}
+            >
+              {mode === 'checkin' ? 'Check In' : 'Check Out'} ({checkedMembers.size})
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowUndoModal(true)}
+              className="px-6 py-3 rounded-full text-white font-medium shadow-lg transition-colors bg-red-500 hover:bg-red-600"
+            >
+              {mode === 'present' ? 'Undo Check In' : 'Undo Check Out'} ({checkedMembers.size})
+            </button>
+          )}
         </div>
       )}
 
@@ -724,6 +947,45 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         action={mode === 'checkout' ? 'checkout' : 'checkin'}
         onConfirm={handleConfirm}
       />
+
+      {/* Undo confirmation modal */}
+      <Modal isOpen={showUndoModal} onClose={() => setShowUndoModal(false)}>
+        <div className="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4">
+          <div className="p-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              {mode === 'present' ? 'Undo Check In?' : 'Undo Check Out?'}
+            </h3>
+            <p className="text-sm text-gray-600 mb-1">
+              {mode === 'present'
+                ? `This will mark ${checkedMembers.size === 1 ? 'this person' : `these ${checkedMembers.size} people`} as not checked in.`
+                : `This will move ${checkedMembers.size === 1 ? 'this person' : `these ${checkedMembers.size} people`} back to Present.`}
+            </p>
+            <div className="mb-4 text-sm text-gray-500">
+              {selectedPeople.map(p => (
+                <span key={p.id} className="inline-block mr-2">
+                  &bull; {p.firstName} {p.lastName}
+                </span>
+              ))}
+            </div>
+            {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+            <div className="flex space-x-3">
+              <button
+                onClick={() => { setShowUndoModal(false); setError(''); }}
+                className="flex-1 px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUndo}
+                disabled={isUndoing}
+                className="flex-1 px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isUndoing ? 'Processing...' : 'Yes, Undo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* Add Visitor Modal */}
       <Modal
