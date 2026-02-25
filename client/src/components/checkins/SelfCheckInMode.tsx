@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCheckIns } from '../../contexts/CheckInsContext';
+import { useWebSocket } from '../../contexts/WebSocketContext';
 import { gatheringsAPI, attendanceAPI, familiesAPI, kioskAPI, GatheringType, Individual } from '../../services/api';
 import {
   MagnifyingGlassIcon,
@@ -139,6 +140,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 }) => {
   const { logout } = useAuth();
   const checkIns = useCheckIns();
+  const { isConnected, socket, sendKioskAction, onAttendanceUpdate, onKioskCheckout, onReconnect } = useWebSocket();
 
   // ===== Phase management =====
   const [phase, setPhase] = useState<KioskPhase>(checkIns.isLocked ? 'active' : 'setup');
@@ -289,8 +291,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
   const loadAttendance = useCallback(async () => {
     if (!selectedGathering) return;
     try {
-      const response = await attendanceAPI.get(selectedGathering.id, gatheringDate);
-      const regulars: Individual[] = response.data.attendanceList || [];
+      const response = await attendanceAPI.getFull(selectedGathering.id, gatheringDate);
+      const regulars: Individual[] = (response.data.attendanceList || []).map((a: any) => ({
+        ...a,
+        present: Boolean(a.present),
+      }));
 
       const seenIds = new Set(regulars.map(p => p.id));
       const allPeople = [...regulars];
@@ -308,7 +313,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
             peopleType: v.peopleType || 'local_visitor',
             familyId: v.familyId,
             familyName: v.familyName,
-            present: v.present,
+            present: Boolean(v.present),
           });
         }
       }
@@ -379,6 +384,74 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
       loadAttendance();
     }
   }, [phase, loadAttendance]);
+
+  // ===== WebSocket: subscribe to attendance updates from other devices =====
+  useEffect(() => {
+    return onAttendanceUpdate((data) => {
+      if (String(data.gatheringId) !== String(selectedGathering.id) || data.date !== gatheringDate) return;
+      if (!data.records) return;
+      setAttendanceList(prev =>
+        prev.map(p => {
+          const rec = data.records!.find(r => r.individualId === p.id);
+          return rec ? { ...p, present: Boolean(rec.present) } : p;
+        })
+      );
+      setFamilyGroups(prev =>
+        prev.map(fg => ({
+          ...fg,
+          members: fg.members.map(m => {
+            const rec = data.records!.find(r => r.individualId === m.id);
+            return rec ? { ...m, present: Boolean(rec.present) } : m;
+          }),
+        }))
+      );
+      setSelectedFamily(prev => {
+        if (!prev) return prev;
+        const updated = prev.members.some(m => data.records!.find(r => r.individualId === m.id));
+        if (!updated) return prev;
+        return {
+          ...prev,
+          members: prev.members.map(m => {
+            const rec = data.records!.find(r => r.individualId === m.id);
+            return rec ? { ...m, present: Boolean(rec.present) } : m;
+          }),
+        };
+      });
+    });
+  }, [onAttendanceUpdate, selectedGathering.id, gatheringDate]);
+
+  // ===== WebSocket: subscribe to kiosk checkout events =====
+  useEffect(() => {
+    return onKioskCheckout((data) => {
+      if (String(data.gatheringId) !== String(selectedGathering.id) || data.date !== gatheringDate) return;
+      const ids = data.individualIds || [];
+      setAttendanceList(prev =>
+        prev.map(p => ids.includes(p.id) ? { ...p, present: false } : p)
+      );
+      setFamilyGroups(prev =>
+        prev.map(fg => ({
+          ...fg,
+          members: fg.members.map(m => ids.includes(m.id) ? { ...m, present: false } : m),
+        }))
+      );
+      setSelectedFamily(prev => {
+        if (!prev) return prev;
+        const affected = prev.members.some(m => ids.includes(m.id));
+        if (!affected) return prev;
+        return {
+          ...prev,
+          members: prev.members.map(m => ids.includes(m.id) ? { ...m, present: false } : m),
+        };
+      });
+    });
+  }, [onKioskCheckout, selectedGathering.id, gatheringDate]);
+
+  // ===== WebSocket: refresh data on reconnect =====
+  useEffect(() => {
+    return onReconnect(() => {
+      loadAttendance();
+    });
+  }, [onReconnect, loadAttendance]);
 
   // ===== Offline queue sync interval =====
   useEffect(() => {
@@ -468,17 +541,35 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
       setIsSubmitting(true);
       setError('');
 
-      const submissionData = {
-        individualIds: Array.from(checkedMembers),
-        action: mode === 'checkin' ? 'checkin' as const : 'checkout' as const,
-        signerName: signerName.trim() || undefined,
-      };
+      const ids = Array.from(checkedMembers);
+      const apiAction = mode === 'checkin' ? 'checkin' as const : 'checkout' as const;
+      const signer = signerName.trim() || '';
 
-      try {
-        await kioskAPI.record(selectedGathering.id, gatheringDate, submissionData);
-      } catch (apiError) {
-        // Queue for offline sync - don't show error to user
-        queueOfflineSubmission(selectedGathering.id, gatheringDate, submissionData);
+      // WebSocket-first, REST fallback, offline queue last resort
+      if (isConnected && socket) {
+        try {
+          await sendKioskAction(selectedGathering.id, gatheringDate, ids, apiAction, signer);
+        } catch {
+          try {
+            await kioskAPI.record(selectedGathering.id, gatheringDate, {
+              individualIds: ids, action: apiAction, signerName: signer || undefined,
+            });
+          } catch {
+            queueOfflineSubmission(selectedGathering.id, gatheringDate, {
+              individualIds: ids, action: apiAction, signerName: signer || undefined,
+            });
+          }
+        }
+      } else {
+        try {
+          await kioskAPI.record(selectedGathering.id, gatheringDate, {
+            individualIds: ids, action: apiAction, signerName: signer || undefined,
+          });
+        } catch {
+          queueOfflineSubmission(selectedGathering.id, gatheringDate, {
+            individualIds: ids, action: apiAction, signerName: signer || undefined,
+          });
+        }
       }
 
       // Optimistically update local state
@@ -1046,8 +1137,13 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                         className="w-full text-left p-3 border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors"
                       >
                         <div className="font-medium text-gray-900">{group.familyName}</div>
-                        <div className="text-sm text-gray-500 mt-0.5">
-                          {group.members.map(m => m.firstName).join(', ')}
+                        <div className="text-sm text-gray-500 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                          {group.members.map((m, i) => (
+                            <span key={m.id} className={m.present ? 'text-green-600 font-medium' : ''}>
+                              {m.present && <CheckCircleIcon className="inline h-3.5 w-3.5 mr-0.5 -mt-0.5" />}
+                              {m.firstName}{i < group.members.length - 1 ? ',' : ''}
+                            </span>
+                          ))}
                         </div>
                       </button>
                     ))

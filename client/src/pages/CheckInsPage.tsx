@@ -10,7 +10,7 @@ import LeaderCheckInMode from '../components/checkins/LeaderCheckInMode';
 import {
   UserGroupIcon,
   ClipboardDocumentCheckIcon,
-  LockClosedIcon,
+  UserIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
 
@@ -197,7 +197,7 @@ const CheckInsPage: React.FC = () => {
                 <UsersIcon className="h-8 w-8 text-primary-600 mb-2" />
                 <span className="text-sm font-medium text-gray-900">Leader Check-in</span>
                 <span className="text-xs text-gray-500 mt-1 text-center">
-                  Check people in/out with signer tracking
+                  Check in/out by a leader
                 </span>
               </button>
               <button
@@ -207,10 +207,10 @@ const CheckInsPage: React.FC = () => {
                 }}
                 className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
               >
-                <LockClosedIcon className="h-8 w-8 text-primary-600 mb-2" />
+                <UserIcon className="h-8 w-8 text-primary-600 mb-2" />
                 <span className="text-sm font-medium text-gray-900">Self Check-in</span>
                 <span className="text-xs text-gray-500 mt-1 text-center">
-                  PIN-locked self-service for a shared device
+                  Self-service or 'Kiosk' mode
                 </span>
               </button>
             </div>

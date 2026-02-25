@@ -57,17 +57,18 @@ router.put('/me',
         }
       }
 
-      // Duplicate checks (exclude current user)
-      const duplicateChecks = [];
+      // Duplicate checks (exclude current user) — global uniqueness, not per-church
       if (email !== undefined && email !== null && email !== '') {
-        duplicateChecks.push(Database.query('SELECT id FROM users WHERE email = ? AND church_id = ? AND id != ?', [email, req.user.church_id, userId]));
+        const emailDup = await Database.query('SELECT id FROM users WHERE email = ? AND id != ?', [email, userId]);
+        if (emailDup.length > 0) {
+          return res.status(409).json({ error: 'This email address is already in use' });
+        }
       }
       if (normalizedMobile !== undefined && normalizedMobile !== null) {
-        duplicateChecks.push(Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ? AND id != ?', [normalizedMobile, req.user.church_id, userId]));
-      }
-      const duplicateResults = await Promise.all(duplicateChecks);
-      if (duplicateResults.some(result => result.length > 0)) {
-        return res.status(409).json({ error: 'Email or mobile number already exists' });
+        const mobileDup = await Database.query('SELECT id FROM users WHERE mobile_number = ? AND id != ?', [normalizedMobile, userId]);
+        if (mobileDup.length > 0) {
+          return res.status(409).json({ error: 'This phone number is already in use' });
+        }
       }
 
       // Build update
@@ -91,6 +92,12 @@ router.put('/me',
 
       return res.json({ message: 'Profile updated successfully' });
     } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        const msg = error.sqlMessage?.includes('unique_mobile')
+          ? 'This phone number is already in use'
+          : 'This email address is already in use';
+        return res.status(409).json({ error: msg });
+      }
       console.error('Update profile (me) error:', error);
       res.status(500).json({ error: 'Failed to update profile.' });
     }
@@ -293,22 +300,18 @@ router.post('/',
         }
       }
 
-      // Check for duplicate email or mobile number
-      const duplicateChecks = [];
+      // Check for duplicate email or mobile number — global uniqueness
       if (email) {
-        duplicateChecks.push(
-          Database.query('SELECT id FROM users WHERE email = ? AND church_id = ?', [email, req.user.church_id])
-        );
+        const emailDup = await Database.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (emailDup.length > 0) {
+          return res.status(409).json({ error: 'This email address is already in use' });
+        }
       }
       if (normalizedMobile) {
-        duplicateChecks.push(
-          Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ?', [normalizedMobile, req.user.church_id])
-        );
-      }
-
-      const duplicateResults = await Promise.all(duplicateChecks);
-      if (duplicateResults.some(result => result.length > 0)) {
-        return res.status(409).json({ error: 'Email or mobile number already exists' });
+        const mobileDup = await Database.query('SELECT id FROM users WHERE mobile_number = ?', [normalizedMobile]);
+        if (mobileDup.length > 0) {
+          return res.status(409).json({ error: 'This phone number is already in use' });
+        }
       }
 
       const result = await Database.query(`
@@ -334,7 +337,10 @@ router.post('/',
       });
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ error: 'Email or mobile number already exists.' });
+        const msg = error.sqlMessage?.includes('unique_mobile')
+          ? 'This phone number is already in use'
+          : 'This email address is already in use';
+        return res.status(409).json({ error: msg });
       }
       console.error('Create user error:', error);
       res.status(500).json({ error: 'Failed to create user.' });
@@ -444,16 +450,18 @@ router.put('/:id',
       }
 
       // Duplicate checks (exclude current user)
-      const duplicateChecks = [];
+      // Duplicate checks — global uniqueness, not per-church
       if (email !== undefined && email !== null && email !== '') {
-        duplicateChecks.push(Database.query('SELECT id FROM users WHERE email = ? AND church_id = ? AND id != ?', [email, req.user.church_id, id]));
+        const emailDup = await Database.query('SELECT id FROM users WHERE email = ? AND id != ?', [email, id]);
+        if (emailDup.length > 0) {
+          return res.status(409).json({ error: 'This email address is already in use' });
+        }
       }
       if (normalizedMobile !== undefined && normalizedMobile !== null) {
-        duplicateChecks.push(Database.query('SELECT id FROM users WHERE mobile_number = ? AND church_id = ? AND id != ?', [normalizedMobile, req.user.church_id, id]));
-      }
-      const duplicateResults = await Promise.all(duplicateChecks);
-      if (duplicateResults.some(result => result.length > 0)) {
-        return res.status(409).json({ error: 'Email or mobile number already exists' });
+        const mobileDup = await Database.query('SELECT id FROM users WHERE mobile_number = ? AND id != ?', [normalizedMobile, id]);
+        if (mobileDup.length > 0) {
+          return res.status(409).json({ error: 'This phone number is already in use' });
+        }
       }
 
       // Build update query dynamically
@@ -516,6 +524,12 @@ router.put('/:id',
 
       res.json({ message: 'User updated successfully' });
     } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        const msg = error.sqlMessage?.includes('unique_mobile')
+          ? 'This phone number is already in use'
+          : 'This email address is already in use';
+        return res.status(409).json({ error: msg });
+      }
       console.error('Update user error:', error);
       res.status(500).json({ error: 'Failed to update user.' });
     }
