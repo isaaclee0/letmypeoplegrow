@@ -48,8 +48,8 @@ const ensureChurchIsolation = (req, res, next) => {
   // Add church_id to request for easy access
   req.churchId = req.user.church_id;
   
-  // Log church access for security monitoring (sanitized)
-  if (process.env.NODE_ENV === 'production') {
+  // Log church access for security monitoring (sanitized) — skip noisy GET / requests
+  if (process.env.NODE_ENV === 'production' && req.path !== '/') {
     console.log('Church access', {
       userId: req.user.id,
       churchId: sanitizeChurchIdForLogging(req.user.church_id),

@@ -153,6 +153,97 @@ async function initializeDatabase() {
       console.warn('⚠️  Could not ensure individuals.is_child column:', e.message);
     }
 
+    // Ensure badge columns exist in individuals
+    try {
+      const badgeCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'badge_text'");
+      if (badgeCol.length === 0) {
+        console.log('🛠️  Adding individuals badge columns');
+        await Database.query('ALTER TABLE individuals ADD COLUMN badge_text VARCHAR(50) DEFAULT NULL');
+        await Database.query('ALTER TABLE individuals ADD COLUMN badge_color VARCHAR(7) DEFAULT NULL');
+        await Database.query('ALTER TABLE individuals ADD COLUMN badge_icon VARCHAR(50) DEFAULT NULL');
+        console.log('✅ individuals badge columns added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure individuals badge columns:', e.message);
+    }
+
+    // Ensure people_type column exists in individuals
+    try {
+      const peopleTypeCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'people_type'");
+      if (peopleTypeCol.length === 0) {
+        console.log('🛠️  Adding individuals.people_type column');
+        await Database.query("ALTER TABLE individuals ADD COLUMN people_type ENUM('regular', 'local_visitor', 'traveller_visitor') DEFAULT 'regular'");
+        console.log('✅ individuals.people_type added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure individuals.people_type column:', e.message);
+    }
+
+    // Ensure people_type_at_time column exists in attendance_records
+    try {
+      const ptAtTimeCol = await Database.query("SHOW COLUMNS FROM attendance_records LIKE 'people_type_at_time'");
+      if (ptAtTimeCol.length === 0) {
+        console.log('🛠️  Adding attendance_records.people_type_at_time column');
+        await Database.query("ALTER TABLE attendance_records ADD COLUMN people_type_at_time ENUM('regular', 'local_visitor', 'traveller_visitor') DEFAULT NULL");
+        console.log('✅ attendance_records.people_type_at_time added');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure attendance_records.people_type_at_time column:', e.message);
+    }
+
+    // Ensure kiosk_checkins table exists
+    try {
+      const kioskTable = await Database.query("SHOW TABLES LIKE 'kiosk_checkins'");
+      if (kioskTable.length === 0) {
+        console.log('🛠️  Creating kiosk_checkins table');
+        await Database.query(`
+          CREATE TABLE IF NOT EXISTS kiosk_checkins (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            gathering_type_id INT NOT NULL,
+            session_date DATE NOT NULL,
+            individual_id INT NOT NULL,
+            action ENUM('checkin', 'checkout') NOT NULL,
+            signer_name VARCHAR(255) DEFAULT NULL,
+            church_id VARCHAR(36) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
+            FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+            INDEX idx_gathering_date (gathering_type_id, session_date),
+            INDEX idx_individual (individual_id),
+            INDEX idx_church_id (church_id),
+            INDEX idx_action (action),
+            INDEX idx_created_at (created_at)
+          ) ENGINE=InnoDB
+        `);
+        console.log('✅ kiosk_checkins table created');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure kiosk_checkins table:', e.message);
+    }
+
+    // Ensure visitor_config table exists
+    try {
+      const vcTable = await Database.query("SHOW TABLES LIKE 'visitor_config'");
+      if (vcTable.length === 0) {
+        console.log('🛠️  Creating visitor_config table');
+        await Database.query(`
+          CREATE TABLE IF NOT EXISTS visitor_config (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            church_id VARCHAR(36) NOT NULL,
+            local_visitor_service_limit INT DEFAULT 4,
+            traveller_visitor_service_limit INT DEFAULT 2,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_church (church_id),
+            INDEX idx_church_id (church_id)
+          ) ENGINE=InnoDB
+        `);
+        console.log('✅ visitor_config table created');
+      }
+    } catch (e) {
+      console.warn('⚠️  Could not ensure visitor_config table:', e.message);
+    }
+
     // Ensure AI chat tables exist (needed for AI Insights chat history)
     try {
       const chatTables = await Database.query("SHOW TABLES LIKE 'ai_chat_conversations'");

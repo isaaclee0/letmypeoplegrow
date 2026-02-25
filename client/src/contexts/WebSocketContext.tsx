@@ -315,7 +315,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         connectionId: connectionId
       },
       withCredentials: true, // Important: send cookies with WebSocket connection
-      transports: ['polling', 'websocket'], // Start with polling (works through any proxy), then upgrade to WebSocket
+      transports: ['websocket', 'polling'], // Prefer WebSocket (faster), fall back to polling if needed
       timeout: 10000, // 10-second timeout to allow retry attempts to complete
       reconnection: true,
       reconnectionAttempts: 5, // Increased attempts for better reliability
