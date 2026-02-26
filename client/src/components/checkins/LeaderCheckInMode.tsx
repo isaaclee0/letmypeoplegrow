@@ -47,6 +47,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
   // Selection
   const [searchTerm, setSearchTerm] = useState('');
+  const [groupByFamily, setGroupByFamily] = useState(true);
   const [checkedMembers, setCheckedMembers] = useState<Set<number>>(new Set());
 
   // Modal
@@ -350,8 +351,29 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       });
     }
 
+    // Sort by family surname (alphabetically)
+    const getFamilySortKey = (g: FamilyGroup) => {
+      const commaIdx = g.familyName.indexOf(',');
+      const surname = commaIdx >= 0 ? g.familyName.slice(0, commaIdx).trim() : '';
+      if (surname) return surname.toLowerCase();
+      // Solo person: "FirstName LastName" - use last word as surname
+      const parts = g.familyName.trim().split(/\s+/);
+      return parts.length > 1 ? (parts[parts.length - 1] || '').toLowerCase() : g.familyName.toLowerCase();
+    };
+    results.sort((a, b) => getFamilySortKey(a).localeCompare(getFamilySortKey(b)));
+
     return results;
   }, [familyGroups, mode, searchTerm, checkedOutIds]);
+
+  // Flattened individuals sorted by first name (for ungrouped view)
+  const filteredIndividuals = useMemo(() => {
+    const people: Individual[] = [];
+    for (const g of filteredFamilies) {
+      for (const m of g.members) people.push(m);
+    }
+    people.sort((a, b) => (a.firstName || '').localeCompare(b.firstName || ''));
+    return people;
+  }, [filteredFamilies]);
 
   // Toggle member
   const toggleMember = (id: number) => {
@@ -720,9 +742,22 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         </div>
       </div>
 
-      {/* Family list */}
+      {/* Group by family checkbox */}
+      <div className="flex justify-center mb-4">
+        <label className="inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            checked={groupByFamily}
+            onChange={(e) => setGroupByFamily(e.target.checked)}
+            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span className="ml-2 text-sm text-gray-700">Group people by family</span>
+        </label>
+      </div>
+
+      {/* Family list / Individual grid */}
       <div className="space-y-4">
-        {filteredFamilies.length === 0 ? (
+        {(groupByFamily ? filteredFamilies.length === 0 : filteredIndividuals.length === 0) ? (
           <p className="text-sm text-gray-500 text-center py-8">
             {searchTerm.trim()
               ? 'No matching people found.'
@@ -734,7 +769,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               ? 'No one is available to check out.'
               : 'No one has been checked out.'}
           </p>
-        ) : (
+        ) : groupByFamily ? (
           filteredFamilies.map(group => {
             const isRealFamily = group.familyId > 0;
             const familyDisplayName = (() => {
@@ -892,6 +927,90 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               </div>
             );
           })
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-x-3 gap-y-6">
+            {filteredIndividuals.map(member => {
+              const isChecked = checkedMembers.has(member.id);
+              const badgeInfo = getBadgeInfo(member);
+              const displayName = getPersonDisplayName(member);
+              const otherLeaderNames = selectedByOthers.get(member.id);
+              const isSelectedByOther = otherLeaderNames && otherLeaderNames.length > 0;
+              const isUndoTab = mode === 'present' || mode === 'checkedout';
+
+              let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white cursor-pointer';
+              if (mode === 'present' && isChecked) {
+                cardClasses += ' border-red-400 bg-red-50';
+              } else if (mode === 'present') {
+                cardClasses += ' border-primary-500 bg-primary-50';
+              } else if (mode === 'checkedout' && isChecked) {
+                cardClasses += ' border-red-400 bg-red-50';
+              } else if (mode === 'checkedout') {
+                cardClasses += ' border-gray-200';
+              } else if (isChecked) {
+                cardClasses += mode === 'checkin'
+                  ? ' border-primary-500 bg-primary-50 cursor-pointer'
+                  : ' border-orange-500 bg-orange-50 cursor-pointer';
+              } else {
+                cardClasses += ' border-gray-200 hover:border-gray-300 cursor-pointer';
+              }
+
+              return (
+                <label key={member.id} className={cardClasses}>
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => toggleMember(member.id)}
+                    className="sr-only"
+                  />
+                  <div
+                    className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                      isUndoTab
+                        ? (isChecked
+                            ? 'bg-red-500 border-red-500'
+                            : (mode === 'present' ? 'bg-primary-600 border-primary-600' : 'bg-gray-400 border-gray-400'))
+                        : isChecked
+                          ? (mode === 'checkin' ? 'bg-primary-600 border-primary-600' : 'bg-orange-500 border-orange-500')
+                          : !isSelectedByOther
+                            ? 'border-gray-300'
+                            : ''
+                    }`}
+                    style={!isChecked && isSelectedByOther && !isUndoTab ? { backgroundColor: '#f8c8da', borderColor: '#ec75a6' } : undefined}
+                  >
+                    {isUndoTab && !isChecked && (
+                      <CheckIcon className="h-3 w-3 text-white" />
+                    )}
+                    {isUndoTab && isChecked && (
+                      <XMarkIcon className="h-3 w-3 text-white" />
+                    )}
+                    {!isUndoTab && isChecked && (
+                      <CheckIcon className="h-3 w-3 text-white" />
+                    )}
+                    {!isUndoTab && !isChecked && isSelectedByOther && (
+                      <CheckIcon className="h-3 w-3 opacity-50" style={{ color: '#ec75a6' }} />
+                    )}
+                  </div>
+                  <span className="ml-3 text-sm font-medium text-gray-900">
+                    {displayName}
+                  </span>
+                  {badgeInfo && (
+                    <span
+                      className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                        badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
+                      }`}
+                      style={badgeInfo.styles}
+                    >
+                      {badgeInfo.icon && (
+                        <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                      )}
+                      {badgeInfo.text && (
+                        <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
+                      )}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
         )}
       </div>
 

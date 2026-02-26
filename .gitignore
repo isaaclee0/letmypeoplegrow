@@ -141,3 +141,6 @@ sqldumps/
 
 # Dummy Data
 family-dummy-data.tsv
+
+# DB refactor (MariaDB → SQLite) - future work
+docs/MIGRATE_MARIADB_TO_SQLITE.md

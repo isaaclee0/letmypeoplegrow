@@ -2257,7 +2257,12 @@ const AttendancePage: React.FC = () => {
   // Group visitors helper, accepts any input array
   const groupVisitors = useCallback((visitorsInput: Visitor[]) => {
     if (!groupByFamily) {
-      return [{ familyId: null, familyName: null, members: visitorsInput, isFamily: false, groupKey: 'ungrouped' }];
+      const sorted = [...visitorsInput].sort((a, b) => {
+        const aFirst = (a.name?.trim().split(' ')[0] || '').toLowerCase();
+        const bFirst = (b.name?.trim().split(' ')[0] || '').toLowerCase();
+        return aFirst.localeCompare(bFirst);
+      });
+      return [{ familyId: null, familyName: null, members: sorted, isFamily: false, groupKey: 'ungrouped' }];
     }
 
     const grouped: { [key: string]: { familyId: number | null; familyName: string | null; members: Visitor[]; isFamily: boolean; groupKey: string; firstSeenIndex: number } } = {};
@@ -2361,13 +2366,17 @@ const AttendancePage: React.FC = () => {
         const aChild = a.isChild ? 1 : 0;
         const bChild = b.isChild ? 1 : 0;
         if (aChild !== bChild) return aChild - bChild;
-        const lastNameComparison = a.lastName.localeCompare(b.lastName);
+        // When ungrouped, sort by first name; when grouped, sort by lastName then firstName
+        if (!groupByFamily || !group.familyName) {
+          return (a.firstName || '').localeCompare(b.firstName || '');
+        }
+        const lastNameComparison = (a.lastName || '').localeCompare(b.lastName || '');
         if (lastNameComparison !== 0) return lastNameComparison;
-        return a.firstName.localeCompare(b.firstName);
+        return (a.firstName || '').localeCompare(b.firstName || '');
       });
     });
     return filtered;
-  }, [groupedAttendees, searchTerm]);
+  }, [groupedAttendees, searchTerm, groupByFamily]);
 
   const filteredGroupedVisitors = displayedGroupedVisitors;
 
@@ -2390,15 +2399,18 @@ const AttendancePage: React.FC = () => {
     return groupVisitors(availableChurchPeople);
   }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors]);
 
-  // Sort members within each group: adults first, then by name
+  // Sort members within each group: adults first, then by name (firstName when ungrouped)
   filteredGroupedAttendees.forEach((group: any) => {
     group.members.sort((a: Individual, b: Individual) => {
       const aChild = a.isChild ? 1 : 0;
       const bChild = b.isChild ? 1 : 0;
       if (aChild !== bChild) return aChild - bChild;
-      const lastNameComparison = a.lastName.localeCompare(b.lastName);
+      if (!groupByFamily || !group.familyName) {
+        return (a.firstName || '').localeCompare(b.firstName || '');
+      }
+      const lastNameComparison = (a.lastName || '').localeCompare(b.lastName || '');
       if (lastNameComparison !== 0) return lastNameComparison;
-      return a.firstName.localeCompare(b.firstName);
+      return (a.firstName || '').localeCompare(b.firstName || '');
     });
   });
 
@@ -3741,19 +3753,11 @@ const AttendancePage: React.FC = () => {
                         return (
                           <label
                             key={person.id}
-                            className={`relative flex items-center cursor-pointer transition-colors ${
-                              groupByFamily
-                                ? `p-3 rounded-md border-2 ${
-                                    isPresent
-                                      ? 'border-primary-500 bg-primary-50'
-                                      : 'border-gray-200 hover:border-gray-300'
-                                  } ${isSaving ? 'opacity-75' : ''}`
-                                : `p-2 rounded-md ${
-                                    isPresent
-                                      ? 'bg-primary-50'
-                                      : 'hover:bg-gray-50'
-                                  } ${isSaving ? 'opacity-75' : ''}`
-                            } ${needsWideLayout ? 'col-span-2' : ''}`}
+                            className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white ${
+                              isPresent
+                                ? 'border-primary-500 bg-primary-50'
+                                : 'border-gray-200 hover:border-gray-300'
+                            } ${isSaving ? 'opacity-75' : ''} ${needsWideLayout ? 'col-span-2' : ''}`}
                           >
                             <input
                               type="checkbox"
@@ -3897,22 +3901,12 @@ const AttendancePage: React.FC = () => {
                       return (
                         <label
                           key={person.id || `visitor_${index}`}
-                          className={`relative flex items-center cursor-pointer transition-colors ${
-                            groupByFamily && group.familyName
-                              ? `p-3 rounded-md border-2 ${
-                                  isPresent
-                                    ? 'border-primary-500 bg-primary-50'
-                                    : isHighlighted
-                                    ? 'border-blue-400 bg-blue-50 shadow-md'
-                                    : 'border-gray-200 hover:border-gray-300'
-                                }`
-                              : `p-2 rounded-md ${
-                                  isPresent
-                                    ? 'bg-primary-50'
-                                    : isHighlighted
-                                    ? 'bg-blue-50 border border-blue-300 shadow-sm'
-                                    : 'hover:bg-gray-50'
-                                }`
+                          className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white ${
+                            isPresent
+                              ? 'border-primary-500 bg-primary-50'
+                              : isHighlighted
+                              ? 'border-blue-400 bg-blue-50 shadow-md'
+                              : 'border-gray-200 hover:border-gray-300'
                           } ${needsWideLayout ? 'col-span-2' : ''}`}
                         >
                           <input
@@ -4056,7 +4050,7 @@ const AttendancePage: React.FC = () => {
                               <div
                                 key={person.id || `all_${idx}`}
                                 onClick={() => !isAttendanceLocked && person.id && addIndividualFromAll(person.id, displayName)}
-                                className={`relative p-3 rounded-md ${groupByFamily && group.familyName ? 'border-2' : 'border'} ${
+                                className={`relative p-3 rounded-md border-2 bg-white ${
                                   isAttendanceLocked
                                     ? 'border-gray-200 cursor-not-allowed opacity-50'
                                     : 'border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer transition-all'

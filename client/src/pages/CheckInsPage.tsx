@@ -29,19 +29,45 @@ const CheckInsPage: React.FC = () => {
   const [noGatherings, setNoGatherings] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check for no gatherings state and restore persisted sessions
+  // Kiosk-enabled gatherings - from cache first, then API
+  const [kioskGatherings, setKioskGatherings] = useState<GatheringType[]>([]);
+
+  // Cache-first loading: show cached data immediately, fetch fresh in background
   useEffect(() => {
     const checkGatherings = async () => {
+      // Step 1: Try cache for instant display
       try {
-        setIsLoading(true);
+        const cachedGatherings = localStorage.getItem('gatherings_cached_data');
+        if (cachedGatherings) {
+          const parsed = JSON.parse(cachedGatherings);
+          const all: GatheringType[] = parsed.gatherings || [];
+          const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
+          if (kioskList.length > 0) {
+            setKioskGatherings(kioskList);
+            setNoGatherings(false);
+            setIsLoading(false); // Show UI immediately with cached data
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Step 2: Fetch fresh data and cache for next visit
+      try {
         const response = await gatheringsAPI.getAll();
         const all: GatheringType[] = response.data.gatherings || [];
         const kioskList = all.filter(g => g.kioskEnabled && g.attendanceType === 'standard');
+        setKioskGatherings(kioskList);
         setNoGatherings(kioskList.length === 0);
+        try {
+          localStorage.setItem('gatherings_cached_data', JSON.stringify({ gatherings: all, timestamp: Date.now() }));
+        } catch {
+          // ignore cache write failures
+        }
 
         // Restore persisted session from context
         if (checkIns.gatheringId && checkIns.mode) {
-          const g = all.find(g => g.id === checkIns.gatheringId);
+          const g = all.find(gr => gr.id === checkIns.gatheringId);
           if (g) {
             setSelectedGathering(g);
             if (checkIns.mode === 'leader' && checkIns.selectedDate) {
@@ -67,17 +93,20 @@ const CheckInsPage: React.FC = () => {
           setActiveMode(checkIns.mode);
         }
       } catch {
-        // Use cache
+        // API failed - try cache as fallback; if no cache, show no gatherings
         try {
           const cachedGatherings = localStorage.getItem('gatherings_cached_data');
           if (cachedGatherings) {
             const parsed = JSON.parse(cachedGatherings);
             const all: GatheringType[] = parsed.gatherings || [];
             const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
+            setKioskGatherings(kioskList);
             setNoGatherings(kioskList.length === 0);
+          } else {
+            setNoGatherings(true);
           }
         } catch {
-          // ignore
+          setNoGatherings(true);
         }
       } finally {
         setIsLoading(false);
@@ -174,6 +203,7 @@ const CheckInsPage: React.FC = () => {
       <div className="bg-white shadow rounded-lg p-6 space-y-5">
         {/* Gathering selection */}
         <GatheringDateSelector
+          kioskGatherings={kioskGatherings}
           onSelect={handleGatheringSelect}
           selectedGathering={selectedGathering}
           selectedDate={gatheringDate}

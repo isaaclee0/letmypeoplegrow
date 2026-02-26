@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { format, addDays, startOfWeek, addWeeks, startOfDay, isBefore, differenceInCalendarDays } from 'date-fns';
-import { gatheringsAPI, GatheringType } from '../../services/api';
+import { GatheringType } from '../../services/api';
 
 const DAY_MAP: Record<string, number> = {
   'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3,
@@ -88,6 +88,7 @@ export function getNextGatheringDate(gathering: GatheringType): { date: string; 
 }
 
 interface GatheringDateSelectorProps {
+  kioskGatherings: GatheringType[];
   onSelect: (gathering: GatheringType, date: string, daysAway: number) => void;
   selectedGathering: GatheringType | null;
   selectedDate: string;
@@ -95,77 +96,25 @@ interface GatheringDateSelectorProps {
 }
 
 const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
+  kioskGatherings,
   onSelect,
   selectedGathering,
   selectedDate,
   daysAway,
 }) => {
-  const [kioskGatherings, setKioskGatherings] = useState<GatheringType[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-
+  // Auto-select when only one gathering and none selected yet
   useEffect(() => {
-    const loadGatherings = async () => {
-      try {
-        setIsLoading(true);
-        const response = await gatheringsAPI.getAll();
-        const all: GatheringType[] = response.data.gatherings || [];
-        const kioskList = all.filter(g => g.kioskEnabled && g.attendanceType === 'standard');
-        setKioskGatherings(kioskList);
-        if (kioskList.length === 1 && !selectedGathering) {
-          const g = kioskList[0];
-          const { date, daysAway: da } = getNextGatheringDate(g);
-          onSelect(g, date, da);
-        }
-      } catch {
-        try {
-          const cachedGatherings = localStorage.getItem('gatherings_cached_data');
-          if (cachedGatherings) {
-            const parsed = JSON.parse(cachedGatherings);
-            const all: GatheringType[] = parsed.gatherings || [];
-            const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
-            setKioskGatherings(kioskList);
-            if (kioskList.length === 1 && !selectedGathering) {
-              const g = kioskList[0];
-              const { date, daysAway: da } = getNextGatheringDate(g);
-              onSelect(g, date, da);
-            }
-          } else {
-            setError('Failed to load gatherings.');
-          }
-        } catch {
-          setError('Failed to load gatherings.');
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadGatherings();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (kioskGatherings.length === 1 && !selectedGathering) {
+      const g = kioskGatherings[0];
+      const { date, daysAway: da } = getNextGatheringDate(g);
+      onSelect(g, date, da);
+    }
+  }, [kioskGatherings, selectedGathering, onSelect]);
 
   const handleGatheringSelect = (g: GatheringType) => {
     const { date, daysAway: da } = getNextGatheringDate(g);
     onSelect(g, date, da);
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-3 text-gray-500 text-sm">Loading gatherings...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
-        {error}
-      </div>
-    );
-  }
 
   if (kioskGatherings.length === 0) {
     return null;
