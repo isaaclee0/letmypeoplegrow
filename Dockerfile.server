@@ -16,7 +16,6 @@ RUN npm install
 # Copy only necessary source files
 COPY server/index.js ./
 COPY server/startup.js ./
-COPY server/delete-user-preferences.js ./
 COPY server/test-edit-functionality.js ./
 COPY server/update-church-id.js ./
 COPY server/update-church-id-backup.js ./
