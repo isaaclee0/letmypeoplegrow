@@ -174,7 +174,15 @@ async function main() {
               let v = row[col];
               if (v === undefined) v = null;
               if (typeof v === 'boolean') v = v ? 1 : 0;
-              if (v instanceof Date) v = v.toISOString().replace('T', ' ').replace('Z', '');
+              if (v instanceof Date) {
+                // Date-only columns: store as YYYY-MM-DD, not full datetime
+                const isDateOnly = col.includes('date') && !col.includes('datetime') && !col.includes('_at');
+                if (isDateOnly && v.getHours() === 0 && v.getMinutes() === 0 && v.getSeconds() === 0) {
+                  v = v.toISOString().split('T')[0];
+                } else {
+                  v = v.toISOString().replace('T', ' ').replace('Z', '');
+                }
+              }
               if (typeof v === 'object' && v !== null) v = JSON.stringify(v);
               return v;
             });
