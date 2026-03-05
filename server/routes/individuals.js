@@ -28,7 +28,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
       LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE i.is_active = true AND i.church_id = ?
+      WHERE i.is_active = 1 AND i.church_id = ?
       GROUP BY i.id, i.first_name, i.last_name
       HAVING name_count > 1
       ORDER BY LOWER(i.last_name), LOWER(i.first_name), i.created_at
@@ -105,7 +105,7 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
             await conn.query(`
               INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
               VALUES (?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE added_by = VALUES(added_by)
+              ON CONFLICT(gathering_type_id, individual_id) DO UPDATE SET added_by = excluded.added_by
             `, [assignment.gathering_type_id, keepId, req.user.id, req.user.church_id]);
           }
         }
@@ -117,26 +117,10 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
         DELETE FROM gathering_lists WHERE individual_id IN (?) AND church_id = ?
       `, [deleteIds, req.user.church_id]);
 
-      // Delete attendance records for these individuals within the same church scope, if column exists
-      const hasArChurchId = await (async () => {
-        try {
-          const col = await conn.query("SHOW COLUMNS FROM attendance_records LIKE 'church_id'");
-          return col && col.length > 0;
-        } catch {
-          return false;
-        }
-      })();
-      if (hasArChurchId) {
-        await conn.query(`
-          DELETE FROM attendance_records WHERE individual_id IN (?) AND church_id = ?
-        `, [deleteIds, req.user.church_id]);
-      } else {
-        await conn.query(`
-          DELETE FROM attendance_records WHERE individual_id IN (?)
-        `, [deleteIds]);
-      }
+      await conn.query(`
+        DELETE FROM attendance_records WHERE individual_id IN (?) AND church_id = ?
+      `, [deleteIds, req.user.church_id]);
 
-      // Finally delete individuals
       await conn.query(`
         DELETE FROM individuals WHERE id IN (?) AND church_id = ?
       `, [deleteIds, req.user.church_id]);
@@ -172,7 +156,7 @@ router.get('/', async (req, res) => {
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
       LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE i.is_active = true AND i.church_id = ?
+      WHERE i.is_active = 1 AND i.church_id = ?
       GROUP BY i.id
       ORDER BY i.last_name, i.first_name
     `, [req.user.church_id]);
@@ -221,7 +205,7 @@ router.get('/archived', async (req, res) => {
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
       LEFT JOIN gathering_types gt ON gl.gathering_type_id = gt.id
-      WHERE i.is_active = false AND i.church_id = ?
+      WHERE i.is_active = 0 AND i.church_id = ?
       GROUP BY i.id
       ORDER BY i.last_name, i.first_name
     `, [req.user.church_id]);
@@ -273,14 +257,14 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
   try {
     // Get all active family members' people_type
     const familyMembers = await Database.query(
-      'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+      'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
       [familyId, churchId]
     );
 
     // If all family members have the same type, update family_type to match
     if (familyMembers.length === 1 && familyMembers[0].people_type) {
       await Database.query(
-        'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+        `UPDATE families SET family_type = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [familyMembers[0].people_type, familyId, churchId]
       );
     }
@@ -349,11 +333,11 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
 
     values.push(id, req.user.church_id);
 
-    console.log('SQL query:', `UPDATE individuals SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`);
+    console.log('SQL query:', `UPDATE individuals SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ? AND church_id = ?`);
     console.log('Values:', values);
 
     const result = await Database.query(
-      `UPDATE individuals SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`,
+      `UPDATE individuals SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
       values
     );
 
@@ -391,7 +375,7 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_IN
     
     const result = await Database.query(`
       UPDATE individuals 
-      SET is_active = false, updated_at = NOW()
+      SET is_active = 0, updated_at = datetime('now')
       WHERE id = ? AND church_id = ?
     `, [id, req.user.church_id]);
 
@@ -422,25 +406,10 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
       );
 
       // Delete attendance records for this individual (church-scoped when available)
-      const hasArChurchId = await (async () => {
-        try {
-          const col = await conn.query("SHOW COLUMNS FROM attendance_records LIKE 'church_id'");
-          return col && col.length > 0;
-        } catch {
-          return false;
-        }
-      })();
-      if (hasArChurchId) {
-        await conn.query(
-          `DELETE FROM attendance_records WHERE individual_id = ? AND church_id = ?`,
-          [id, req.user.church_id]
-        );
-      } else {
-        await conn.query(
-          `DELETE FROM attendance_records WHERE individual_id = ?`,
-          [id]
-        );
-      }
+      await conn.query(
+        `DELETE FROM attendance_records WHERE individual_id = ? AND church_id = ?`,
+        [id, req.user.church_id]
+      );
 
       // Finally delete the individual record
       const result = await conn.query(
@@ -466,14 +435,14 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
   }
 });
 
-// Restore individual (set is_active = true)
+// Restore individual (set is_active = 1)
 router.post('/:id/restore', requireRole(['admin', 'coordinator']), auditLog('RESTORE_INDIVIDUAL'), async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await Database.query(`
       UPDATE individuals 
-      SET is_active = true, updated_at = NOW()
+      SET is_active = 1, updated_at = datetime('now')
       WHERE id = ? AND church_id = ?
     `, [id, req.user.church_id]);
 
@@ -503,7 +472,7 @@ router.post('/:id/gatherings/:gatheringId', requireRole(['admin', 'coordinator']
       // Update the existing assignment
       await Database.query(`
         UPDATE gathering_lists 
-        SET added_by = ?, added_at = NOW()
+        SET added_by = ?, added_at = datetime('now')
         WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?
       `, [req.user.id, gatheringId, id, req.user.church_id]);
       
@@ -592,7 +561,7 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       WHERE ar.individual_id = ? 
         AND ar.church_id = ?
-        AND ar.present = true
+        AND ar.present = 1
       ORDER BY as_table.session_date DESC, ar.updated_at DESC
       LIMIT 1
     `, [id, req.user.church_id]);
@@ -614,7 +583,7 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       WHERE ar.individual_id = ? 
         AND ar.church_id = ?
-        AND ar.present = true
+        AND ar.present = 1
         AND as_table.session_date >= ?
       ORDER BY as_table.session_date ASC
     `, [id, req.user.church_id, oneYearAgoStr]);

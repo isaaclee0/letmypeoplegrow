@@ -126,7 +126,7 @@ router.get('/attendance', validateDataAccess, async (req, res) => {
       SELECT 
         ar.date,
         gt.name as gathering_type,
-        CONCAT(i.first_name, ' ', i.last_name) as name,
+        i.first_name || ' ' || i.last_name as name,
         COALESCE(f.family_name, 'No Family') as family,
         CASE 
           WHEN ar.status = 'present' THEN 'Present'

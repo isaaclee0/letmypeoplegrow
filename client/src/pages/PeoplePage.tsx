@@ -349,8 +349,6 @@ const PeoplePage: React.FC = () => {
     localVisitorServiceLimit: 6,
     travellerVisitorServiceLimit: 2
   });
-  const [showVisitorConfig, setShowVisitorConfig] = useState(false);
-  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
 
   // Color palette for gatherings
   const gatheringColors = [
@@ -658,20 +656,6 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  // Save visitor configuration
-  const saveVisitorConfig = async () => {
-    setIsLoadingConfig(true);
-    try {
-      await visitorConfigAPI.updateConfig(visitorConfig);
-      showSuccess('Visitor configuration updated');
-      setShowVisitorConfig(false);
-    } catch (err) {
-      console.error('Failed to save visitor config:', err);
-      setError('Failed to save visitor configuration');
-    } finally {
-      setIsLoadingConfig(false);
-    }
-  };
 
   // Group people by family
   const groupedPeople = people.reduce((groups, person) => {
@@ -1818,83 +1802,8 @@ const PeoplePage: React.FC = () => {
               <h3 className="text-lg leading-6 font-medium text-gray-900">
                 Visitors ({recentVisitorGroups.flatMap(g => g.members).length + olderVisitorGroups.flatMap(g => g.members).length})
               </h3>
-              <button
-                onClick={() => setShowVisitorConfig(!showVisitorConfig)}
-                className="text-sm text-primary-600 hover:text-primary-700 font-medium"
-              >
-                {showVisitorConfig ? 'Hide Settings' : 'Configure Filtering'}
-              </button>
             </div>
 
-            {/* Visitor Configuration Section */}
-            {showVisitorConfig && (
-              <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                <h4 className="text-md font-medium text-gray-900 mb-3">Visitor Filtering Configuration</h4>
-                <p className="text-sm text-gray-600 mb-4">
-                  Configure how long visitors appear in recent visitor lists. These settings apply to both the Attendance page (based on number of services) and the People page (based on weeks from the last weekend).
-                </p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Local Visitors (services/weeks to keep)
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="52"
-                      value={visitorConfig.localVisitorServiceLimit}
-                      onChange={(e) => setVisitorConfig(prev => ({
-                        ...prev,
-                        localVisitorServiceLimit: parseInt(e.target.value) || 1
-                      }))}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      <strong>Attendance page:</strong> Shows visitors for this many services after their last attendance.<br />
-                      <strong>People page:</strong> Shows visitors who attended within this many weeks from the last weekend.
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Traveller Visitors (services/weeks to keep)
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="52"
-                      value={visitorConfig.travellerVisitorServiceLimit}
-                      onChange={(e) => setVisitorConfig(prev => ({
-                        ...prev,
-                        travellerVisitorServiceLimit: parseInt(e.target.value) || 1
-                      }))}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      <strong>Attendance page:</strong> Shows visitors for this many services after their last attendance.<br />
-                      <strong>People page:</strong> Shows visitors who attended within this many weeks from the last weekend.
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="flex justify-end mt-4 space-x-3">
-                  <button
-                    onClick={() => setShowVisitorConfig(false)}
-                    className="px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={saveVisitorConfig}
-                    disabled={isLoadingConfig}
-                    className="px-3 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                  >
-                    {isLoadingConfig ? 'Saving...' : 'Save Configuration'}
-                  </button>
-                </div>
-              </div>
-            )}
             <div className="space-y-4">
               {/* Recent Visitors (configurable week-based filtering from last weekend) */}
               {recentVisitorGroups.length > 0 && (

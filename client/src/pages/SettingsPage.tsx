@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { integrationsAPI, aiAPI, settingsAPI } from '../services/api';
+import { integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI } from '../services/api';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
 import BadgeIcon, { BADGE_ICON_OPTIONS, BadgeIconType } from '../components/icons/BadgeIcon';
@@ -17,12 +17,13 @@ import {
   ExclamationTriangleIcon,
   LinkSlashIcon,
   MapPinIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations' | 'visitors'>('general');
 
   // Elvanto integration state
   const [elvantoStatus, setElvantoStatus] = useState<{
@@ -112,9 +113,18 @@ const SettingsPage: React.FC = () => {
     adultBadgeColor !== originalBadgeSettings.adultColor ||
     adultBadgeIcon !== originalBadgeSettings.adultIcon;
 
+  // Visitor config state
+  const [visitorConfig, setVisitorConfig] = useState({
+    localVisitorServiceLimit: 6,
+    travellerVisitorServiceLimit: 2
+  });
+  const [visitorConfigLoading, setVisitorConfigLoading] = useState(false);
+  const [visitorConfigSuccess, setVisitorConfigSuccess] = useState(false);
+
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
+    ...(user?.role === 'admin' ? [{ id: 'visitors', name: 'Visitors', icon: UserGroupIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
   ];
 
@@ -382,8 +392,8 @@ const SettingsPage: React.FC = () => {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
-    if (tabParam && ['general', 'system', 'integrations'].includes(tabParam)) {
-      setActiveTab(tabParam as 'general' | 'system' | 'integrations');
+    if (tabParam && ['general', 'system', 'integrations', 'visitors'].includes(tabParam)) {
+      setActiveTab(tabParam as 'general' | 'system' | 'integrations' | 'visitors');
     }
 
     // Handle Planning Center OAuth callback
@@ -400,6 +410,31 @@ const SettingsPage: React.FC = () => {
       window.history.replaceState({}, '', '/app/settings?tab=integrations');
     }
   }, [fetchPlanningCenterStatus]);
+
+  // Load visitor config when visitors tab is active
+  useEffect(() => {
+    if (activeTab === 'visitors' && user?.role === 'admin') {
+      visitorConfigAPI.getConfig().then(res => {
+        setVisitorConfig(res.data);
+      }).catch(err => {
+        logger.error('Failed to load visitor config:', err);
+      });
+    }
+  }, [activeTab, user?.role]);
+
+  const saveVisitorConfig = async () => {
+    setVisitorConfigLoading(true);
+    setVisitorConfigSuccess(false);
+    try {
+      await visitorConfigAPI.updateConfig(visitorConfig);
+      setVisitorConfigSuccess(true);
+      setTimeout(() => setVisitorConfigSuccess(false), 3000);
+    } catch (err) {
+      logger.error('Failed to save visitor config:', err);
+    } finally {
+      setVisitorConfigLoading(false);
+    }
+  };
 
   const getSystemInfo = () => {
     return {
@@ -1027,6 +1062,77 @@ const SettingsPage: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'visitors' && user?.role === 'admin' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">Visitor Settings</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Configure how long visitors appear in recent visitor lists. These limits control both the Attendance page (based on absences from services) and the People page (based on weeks from the last weekend).
+                </p>
+              </div>
+
+              <div className="border border-gray-200 rounded-lg p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Local Visitor Limit
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="52"
+                      value={visitorConfig.localVisitorServiceLimit}
+                      onChange={(e) => setVisitorConfig(prev => ({
+                        ...prev,
+                        localVisitorServiceLimit: parseInt(e.target.value) || 1
+                      }))}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Number of consecutive absences before a local visitor is hidden from recent lists.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Traveller Visitor Limit
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="52"
+                      value={visitorConfig.travellerVisitorServiceLimit}
+                      onChange={(e) => setVisitorConfig(prev => ({
+                        ...prev,
+                        travellerVisitorServiceLimit: parseInt(e.target.value) || 1
+                      }))}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Number of consecutive absences before a traveller visitor is hidden from recent lists.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end mt-6 space-x-3">
+                  {visitorConfigSuccess && (
+                    <span className="text-sm text-green-600 flex items-center">
+                      <CheckCircleIcon className="h-4 w-4 mr-1" />
+                      Saved
+                    </span>
+                  )}
+                  <button
+                    onClick={saveVisitorConfig}
+                    disabled={visitorConfigLoading}
+                    className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {visitorConfigLoading ? 'Saving...' : 'Save'}
+                  </button>
                 </div>
               </div>
             </div>

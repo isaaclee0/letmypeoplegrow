@@ -208,7 +208,7 @@ class MigrationExecutor {
       let lastError = null;
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          await Database.query('START TRANSACTION');
+          await Database.query('BEGIN TRANSACTION');
 
           // Split and execute SQL statements
           const statements = this.splitSqlStatements(migration.sql);
@@ -271,7 +271,7 @@ class MigrationExecutor {
             sql: rollbackSql
           });
         } else {
-          await Database.query('START TRANSACTION');
+          await Database.query('BEGIN TRANSACTION');
           await Database.query(rollbackSql);
           await Database.query('COMMIT');
 
@@ -332,7 +332,7 @@ class MigrationExecutor {
       
       const rowCount = await this.introspector.getTableRowCount(table.name);
       if (rowCount > 0) {
-        const data = await Database.query(`SELECT * FROM \`${table.name}\``);
+        const data = await Database.query(`SELECT * FROM "${table.name}"`);
         backupData[table.name] = data;
       }
     }
@@ -355,7 +355,7 @@ class MigrationExecutor {
           dry_run,
           error_message,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `, [
         logData.executionId,
         JSON.stringify(logData.plan?.summary || {}),
@@ -379,22 +379,22 @@ class MigrationExecutor {
     switch (migration.type) {
       case 'add_columns':
         return migration.columns.map(col => 
-          `ALTER TABLE \`${col.table}\` DROP COLUMN \`${col.column}\``
+          `ALTER TABLE "${col.table}" DROP COLUMN "${col.column}"`
         ).join(';\n');
 
       case 'create_indexes':
         return migration.indexes.map(idx => 
-          `DROP INDEX \`${idx.index}\` ON \`${idx.table}\``
+          `DROP INDEX IF EXISTS "${idx.index}"`
         ).join(';\n');
 
       case 'add_foreign_keys':
-        return migration.foreignKeys.map(fk => 
-          `ALTER TABLE \`${fk.table}\` DROP FOREIGN KEY \`${fk.foreignKey}\``
-        ).join(';\n');
+        // SQLite does not support dropping foreign keys via ALTER TABLE;
+        // the table must be recreated without the constraint
+        return `-- Cannot drop foreign keys in SQLite without recreating the table`;
 
       case 'create_tables':
         return migration.tables.map(table => 
-          `DROP TABLE \`${table}\``
+          `DROP TABLE IF EXISTS "${table}"`
         ).join(';\n');
 
       default:

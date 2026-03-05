@@ -1,30 +1,6 @@
 version: '3.8'
 
 services:
-  # MariaDB Database
-  db:
-    image: mariadb:10.6
-    container_name: church_attendance_db_dev
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: church_attendance
-      MYSQL_USER: church_user
-      MYSQL_PASSWORD: church_password
-    ports:
-      - "3307:3306"
-    volumes:
-      - db_data_dev:/var/lib/mysql
-      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
-    command: --default-authentication-plugin=mysql_native_password
-    networks:
-      - app-network-dev
-    healthcheck:
-      test: ["CMD", "mariadb", "-u", "church_user", "-pchurch_password", "-e", "SELECT 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # Node.js Backend Server (Development)
   server:
     build:
@@ -39,33 +15,23 @@ services:
       AUTH_DEV_BYPASS: 'false'
       PORT: 3001
       CLIENT_URL: http://localhost:3000
-      # BASE_URL comes from server/.env file (via env_file above)
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: church_attendance
-      DB_USER: church_user
-      DB_PASSWORD: church_password
+      CHURCH_DATA_DIR: /app/data
       JWT_SECRET: your_secure_jwt_secret_change_this_in_production
       JWT_EXPIRE: 30d
       OTC_EXPIRE_MINUTES: 10
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au
-      # Logging controls (quieter dev defaults)
+      # Logging controls
       LOG_LEVEL: debug
       CONSOLE_LOG_LEVEL: debug
       HTTP_LOG_MIN_STATUS: 200
       HTTP_LOG_SLOW_MS: 500
       LOG_HTTP_START: 'true'
-      # External services should be configured in server/.env file
-      # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
-      # BREVO_API_KEY
     volumes:
       - ./server:/app
       - /app/node_modules
       - ./server/uploads:/app/uploads
-    depends_on:
-      db:
-        condition: service_healthy
+      - server_data_dev:/app/data
     networks:
       - app-network-dev
     command: npm run dev
@@ -112,20 +78,14 @@ services:
       NODE_ENV: development
       DOCKER_ENV: "true"
       ADMIN_PORT: 7777
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: church_attendance
-      DB_USER: church_user
-      DB_PASSWORD: church_password
+      CHURCH_DATA_DIR: /app/data
     ports:
       - "127.0.0.1:7777:7777"
     volumes:
       - ./server:/app
       - /app/node_modules
+      - server_data_dev:/app/data
     command: node admin/index.js
-    depends_on:
-      db:
-        condition: service_healthy
     networks:
       - app-network-dev
 
@@ -147,8 +107,6 @@ services:
       - app-network-dev
 
   # Cloudflare Tunnel - exposes local dev to dev.letmypeoplegrow.com.au
-  # Requires TUNNEL_TOKEN in server/.env
-  # Shares network with nginx so localhost:80 reaches nginx
   cloudflared:
     image: cloudflare/cloudflared:latest
     network_mode: "service:nginx"
@@ -161,28 +119,9 @@ services:
     profiles:
       - tunnel
 
-  # phpMyAdmin (Development)
-  phpmyadmin:
-    image: phpmyadmin:latest
-    container_name: church_attendance_phpmyadmin_dev
-    restart: unless-stopped
-    environment:
-      PMA_HOST: db
-      PMA_PORT: 3306
-      PMA_USER: church_user
-      PMA_PASSWORD: church_password
-      UPLOAD_LIMIT: 256M
-    ports:
-      - "8080:80"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - app-network-dev
-
 volumes:
-  db_data_dev:
+  server_data_dev:
 
 networks:
   app-network-dev:
-    driver: bridge 
+    driver: bridge

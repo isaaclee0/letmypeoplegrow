@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Database = require('../config/database');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, requireRole } = require('../middleware/auth');
 
 // Get visitor configuration for current church
 router.get('/', verifyToken, async (req, res) => {
@@ -30,7 +30,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // Update visitor configuration for current church
-router.put('/', verifyToken, async (req, res) => {
+router.put('/', verifyToken, requireRole('admin'), async (req, res) => {
   try {
     const { localVisitorServiceLimit, travellerVisitorServiceLimit } = req.body;
 
@@ -52,10 +52,10 @@ router.put('/', verifyToken, async (req, res) => {
     await Database.query(`
       INSERT INTO visitor_config (church_id, local_visitor_service_limit, traveller_visitor_service_limit)
       VALUES (?, ?, ?)
-      ON DUPLICATE KEY UPDATE 
-        local_visitor_service_limit = VALUES(local_visitor_service_limit),
-        traveller_visitor_service_limit = VALUES(traveller_visitor_service_limit),
-        updated_at = NOW()
+      ON CONFLICT(church_id) DO UPDATE SET
+        local_visitor_service_limit = excluded.local_visitor_service_limit,
+        traveller_visitor_service_limit = excluded.traveller_visitor_service_limit,
+        updated_at = datetime('now')
     `, [req.user.church_id, localVisitorServiceLimit, travellerVisitorServiceLimit]);
 
     res.json({

@@ -9,7 +9,7 @@ router.use(verifyToken);
 router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     const rules = await Database.query(
-      `SELECT * FROM notification_rules WHERE (created_by = ? OR is_default = true) AND church_id = ?`,
+      `SELECT * FROM notification_rules WHERE (created_by = ? OR is_default = 1) AND church_id = ?`,
       [req.user.id, req.user.church_id]
     );
     res.json({ rules });

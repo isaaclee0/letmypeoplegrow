@@ -20,6 +20,7 @@ server/dist/
 *.db
 *.sqlite
 *.sqlite3
+server/data/
 
 # Logs
 logs
@@ -142,5 +143,5 @@ sqldumps/
 # Dummy Data
 family-dummy-data.tsv
 
-# DB refactor (MariaDB → SQLite) - future work
-docs/MIGRATE_MARIADB_TO_SQLITE.md
+# MariaDB backup module (kept for reference during migration)
+server/config/database-mariadb.js

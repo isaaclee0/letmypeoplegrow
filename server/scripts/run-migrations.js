@@ -62,15 +62,15 @@ function getMigrationDescription(version) {
 async function ensureMigrationsTable() {
   await Database.query(`
     CREATE TABLE IF NOT EXISTS migrations (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      version VARCHAR(50) NOT NULL UNIQUE,
-      name VARCHAR(255) NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      version TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       description TEXT,
-      executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      execution_time_ms INT,
-      status ENUM('success', 'failed') DEFAULT 'success',
+      executed_at TEXT DEFAULT (datetime('now')),
+      execution_time_ms INTEGER,
+      status TEXT CHECK(status IN ('success', 'failed')) DEFAULT 'success',
       error_message TEXT
-    ) ENGINE=InnoDB
+    )
   `);
 }
 
@@ -135,7 +135,7 @@ async function runMigration(version) {
   console.log(`🔄 Running migration: ${version} - ${migrationName}`);
   
   // Start transaction
-  await Database.query('START TRANSACTION');
+  await Database.query('BEGIN TRANSACTION');
 
   const startTime = Date.now();
   let status = 'success';
@@ -149,7 +149,7 @@ async function runMigration(version) {
     if (existing.length > 0) {
       await Database.query(`
         UPDATE migrations 
-        SET name = ?, description = ?, execution_time_ms = ?, status = ?, error_message = NULL, executed_at = NOW()
+        SET name = ?, description = ?, execution_time_ms = ?, status = ?, error_message = NULL, executed_at = datetime('now')
         WHERE version = ?
       `, [`${version}.sql`, migrationName, Date.now() - startTime, status, version]);
     } else {
@@ -178,7 +178,7 @@ async function runMigration(version) {
     if (existing.length > 0) {
       await Database.query(`
         UPDATE migrations 
-        SET name = ?, description = ?, execution_time_ms = ?, status = ?, error_message = ?, executed_at = NOW()
+        SET name = ?, description = ?, execution_time_ms = ?, status = ?, error_message = ?, executed_at = datetime('now')
         WHERE version = ?
       `, [`${version}.sql`, migrationName, Date.now() - startTime, status, errorMessage, version]);
     } else {

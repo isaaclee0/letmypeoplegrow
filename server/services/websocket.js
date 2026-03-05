@@ -99,8 +99,9 @@ class WebSocketService {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
         // Get user details from database to ensure they still exist and are active
-        const users = await Database.query(
-          'SELECT id, email, role, first_name, last_name, is_active, church_id FROM users WHERE id = ? AND is_active = true',
+        const users = await Database.queryForChurch(
+          decoded.churchId,
+          'SELECT id, email, role, first_name, last_name, is_active, church_id FROM users WHERE id = ? AND is_active = 1',
           [decoded.userId]
         );
 
@@ -197,6 +198,15 @@ class WebSocketService {
    */
   handleConnection(socket) {
     const userKey = `${socket.churchId}:${socket.userId}`;
+
+    // Set church context for all event handlers on this socket
+    socket.use(([event, ...args], next) => {
+      if (socket.churchId) {
+        Database.setChurchContext(socket.churchId, () => next());
+      } else {
+        next();
+      }
+    });
     
     // Track user connection
     if (!this.connectedUsers.has(userKey)) {
@@ -521,9 +531,9 @@ class WebSocketService {
       const Database = require('../config/database');
       const { columnExists } = require('../utils/databaseSchema');
 
-      await Database.transaction(async (conn) => {
+      await Database.transactionForChurch(socket.churchId, async (conn) => {
         const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
-        
+
         // Get or create attendance session
         let sessionResult;
         if (hasSessionsChurchId) {
@@ -554,40 +564,87 @@ class WebSocketService {
           sessionId = sessionResult[0].id;
         }
 
-        // Check if attendance_records has church_id column
-        const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
-        
+        // Snapshot roster if any record is being marked present
+        if (records.some(r => r.present)) {
+          try {
+            // Check if already snapshotted
+            const sessionCheck = await conn.query(
+              'SELECT roster_snapshotted FROM attendance_sessions WHERE id = ?',
+              [sessionId]
+            );
+            if (sessionCheck.length > 0 && sessionCheck[0].roster_snapshotted !== 1) {
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const sessionDate = new Date(date);
+              sessionDate.setHours(0, 0, 0, 0);
+              if (sessionDate <= today) {
+                const gathering = await conn.query(
+                  'SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?',
+                  [gatheringId, socket.churchId]
+                );
+                if (gathering.length > 0 && gathering[0].attendance_type === 'standard') {
+                  const rosterMembers = await conn.query(`
+                    SELECT gl.individual_id, COALESCE(i.people_type, 'regular') as people_type
+                    FROM gathering_lists gl
+                    JOIN individuals i ON gl.individual_id = i.id
+                    WHERE gl.gathering_type_id = ? AND i.is_active = 1 AND i.church_id = ?
+                  `, [gatheringId, socket.churchId]);
+                  for (const member of rosterMembers) {
+                    await conn.query(`
+                      INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+                      VALUES (?, ?, 0, ?, ?)
+                      ON CONFLICT(session_id, individual_id) DO NOTHING
+                    `, [sessionId, member.individual_id, socket.churchId, member.people_type]);
+                  }
+                  await conn.query('UPDATE attendance_sessions SET roster_snapshotted = 1 WHERE id = ?', [sessionId]);
+                }
+              }
+            }
+          } catch (snapshotError) {
+            logger.error('Error creating roster snapshot via WebSocket', { error: snapshotError.message });
+          }
+        }
+
         // Record attendance
         for (const record of records) {
           const { individualId, present } = record;
-          
-          // Use REPLACE INTO to handle concurrent updates more reliably, same as REST API
-          if (hasAttendanceRecordsChurchId) {
-            await conn.query(
-              'REPLACE INTO attendance_records (session_id, individual_id, present, church_id) VALUES (?, ?, ?, ?)',
-              [sessionId, individualId, present, socket.churchId]
-            );
-          } else {
-            await conn.query(
-              'REPLACE INTO attendance_records (session_id, individual_id, present) VALUES (?, ?, ?)',
-              [sessionId, individualId, present]
-            );
+
+          // Fetch current people_type to store as historical type
+          let peopleTypeAtTime = null;
+          const individualResult = await conn.query(
+            'SELECT people_type FROM individuals WHERE id = ? AND church_id = ?',
+            [individualId, socket.churchId]
+          );
+          if (individualResult.length > 0 && individualResult[0].people_type) {
+            peopleTypeAtTime = individualResult[0].people_type;
           }
-          
+
+          // Use INSERT ON CONFLICT instead of REPLACE INTO to preserve people_type_at_time
+          if (peopleTypeAtTime) {
+            await conn.query(`
+              INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                present = excluded.present,
+                people_type_at_time = excluded.people_type_at_time,
+                updated_at = CURRENT_TIMESTAMP
+            `, [sessionId, individualId, present, socket.churchId, peopleTypeAtTime]);
+          } else {
+            await conn.query(`
+              INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                present = excluded.present,
+                updated_at = CURRENT_TIMESTAMP
+            `, [sessionId, individualId, present, socket.churchId]);
+          }
+
           // Update last_attendance_date if person is marked present (same as REST API)
           if (present) {
-            const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
-            if (hasIndividualsChurchId) {
-              await conn.query(
-                'UPDATE individuals SET last_attendance_date = ? WHERE id = ? AND church_id = ?',
-                [date, individualId, socket.churchId]
-              );
-            } else {
-              await conn.query(
-                'UPDATE individuals SET last_attendance_date = ? WHERE id = ?',
-                [date, individualId]
-              );
-            }
+            await conn.query(
+              'UPDATE individuals SET last_attendance_date = ? WHERE id = ? AND church_id = ?',
+              [date, individualId, socket.churchId]
+            );
           }
         }
       });
@@ -679,7 +736,7 @@ class WebSocketService {
       const Database = require('../config/database');
       const { columnExists } = require('../utils/databaseSchema');
 
-      await Database.transaction(async (conn) => {
+      await Database.transactionForChurch(socket.churchId, async (conn) => {
         // Check schema capabilities
         const hasIndividualsChurchId = await columnExists('individuals', 'church_id');
         const hasAttendanceRecordsChurchId = await columnExists('attendance_records', 'church_id');
@@ -706,7 +763,7 @@ class WebSocketService {
               ${peopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
-              COALESCE(ar.present, false) as present
+              COALESCE(ar.present, 0) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id AND f.church_id = ?
             LEFT JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.church_id = ?
@@ -722,11 +779,9 @@ class WebSocketService {
                 : 'i.people_type'} = 'regular')
             )
             AND (
-              i.is_active = true OR 
-              ar.present = 1 OR 
-              ar.present = true OR
-              -- Include archived people only if they have attendance records for past gatherings
-              (i.is_active = false AND ar.present = 1)
+              i.is_active = 1 OR 
+              ar.present = 1 OR
+              (i.is_active = 0 AND ar.present = 1)
             )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
@@ -742,7 +797,7 @@ class WebSocketService {
               ${peopleTypeExpression},
               f.family_name as familyName,
               f.id as familyId,
-              COALESCE(ar.present, false) as present
+              COALESCE(ar.present, 0) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id
             LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
@@ -758,11 +813,9 @@ class WebSocketService {
                 : 'i.people_type'} = 'regular')
             )
             AND (
-              i.is_active = true OR 
-              ar.present = 1 OR 
-              ar.present = true OR
-              -- Include archived people only if they have attendance records for past gatherings
-              (i.is_active = false AND ar.present = 1)
+              i.is_active = 1 OR 
+              ar.present = 1 OR
+              (i.is_active = 0 AND ar.present = 1)
             )
             ORDER BY f.family_name, i.first_name, i.last_name
           `;
@@ -794,7 +847,7 @@ class WebSocketService {
               f.family_type as familyType,
               f.family_notes as familyNotes,
               f.last_attended as familyLastAttended,
-              COALESCE(ar.present, false) as present
+              COALESCE(ar.present, 0) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id AND f.church_id = ?
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ? AND ats.church_id = ?
@@ -825,7 +878,7 @@ class WebSocketService {
               f.family_type as familyType,
               f.family_notes as familyNotes,
               f.last_attended as familyLastAttended,
-              COALESCE(ar.present, false) as present
+              COALESCE(ar.present, 0) as present
             FROM individuals i
             LEFT JOIN families f ON i.family_id = f.id
             LEFT JOIN attendance_sessions ats ON ats.gathering_type_id = ? AND ats.session_date = ?
@@ -1664,10 +1717,10 @@ class WebSocketService {
         await Database.query(`
           INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE 
-          headcount = VALUES(headcount),
-          updated_by = VALUES(updated_by),
-          updated_at = CURRENT_TIMESTAMP
+          ON CONFLICT(session_id, updated_by) DO UPDATE SET 
+          headcount = excluded.headcount,
+          updated_by = excluded.updated_by,
+          updated_at = datetime('now')
         `, [sessionId, headcount, socket.userId, socket.churchId]);
 
         // Now calculate the display value based on mode (same logic as API)
@@ -1912,30 +1965,8 @@ class WebSocketService {
       });
 
       const Database = require('../config/database');
-      const { columnExists } = require('../utils/databaseSchema');
 
-      // Ensure kiosk_checkins table exists
-      await Database.query(`
-        CREATE TABLE IF NOT EXISTS kiosk_checkins (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          gathering_type_id INT NOT NULL,
-          session_date DATE NOT NULL,
-          individual_id INT NOT NULL,
-          action ENUM('checkin', 'checkout') NOT NULL,
-          signer_name VARCHAR(255) DEFAULT NULL,
-          user_id INT DEFAULT NULL,
-          church_id VARCHAR(36) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          INDEX idx_gathering_date (gathering_type_id, session_date),
-          INDEX idx_individual (individual_id),
-          INDEX idx_church_id (church_id),
-          INDEX idx_action (action),
-          INDEX idx_created_at (created_at),
-          INDEX idx_user_id (user_id)
-        ) ENGINE=InnoDB
-      `);
-
-      await Database.transaction(async (conn) => {
+      await Database.transactionForChurch(socket.churchId, async (conn) => {
         // Insert kiosk checkin/checkout records
         for (const individualId of individualIds) {
           await conn.query(`
@@ -1957,13 +1988,13 @@ class WebSocketService {
             sessionResult = await conn.query(`
               INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
               VALUES (?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE updated_at = NOW()
+              ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
             `, [gatheringId, date, socket.userId, socket.churchId]);
           } else {
             sessionResult = await conn.query(`
               INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
               VALUES (?, ?, ?)
-              ON DUPLICATE KEY UPDATE updated_at = NOW()
+              ON CONFLICT(gathering_type_id, session_date) DO UPDATE SET updated_at = datetime('now')
             `, [gatheringId, date, socket.userId]);
           }
 
@@ -2002,28 +2033,28 @@ class WebSocketService {
               if (hasPeopleTypeAtTime && peopleTypeAtTime) {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
-                  VALUES (?, ?, true, ?, ?)
-                  ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                  VALUES (?, ?, 1, ?, ?)
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
                 `, [sessionId, individualId, socket.churchId, peopleTypeAtTime]);
               } else {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, church_id)
-                  VALUES (?, ?, true, ?)
-                  ON DUPLICATE KEY UPDATE present = true
+                  VALUES (?, ?, 1, ?)
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
                 `, [sessionId, individualId, socket.churchId]);
               }
             } else {
               if (hasPeopleTypeAtTime && peopleTypeAtTime) {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
-                  VALUES (?, ?, true, ?)
-                  ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                  VALUES (?, ?, 1, ?)
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
                 `, [sessionId, individualId, peopleTypeAtTime]);
               } else {
                 await conn.query(`
                   INSERT INTO attendance_records (session_id, individual_id, present)
-                  VALUES (?, ?, true)
-                  ON DUPLICATE KEY UPDATE present = true
+                  VALUES (?, ?, 1)
+                  ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
                 `, [sessionId, individualId]);
               }
             }

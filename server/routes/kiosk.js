@@ -19,44 +19,12 @@ const disableCache = (req, res, next) => {
   next();
 };
 
-/**
- * Ensure the kiosk_checkins table exists.
- * Called lazily on first request.
- */
-let tableEnsured = false;
-async function ensureTable() {
-  if (tableEnsured) return;
-  await Database.query(`
-    CREATE TABLE IF NOT EXISTS kiosk_checkins (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      gathering_type_id INT NOT NULL,
-      session_date DATE NOT NULL,
-      individual_id INT NOT NULL,
-      action ENUM('checkin', 'checkout') NOT NULL,
-      signer_name VARCHAR(255) DEFAULT NULL,
-      user_id INT DEFAULT NULL,
-      church_id VARCHAR(36) NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_gathering_date (gathering_type_id, session_date),
-      INDEX idx_individual (individual_id),
-      INDEX idx_church_id (church_id),
-      INDEX idx_action (action),
-      INDEX idx_created_at (created_at),
-      INDEX idx_user_id (user_id)
-    ) ENGINE=InnoDB
-  `);
-  tableEnsured = true;
-}
-
 // ===== Record kiosk check-in or check-out =====
 // POST /api/kiosk/:gatheringTypeId/:date
 router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
   try {
-    await ensureTable();
-
     const { gatheringTypeId, date } = req.params;
     const { individualIds, action, signerName } = req.body;
-    // action: 'checkin' | 'checkout'
 
     if (!individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
       return res.status(400).json({ error: 'individualIds array is required.' });
@@ -90,34 +58,31 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
           sessionResult = await conn.query(`
             INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
             VALUES (?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE updated_at = NOW()
+            ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
           `, [gatheringTypeId, date, req.user.id, churchId]);
         } else {
           sessionResult = await conn.query(`
             INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
             VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE updated_at = NOW()
+            ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
           `, [gatheringTypeId, date, req.user.id]);
         }
 
-        let sessionId;
-        if (sessionResult.insertId) {
-          sessionId = Number(sessionResult.insertId);
-        } else {
-          const sessions = hasSessionsChurchId
-            ? await conn.query(
-                'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-                [gatheringTypeId, date, churchId]
-              )
-            : await conn.query(
-                'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-                [gatheringTypeId, date]
-              );
-          if (sessions.length === 0) {
-            throw new Error('Failed to create or retrieve attendance session');
-          }
-          sessionId = Number(sessions[0].id);
+        // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+        // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+        const sessionsLookup = hasSessionsChurchId
+          ? await conn.query(
+              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+              [gatheringTypeId, date, churchId]
+            )
+          : await conn.query(
+              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+              [gatheringTypeId, date]
+            );
+        if (sessionsLookup.length === 0) {
+          throw new Error('Failed to create or retrieve attendance session');
         }
+        const sessionId = Number(sessionsLookup[0].id);
 
         // Mark each individual as present
         for (const individualId of individualIds) {
@@ -135,28 +100,28 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
             if (hasPeopleTypeAtTime && peopleTypeAtTime) {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
-                VALUES (?, ?, true, ?, ?)
-                ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
               `, [sessionId, individualId, churchId, peopleTypeAtTime]);
             } else {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, church_id)
-                VALUES (?, ?, true, ?)
-                ON DUPLICATE KEY UPDATE present = true
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
               `, [sessionId, individualId, churchId]);
             }
           } else {
             if (hasPeopleTypeAtTime && peopleTypeAtTime) {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
-                VALUES (?, ?, true, ?)
-                ON DUPLICATE KEY UPDATE present = true, people_type_at_time = VALUES(people_type_at_time)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
               `, [sessionId, individualId, peopleTypeAtTime]);
             } else {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present)
-                VALUES (?, ?, true)
-                ON DUPLICATE KEY UPDATE present = true
+                VALUES (?, ?, 1)
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
               `, [sessionId, individualId]);
             }
           }
@@ -221,8 +186,6 @@ router.post('/:gatheringTypeId/:date', disableCache, async (req, res) => {
 // GET /api/kiosk/history/:gatheringTypeId
 router.get('/history/:gatheringTypeId', disableCache, async (req, res) => {
   try {
-    await ensureTable();
-
     const { gatheringTypeId } = req.params;
     const churchId = req.user.church_id;
     const limit = parseInt(req.query.limit) || 20;
@@ -286,8 +249,6 @@ router.get('/history/:gatheringTypeId', disableCache, async (req, res) => {
 // GET /api/kiosk/history/:gatheringTypeId/:date
 router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => {
   try {
-    await ensureTable();
-
     const { gatheringTypeId, date } = req.params;
     const churchId = req.user.church_id;
 
@@ -375,8 +336,6 @@ router.delete('/history/:gatheringTypeId/:date', requireGatheringAccess, async (
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Only admins can delete kiosk sessions.' });
     }
-
-    await ensureTable();
 
     const { gatheringTypeId, date } = req.params;
     const churchId = req.user.church_id;

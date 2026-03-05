@@ -2,10 +2,8 @@ const jwt = require('jsonwebtoken');
 const Database = require('../config/database');
 const logger = require('../config/logger');
 
-// Verify JWT token
 const verifyToken = async (req, res, next) => {
   try {
-    // Only log auth verification for headcount endpoints to reduce noise
     if (req.path.includes('/headcount/')) {
       logger.debugLog('AUTH: Verifying token for headcount', {
         path: req.path,
@@ -13,56 +11,59 @@ const verifyToken = async (req, res, next) => {
         hasCookie: !!req.cookies?.authToken
       });
     }
-    
-    // Check for token in Authorization header first (for backward compatibility)
+
     let token = req.header('Authorization')?.replace('Bearer ', '');
-    
-    // If no token in header, check for cookie
     if (!token) {
       token = req.cookies?.authToken;
     }
-    
+
     if (!token) {
       return res.status(401).json({ error: 'Access denied. No token provided.' });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Get user details from database
-    const users = await Database.query(
-      'SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, church_id FROM users WHERE id = ? AND is_active = true',
-      [decoded.userId]
-    );
+    const churchId = decoded.churchId;
 
-    if (users.length === 0) {
-      return res.status(401).json({ error: 'Invalid token or user not found.' });
+    if (!churchId) {
+      return res.status(401).json({ error: 'Invalid token: missing church context.' });
     }
 
-    // Use church_id from JWT token if available, otherwise from database
-    const user = users[0];
-    user.church_id = decoded.churchId || user.church_id;
-    
-    req.user = user;
-    next();
+    Database.setChurchContext(churchId, async () => {
+      try {
+        const users = await Database.query(
+          'SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE id = ? AND is_active = 1',
+          [decoded.userId]
+        );
+
+        if (users.length === 0) {
+          return res.status(401).json({ error: 'Invalid token or user not found.' });
+        }
+
+        const user = users[0];
+        user.church_id = decoded.churchId || user.church_id;
+        req.user = user;
+        next();
+      } catch (error) {
+        console.error('Auth middleware error (inner):', error);
+        res.status(401).json({ error: 'Invalid token.' });
+      }
+    });
   } catch (error) {
     console.error('Auth middleware error:', error);
-    
-    // Provide more specific error messages and auto-clear expired tokens
+
     if (error.name === 'TokenExpiredError') {
-      // Automatically clear the expired token cookie
       res.clearCookie('authToken', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
+        sameSite: 'lax',
         path: '/'
       });
-      
-      res.status(401).json({ 
+      res.status(401).json({
         error: 'Token expired. Please log in again.',
         code: 'TOKEN_EXPIRED'
       });
     } else if (error.name === 'JsonWebTokenError') {
-      res.status(401).json({ 
+      res.status(401).json({
         error: 'Invalid token format.',
         code: 'INVALID_TOKEN'
       });
@@ -72,22 +73,18 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// Role-based access control
 const requireRole = (allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required.' });
     }
-
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Insufficient permissions.' });
     }
-
     next();
   };
 };
 
-// Check if user can access specific gathering
 const requireGatheringAccess = async (req, res, next) => {
   try {
     logger.accessLog('GATHERING ACCESS: Checking access', {
@@ -96,17 +93,15 @@ const requireGatheringAccess = async (req, res, next) => {
       userId: req.user?.id,
       userRole: req.user?.role
     });
-    
+
     const { gatheringTypeId } = req.params;
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // Admins have access to all gatherings
     if (userRole === 'admin') {
       return next();
     }
 
-    // Check if user is assigned to this gathering type
     const assignments = await Database.query(
       'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ?',
       [userId, gatheringTypeId]
@@ -123,130 +118,117 @@ const requireGatheringAccess = async (req, res, next) => {
   }
 };
 
-// Audit log middleware with deduplication
 const auditLog = (action) => {
   return async (req, res, next) => {
-    // Store original json method
     const originalJson = res.json;
-    
-    // Override json method to capture response
+
     res.json = function(data) {
-      // Log successful actions (status < 400)
       if (res.statusCode < 400 && req.user) {
         setImmediate(async () => {
           try {
-            // Extract service and date information from request
-            let serviceName = null;
-            let serviceDate = null;
-            
-            // For attendance routes, extract gathering type and date
-            if (req.params.gatheringTypeId && req.params.date) {
-              try {
-                const gatheringResult = await Database.query(
-                  'SELECT name FROM gathering_types WHERE id = ?',
-                  [req.params.gatheringTypeId]
-                );
-                if (gatheringResult.length > 0) {
-                  serviceName = gatheringResult[0].name;
-                }
-                serviceDate = req.params.date;
-              } catch (error) {
-                console.error('Error getting gathering info:', error);
-              }
-            }
-            
-            // Check for existing similar action within 5 minutes
-            const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-            const existingAction = await Database.query(`
-              SELECT id, new_values FROM audit_log 
-              WHERE user_id = ? 
-                AND action = ? 
-                AND created_at > ?
-                AND table_name = ?
-                AND church_id = ?
-              ORDER BY created_at DESC 
-              LIMIT 1
-            `, [
-              req.user.id,
-              action,
-              fiveMinutesAgo,
-              req.body?.table || 'attendance_sessions',
-              req.user.church_id
-            ]);
-            
-            if (existingAction.length > 0) {
-              // Update existing action instead of creating new one
-              let existingValues = {};
-              try {
-                if (existingAction[0].new_values) {
-                  // Handle both string and object cases
-                  if (typeof existingAction[0].new_values === 'string') {
-                    existingValues = JSON.parse(existingAction[0].new_values);
-                  } else {
-                    existingValues = existingAction[0].new_values;
+            const churchId = req.user.church_id;
+            await Database.setChurchContext(churchId, async () => {
+              let serviceName = null;
+              let serviceDate = null;
+
+              if (req.params.gatheringTypeId && req.params.date) {
+                try {
+                  const gatheringResult = await Database.query(
+                    'SELECT name FROM gathering_types WHERE id = ?',
+                    [req.params.gatheringTypeId]
+                  );
+                  if (gatheringResult.length > 0) {
+                    serviceName = gatheringResult[0].name;
                   }
+                  serviceDate = req.params.date;
+                } catch (error) {
+                  console.error('Error getting gathering info:', error);
                 }
-              } catch (parseError) {
-                console.error('Error parsing existing new_values:', parseError);
-                existingValues = {};
               }
-              const newValues = req.body ? JSON.stringify(req.body) : null;
-              
-              // Merge the values and update the timestamp
-              await Database.query(`
-                UPDATE audit_log 
-                SET new_values = ?, 
-                    created_at = NOW(),
-                    table_name = ?,
-                    record_id = ?
-                WHERE id = ? AND church_id = ?
-              `, [
-                JSON.stringify({
-                  ...existingValues,
-                  latestUpdate: new Date().toISOString(),
-                  serviceName: serviceName,
-                  serviceDate: serviceDate,
-                  actionCount: (existingValues.actionCount || 1) + 1
-                }),
-                req.body?.table || 'attendance_sessions',
-                req.body?.id || data?.id || null,
-                existingAction[0].id,
-                req.user.church_id
-              ]);
-            } else {
-              // Create new action
-              const enhancedBody = {
-                ...req.body,
-                serviceName: serviceName,
-                serviceDate: serviceDate,
-                actionCount: 1,
-                firstAction: new Date().toISOString()
-              };
-              
-              await Database.query(`
-                INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent, church_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+              const existingAction = await Database.query(`
+                SELECT id, new_values FROM audit_log
+                WHERE user_id = ?
+                  AND action = ?
+                  AND created_at > ?
+                  AND table_name = ?
+                  AND church_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
               `, [
                 req.user.id,
                 action,
+                fiveMinutesAgo,
                 req.body?.table || 'attendance_sessions',
-                req.body?.id || data?.id || null,
-                JSON.stringify(enhancedBody),
-                req.ip,
-                req.get('User-Agent'),
                 req.user.church_id
               ]);
-            }
+
+              if (existingAction.length > 0) {
+                let existingValues = {};
+                try {
+                  if (existingAction[0].new_values) {
+                    existingValues = typeof existingAction[0].new_values === 'string'
+                      ? JSON.parse(existingAction[0].new_values)
+                      : existingAction[0].new_values;
+                  }
+                } catch (_) {
+                  existingValues = {};
+                }
+
+                await Database.query(`
+                  UPDATE audit_log
+                  SET new_values = ?,
+                      created_at = datetime('now'),
+                      table_name = ?,
+                      record_id = ?
+                  WHERE id = ? AND church_id = ?
+                `, [
+                  JSON.stringify({
+                    ...existingValues,
+                    latestUpdate: new Date().toISOString(),
+                    serviceName,
+                    serviceDate,
+                    actionCount: (existingValues.actionCount || 1) + 1
+                  }),
+                  req.body?.table || 'attendance_sessions',
+                  req.body?.id || data?.id || null,
+                  existingAction[0].id,
+                  req.user.church_id
+                ]);
+              } else {
+                const enhancedBody = {
+                  ...req.body,
+                  serviceName,
+                  serviceDate,
+                  actionCount: 1,
+                  firstAction: new Date().toISOString()
+                };
+
+                await Database.query(`
+                  INSERT INTO audit_log (user_id, action, table_name, record_id, new_values, ip_address, user_agent, church_id)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `, [
+                  req.user.id,
+                  action,
+                  req.body?.table || 'attendance_sessions',
+                  req.body?.id || data?.id || null,
+                  JSON.stringify(enhancedBody),
+                  req.ip,
+                  req.get('User-Agent'),
+                  req.user.church_id
+                ]);
+              }
+            });
           } catch (error) {
             console.error('Audit log error:', error);
           }
         });
       }
-      
-      // Call original json method
+
       originalJson.call(this, data);
     };
-    
+
     next();
   };
 };
@@ -256,4 +238,4 @@ module.exports = {
   requireRole,
   requireGatheringAccess,
   auditLog
-}; 
+};

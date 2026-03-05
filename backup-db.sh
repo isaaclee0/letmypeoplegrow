@@ -1,23 +1,28 @@
 #!/bin/bash
 
-# Database backup script for Let My People Grow
+# Database backup script for Let My People Grow (SQLite)
 # Usage: ./backup-db.sh [backup_name]
+#
+# Backs up all SQLite database files (registry + per-church databases)
+# from the Docker volume to a local backups/ directory.
 
 BACKUP_NAME=${1:-$(date +%Y%m%d_%H%M%S)}
-BACKUP_FILE="backup_${BACKUP_NAME}.sql"
+BACKUP_DIR="backups/backup_${BACKUP_NAME}"
 
-echo "Creating database backup: $BACKUP_FILE"
+echo "Creating database backup: $BACKUP_DIR"
 
-# Create backup directory if it doesn't exist
-mkdir -p backups
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
 
-# Create the backup
-docker-compose exec -T church_attendance_db_dev mariadb -u church_user -pchurch_password church_attendance > "backups/$BACKUP_FILE"
+# Copy the data directory from the server container
+docker cp church_attendance_server:/app/data "$BACKUP_DIR/data"
 
 if [ $? -eq 0 ]; then
-    echo "✅ Backup created successfully: backups/$BACKUP_FILE"
-    echo "📊 Backup size: $(du -h "backups/$BACKUP_FILE" | cut -f1)"
+    echo "Backup created successfully: $BACKUP_DIR"
+    echo "Backup size: $(du -sh "$BACKUP_DIR" | cut -f1)"
+    echo "Contents:"
+    ls -lh "$BACKUP_DIR/data/"
 else
-    echo "❌ Backup failed!"
+    echo "Backup failed!"
     exit 1
-fi 
+fi

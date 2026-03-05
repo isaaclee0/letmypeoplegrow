@@ -18,13 +18,13 @@ router.get('/', async (req, res) => {
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
-               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
+               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
-                   AND ar.present = true
-                   AND i.is_active = true
-                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 42 DAY))
-                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)))
+                   AND ar.present = 1
+                   AND i.is_active = 1
+                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= datetime(date('now'), '-42 day'))
+                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= datetime(date('now'), '-14 day')))
                  THEN ar.individual_id
                END) as recent_visitor_count
         FROM gathering_types gt
@@ -33,20 +33,20 @@ router.get('/', async (req, res) => {
         LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
-        WHERE gt.is_active = true AND gt.church_id = ?
+        WHERE gt.is_active = 1 AND gt.church_id = ?
         GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.church_id]);
     } else {
       gatherings = await Database.query(`
         SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
-               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = true AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
+               COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
-                   AND ar.present = true
-                   AND i.is_active = true
-                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 42 DAY))
-                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)))
+                   AND ar.present = 1
+                   AND i.is_active = 1
+                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= datetime(date('now'), '-42 day'))
+                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= datetime(date('now'), '-14 day')))
                  THEN ar.individual_id
                END) as recent_visitor_count
         FROM gathering_types gt
@@ -56,7 +56,7 @@ router.get('/', async (req, res) => {
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-        WHERE gt.is_active = true AND uga.user_id = ? AND gt.church_id = ?
+        WHERE gt.is_active = 1 AND uga.user_id = ? AND gt.church_id = ?
         GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.kiosk_message, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.id, req.user.church_id]);

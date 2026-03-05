@@ -2,11 +2,10 @@ const Database = require('../config/database');
 
 /**
  * Schema Introspector - Analyzes current database state
- * This utility provides comprehensive database schema analysis capabilities
+ * Uses SQLite PRAGMA statements and sqlite_master for schema analysis
  */
 class SchemaIntrospector {
   constructor() {
-    this.dbName = process.env.DB_NAME || 'church_attendance';
   }
 
   /**
@@ -34,127 +33,126 @@ class SchemaIntrospector {
    */
   async getAllTables() {
     const tables = await Database.query(`
-      SELECT 
-        TABLE_NAME as name,
-        TABLE_TYPE as type,
-        ENGINE as engine,
-        TABLE_ROWS as tableRows,
-        AVG_ROW_LENGTH as avgRowLength,
-        DATA_LENGTH as dataLength,
-        MAX_DATA_LENGTH as maxDataLength,
-        INDEX_LENGTH as indexLength,
-        DATA_FREE as dataFree,
-        AUTO_INCREMENT as autoIncrement,
-        CREATE_TIME as createTime,
-        UPDATE_TIME as updateTime,
-        CHECK_TIME as checkTime,
-        TABLE_COLLATION as collation,
-        CHECKSUM as checksum,
-        CREATE_OPTIONS as createOptions,
-        TABLE_COMMENT as comment
-      FROM INFORMATION_SCHEMA.TABLES 
-      WHERE TABLE_SCHEMA = ?
-      ORDER BY TABLE_NAME
-    `, [this.dbName]);
+      SELECT name, type, sql
+      FROM sqlite_master 
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `);
 
-    return tables;
+    return tables.map(t => ({
+      name: t.name,
+      type: t.type,
+      sql: t.sql
+    }));
   }
 
   /**
    * Get all columns for all tables
    */
   async getAllColumns() {
-    const columns = await Database.query(`
-      SELECT 
-        TABLE_NAME as tableName,
-        COLUMN_NAME as name,
-        ORDINAL_POSITION as position,
-        COLUMN_DEFAULT as defaultValue,
-        IS_NULLABLE as isNullable,
-        DATA_TYPE as dataType,
-        CHARACTER_MAXIMUM_LENGTH as maxLength,
-        NUMERIC_PRECISION as numericPrecision,
-        NUMERIC_SCALE as numericScale,
-        DATETIME_PRECISION as datetimePrecision,
-        CHARACTER_SET_NAME as characterSet,
-        COLLATION_NAME as columnCollation,
-        COLUMN_TYPE as columnType,
-        COLUMN_KEY as columnKey,
-        EXTRA as extra,
-        PRIVILEGES as privileges,
-        COLUMN_COMMENT as comment,
-        IS_GENERATED as isGenerated,
-        GENERATION_EXPRESSION as generationExpression
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_SCHEMA = ?
-      ORDER BY TABLE_NAME, ORDINAL_POSITION
-    `, [this.dbName]);
+    const tables = await this.getAllTables();
+    const allColumns = [];
 
-    return columns;
+    for (const table of tables) {
+      const columns = await Database.query(`PRAGMA table_info("${table.name}")`);
+      for (const col of columns) {
+        allColumns.push({
+          tableName: table.name,
+          name: col.name,
+          position: col.cid,
+          defaultValue: col.dflt_value,
+          isNullable: col.notnull ? 'NO' : 'YES',
+          dataType: col.type,
+          columnType: col.type,
+          columnKey: col.pk ? 'PRI' : ''
+        });
+      }
+    }
+
+    return allColumns;
   }
 
   /**
    * Get all indexes for all tables
    */
   async getAllIndexes() {
-    const indexes = await Database.query(`
-      SELECT 
-        TABLE_NAME as tableName,
-        INDEX_NAME as name,
-        NON_UNIQUE as nonUnique,
-        SEQ_IN_INDEX as sequence,
-        COLUMN_NAME as columnName,
-        COLLATION as collation,
-        CARDINALITY as cardinality,
-        SUB_PART as subPart,
-        PACKED as packed,
-        NULLABLE as nullable,
-        INDEX_TYPE as indexType,
-        COMMENT as comment,
-        INDEX_COMMENT as indexComment
-      FROM INFORMATION_SCHEMA.STATISTICS 
-      WHERE TABLE_SCHEMA = ?
-      ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
-    `, [this.dbName]);
+    const tables = await this.getAllTables();
+    const allIndexes = [];
 
-    return indexes;
+    for (const table of tables) {
+      const indexes = await Database.query(`PRAGMA index_list("${table.name}")`);
+      for (const idx of indexes) {
+        const indexInfo = await Database.query(`PRAGMA index_info("${idx.name}")`);
+        for (const col of indexInfo) {
+          allIndexes.push({
+            tableName: table.name,
+            name: idx.name,
+            nonUnique: idx.unique ? 0 : 1,
+            sequence: col.seqno,
+            columnName: col.name,
+            indexType: idx.origin === 'pk' ? 'PRIMARY' : 'BTREE'
+          });
+        }
+      }
+    }
+
+    return allIndexes;
   }
 
   /**
    * Get all foreign key constraints
    */
   async getAllForeignKeys() {
-    const foreignKeys = await Database.query(`
-      SELECT 
-        CONSTRAINT_NAME as name,
-        TABLE_NAME as tableName,
-        COLUMN_NAME as columnName,
-        REFERENCED_TABLE_NAME as referencedTableName,
-        REFERENCED_COLUMN_NAME as referencedColumnName
-      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-      WHERE TABLE_SCHEMA = ? 
-      AND REFERENCED_TABLE_NAME IS NOT NULL
-      ORDER BY TABLE_NAME, CONSTRAINT_NAME
-    `, [this.dbName]);
+    const tables = await this.getAllTables();
+    const allForeignKeys = [];
 
-    return foreignKeys;
+    for (const table of tables) {
+      const fks = await Database.query(`PRAGMA foreign_key_list("${table.name}")`);
+      for (const fk of fks) {
+        allForeignKeys.push({
+          name: `fk_${table.name}_${fk.from}`,
+          tableName: table.name,
+          columnName: fk.from,
+          referencedTableName: fk.table,
+          referencedColumnName: fk.to
+        });
+      }
+    }
+
+    return allForeignKeys;
   }
 
   /**
-   * Get all constraints (CHECK, UNIQUE, etc.)
+   * Get all constraints (PRIMARY KEY, UNIQUE)
    */
   async getAllConstraints() {
-    const constraints = await Database.query(`
-      SELECT 
-        CONSTRAINT_NAME as name,
-        TABLE_NAME as tableName,
-        CONSTRAINT_TYPE as type
-      FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS 
-      WHERE TABLE_SCHEMA = ?
-      ORDER BY TABLE_NAME, CONSTRAINT_NAME
-    `, [this.dbName]);
+    const tables = await this.getAllTables();
+    const allConstraints = [];
 
-    return constraints;
+    for (const table of tables) {
+      const columns = await Database.query(`PRAGMA table_info("${table.name}")`);
+      const pkColumns = columns.filter(c => c.pk > 0);
+      if (pkColumns.length > 0) {
+        allConstraints.push({
+          name: 'PRIMARY',
+          tableName: table.name,
+          type: 'PRIMARY KEY'
+        });
+      }
+
+      const indexes = await Database.query(`PRAGMA index_list("${table.name}")`);
+      for (const idx of indexes) {
+        if (idx.unique) {
+          allConstraints.push({
+            name: idx.name,
+            tableName: table.name,
+            type: 'UNIQUE'
+          });
+        }
+      }
+    }
+
+    return allConstraints;
   }
 
   /**
@@ -162,31 +160,15 @@ class SchemaIntrospector {
    */
   async getAllTriggers() {
     const triggers = await Database.query(`
-      SELECT 
-        TRIGGER_NAME as name,
-        EVENT_MANIPULATION as eventManipulation,
-        EVENT_OBJECT_TABLE as eventObjectTable,
-        ACTION_ORDER as actionOrder,
-        ACTION_CONDITION as actionCondition,
-        ACTION_STATEMENT as actionStatement,
-        ACTION_ORIENTATION as actionOrientation,
-        ACTION_TIMING as actionTiming,
-        ACTION_REFERENCE_OLD_TABLE as actionReferenceOldTable,
-        ACTION_REFERENCE_NEW_TABLE as actionReferenceNewTable,
-        ACTION_REFERENCE_OLD_ROW as actionReferenceOldRow,
-        ACTION_REFERENCE_NEW_ROW as actionReferenceNewRow,
-        CREATED as created,
-        SQL_MODE as sqlMode,
-        DEFINER as definer,
-        CHARACTER_SET_CLIENT as characterSetClient,
-        COLLATION_CONNECTION as collationConnection,
-        DATABASE_COLLATION as databaseCollation
-      FROM INFORMATION_SCHEMA.TRIGGERS 
-      WHERE TRIGGER_SCHEMA = ?
-      ORDER BY EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION
-    `, [this.dbName]);
+      SELECT name, sql FROM sqlite_master 
+      WHERE type = 'trigger'
+      ORDER BY name
+    `);
 
-    return triggers;
+    return triggers.map(t => ({
+      name: t.name,
+      sql: t.sql
+    }));
   }
 
   /**
@@ -194,79 +176,29 @@ class SchemaIntrospector {
    */
   async getAllViews() {
     const views = await Database.query(`
-      SELECT 
-        TABLE_NAME as name,
-        VIEW_DEFINITION as definition,
-        CHECK_OPTION as checkOption,
-        IS_UPDATABLE as isUpdatable,
-        DEFINER as definer,
-        SECURITY_TYPE as securityType,
-        CHARACTER_SET_CLIENT as characterSetClient,
-        COLLATION_CONNECTION as collationConnection
-      FROM INFORMATION_SCHEMA.VIEWS 
-      WHERE TABLE_SCHEMA = ?
-      ORDER BY TABLE_NAME
-    `, [this.dbName]);
+      SELECT name, sql FROM sqlite_master 
+      WHERE type = 'view'
+      ORDER BY name
+    `);
 
-    return views;
+    return views.map(v => ({
+      name: v.name,
+      definition: v.sql
+    }));
   }
 
   /**
-   * Get all functions
+   * Get all functions — SQLite has no stored functions
    */
   async getAllFunctions() {
-    const functions = await Database.query(`
-      SELECT 
-        ROUTINE_NAME as name,
-        ROUTINE_TYPE as type,
-        DATA_TYPE as dataType,
-        ROUTINE_DEFINITION as definition,
-        IS_DETERMINISTIC as isDeterministic,
-        SQL_DATA_ACCESS as sqlDataAccess,
-        SECURITY_TYPE as securityType,
-        CREATED as created,
-        LAST_ALTERED as lastAltered,
-        SQL_MODE as sqlMode,
-        ROUTINE_COMMENT as comment,
-        DEFINER as definer,
-        CHARACTER_SET_CLIENT as characterSetClient,
-        COLLATION_CONNECTION as collationConnection,
-        DATABASE_COLLATION as databaseCollation
-      FROM INFORMATION_SCHEMA.ROUTINES 
-      WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'
-      ORDER BY ROUTINE_NAME
-    `, [this.dbName]);
-
-    return functions;
+    return [];
   }
 
   /**
-   * Get all stored procedures
+   * Get all stored procedures — SQLite has no stored procedures
    */
   async getAllProcedures() {
-    const procedures = await Database.query(`
-      SELECT 
-        ROUTINE_NAME as name,
-        ROUTINE_TYPE as type,
-        DATA_TYPE as dataType,
-        ROUTINE_DEFINITION as definition,
-        IS_DETERMINISTIC as isDeterministic,
-        SQL_DATA_ACCESS as sqlDataAccess,
-        SECURITY_TYPE as securityType,
-        CREATED as created,
-        LAST_ALTERED as lastAltered,
-        SQL_MODE as sqlMode,
-        ROUTINE_COMMENT as comment,
-        DEFINER as definer,
-        CHARACTER_SET_CLIENT as characterSetClient,
-        COLLATION_CONNECTION as collationConnection,
-        DATABASE_COLLATION as databaseCollation
-      FROM INFORMATION_SCHEMA.ROUTINES 
-      WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
-      ORDER BY ROUTINE_NAME
-    `, [this.dbName]);
-
-    return procedures;
+    return [];
   }
 
   /**
@@ -274,90 +206,51 @@ class SchemaIntrospector {
    */
   async getTableSchema(tableName) {
     const tableInfo = await Database.query(`
-      SELECT 
-        TABLE_NAME as name,
-        TABLE_TYPE as type,
-        ENGINE as engine,
-        TABLE_ROWS as tableRows,
-        AVG_ROW_LENGTH as avgRowLength,
-        DATA_LENGTH as dataLength,
-        MAX_DATA_LENGTH as maxDataLength,
-        INDEX_LENGTH as indexLength,
-        DATA_FREE as dataFree,
-        AUTO_INCREMENT as autoIncrement,
-        CREATE_TIME as createTime,
-        UPDATE_TIME as updateTime,
-        CHECK_TIME as checkTime,
-        TABLE_COLLATION as collation,
-        CHECKSUM as checksum,
-        CREATE_OPTIONS as createOptions,
-        TABLE_COMMENT as comment
-      FROM INFORMATION_SCHEMA.TABLES 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-    `, [this.dbName, tableName]);
+      SELECT name, type, sql FROM sqlite_master 
+      WHERE type = 'table' AND name = ?
+    `, [tableName]);
 
     if (tableInfo.length === 0) {
       return null;
     }
 
-    const columns = await Database.query(`
-      SELECT 
-        COLUMN_NAME as name,
-        ORDINAL_POSITION as position,
-        COLUMN_DEFAULT as defaultValue,
-        IS_NULLABLE as isNullable,
-        DATA_TYPE as dataType,
-        CHARACTER_MAXIMUM_LENGTH as maxLength,
-        NUMERIC_PRECISION as numericPrecision,
-        NUMERIC_SCALE as numericScale,
-        DATETIME_PRECISION as datetimePrecision,
-        CHARACTER_SET_NAME as characterSet,
-        COLLATION_NAME as columnCollation,
-        COLUMN_TYPE as columnType,
-        COLUMN_KEY as columnKey,
-        EXTRA as extra,
-        PRIVILEGES as privileges,
-        COLUMN_COMMENT as comment,
-        IS_GENERATED as isGenerated,
-        GENERATION_EXPRESSION as generationExpression
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-      ORDER BY ORDINAL_POSITION
-    `, [this.dbName, tableName]);
+    const columns = await Database.query(`PRAGMA table_info("${tableName}")`);
+    const mappedColumns = columns.map(col => ({
+      name: col.name,
+      position: col.cid,
+      defaultValue: col.dflt_value,
+      isNullable: col.notnull ? 'NO' : 'YES',
+      dataType: col.type,
+      columnType: col.type,
+      columnKey: col.pk ? 'PRI' : ''
+    }));
 
-    const indexes = await Database.query(`
-      SELECT 
-        INDEX_NAME as name,
-        NON_UNIQUE as nonUnique,
-        SEQ_IN_INDEX as sequence,
-        COLUMN_NAME as columnName,
-        COLLATION as collation,
-        CARDINALITY as cardinality,
-        SUB_PART as subPart,
-        PACKED as packed,
-        NULLABLE as nullable,
-        INDEX_TYPE as indexType,
-        COMMENT as comment,
-        INDEX_COMMENT as indexComment
-      FROM INFORMATION_SCHEMA.STATISTICS 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-      ORDER BY INDEX_NAME, SEQ_IN_INDEX
-    `, [this.dbName, tableName]);
+    const indexList = await Database.query(`PRAGMA index_list("${tableName}")`);
+    const indexes = [];
+    for (const idx of indexList) {
+      const indexInfo = await Database.query(`PRAGMA index_info("${idx.name}")`);
+      for (const col of indexInfo) {
+        indexes.push({
+          name: idx.name,
+          nonUnique: idx.unique ? 0 : 1,
+          sequence: col.seqno,
+          columnName: col.name,
+          indexType: idx.origin === 'pk' ? 'PRIMARY' : 'BTREE'
+        });
+      }
+    }
 
-    const foreignKeys = await Database.query(`
-      SELECT 
-        CONSTRAINT_NAME as name,
-        COLUMN_NAME as columnName,
-        REFERENCED_TABLE_NAME as referencedTableName,
-        REFERENCED_COLUMN_NAME as referencedColumnName
-      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL
-      ORDER BY CONSTRAINT_NAME
-    `, [this.dbName, tableName]);
+    const fkList = await Database.query(`PRAGMA foreign_key_list("${tableName}")`);
+    const foreignKeys = fkList.map(fk => ({
+      name: `fk_${tableName}_${fk.from}`,
+      columnName: fk.from,
+      referencedTableName: fk.table,
+      referencedColumnName: fk.to
+    }));
 
     return {
-      table: tableInfo[0],
-      columns,
+      table: { name: tableInfo[0].name, type: tableInfo[0].type, sql: tableInfo[0].sql },
+      columns: mappedColumns,
       indexes,
       foreignKeys
     };
@@ -368,10 +261,9 @@ class SchemaIntrospector {
    */
   async tableExists(tableName) {
     const result = await Database.query(`
-      SELECT COUNT(*) as count 
-      FROM INFORMATION_SCHEMA.TABLES 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-    `, [this.dbName, tableName]);
+      SELECT COUNT(*) as count FROM sqlite_master 
+      WHERE type = 'table' AND name = ?
+    `, [tableName]);
     
     return result[0].count > 0;
   }
@@ -380,59 +272,53 @@ class SchemaIntrospector {
    * Check if a column exists in a table
    */
   async columnExists(tableName, columnName) {
-    const result = await Database.query(`
-      SELECT COUNT(*) as count 
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?
-    `, [this.dbName, tableName, columnName]);
-    
-    return result[0].count > 0;
+    const columns = await Database.query(`PRAGMA table_info("${tableName}")`);
+    return columns.some(col => col.name === columnName);
   }
 
   /**
    * Check if an index exists
    */
   async indexExists(tableName, indexName) {
-    const result = await Database.query(`
-      SELECT COUNT(*) as count 
-      FROM INFORMATION_SCHEMA.STATISTICS 
-      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?
-    `, [this.dbName, tableName, indexName]);
-    
-    return result[0].count > 0;
+    const indexes = await Database.query(`PRAGMA index_list("${tableName}")`);
+    return indexes.some(idx => idx.name === indexName);
   }
 
   /**
    * Get table row count
    */
   async getTableRowCount(tableName) {
-    const result = await Database.query(`SELECT COUNT(*) as count FROM \`${tableName}\``);
+    const result = await Database.query(`SELECT COUNT(*) as count FROM "${tableName}"`);
     return result[0].count;
   }
 
   /**
-   * Generate CREATE TABLE statement for a table
+   * Get the CREATE TABLE statement for a table
    */
   async getCreateTableStatement(tableName) {
-    const result = await Database.query(`SHOW CREATE TABLE \`${tableName}\``);
-    return result[0]['Create Table'];
+    const result = await Database.query(`
+      SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?
+    `, [tableName]);
+    return result.length > 0 ? result[0].sql : null;
   }
 
   /**
    * Get database size information
    */
   async getDatabaseSize() {
-    const result = await Database.query(`
-      SELECT 
-        SUM(DATA_LENGTH + INDEX_LENGTH) as totalSize,
-        SUM(DATA_LENGTH) as dataSize,
-        SUM(INDEX_LENGTH) as indexSize,
-        COUNT(*) as tableCount
-      FROM INFORMATION_SCHEMA.TABLES 
-      WHERE TABLE_SCHEMA = ?
-    `, [this.dbName]);
+    const pageCount = await Database.query('PRAGMA page_count');
+    const pageSize = await Database.query('PRAGMA page_size');
+    const count = pageCount[0]?.page_count || 0;
+    const size = pageSize[0]?.page_size || 0;
+    const totalSize = count * size;
+    const tables = await this.getAllTables();
 
-    return result[0];
+    return {
+      totalSize,
+      dataSize: totalSize,
+      indexSize: 0,
+      tableCount: tables.length
+    };
   }
 }
 

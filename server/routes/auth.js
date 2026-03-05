@@ -12,24 +12,20 @@ const { verifyToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Environment flags
 const isDev = process.env.NODE_ENV === 'development';
 const devBypassEnabled = process.env.AUTH_DEV_BYPASS === 'true';
 
-// Root auth endpoint - provides basic auth status
 router.get('/', (req, res) => {
-  // External services availability (Crazytel for SMS, Brevo for Email)
   const externalServices = {
     crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
     brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
   };
-
   const hasExternalServices = externalServices.brevo || externalServices.crazytel;
 
   const payload = {
     message: 'Authentication service is running',
     status: hasExternalServices ? 'full' : 'limited',
-    externalServices: externalServices,
+    externalServices,
     endpoints: {
       'request-code': hasExternalServices ? 'POST - Request one-time code' : 'POST - Disabled (no external services)',
       'verify-code': hasExternalServices ? 'POST - Verify one-time code' : 'POST - Disabled (no external services)',
@@ -42,45 +38,59 @@ router.get('/', (req, res) => {
   };
 
   if (isDev) {
-    if (devBypassEnabled) {
-      payload.development = {
-        note: 'Development bypass is ENABLED: use dev@church.local with code 000000',
-        devUser: 'dev@church.local',
-        devCode: '000000'
-      };
-    } else {
-      payload.development = {
-        note: 'Development bypass is DISABLED. Full OTC flow required.'
-      };
-    }
+    payload.development = devBypassEnabled
+      ? { note: 'Development bypass is ENABLED: use dev@church.local with code 000000', devUser: 'dev@church.local', devCode: '000000' }
+      : { note: 'Development bypass is DISABLED. Full OTC flow required.' };
   }
 
   res.json(payload);
 });
 
-// Rate limiting for auth endpoints - enabled in all environments
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'development' ? 20 : 5, // More lenient in development
+  windowMs: 15 * 60 * 1000,
+  max: isDev ? 20 : 5,
   message: { error: 'Too many authentication attempts, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip successful requests to avoid penalizing normal usage
   skipSuccessfulRequests: true
 });
 
-// Rate limiting for OTC requests - enabled in all environments
 const otcLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: process.env.NODE_ENV === 'development' ? 30 : 10, // More lenient in development
+  windowMs: 60 * 1000,
+  max: isDev ? 30 : 10,
   message: { error: 'Please wait before requesting another code.' },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip successful requests to avoid penalizing normal usage
   skipSuccessfulRequests: true
 });
 
-// Request One-Time Code (supports both email and SMS)
+async function findUserByContact(contact) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const isEmail = emailRegex.test(contact);
+
+  let normalizedContact = contact;
+  if (!isEmail) {
+    const countryCode = await getChurchCountry();
+    normalizedContact = getInternationalFormat(contact, countryCode) || contact;
+  }
+
+  const lookup = isEmail
+    ? Database.lookupChurchByEmail(contact)
+    : Database.lookupChurchByMobile(normalizedContact);
+
+  if (!lookup) return { users: [], isEmail, normalizedContact, churchId: null };
+
+  const churchId = lookup.church_id;
+  const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
+  const users = await Database.queryForChurch(
+    churchId,
+    `SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE ${whereClause}`,
+    [isEmail ? contact : normalizedContact]
+  );
+
+  return { users, isEmail, normalizedContact, churchId };
+}
+
 router.post('/request-code',
   otcLimiter,
   [
@@ -89,20 +99,11 @@ router.post('/request-code',
       .notEmpty()
       .withMessage('Contact information is required')
       .custom(async (value) => {
-        // Check if it's a valid email
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        const isEmail = emailRegex.test(value);
-        
-        if (isEmail) {
-          return true;
-        }
-        
-        // Check if it's a valid phone number for the church's country
+        if (emailRegex.test(value)) return true;
         try {
           const countryCode = await getChurchCountry();
-          const isPhone = validatePhoneNumber(value, countryCode);
-          
-          if (!isPhone) {
+          if (!validatePhoneNumber(value, countryCode)) {
             throw new Error(`Please provide a valid email address or phone number for ${countryCode}`);
           }
           return true;
@@ -119,88 +120,60 @@ router.post('/request-code',
       }
 
       const { contact } = req.body;
-      
-      // Determine if contact is email or phone
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const isEmail = emailRegex.test(contact);
       const contactType = isEmail ? 'email' : 'sms';
-      
-      // Normalize contact information
+
       let normalizedContact = contact;
       if (!isEmail) {
-        // Get church country for intelligent phone number parsing
         const countryCode = await getChurchCountry();
         const internationalFormat = getInternationalFormat(contact, countryCode);
-        
         if (!internationalFormat) {
-          return res.status(400).json({ 
-            error: `Invalid phone number format for ${countryCode}. Please check your number and try again.` 
-          });
+          return res.status(400).json({ error: `Invalid phone number format for ${countryCode}. Please check your number and try again.` });
         }
-        
         normalizedContact = internationalFormat;
       }
 
-      // Check if user exists and is active
-      const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
-      let users = await Database.query(
-        `SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE ${whereClause}`,
-        [isEmail ? contact : normalizedContact]
-      );
+      let { users, churchId } = await findUserByContact(isEmail ? contact : normalizedContact);
 
       if (users.length === 0) {
-        // Development mode: Auto-create dev user if requesting code for dev@church.local (when enabled)
         if (isDev && devBypassEnabled && contact === 'dev@church.local') {
           console.log('🔧 Development mode: Auto-creating dev user for dev@church.local');
-          
           try {
-            // Use existing church_id from church_settings if available
-            const existingSettings = await Database.query(
-              'SELECT church_id FROM church_settings WHERE onboarding_completed = 1 LIMIT 1'
-            );
-            
-            let churchId;
-            if (existingSettings.length > 0) {
-              churchId = existingSettings[0].church_id;
-              console.log('✅ Using existing church_id:', churchId);
+            let devChurchId = 'devch1';
+            const churches = Database.listChurches();
+            if (churches.length > 0) {
+              devChurchId = churches[0].church_id;
+              console.log('✅ Using existing church:', devChurchId);
             } else {
-              // Generate a simple church_id for development
-              churchId = 'devch1';
-              console.log('🆕 Using simple church_id:', churchId);
+              Database.ensureChurch(devChurchId, 'Development Church');
+              await Database.setChurchContext(devChurchId, async () => {
+                await Database.query(
+                  `INSERT OR IGNORE INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed, church_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                  ['Development Church', 'AU', 'Australia/Sydney', 'Let My People Grow', 'dev@church.local', 1, devChurchId]
+                );
+              });
             }
-            
-            // Create development admin user
-            const result = await Database.query(`
-              INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed, church_id)
-              VALUES (?, 'admin', 'Development', 'Admin', true, true, ?)
-            `, ['dev@church.local', churchId]);
-            
-            // Set up church settings to bypass onboarding (only if they don't exist)
-            if (existingSettings.length === 0) {
-              await Database.query(`
-                INSERT INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed, church_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-              `, [
-                'Development Church',
-                'AU',
-                'Australia/Sydney',
-                'Let My People Grow',
-                'dev@church.local',
-                true,
-                churchId
-              ]);
-            }
-            
-            console.log('✅ Development user and church settings created');
-            
-            // Re-query for the newly created user
-            const newUsers = await Database.query(
+
+            await Database.setChurchContext(devChurchId, async () => {
+              await Database.query(
+                `INSERT INTO users (email, role, first_name, last_name, is_active, first_login_completed, church_id)
+                 VALUES (?, 'admin', 'Development', 'Admin', 1, 1, ?)`,
+                ['dev@church.local', devChurchId]
+              );
+            });
+
+            const newUsers = await Database.queryForChurch(
+              devChurchId,
               'SELECT id, email, mobile_number, primary_contact_method, role, is_active, church_id FROM users WHERE email = ?',
               ['dev@church.local']
             );
-            
+
             if (newUsers.length > 0) {
               users = newUsers;
+              churchId = devChurchId;
+              Database.registerUserLookup(newUsers[0].id, 'dev@church.local', null, devChurchId);
             } else {
               throw new Error('Failed to create development user');
             }
@@ -219,12 +192,9 @@ router.post('/request-code',
         return res.status(403).json({ error: 'User account is deactivated.' });
       }
 
-      // Use the user's preferred contact method if available
       let finalContactMethod = contactType;
       let finalContact = normalizedContact;
-      
-      // Do NOT override when the user initiated an SMS login (phone number provided)
-      // Only consider overriding when the user initiated an email login
+
       if (contactType === 'email' && user.email && user.mobile_number && user.primary_contact_method !== contactType) {
         if (user.primary_contact_method === 'email') {
           finalContactMethod = 'email';
@@ -235,61 +205,42 @@ router.post('/request-code',
         }
       }
 
-      // Cooldown check disabled for development/testing
-      // const cooldownSeconds = parseInt(process.env.OTC_RESEND_COOLDOWN_SECONDS) || 60;
-      // const recentCodes = await Database.query(`
-      //   SELECT id FROM otc_codes 
-      //   WHERE contact_identifier = ? AND contact_type = ? AND used = false 
-      //   AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)
-      // `, [finalContact, finalContactMethod, cooldownSeconds]);
-
-      // if (recentCodes.length > 0) {
-      //   return res.status(429).json({ 
-      //     error: `Please wait ${cooldownSeconds} seconds before requesting a new code.`,
-      //     cooldownSeconds 
-      //   });
-      // }
-
-      // Clean up expired codes
-      await Database.query(
-        'DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = true OR expires_at < NOW())',
+      await Database.queryForChurch(
+        churchId || user.church_id,
+        "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
         [finalContact, finalContactMethod]
       );
 
-      // Generate new OTC
       const code = generateOTC();
       const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
 
-      // Store OTC in database
-      await Database.query(`
-        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id)
-        VALUES (?, ?, ?, ?, ?)
-      `, [finalContact, finalContactMethod, code, expiresAt, user.church_id]);
+      await Database.queryForChurch(
+        churchId || user.church_id,
+        `INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id) VALUES (?, ?, ?, ?, ?)`,
+        [finalContact, finalContactMethod, code, expiresAt, user.church_id]
+      );
 
-      // Check if external services are available
       const externalServices = {
         crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
         brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
       };
 
-      const hasRequiredService = (finalContactMethod === 'email' && externalServices.brevo) || 
+      const hasRequiredService = (finalContactMethod === 'email' && externalServices.brevo) ||
                                 (finalContactMethod === 'sms' && externalServices.crazytel);
 
       if (!hasRequiredService) {
-        // In development mode, we can still proceed without external services
         if (process.env.NODE_ENV === 'development') {
           console.log(`⚠️  Development mode: ${finalContactMethod.toUpperCase()} service not configured, but proceeding with code generation`);
         } else {
           return res.status(503).json({
             error: 'Service temporarily unavailable',
             message: `${finalContactMethod.toUpperCase()} service is not configured`,
-            externalServices: externalServices,
+            externalServices,
             note: 'Configure external services to enable authentication'
           });
         }
       }
 
-      // Send code via appropriate method (don't wait for it to complete)
       setImmediate(async () => {
         try {
           if (finalContactMethod === 'email') {
@@ -313,7 +264,6 @@ router.post('/request-code',
         }
       });
 
-      // Mask the contact information for response
       let maskedContact;
       if (finalContactMethod === 'email') {
         maskedContact = finalContact.replace(/(.{2})(.*)(@.*)/, '$1***$3');
@@ -322,14 +272,13 @@ router.post('/request-code',
         maskedContact = maskPhoneNumber(finalContact, countryCode);
       }
 
-      const responsePayload = { 
+      const responsePayload = {
         message: `Verification code sent to your ${finalContactMethod === 'email' ? 'email address' : 'phone number'}.`,
         contact: maskedContact,
         contactType: finalContactMethod,
         expiresIn: parseInt(process.env.OTC_EXPIRE_MINUTES) || 10
       };
       if (isDev && devBypassEnabled) {
-        // Return the code in development to simplify testing
         responsePayload.devCode = code;
       }
       res.json(responsePayload);
@@ -341,19 +290,11 @@ router.post('/request-code',
   }
 );
 
-// Verify One-Time Code and login (supports both email and SMS)
 router.post('/verify-code',
   authLimiter,
-  // authLimiter, // Temporarily disabled for development
   [
-    body('contact')
-      .trim()
-      .notEmpty()
-      .withMessage('Contact information is required'),
-    body('code')
-      .isLength({ min: 6, max: 6 })
-      .isNumeric()
-      .withMessage('Code must be 6 digits')
+    body('contact').trim().notEmpty().withMessage('Contact information is required'),
+    body('code').isLength({ min: 6, max: 6 }).isNumeric().withMessage('Code must be 6 digits')
   ],
   async (req, res) => {
     try {
@@ -363,71 +304,59 @@ router.post('/verify-code',
       }
 
       const { contact, code } = req.body;
-
-      // Determine if contact is email or phone and normalize
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const isEmail = emailRegex.test(contact);
       const contactType = isEmail ? 'email' : 'sms';
-      
+
       let normalizedContact = contact;
       if (!isEmail) {
-        // Get church country for intelligent phone number parsing
         const countryCode = await getChurchCountry();
         const internationalFormat = getInternationalFormat(contact, countryCode);
-        
         if (!internationalFormat) {
           return res.status(401).json({ error: 'Invalid phone number format' });
         }
-        
         normalizedContact = internationalFormat;
       }
 
-      // Get user by contact method
-      const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
-      const users = await Database.query(
-        `SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE ${whereClause}`,
-        [isEmail ? contact : normalizedContact]
-      );
+      const searchResult = await findUserByContact(isEmail ? contact : normalizedContact);
+      const { users, churchId } = searchResult;
 
       if (users.length === 0) {
         return res.status(404).json({ error: 'No user found with this email address.', code: 'USER_NOT_FOUND' });
       }
-      
       if (!users[0].is_active) {
         return res.status(401).json({ error: 'Account is deactivated. Please contact your administrator.' });
       }
 
       const user = users[0];
+      const userChurchId = churchId || user.church_id;
 
-      // Development bypass: Accept "000000" for dev@church.local in development mode (only when enabled)
       let validOtcRecord = null;
-      if (isDev && devBypassEnabled &&
-          user.email === 'dev@church.local' && 
-          code === '000000') {
+      if (isDev && devBypassEnabled && user.email === 'dev@church.local' && code === '000000') {
         console.log('🔓 Development bypass: Accepting "000000" for dev@church.local');
         validOtcRecord = { id: 'dev-bypass' };
       } else {
-        // Find the most recent valid OTC for this contact
-        const otcRecords = await Database.query(`
-          SELECT id, contact_identifier, contact_type FROM otc_codes 
-          WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = false AND expires_at > NOW()
-          ORDER BY created_at DESC LIMIT 1
-        `, [normalizedContact, contactType, code]);
+        const otcRecords = await Database.queryForChurch(
+          userChurchId,
+          `SELECT id, contact_identifier, contact_type FROM otc_codes
+           WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = 0 AND expires_at > datetime('now')
+           ORDER BY created_at DESC LIMIT 1`,
+          [normalizedContact, contactType, code]
+        );
 
-        // Also check if they have alternative contact methods with valid codes
         if (otcRecords.length > 0) {
           validOtcRecord = otcRecords[0];
         } else if (user.email && user.mobile_number) {
-          // Check alternative contact method
           const altContactType = contactType === 'email' ? 'sms' : 'email';
           const altContact = contactType === 'email' ? user.mobile_number : user.email;
-          
-          const altOtcRecords = await Database.query(`
-            SELECT id, contact_identifier, contact_type FROM otc_codes 
-            WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = false AND expires_at > NOW()
-            ORDER BY created_at DESC LIMIT 1
-          `, [altContact, altContactType, code]);
-          
+
+          const altOtcRecords = await Database.queryForChurch(
+            userChurchId,
+            `SELECT id, contact_identifier, contact_type FROM otc_codes
+             WHERE contact_identifier = ? AND contact_type = ? AND code = ? AND used = 0 AND expires_at > datetime('now')
+             ORDER BY created_at DESC LIMIT 1`,
+            [altContact, altContactType, code]
+          );
           if (altOtcRecords.length > 0) {
             validOtcRecord = altOtcRecords[0];
           }
@@ -438,117 +367,91 @@ router.post('/verify-code',
         return res.status(401).json({ error: 'Invalid or expired verification code.' });
       }
 
-      // Mark code as used (skip for development bypass)
       if (validOtcRecord.id !== 'dev-bypass') {
-        await Database.query(
-          'UPDATE otc_codes SET used = true WHERE id = ?',
-          [validOtcRecord.id]
-        );
+        await Database.queryForChurch(userChurchId, 'UPDATE otc_codes SET used = 1 WHERE id = ?', [validOtcRecord.id]);
       }
 
-      // Clean up old codes for this user's contact methods
       const cleanupTasks = [];
       if (user.email) {
-        cleanupTasks.push(
-          Database.query(
-            'DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = true OR expires_at < NOW())',
-            [user.email, 'email']
-          )
-        );
+        cleanupTasks.push(Database.queryForChurch(
+          userChurchId,
+          "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
+          [user.email, 'email']
+        ));
       }
       if (user.mobile_number) {
-        cleanupTasks.push(
-          Database.query(
-            'DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = true OR expires_at < NOW())',
-            [user.mobile_number, 'sms']
-          )
-        );
+        cleanupTasks.push(Database.queryForChurch(
+          userChurchId,
+          "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
+          [user.mobile_number, 'sms']
+        ));
       }
       await Promise.all(cleanupTasks);
 
-      // Generate JWT token
+      const fullUsers = await Database.queryForChurch(
+        userChurchId,
+        'SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE id = ?',
+        [user.id]
+      );
+      const fullUser = fullUsers[0];
+
       const token = jwt.sign(
-        { 
-          userId: user.id, 
-          email: user.email, 
-          mobile: user.mobile_number,
-          role: user.role,
-          churchId: user.church_id
-        },
+        { userId: fullUser.id, email: fullUser.email, mobile: fullUser.mobile_number, role: fullUser.role, churchId: fullUser.church_id },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRE || '30d' }
       );
 
-      // Set HTTP-only cookie with the token
       const cookieOptions = {
         httpOnly: true,
-        secure: req.secure || process.env.NODE_ENV === 'production', // Use secure if request is HTTPS or in production
-        sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
+        secure: req.secure || process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
         path: '/'
       };
-      
-      // Add domain if specified in environment
-      if (process.env.COOKIE_DOMAIN) {
-        cookieOptions.domain = process.env.COOKIE_DOMAIN;
-      }
-      
+      if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
       res.cookie('authToken', token, cookieOptions);
 
-      // Update last login timestamp
       try {
-        await Database.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+        await Database.queryForChurch(userChurchId, "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", [fullUser.id]);
       } catch (e) {
         console.warn('⚠️  Failed to update last_login_at:', e.message);
       }
 
-      // Get user's gathering assignments
-      const assignments = await Database.query(`
-        SELECT gt.id, gt.name, gt.description
-        FROM user_gathering_assignments uga
-        JOIN gathering_types gt ON uga.gathering_type_id = gt.id
-        WHERE uga.user_id = ? AND gt.is_active = true
-        ORDER BY gt.name
-      `, [user.id]);
+      const assignments = await Database.queryForChurch(
+        userChurchId,
+        `SELECT gt.id, gt.name, gt.description
+         FROM user_gathering_assignments uga
+         JOIN gathering_types gt ON uga.gathering_type_id = gt.id
+         WHERE uga.user_id = ? AND gt.is_active = 1
+         ORDER BY gt.name`,
+        [fullUser.id]
+      );
 
-      // Convert BigInt IDs to regular numbers
-      const assignmentsWithNumbers = assignments.map(assignment => ({
-        ...assignment,
-        id: Number(assignment.id)
-      }));
+      const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
 
-      // Mark first login as completed if this is their first time
-      // Only mark as completed if user has gathering assignments or is admin
-      if (!user.first_login_completed) {
-        const hasAssignments = assignments.length > 0;
-        const isAdmin = user.role === 'admin';
-        
-        if (hasAssignments || isAdmin) {
-        await Database.query(
-          'UPDATE users SET first_login_completed = true WHERE id = ?',
-          [user.id]
-        );
-      }
+      if (!fullUser.first_login_completed) {
+        if (assignments.length > 0 || fullUser.role === 'admin') {
+          await Database.queryForChurch(userChurchId, 'UPDATE users SET first_login_completed = 1 WHERE id = ?', [fullUser.id]);
+        }
       }
 
-      // Determine if this is first login based on assignments and role
-      const hasAssignments = assignments.length > 0;
-      const isAdmin = user.role === 'admin';
-      const isFirstLogin = !user.first_login_completed && (!hasAssignments || !isAdmin);
+      const isFirstLogin = !fullUser.first_login_completed && (assignments.length === 0 || fullUser.role !== 'admin');
+
+      Database.registerUserLookup(fullUser.id, fullUser.email, fullUser.mobile_number, fullUser.church_id);
 
       res.json({
         message: 'Login successful',
         user: {
-          id: user.id,
-          email: user.email,
-          mobileNumber: user.mobile_number,
-          primaryContactMethod: user.primary_contact_method,
-          role: user.role,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          church_id: user.church_id,
-          isFirstLogin: isFirstLogin,
-          defaultGatheringId: user.default_gathering_id,
+          id: fullUser.id,
+          email: fullUser.email,
+          mobileNumber: fullUser.mobile_number,
+          primaryContactMethod: fullUser.primary_contact_method,
+          role: fullUser.role,
+          firstName: fullUser.first_name,
+          lastName: fullUser.last_name,
+          church_id: fullUser.church_id,
+          isFirstLogin,
+          defaultGatheringId: fullUser.default_gathering_id,
           gatheringAssignments: assignmentsWithNumbers
         }
       });
@@ -560,29 +463,22 @@ router.post('/verify-code',
   }
 );
 
-// Get current user info
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const user = req.user;
-    
-    // Get user's gathering assignments
-    const assignments = await Database.query(`
-      SELECT gt.id, gt.name, gt.description
-      FROM user_gathering_assignments uga
-      JOIN gathering_types gt ON uga.gathering_type_id = gt.id
-      WHERE uga.user_id = ? AND gt.is_active = true
-      ORDER BY gt.name
-    `, [user.id]);
 
-    // Convert BigInt IDs to regular numbers
-    const assignmentsWithNumbers = assignments.map(assignment => ({
-      ...assignment,
-      id: Number(assignment.id)
-    }));
+    const assignments = await Database.query(
+      `SELECT gt.id, gt.name, gt.description
+       FROM user_gathering_assignments uga
+       JOIN gathering_types gt ON uga.gathering_type_id = gt.id
+       WHERE uga.user_id = ? AND gt.is_active = 1
+       ORDER BY gt.name`,
+      [user.id]
+    );
+    const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
 
-    // Get unread notifications count
     const notificationCount = await Database.query(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = false',
+      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0',
       [user.id]
     );
 
@@ -602,17 +498,15 @@ router.get('/me', verifyToken, async (req, res) => {
         unreadNotifications: Number(notificationCount[0].count)
       }
     });
-
   } catch (error) {
     console.error('Get user info error:', error);
     res.status(500).json({ error: 'Failed to get user information.' });
   }
 });
 
-// Refresh token - additional rate limiting for JWT refresh attacks
 const refreshLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: process.env.NODE_ENV === 'development' ? 50 : 10, // Stricter limits for refresh tokens
+  windowMs: 5 * 60 * 1000,
+  max: isDev ? 50 : 10,
   message: { error: 'Too many token refresh attempts, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -622,98 +516,55 @@ const refreshLimiter = rateLimit({
 router.post('/refresh', verifyToken, authLimiter, refreshLimiter, async (req, res) => {
   try {
     const user = req.user;
-    console.log(`🔄 Token refresh requested for user: ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'} (ID: ${user.id})`);
-    
-    // Validate user is still active
     if (!user.is_active) {
-      console.log(`❌ Token refresh denied - user ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'} is inactive`);
-      return res.status(401).json({ 
-        error: 'User account is inactive.',
-        code: 'USER_INACTIVE'
-      });
+      return res.status(401).json({ error: 'User account is inactive.', code: 'USER_INACTIVE' });
     }
-    
-    // Generate new token
+
     const token = jwt.sign(
-      { 
-        userId: user.id, 
-        email: user.email, 
-        role: user.role,
-        churchId: user.church_id
-      },
+      { userId: user.id, email: user.email, role: user.role, churchId: user.church_id },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
 
-    // Set new HTTP-only cookie with the refreshed token
     const cookieOptions = {
       httpOnly: true,
       secure: req.secure || process.env.NODE_ENV === 'production',
-      sameSite: 'lax', // Always use 'lax' for better iOS Safari compatibility
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in milliseconds
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
       path: '/'
     };
-    
-    // Add domain if specified in environment
-    if (process.env.COOKIE_DOMAIN) {
-      cookieOptions.domain = process.env.COOKIE_DOMAIN;
-    }
-    
+    if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
     res.cookie('authToken', token, cookieOptions);
-    console.log(`✅ Token refreshed successfully for user: ${user.email ? user.email.substring(0, 3) + '***' : 'unknown'}`);
-    res.json({ 
-      message: 'Token refreshed successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        firstName: user.first_name,
-        lastName: user.last_name
-      }
-    });
 
+    res.json({
+      message: 'Token refreshed successfully',
+      user: { id: user.id, email: user.email, role: user.role, firstName: user.first_name, lastName: user.last_name }
+    });
   } catch (error) {
     console.error('💥 Refresh token error:', error);
-    res.status(500).json({ 
-      error: 'Failed to refresh token.',
-      code: 'REFRESH_FAILED'
-    });
+    res.status(500).json({ error: 'Failed to refresh token.', code: 'REFRESH_FAILED' });
   }
 });
 
-// Set default gathering
-router.post('/set-default-gathering', 
+router.post('/set-default-gathering',
   verifyToken,
-  [
-    body('gatheringId').isInt().withMessage('Valid gathering ID is required')
-  ],
+  [body('gatheringId').isInt().withMessage('Valid gathering ID is required')],
   async (req, res) => {
     try {
       const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
       const { gatheringId } = req.body;
-
-      // Verify user has access to this gathering
       const assignments = await Database.query(
         'SELECT id FROM user_gathering_assignments WHERE user_id = ? AND gathering_type_id = ?',
         [req.user.id, gatheringId]
       );
-
       if (assignments.length === 0) {
         return res.status(403).json({ error: 'You do not have access to this gathering' });
       }
 
-      // Update user's default gathering
-      await Database.query(
-        'UPDATE users SET default_gathering_id = ? WHERE id = ?',
-        [gatheringId, req.user.id]
-      );
-
+      await Database.query('UPDATE users SET default_gathering_id = ? WHERE id = ?', [gatheringId, req.user.id]);
       res.json({ message: 'Default gathering updated successfully' });
-
     } catch (error) {
       console.error('Set default gathering error:', error);
       res.status(500).json({ error: 'Failed to set default gathering' });
@@ -721,83 +572,59 @@ router.post('/set-default-gathering',
   }
 );
 
-// Register new user
-router.post('/register', 
+router.post('/register',
   [
-    body('email')
-      .isEmail()
-      .withMessage('Valid email address is required'),
-    body('firstName')
-      .trim()
-      .isLength({ min: 1, max: 100 })
-      .withMessage('First name is required (max 100 characters)'),
-    body('lastName')
-      .trim()
-      .isLength({ min: 1, max: 100 })
-      .withMessage('Last name is required (max 100 characters)'),
-    body('role')
-      .optional()
-      .isIn(['admin', 'attendance_taker', 'coordinator'])
-      .withMessage('Role must be either admin, attendance_taker, or coordinator')
+    body('email').isEmail().withMessage('Valid email address is required'),
+    body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name is required (max 100 characters)'),
+    body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name is required (max 100 characters)'),
+    body('role').optional().isIn(['admin', 'attendance_taker', 'coordinator']).withMessage('Role must be either admin, attendance_taker, or coordinator')
   ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
       const { email, firstName, lastName, role, churchName } = req.body;
-      
-      // Default to admin role if not specified
       const userRole = role || 'admin';
 
-      // Check if user already exists
-      const existingUser = await Database.query(
-        'SELECT id FROM users WHERE email = ?',
-        [email]
-      );
-
-      if (existingUser.length > 0) {
+      const existingLookup = Database.lookupChurchByEmail(email);
+      if (existingLookup) {
         return res.status(409).json({ error: 'A user with this email address already exists.' });
       }
 
-      // Get or create church ID for new user (requires church name)
       const { getOrCreateChurchId } = require('../utils/churchIdGenerator');
       const churchId = await getOrCreateChurchId(churchName || 'New Church');
-      
-      // Create new user
-      const result = await Database.query(`
-        INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed, church_id)
-        VALUES (?, ?, ?, ?, true, false, ?)
-      `, [email, firstName, lastName, userRole, churchId]);
 
-      const userId = result.insertId;
+      let userId;
+      await Database.setChurchContext(churchId, async () => {
+        const result = await Database.query(
+          `INSERT INTO users (email, first_name, last_name, role, is_active, first_login_completed, church_id)
+           VALUES (?, ?, ?, ?, 1, 0, ?)`,
+          [email, firstName, lastName, userRole, churchId]
+        );
+        userId = result.insertId;
+      });
 
-      // Generate OTC for first login
+      Database.registerUserLookup(userId, email, null, churchId);
+
       const code = generateOTC();
       const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
 
-      // Store OTC in database
-      await Database.query(`
-        INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id)
-        VALUES (?, 'email', ?, ?, ?)
-      `, [email, code, expiresAt, churchId]);
+      await Database.queryForChurch(
+        churchId,
+        `INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id) VALUES (?, 'email', ?, ?, ?)`,
+        [email, code, expiresAt, churchId]
+      );
 
-      // Send welcome email with OTC
       setImmediate(async () => {
-        try {
-          await sendOTCEmail(email, code);
-        } catch (error) {
-          console.error('Failed to send welcome email:', error);
-        }
+        try { await sendOTCEmail(email, code); }
+        catch (error) { console.error('Failed to send welcome email:', error); }
       });
 
-      res.status(201).json({ 
+      res.status(201).json({
         message: 'Account created successfully. Please check your email for a verification code to complete your first login.',
         email: email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
       });
-
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: 'Failed to create account.' });
@@ -805,28 +632,20 @@ router.post('/register',
   }
 );
 
-// Check if any users exist besides the default admin
 router.get('/check-users', async (req, res) => {
   try {
-    // Count all active users
-    const totalUsers = await Database.query(
-      'SELECT COUNT(*) as count FROM users WHERE is_active = true'
-    );
-    
-    // Count admin users
-    const adminUsers = await Database.query(
-      'SELECT COUNT(*) as count FROM users WHERE role = "admin" AND is_active = true'
-    );
-    
-    // Count non-admin users (excluding the default admin)
-    const nonAdminUsers = await Database.query(
-      'SELECT COUNT(*) as count FROM users WHERE role != "admin" AND is_active = true'
-    );
-    
-    const totalCount = Number(totalUsers[0].count);
-    const adminCount = Number(adminUsers[0].count);
-    const nonAdminCount = Number(nonAdminUsers[0].count);
-    
+    const churches = Database.listChurches();
+    let totalCount = 0, adminCount = 0, nonAdminCount = 0;
+
+    for (const church of churches) {
+      const total = await Database.queryForChurch(church.church_id, 'SELECT COUNT(*) as count FROM users WHERE is_active = 1');
+      const admins = await Database.queryForChurch(church.church_id, "SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1");
+      const nonAdmins = await Database.queryForChurch(church.church_id, "SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND is_active = 1");
+      totalCount += Number(total[0].count);
+      adminCount += Number(admins[0].count);
+      nonAdminCount += Number(nonAdmins[0].count);
+    }
+
     res.json({
       hasUsers: totalCount > 0,
       hasNonAdminUsers: nonAdminCount > 0,
@@ -840,60 +659,33 @@ router.get('/check-users', async (req, res) => {
   }
 });
 
-// Logout - clear the auth cookie
 router.post('/logout', verifyToken, (req, res) => {
-  res.clearCookie('authToken', {
-    httpOnly: true,
-    secure: req.secure || process.env.NODE_ENV === 'production',
-    sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
-    path: '/'
-  });
+  res.clearCookie('authToken', { httpOnly: true, secure: req.secure || process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/' });
   res.json({ message: 'Logged out successfully' });
 });
 
-// Clear expired token route - helps users with expired tokens
 router.post('/clear-expired-token', (req, res) => {
   try {
-    // Clear the auth cookie
-    res.clearCookie('authToken', {
-      httpOnly: true,
-      secure: req.secure || process.env.NODE_ENV === 'production',
-      sameSite: 'lax', // Use 'lax' for better iOS Safari compatibility
-      path: '/'
-    });
-    
-    res.json({ 
-      message: 'Expired token cleared. Please log in again.',
-      code: 'TOKEN_CLEARED'
-    });
+    res.clearCookie('authToken', { httpOnly: true, secure: req.secure || process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/' });
+    res.json({ message: 'Expired token cleared. Please log in again.', code: 'TOKEN_CLEARED' });
   } catch (error) {
     console.error('Clear expired token error:', error);
     res.status(500).json({ error: 'Failed to clear token.' });
   }
 });
 
-// Debug endpoint to check cookie status
 router.get('/debug-cookies', (req, res) => {
-  const cookies = req.cookies;
-  const headers = req.headers;
-  
   res.json({
-    cookies: cookies,
-    hasAuthToken: !!cookies.authToken,
-    userAgent: headers['user-agent'],
-    isIOSSafari: /iPad|iPhone|iPod/.test(headers['user-agent']) && 
-                 /Safari/.test(headers['user-agent']) && 
-                 !/Chrome/.test(headers['user-agent']),
-    cookieHeader: headers.cookie
+    cookies: req.cookies,
+    hasAuthToken: !!req.cookies.authToken,
+    userAgent: req.headers['user-agent'],
+    isIOSSafari: /iPad|iPhone|iPod/.test(req.headers['user-agent']) && /Safari/.test(req.headers['user-agent']) && !/Chrome/.test(req.headers['user-agent']),
+    cookieHeader: req.headers.cookie
   });
 });
 
-// Server time sync endpoint for clock offset calculation
 router.get('/server-time', (req, res) => {
-  res.json({
-    serverTime: Date.now(),
-    iso: new Date().toISOString()
-  });
+  res.json({ serverTime: Date.now(), iso: new Date().toISOString() });
 });
 
-module.exports = router; 
+module.exports = router;

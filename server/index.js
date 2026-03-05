@@ -145,21 +145,7 @@ app.set('trust proxy', 1);
 
 // Validate required environment variables
 const validateEnvironment = () => {
-  const required = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    console.warn('⚠️  Missing environment variables:', missing.join(', '));
-    console.warn('Using default values where possible');
-  }
-  
-  // Set defaults for missing variables
-  if (!process.env.DB_HOST) process.env.DB_HOST = 'localhost';
-  if (!process.env.DB_USER) process.env.DB_USER = 'root';
-  if (!process.env.DB_PASSWORD) process.env.DB_PASSWORD = '';
-  if (!process.env.DB_NAME) process.env.DB_NAME = 'church_attendance';
   if (!process.env.JWT_SECRET) process.env.JWT_SECRET = 'default_jwt_secret_change_in_production';
-  
   console.log('✅ Environment validation completed');
 };
 

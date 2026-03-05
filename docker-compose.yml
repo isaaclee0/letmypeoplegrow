@@ -1,28 +1,6 @@
 version: '3.8'
 
 services:
-  # MariaDB Database
-  db:
-    image: mariadb:10.6
-    container_name: church_attendance_db
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: church_attendance
-      MYSQL_USER: church_user
-      MYSQL_PASSWORD: church_password
-    volumes:
-      - db_data:/var/lib/mysql
-      - ./server/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
-    command: --default-authentication-plugin=mysql_native_password
-    networks:
-      - app-network
-    healthcheck:
-      test: ["CMD", "mariadb", "-u", "church_user", "-pchurch_password", "-e", "SELECT 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # Node.js Backend Server
   server:
     build:
@@ -36,11 +14,7 @@ services:
       NODE_ENV: production
       PORT: 3001
       CLIENT_URL: http://localhost:3000
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: church_attendance
-      DB_USER: church_user
-      DB_PASSWORD: church_password
+      CHURCH_DATA_DIR: /app/data
       JWT_SECRET: your_secure_jwt_secret_change_this_in_production
       JWT_EXPIRE: 30d
       OTC_EXPIRE_MINUTES: 10
@@ -50,14 +24,11 @@ services:
       - "3001:3001"
     volumes:
       - ./server/uploads:/app/uploads
-    depends_on:
-      db:
-        condition: service_healthy
+      - server_data:/app/data
     networks:
       - app-network
 
   # React Frontend Client (also handles API/WebSocket proxying to server)
-  # NPM routes to this container directly on port 3000
   client:
     build:
       context: .
@@ -69,25 +40,6 @@ services:
     networks:
       - app-network
       - npm_proxy
-
-  # phpMyAdmin
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin:latest
-    container_name: church_attendance_phpmyadmin
-    restart: unless-stopped
-    environment:
-      PMA_HOST: db
-      PMA_PORT: 3306
-      PMA_USER: church_user
-      PMA_PASSWORD: church_password
-      MYSQL_ROOT_PASSWORD: root_password
-    ports:
-      - "8080:80"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - app-network
 
   # Internal Admin Panel (localhost only)
   admin:
@@ -102,17 +54,12 @@ services:
       NODE_ENV: production
       DOCKER_ENV: "true"
       ADMIN_PORT: 7777
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: church_attendance
-      DB_USER: church_user
-      DB_PASSWORD: church_password
+      CHURCH_DATA_DIR: /app/data
     ports:
       - "127.0.0.1:7777:7777"
     command: node admin/index.js
-    depends_on:
-      db:
-        condition: service_healthy
+    volumes:
+      - server_data:/app/data
     networks:
       - app-network
 
@@ -128,7 +75,7 @@ services:
   #   - In Advanced tab, add: proxy_read_timeout 86400; proxy_send_timeout 86400;
 
 volumes:
-  db_data:
+  server_data:
 
 networks:
   app-network:

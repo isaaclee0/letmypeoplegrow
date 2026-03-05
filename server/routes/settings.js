@@ -193,7 +193,7 @@ router.put('/elvanto-config', requireRole(['admin']), async (req, res) => {
         SET elvanto_client_id = ?,
             elvanto_client_secret = ?,
             elvanto_redirect_uri = ?,
-            updated_at = NOW()
+            updated_at = datetime('now')
         WHERE church_id = ?
       `, [clientId.trim(), clientSecret.trim(), redirectUri.trim(), req.user.church_id]);
     } else {
@@ -201,7 +201,7 @@ router.put('/elvanto-config', requireRole(['admin']), async (req, res) => {
         UPDATE church_settings
         SET elvanto_client_id = ?,
             elvanto_redirect_uri = ?,
-            updated_at = NOW()
+            updated_at = datetime('now')
         WHERE church_id = ?
       `, [clientId.trim(), redirectUri.trim(), req.user.church_id]);
     }
@@ -294,7 +294,7 @@ router.put('/location', requireRole(['admin']), async (req, res) => {
 
     await Database.query(`
       UPDATE church_settings
-      SET location_name = ?, location_lat = ?, location_lng = ?, updated_at = NOW()
+      SET location_name = ?, location_lat = ?, location_lng = ?, updated_at = datetime('now')
       WHERE church_id = ?
     `, [name.trim(), lat, lng, req.user.church_id]);
 

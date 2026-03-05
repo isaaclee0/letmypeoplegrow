@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Let My People Grow is a church attendance tracking and member management system with a React/TypeScript frontend, Node.js/Express backend, and MariaDB database. The application is fully containerized using Docker.
+Let My People Grow is a church attendance tracking and member management system with a React/TypeScript frontend, Node.js/Express backend, and per-church SQLite databases. The application is fully containerized using Docker.
 
 ## Development Commands
 
@@ -50,22 +50,18 @@ npm run admin      # Start admin panel (port 7777)
 
 ### Database Operations
 
-**Schema management:**
+**SQLite databases are created automatically** when the server starts or when a new church registers. No manual schema setup is needed.
+
+**Migrating from MariaDB:**
 ```bash
 cd server
-npm run init-db                  # Initialize database schema
-npm run schema:baseline          # Record current schema as baseline
-npm run schema:plan              # Generate migration plan from baseline
+DB_HOST=127.0.0.1 DB_PORT=3307 DB_USER=root DB_PASSWORD=root \
+  npm run migrate:mariadb
 ```
 
-**Database access:**
-```bash
-# Via Docker
-docker-compose -f docker-compose.dev.yml exec db mariadb -u church_user -pchurch_password church_attendance
-
-# Via phpMyAdmin (dev only)
-# http://localhost:8080
-```
+**Data location:**
+- `server/data/registry.sqlite` — church list and login routing
+- `server/data/churches/{church_id}.sqlite` — per-church data
 
 ### Adding Dependencies
 
@@ -129,10 +125,12 @@ The application uses a passwordless authentication system:
 
 ### Backend Architecture
 
-**Express + MariaDB:**
-- **Database**: MariaDB with connection pooling via `server/config/database.js`
+**Express + SQLite (per-church):**
+- **Database**: SQLite via `better-sqlite3` with per-church file isolation (`server/config/database.js`)
+- **Registry**: `registry.sqlite` maps emails/phones to church IDs for login routing
+- **Church context**: `AsyncLocalStorage` threads the church ID through middleware and route handlers
 - **Routes**: RESTful API organized by domain (`server/routes/`)
-- **Middleware**: Authentication, church isolation, security (Helmet, rate limiting)
+- **Middleware**: Authentication (sets church context), church isolation, security (Helmet, rate limiting)
 - **WebSocket**: Socket.io service for real-time updates (`server/services/websocket.js`)
 - **Logging**: Winston for structured logging to files and console
 
@@ -160,7 +158,8 @@ The application uses a passwordless authentication system:
 - `headcount_records` - Headcount data for headcount mode gatherings
 - `visitor_config` - Church-specific visitor thresholds
 
-**ALL tables include `church_id` for multi-tenancy isolation.**
+**Each church has its own SQLite file.** Tables retain `church_id` columns for query compatibility.
+Schema is defined in `server/config/schema.js`.
 
 ### Attendance System
 
@@ -257,23 +256,16 @@ Real-time updates for attendance tracking:
 
 ## Database Migrations
 
-The system uses a custom migration framework:
+Schema is defined in `server/config/schema.js`. New columns/tables should be added there. The schema is applied automatically when a church database is first created.
 
-1. **Baseline**: Record current schema state (`npm run schema:baseline`)
-2. **Plan**: Generate SQL migration from baseline (`npm run schema:plan`)
-3. **Review**: Review generated SQL in `server/scripts/migrations/`
-4. **Apply**: Manually apply SQL or use migration endpoints
-
-**Important**: Always test migrations on development database first. See `docs/DATABASE_MIGRATION_GUIDE_SIMPLIFIED.md` for details.
+For migrating from MariaDB, see `docs/MIGRATE_MARIADB_TO_SQLITE.md`.
 
 ## Docker Configuration
 
 **Services:**
 - `client` - React frontend (port 3000)
-- `server` - Node.js backend (port 3001)
-- `nginx` - Reverse proxy (port 80) - routes `/api` to server, `/` to client
-- `db` - MariaDB database (port 3307 mapped to 3306)
-- `phpmyadmin` - Database admin (port 8080, dev only)
+- `server` - Node.js backend (port 3001) — includes SQLite databases in `data/` volume
+- `nginx` - Reverse proxy (port 80, dev only) - routes `/api` to server, `/` to client
 - `admin` - Internal admin panel (port 7777, localhost only)
 
 **Environment files:**
@@ -282,7 +274,7 @@ The system uses a custom migration framework:
 - `docker-compose.yml` - Production configuration
 
 **Data persistence:**
-- Database: `db_data_dev` volume
+- SQLite databases: `server_data_dev` / `server_data` volume (mounted at `/app/data`)
 - Uploads: `server/uploads` directory mounted
 
 ## Admin Panel
@@ -295,13 +287,15 @@ Internal admin panel accessible at `http://localhost:7777` (dev only):
 
 ## Common Gotchas
 
-1. **Church ID Required**: When adding new database tables, ALWAYS include `church_id` column and filtering
-2. **Docker Rebuilds**: After adding npm dependencies, rebuild the Docker container
-3. **Token Cookies**: Authentication uses HTTP-only cookies, not localStorage or Authorization headers
-4. **WebSocket Rooms**: Always scope WebSocket events by church_id to prevent cross-church leaks
-5. **PWA Caching**: Static assets are cached; clear service worker cache when debugging frontend issues
-6. **Rate Limiting**: Be aware of rate limits when testing authentication flows
-7. **Service Worker**: Must be regenerated on build - run `npm run build`, not just `vite build`
+1. **Church Context Required**: All `Database.query()` calls require church context (set by `verifyToken` middleware via `AsyncLocalStorage`). For code outside the request chain (e.g., scripts, websockets), use `Database.queryForChurch(churchId, ...)` or `Database.setChurchContext(churchId, callback)`.
+2. **Schema Changes**: Add new tables/columns in `server/config/schema.js`. They are applied automatically when a church database is created.
+3. **SQLite SQL Differences**: The database layer auto-translates common MariaDB syntax (`NOW()`, `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE`, `DATE_FORMAT`, boolean literals). For new queries, use SQLite-compatible SQL.
+4. **Docker Rebuilds**: After adding npm dependencies, rebuild the Docker container
+5. **Token Cookies**: Authentication uses HTTP-only cookies, not localStorage or Authorization headers
+6. **WebSocket Rooms**: Always scope WebSocket events by church_id to prevent cross-church leaks
+7. **PWA Caching**: Static assets are cached; clear service worker cache when debugging frontend issues
+8. **Rate Limiting**: Be aware of rate limits when testing authentication flows
+9. **Service Worker**: Must be regenerated on build - run `npm run build`, not just `vite build`
 
 ## Documentation Reference
 
@@ -317,8 +311,5 @@ Key documentation files in `docs/`:
 
 - 3000 - Client (frontend)
 - 3001 - Server (backend API)
-- 3002 - Server (alternate port in some configs)
-- 3307 - Database (MariaDB)
 - 7777 - Admin panel (localhost only)
-- 8080 - phpMyAdmin (dev only)
-- 80 - Nginx (reverse proxy)
+- 80 - Nginx (reverse proxy, dev only)

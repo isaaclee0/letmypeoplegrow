@@ -1165,7 +1165,24 @@ const AttendancePage: React.FC = () => {
           if (isRelevantCache && cacheAge < 7 * 24 * 60 * 60 * 1000) { // Cache valid for 7 days
             logger.log('⚡ Loading from cache immediately for instant UI');
             setAttendanceList(parsed.attendanceList || []);
-            setVisitors(parsed.visitors || []);
+            const cachedVisitors = (parsed.visitors || []).map((v: any) => ({
+              ...v,
+              name: v.name || `${v.firstName || ''} ${v.lastName || ''}`.trim() || 'Unknown',
+              visitorType: v.visitorType || ((v.people_type === 'local_visitor' || v.familyType === 'local_visitor') ? 'potential_regular' : 'temporary_other'),
+              visitorFamilyGroup: v.visitorFamilyGroup || (v.familyId ? String(v.familyId) : undefined),
+            }));
+            setVisitors(cachedVisitors);
+            setAllVisitors(cachedVisitors);
+            
+            // Initialize visitor attendance from cache so visitor section renders immediately
+            const presentVisitorIds = new Set(cachedVisitors.filter((cv: any) => cv.present).map((cv: any) => cv.id));
+            const cachedVisitorAttendance: { [key: number]: boolean } = {};
+            cachedVisitors.forEach((visitor: any) => {
+              if (visitor.id) {
+                cachedVisitorAttendance[visitor.id] = presentVisitorIds.has(visitor.id);
+              }
+            });
+            setVisitorAttendance(cachedVisitorAttendance);
             
             // Initialize presentById from cached data
             const cachedPresentById = syncPresentByIdWithAttendanceList(parsed.attendanceList || []);
@@ -1182,59 +1199,24 @@ const AttendancePage: React.FC = () => {
       }
       
       // STEP 2: Fetch fresh data from server (always, even if cache loaded)
+      // Always use REST /full endpoint for initial load — it returns all data in one call.
+      // WebSocket handles real-time updates after the page is loaded.
       try {
         // Only show loading spinner if we didn't load from cache
         if (!loadedFromCache) {
           setIsLoading(true);
         }
 
-        // Try WebSocket first if connected, fall back to REST API
-        let response;
+        const apiResponse = await attendanceAPI.getFull(selectedGathering.id, selectedDate);
+        const response: any = apiResponse.data;
 
-        // If WebSocket is connecting (not yet connected), wait briefly before falling back to API
-        if (!isWebSocketConnected && connectionStatus === 'connecting' && loadedFromCache) {
-          logger.log('⏳ WebSocket connecting, waiting briefly (cache already shown)...');
-          await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5s for connection
+        if (response.recentVisitors) {
+          setRecentVisitors(response.recentVisitors);
+          setAllRecentVisitorsPool(response.recentVisitors);
         }
-
-        if (isWebSocketConnected) {
-          try {
-            response = await loadAttendanceDataWebSocket(selectedGathering.id, selectedDate);
-            // WebSocket only returns attendanceList + gathering-assigned visitors.
-            // Fetch supplementary data (recentVisitors, allChurchPeople) via REST
-            // so the visitor list is consistent regardless of data path.
-            try {
-              const [recentRes, allPeopleRes] = await Promise.all([
-                attendanceAPI.getRecentVisitors(selectedGathering.id),
-                attendanceAPI.getAllPeople(),
-              ]);
-              response.recentVisitors = recentRes.data.visitors || [];
-              response.allChurchPeople = allPeopleRes.data.visitors || [];
-              setRecentVisitors(response.recentVisitors);
-              setAllRecentVisitorsPool(response.recentVisitors);
-              setAllChurchVisitors(response.allChurchPeople);
-              setIsLoadingAllVisitors(false);
-            } catch (supplementaryErr) {
-              logger.warn('⚠️ Failed to fetch supplementary visitor data:', supplementaryErr);
-            }
-          } catch (wsError) {
-            logger.warn(`⚠️ WebSocket failed, falling back to REST API:`, wsError);
-            throw wsError; // Re-throw to trigger REST API fallback
-          }
-        } else {
-          // OPTIMIZED: Use /full endpoint to get all data in one call
-          const apiResponse = await attendanceAPI.getFull(selectedGathering.id, selectedDate);
-          response = apiResponse.data;
-
-          // Extract additional data from the combined response
-          if (response.recentVisitors) {
-            setRecentVisitors(response.recentVisitors);
-            setAllRecentVisitorsPool(response.recentVisitors);
-          }
-          if (response.allChurchPeople) {
-            setAllChurchVisitors(response.allChurchPeople);
-            setIsLoadingAllVisitors(false);
-          }
+        if (response.allChurchPeople) {
+          setAllChurchVisitors(response.allChurchPeople);
+          setIsLoadingAllVisitors(false);
         }
 
         // CRITICAL: Check if this request is still relevant before updating state
@@ -1376,7 +1358,8 @@ const AttendancePage: React.FC = () => {
     return () => {
       isCancelled = true;
     };
-  }, [selectedGathering, selectedDate, isWebSocketConnected, loadAttendanceDataWebSocket, attendanceRefreshTrigger, validDates]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGathering, selectedDate, attendanceRefreshTrigger, validDates]);
 
   // Refresh data when WebSocket reconnects (device woke up, network restored, etc.)
   useEffect(() => {

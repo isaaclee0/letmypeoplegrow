@@ -49,10 +49,24 @@ const getCrazytelConfig = () => ({
 // twilioClient = initializeTwilio();
 
 // Get church country context for phone number parsing
+// Falls back to iterating church databases if no church context is active (pre-auth)
 const getChurchCountry = async () => {
   try {
-    const settings = await Database.query('SELECT country_code FROM church_settings LIMIT 1');
-    return settings.length > 0 ? settings[0].country_code : 'AU';
+    const churchId = Database.getCurrentChurchId();
+    if (churchId) {
+      const settings = await Database.query('SELECT country_code FROM church_settings LIMIT 1');
+      return settings.length > 0 ? settings[0].country_code : 'AU';
+    }
+    // Pre-auth: check the first available church
+    const churches = Database.listChurches();
+    if (churches.length > 0) {
+      const settings = await Database.queryForChurch(
+        churches[0].church_id,
+        'SELECT country_code FROM church_settings LIMIT 1'
+      );
+      return settings.length > 0 ? settings[0].country_code : 'AU';
+    }
+    return 'AU';
   } catch (error) {
     console.warn('Failed to get church country, defaulting to AU:', error.message);
     return 'AU';

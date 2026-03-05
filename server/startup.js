@@ -1,298 +1,94 @@
 const Database = require('./config/database');
-const app = require('./index');
 
 async function runMigrations() {
+  const churchId = Database.getCurrentChurchId();
+  if (!churchId) return;
+
   try {
-    console.log('🔄 Checking for pending migrations...');
-    
-    // Get all migration files
+    console.log(`🔄 Checking migrations for church ${churchId}...`);
+
     const migrationFiles = [
-  { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
-  { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
-  { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
-  { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
-  { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' },
-  { version: '006', name: 'fix_attendance_sessions_unique_constraint', description: 'Fix attendance sessions unique constraint to include church_id' },
-  { version: '007', name: 'add_visitor_config', description: 'Add visitor filtering configuration table' }
-];
+      { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
+      { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
+      { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
+      { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
+      { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' },
+      { version: '006', name: 'fix_attendance_sessions_unique_constraint', description: 'Fix attendance sessions unique constraint to include church_id' },
+      { version: '007', name: 'add_visitor_config', description: 'Add visitor filtering configuration table' },
+      { version: '008_add_roster_snapshotted', name: 'add_roster_snapshotted', description: 'Add roster_snapshotted column to attendance_sessions and backfill people_type_at_time' }
+    ];
 
-    // Check which migrations have been run
-    const executedMigrations = await Database.query('SELECT version FROM migrations WHERE status = "success"');
+    const executedMigrations = await Database.query(
+      "SELECT version FROM migrations WHERE status = 'success'"
+    );
     const executedVersions = executedMigrations.map(row => row.version);
+    const pendingMigrations = migrationFiles.filter(m => !executedVersions.includes(m.version));
 
-    const pendingMigrations = migrationFiles.filter(migration => !executedVersions.includes(migration.version));
+    if (pendingMigrations.length === 0) return;
 
-    if (pendingMigrations.length === 0) {
-      console.log('✅ All migrations are up to date');
-      return;
-    }
-
-    console.log(`🔄 Running ${pendingMigrations.length} pending migrations...`);
+    console.log(`🔄 Running ${pendingMigrations.length} pending migrations for ${churchId}...`);
 
     for (const migration of pendingMigrations) {
-      console.log(`📝 Running migration: ${migration.name} (${migration.version})`);
-      
       const startTime = Date.now();
-      
       try {
-        // Mark migration as successful (since schema is already created in init.sql)
-        await Database.query(`
-          INSERT INTO migrations (version, name, description, execution_time_ms, status, executed_at) 
-          VALUES (?, ?, ?, ?, 'success', NOW())
-        `, [migration.version, migration.name, migration.description, Date.now() - startTime]);
-        
-        console.log(`✅ Migration ${migration.name} completed`);
+        // Execute migration-specific SQL
+        if (migration.version === '008_add_roster_snapshotted') {
+          // Add roster_snapshotted column to attendance_sessions if missing
+          const cols = await Database.query(`PRAGMA table_info(attendance_sessions)`);
+          if (!cols.some(c => c.name === 'roster_snapshotted')) {
+            await Database.query(`ALTER TABLE attendance_sessions ADD COLUMN roster_snapshotted INTEGER DEFAULT 0`);
+            console.log(`  ✅ Added roster_snapshotted column to attendance_sessions`);
+          }
+          // Backfill NULL people_type_at_time with current people_type (best available data)
+          await Database.query(`
+            UPDATE attendance_records
+            SET people_type_at_time = (
+              SELECT COALESCE(i.people_type, 'regular')
+              FROM individuals i
+              WHERE i.id = attendance_records.individual_id
+            )
+            WHERE people_type_at_time IS NULL
+          `);
+          console.log(`  ✅ Backfilled NULL people_type_at_time values`);
+        }
+
+        await Database.query(
+          `INSERT OR IGNORE INTO migrations (version, name, description, execution_time_ms, status, executed_at)
+           VALUES (?, ?, ?, ?, 'success', datetime('now'))`,
+          [migration.version, migration.name, migration.description, Date.now() - startTime]
+        );
       } catch (error) {
         console.error(`❌ Migration ${migration.name} failed:`, error);
-        throw error;
       }
     }
-    
-    console.log('🎉 All migrations completed successfully!');
-    
   } catch (error) {
     console.error('❌ Migration process failed:', error);
-    throw error;
   }
 }
 
 async function initializeDatabase() {
   try {
-    console.log('🔍 Checking database schema...');
-    
-    // Check if all required tables exist
-    const requiredTables = [
-      'users',
-      'otc_codes', 
-      'church_settings',
-      'gathering_types',
-      'user_gathering_assignments',
-      'families',
-      'individuals',
-      'gathering_lists',
-      'attendance_sessions',
-      'attendance_records',
-      'visitors',
-      'user_invitations',
-      'notification_rules',
-      'notifications',
-      'audit_log',
-      'migrations'
-    ];
+    console.log('🔍 Initializing SQLite databases...');
 
-    const existingTables = await Database.query('SHOW TABLES');
-    const existingTableNames = existingTables.map(row => Object.values(row)[0]);
+    Database.initialize();
 
-    const missingTables = requiredTables.filter(table => !existingTableNames.includes(table));
+    const churches = Database.listChurches();
 
-    if (missingTables.length > 0) {
-      console.log(`⚠️  Missing tables: ${missingTables.join(', ')}`);
-      console.log('🗄️  Database schema will be initialized by Docker init script');
+    if (churches.length === 0) {
+      console.log('📋 No churches found. A church will be created on first login/registration.');
     } else {
-      console.log('✅ All required tables exist');
-    }
-
-    // Ensure optional columns exist
-    try {
-      const userColumns = await Database.query("SHOW COLUMNS FROM users LIKE 'last_login_at'");
-      if (userColumns.length === 0) {
-        console.log('🛠️  Adding users.last_login_at column');
-        await Database.query('ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL AFTER updated_at');
-        console.log('✅ users.last_login_at added');
+      console.log(`📋 Found ${churches.length} church(es). Verifying schemas...`);
+      for (const church of churches) {
+        try {
+          Database.ensureChurchSchema(church.church_id);
+          await Database.setChurchContext(church.church_id, () => runMigrations());
+        } catch (err) {
+          console.warn(`⚠️  Error checking church ${church.church_id}:`, err.message);
+        }
       }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure users.last_login_at column:', e.message);
     }
 
-    // Ensure location columns exist in church_settings
-    try {
-      const locNameCol = await Database.query("SHOW COLUMNS FROM church_settings LIKE 'location_name'");
-      if (locNameCol.length === 0) {
-        console.log('🛠️  Adding church_settings location columns');
-        await Database.query('ALTER TABLE church_settings ADD COLUMN location_name VARCHAR(255) NULL');
-        await Database.query('ALTER TABLE church_settings ADD COLUMN location_lat DECIMAL(10,7) NULL');
-        await Database.query('ALTER TABLE church_settings ADD COLUMN location_lng DECIMAL(10,7) NULL');
-        console.log('✅ church_settings location columns added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure church_settings location columns:', e.message);
-    }
-
-    // Ensure kiosk columns exist in gathering_types
-    try {
-      const kioskCol = await Database.query("SHOW COLUMNS FROM gathering_types LIKE 'kiosk_enabled'");
-      if (kioskCol.length === 0) {
-        console.log('🛠️  Adding gathering_types.kiosk_enabled column');
-        await Database.query('ALTER TABLE gathering_types ADD COLUMN kiosk_enabled BOOLEAN DEFAULT false AFTER custom_schedule');
-        console.log('✅ gathering_types.kiosk_enabled added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure gathering_types.kiosk_enabled column:', e.message);
-    }
-
-    try {
-      const kioskMsgCol = await Database.query("SHOW COLUMNS FROM gathering_types LIKE 'kiosk_message'");
-      if (kioskMsgCol.length === 0) {
-        console.log('🛠️  Adding gathering_types.kiosk_message column');
-        await Database.query('ALTER TABLE gathering_types ADD COLUMN kiosk_message TEXT DEFAULT NULL AFTER kiosk_enabled');
-        console.log('✅ gathering_types.kiosk_message added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure gathering_types.kiosk_message column:', e.message);
-    }
-
-    // Ensure is_child column exists in individuals
-    try {
-      const isChildCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'is_child'");
-      if (isChildCol.length === 0) {
-        console.log('🛠️  Adding individuals.is_child column');
-        await Database.query('ALTER TABLE individuals ADD COLUMN is_child BOOLEAN DEFAULT false AFTER family_id');
-        console.log('✅ individuals.is_child added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure individuals.is_child column:', e.message);
-    }
-
-    // Ensure badge columns exist in individuals
-    try {
-      const badgeCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'badge_text'");
-      if (badgeCol.length === 0) {
-        console.log('🛠️  Adding individuals badge columns');
-        await Database.query('ALTER TABLE individuals ADD COLUMN badge_text VARCHAR(50) DEFAULT NULL');
-        await Database.query('ALTER TABLE individuals ADD COLUMN badge_color VARCHAR(7) DEFAULT NULL');
-        await Database.query('ALTER TABLE individuals ADD COLUMN badge_icon VARCHAR(50) DEFAULT NULL');
-        console.log('✅ individuals badge columns added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure individuals badge columns:', e.message);
-    }
-
-    // Ensure people_type column exists in individuals
-    try {
-      const peopleTypeCol = await Database.query("SHOW COLUMNS FROM individuals LIKE 'people_type'");
-      if (peopleTypeCol.length === 0) {
-        console.log('🛠️  Adding individuals.people_type column');
-        await Database.query("ALTER TABLE individuals ADD COLUMN people_type ENUM('regular', 'local_visitor', 'traveller_visitor') DEFAULT 'regular'");
-        console.log('✅ individuals.people_type added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure individuals.people_type column:', e.message);
-    }
-
-    // Ensure people_type_at_time column exists in attendance_records
-    try {
-      const ptAtTimeCol = await Database.query("SHOW COLUMNS FROM attendance_records LIKE 'people_type_at_time'");
-      if (ptAtTimeCol.length === 0) {
-        console.log('🛠️  Adding attendance_records.people_type_at_time column');
-        await Database.query("ALTER TABLE attendance_records ADD COLUMN people_type_at_time ENUM('regular', 'local_visitor', 'traveller_visitor') DEFAULT NULL");
-        console.log('✅ attendance_records.people_type_at_time added');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure attendance_records.people_type_at_time column:', e.message);
-    }
-
-    // Ensure kiosk_checkins table exists
-    try {
-      const kioskTable = await Database.query("SHOW TABLES LIKE 'kiosk_checkins'");
-      if (kioskTable.length === 0) {
-        console.log('🛠️  Creating kiosk_checkins table');
-        await Database.query(`
-          CREATE TABLE IF NOT EXISTS kiosk_checkins (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            gathering_type_id INT NOT NULL,
-            session_date DATE NOT NULL,
-            individual_id INT NOT NULL,
-            action ENUM('checkin', 'checkout') NOT NULL,
-            signer_name VARCHAR(255) DEFAULT NULL,
-            church_id VARCHAR(36) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
-            FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
-            INDEX idx_gathering_date (gathering_type_id, session_date),
-            INDEX idx_individual (individual_id),
-            INDEX idx_church_id (church_id),
-            INDEX idx_action (action),
-            INDEX idx_created_at (created_at)
-          ) ENGINE=InnoDB
-        `);
-        console.log('✅ kiosk_checkins table created');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure kiosk_checkins table:', e.message);
-    }
-
-    // Ensure visitor_config table exists
-    try {
-      const vcTable = await Database.query("SHOW TABLES LIKE 'visitor_config'");
-      if (vcTable.length === 0) {
-        console.log('🛠️  Creating visitor_config table');
-        await Database.query(`
-          CREATE TABLE IF NOT EXISTS visitor_config (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            church_id VARCHAR(36) NOT NULL,
-            local_visitor_service_limit INT DEFAULT 4,
-            traveller_visitor_service_limit INT DEFAULT 2,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY unique_church (church_id),
-            INDEX idx_church_id (church_id)
-          ) ENGINE=InnoDB
-        `);
-        console.log('✅ visitor_config table created');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure visitor_config table:', e.message);
-    }
-
-    // Ensure AI chat tables exist (needed for AI Insights chat history)
-    try {
-      const chatTables = await Database.query("SHOW TABLES LIKE 'ai_chat_conversations'");
-      if (chatTables.length === 0) {
-        console.log('🛠️  Creating ai_chat_conversations table');
-        await Database.query(`
-          CREATE TABLE IF NOT EXISTS ai_chat_conversations (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            church_id VARCHAR(255) NOT NULL,
-            title VARCHAR(500) DEFAULT 'New Chat',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-            INDEX idx_user_church (user_id, church_id),
-            INDEX idx_church_id (church_id),
-            INDEX idx_updated_at (updated_at)
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        `);
-        console.log('✅ ai_chat_conversations table created');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure ai_chat_conversations table:', e.message);
-    }
-
-    try {
-      const msgTables = await Database.query("SHOW TABLES LIKE 'ai_chat_messages'");
-      if (msgTables.length === 0) {
-        console.log('🛠️  Creating ai_chat_messages table');
-        await Database.query(`
-          CREATE TABLE IF NOT EXISTS ai_chat_messages (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            conversation_id INT NOT NULL,
-            role ENUM('user', 'assistant', 'system') NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES ai_chat_conversations(id) ON DELETE CASCADE,
-            INDEX idx_conversation (conversation_id),
-            INDEX idx_created_at (created_at)
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        `);
-        console.log('✅ ai_chat_messages table created');
-      }
-    } catch (e) {
-      console.warn('⚠️  Could not ensure ai_chat_messages table:', e.message);
-    }
-
-    console.log('🎉 Database initialization check completed!');
-    
+    console.log('🎉 Database initialization completed!');
   } catch (error) {
     console.error('❌ Database initialization failed:', error);
     throw error;
@@ -302,29 +98,20 @@ async function initializeDatabase() {
 async function startServer() {
   try {
     console.log('🚀 Starting server...');
-    
-    // Initialize database connection
-    await Database.initialize();
-    console.log('✅ Database connected');
-    
-    // Check database schema
     await initializeDatabase();
-    
-    // Run pending migrations
-    await runMigrations();
-    
-    // Start the server
+    console.log('✅ Database initialized');
+
     const PORT = process.env.PORT || 3001;
+    const app = require('./index');
     app.listen(PORT, () => {
       console.log(`🎉 Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV}`);
       console.log(`🌐 Health check: http://localhost:${PORT}/health`);
     });
-    
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
 }
 
-module.exports = { initializeDatabase, startServer }; 
+module.exports = { initializeDatabase, startServer };

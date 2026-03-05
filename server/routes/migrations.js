@@ -56,15 +56,15 @@ router.get('/status', async (req, res) => {
     // Check if migrations table exists, create if not
     await Database.query(`
       CREATE TABLE IF NOT EXISTS migrations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        version VARCHAR(50) NOT NULL UNIQUE,
-        name VARCHAR(255) NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
         description TEXT,
-        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        execution_time_ms INT,
-        status ENUM('success', 'failed') DEFAULT 'success',
+        executed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        execution_time_ms INTEGER,
+        status TEXT DEFAULT 'success' CHECK(status IN ('success', 'failed')),
         error_message TEXT
-      ) ENGINE=InnoDB
+      )
     `);
 
     // Get all executed migrations
@@ -139,7 +139,7 @@ router.post('/run/:version', async (req, res) => {
     const migrationName = getMigrationDescription(version);
 
     // Start transaction
-    await Database.query('START TRANSACTION');
+    await Database.query('BEGIN');
 
     const startTime = Date.now();
     let status = 'success';
@@ -315,7 +315,7 @@ async function runMigration(version) {
   const sqlContent = fs.readFileSync(migrationFile, 'utf8');
   const migrationName = getMigrationDescription(version);
 
-  await Database.query('START TRANSACTION');
+  await Database.query('BEGIN');
 
   const startTime = Date.now();
   let status = 'success';

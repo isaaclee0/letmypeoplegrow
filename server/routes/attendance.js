@@ -8,6 +8,82 @@ const logger = require('../config/logger');
 
 const router = express.Router();
 
+/**
+ * Snapshot the current roster into attendance_records with present=0.
+ * This preserves the historical roster state so past sessions show who was on the list at that time.
+ * Uses ON CONFLICT DO NOTHING so existing records (e.g., already marked present) are preserved.
+ *
+ * @param {object} conn - Database connection (within transaction)
+ * @param {number} sessionId - The attendance session ID
+ * @param {number} gatheringTypeId - The gathering type ID
+ * @param {string} churchId - The church ID
+ * @param {string} date - The session date (YYYY-MM-DD)
+ */
+async function createRosterSnapshot(conn, sessionId, gatheringTypeId, churchId, date) {
+  try {
+    // Check if already snapshotted
+    const session = await conn.query(
+      'SELECT roster_snapshotted FROM attendance_sessions WHERE id = ?',
+      [sessionId]
+    );
+    if (session.length > 0 && session[0].roster_snapshotted === 1) {
+      return; // Already snapshotted
+    }
+
+    // Don't snapshot future dates
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sessionDate = new Date(date);
+    sessionDate.setHours(0, 0, 0, 0);
+    if (sessionDate > today) {
+      return;
+    }
+
+    // Only snapshot standard attendance type gatherings (not headcount)
+    const gathering = await conn.query(
+      'SELECT attendance_type FROM gathering_types WHERE id = ? AND church_id = ?',
+      [gatheringTypeId, churchId]
+    );
+    if (gathering.length === 0 || gathering[0].attendance_type !== 'standard') {
+      return;
+    }
+
+    // Get all active individuals on this gathering's roster
+    const rosterMembers = await conn.query(`
+      SELECT gl.individual_id, COALESCE(i.people_type, 'regular') as people_type
+      FROM gathering_lists gl
+      JOIN individuals i ON gl.individual_id = i.id
+      WHERE gl.gathering_type_id = ?
+        AND i.is_active = 1
+        AND i.church_id = ?
+    `, [gatheringTypeId, churchId]);
+
+    // Bulk-insert with ON CONFLICT DO NOTHING to preserve existing records
+    for (const member of rosterMembers) {
+      await conn.query(`
+        INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+        VALUES (?, ?, 0, ?, ?)
+        ON CONFLICT(session_id, individual_id) DO NOTHING
+      `, [sessionId, member.individual_id, churchId, member.people_type]);
+    }
+
+    // Mark session as snapshotted
+    await conn.query(
+      'UPDATE attendance_sessions SET roster_snapshotted = 1 WHERE id = ?',
+      [sessionId]
+    );
+
+    logger.debugLog('Roster snapshot created', {
+      sessionId,
+      gatheringTypeId,
+      rosterSize: rosterMembers.length
+    });
+  } catch (error) {
+    // Log but don't fail the parent operation
+    logger.error('Error creating roster snapshot', { error: error.message, sessionId });
+  }
+}
+
 router.use(verifyToken);
 
 // Debug middleware to log all requests
@@ -284,9 +360,9 @@ router.post('/headcount/update/:gatheringTypeId/:date', disableCache, requireGat
       await conn.query(`
         INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
         VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-        headcount = VALUES(headcount),
-        updated_by = VALUES(updated_by),
+        ON CONFLICT(session_id, updated_by) DO UPDATE SET
+        headcount = excluded.headcount,
+        updated_by = excluded.updated_by,
         updated_at = CURRENT_TIMESTAMP
       `, [sessionId, headcount, req.user.id, req.user.church_id]);
     });
@@ -508,7 +584,7 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
       const targetUser = await Database.query(`
         SELECT id, first_name, last_name, role, church_id 
         FROM users 
-        WHERE id = ? AND church_id = ? AND is_active = true
+        WHERE id = ? AND church_id = ? AND is_active = 1
       `, [targetUserId, req.user.church_id]);
 
       if (targetUser.length === 0) {
@@ -555,9 +631,9 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
         await conn.query(`
           INSERT INTO headcount_records (session_id, headcount, updated_by, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE 
-          headcount = VALUES(headcount),
-          updated_by = VALUES(updated_by),
+          ON CONFLICT(session_id, updated_by) DO UPDATE SET
+          headcount = excluded.headcount,
+          updated_by = excluded.updated_by,
           updated_at = CURRENT_TIMESTAMP
         `, [sessionId, headcount, parseInt(targetUserId), req.user.church_id]);
       });
@@ -724,7 +800,121 @@ const getVisitorConfig = async (churchId) => {
   }
 };
 
-// Church-wide people (all gatherings, all time) — define BEFORE param routes to avoid shadowing  
+/**
+ * Check if any snapshotted sessions exist for a gathering type.
+ * Used to decide between absence-count logic and legacy date-based filtering.
+ */
+const hasSnapshotData = async (gatheringTypeId, churchId) => {
+  try {
+    const result = await Database.query(
+      'SELECT 1 FROM attendance_sessions WHERE gathering_type_id = ? AND church_id = ? AND roster_snapshotted = 1 LIMIT 1',
+      [gatheringTypeId, churchId]
+    );
+    return result.length > 0;
+  } catch (error) {
+    console.error('Error checking snapshot data:', error);
+    return false;
+  }
+};
+
+/**
+ * Batch query that returns a Map<individualId, consecutiveAbsences> for all visitor-type
+ * individuals on a gathering. Counts consecutive present=0 records from most recent
+ * snapshotted session backwards, stopping at the first present=1.
+ */
+const getVisitorAbsenceCounts = async (gatheringTypeId, churchId) => {
+  try {
+    const rows = await Database.query(`
+      SELECT ar.individual_id, ar.present, s.session_date
+      FROM attendance_records ar
+      JOIN attendance_sessions s ON ar.session_id = s.id
+      JOIN individuals i ON ar.individual_id = i.id
+      WHERE s.gathering_type_id = ?
+        AND s.church_id = ?
+        AND s.roster_snapshotted = 1
+        AND i.people_type IN ('local_visitor', 'traveller_visitor')
+      ORDER BY ar.individual_id, s.session_date DESC
+    `, [gatheringTypeId, churchId]);
+
+    const absenceMap = new Map();
+    let currentId = null;
+    let consecutiveAbsences = 0;
+    let foundPresent = false;
+
+    for (const row of rows) {
+      if (row.individual_id !== currentId) {
+        // Save previous individual's count
+        if (currentId !== null) {
+          absenceMap.set(currentId, consecutiveAbsences);
+        }
+        currentId = row.individual_id;
+        consecutiveAbsences = 0;
+        foundPresent = false;
+      }
+
+      if (foundPresent) continue;
+
+      if (row.present === 1 || row.present === true) {
+        foundPresent = true;
+      } else {
+        consecutiveAbsences++;
+      }
+    }
+    // Save last individual
+    if (currentId !== null) {
+      absenceMap.set(currentId, consecutiveAbsences);
+    }
+
+    return absenceMap;
+  } catch (error) {
+    console.error('Error getting visitor absence counts:', error);
+    return new Map();
+  }
+};
+
+/**
+ * Filter visitors using absence-count logic (snapshot-based) or legacy date-based logic.
+ * @param {Array} visitors - Array of visitor objects with id, present, peopleType, lastAttendanceDate, createdAt
+ * @param {object} options - { useSnapshotLogic, absenceMap, visitorConfig, localServiceDates, travellerServiceDates }
+ * @returns {Array} Filtered visitors
+ */
+const filterVisitorsByAbsence = (visitors, options) => {
+  const { useSnapshotLogic, absenceMap, visitorConfig, localServiceDates, travellerServiceDates } = options;
+
+  return visitors.filter(visitor => {
+    // Always show visitors who are marked present
+    if (visitor.present) return true;
+
+    if (useSnapshotLogic) {
+      // Snapshot-based: count consecutive absences
+      const absences = absenceMap.get(visitor.id) || 0;
+      const isLocal = visitor.peopleType === 'local_visitor';
+      const limit = isLocal ? visitorConfig.localVisitorServiceLimit : visitorConfig.travellerVisitorServiceLimit;
+      return absences < limit;
+    } else {
+      // Legacy date-based filtering
+      const effectiveDate = visitor.lastAttendanceDate || visitor.createdAt;
+      if (!effectiveDate) return true;
+
+      const relevantServiceDates = visitor.peopleType === 'local_visitor' ?
+        localServiceDates : travellerServiceDates;
+
+      const parsedDate = new Date(effectiveDate);
+      parsedDate.setHours(0, 0, 0, 0);
+      const effectiveDateStr = parsedDate.toISOString().split('T')[0];
+
+      if (relevantServiceDates.length === 0) return false;
+
+      const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
+      if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+
+      const oldestServiceDateStr = String(oldestServiceDate.session_date).split('T')[0];
+      return effectiveDateStr >= oldestServiceDateStr;
+    }
+  });
+};
+
+// Church-wide people (all gatherings, all time) — define BEFORE param routes to avoid shadowing
 router.get('/people/all', disableCache, async (req, res) => {
   try {
     const allFamilies = await Database.query(`
@@ -736,7 +926,7 @@ router.get('/people/all', disableCache, async (req, res) => {
         COALESCE(f.last_attended, f.created_at) as last_activity
       FROM families f
       JOIN individuals i ON f.id = i.family_id
-      WHERE i.is_active = true
+      WHERE i.is_active = 1
         AND f.church_id = ?
       GROUP BY f.id
       ORDER BY last_activity DESC, f.family_name
@@ -747,7 +937,7 @@ router.get('/people/all', disableCache, async (req, res) => {
       const familyMembers = await Database.query(`
         SELECT id, first_name, last_name, people_type, is_child
         FROM individuals
-        WHERE family_id = ? AND is_active = true AND church_id = ?
+        WHERE family_id = ? AND is_active = 1 AND church_id = ?
         ORDER BY first_name
       `, [family.family_id, req.user.church_id]);
 
@@ -788,7 +978,7 @@ router.get('/visitors/all', disableCache, async (req, res) => {
       JOIN individuals i ON f.id = i.family_id
       WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND i.is_active = true
+        AND i.is_active = 1
         AND f.church_id = ?
       GROUP BY f.id
       ORDER BY last_activity DESC, f.family_name
@@ -799,7 +989,7 @@ router.get('/visitors/all', disableCache, async (req, res) => {
       const familyMembers = await Database.query(`
         SELECT id, first_name, last_name, people_type
         FROM individuals 
-        WHERE family_id = ? AND is_active = true AND church_id = ?
+        WHERE family_id = ? AND is_active = 1 AND church_id = ?
         ORDER BY first_name
       `, [family.family_id, req.user.church_id]);
 
@@ -847,7 +1037,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             COALESCE(f.last_attended, f.created_at) as last_activity
           FROM families f
           JOIN individuals i ON f.id = i.family_id
-          WHERE i.is_active = true
+          WHERE i.is_active = 1
             AND f.church_id = ?
           GROUP BY f.id
           ORDER BY last_activity DESC, f.family_name
@@ -858,7 +1048,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           const familyMembers = await Database.query(`
             SELECT id, first_name, last_name, people_type, is_child
             FROM individuals
-            WHERE family_id = ? AND is_active = true AND church_id = ?
+            WHERE family_id = ? AND is_active = 1 AND church_id = ?
             ORDER BY first_name
           `, [family.family_id, req.user.church_id]);
 
@@ -883,9 +1073,11 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       // PARALLEL BATCH 2: Fetch recent visitors (doesn't depend on main attendance)
       const recentVisitorsPromise = (async () => {
         const visitorConfig = await getVisitorConfig(req.user.church_id);
+        const useSnapshotLogic = await hasSnapshotData(gatheringTypeId, req.user.church_id);
+        const absenceMap = useSnapshotLogic ? await getVisitorAbsenceCounts(gatheringTypeId, req.user.church_id) : new Map();
         const today = new Date().toISOString().split('T')[0];
-        const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
-        const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
+        const localServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
+        const travellerServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
 
         const allVisitorFamilies = await Database.query(`
           SELECT DISTINCT
@@ -898,7 +1090,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           JOIN individuals i ON f.id = i.family_id
           WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
             AND i.people_type IN ('local_visitor', 'traveller_visitor')
-            AND i.is_active = true
+            AND i.is_active = 1
             AND f.church_id = ?
             AND EXISTS (
               SELECT 1 FROM attendance_records ar2
@@ -909,7 +1101,9 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           ORDER BY last_activity DESC, f.family_name
         `, [req.user.church_id, gatheringTypeId, req.user.church_id]);
 
-        const recentVisitorFamilies = allVisitorFamilies.filter(family => {
+        // When using snapshot logic, we filter at the individual level after fetching members
+        // When using legacy logic, we filter at the family level first
+        const familiesToProcess = useSnapshotLogic ? allVisitorFamilies : allVisitorFamilies.filter(family => {
           const isLocal = family.family_type === 'local_visitor';
           const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
 
@@ -922,21 +1116,29 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
           if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
 
-          const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+          const oldestServiceDateStr = String(oldestServiceDate.session_date).split('T')[0];
           return lastActivityStr >= oldestServiceDateStr;
         });
 
         const processedVisitors = [];
-        for (const family of recentVisitorFamilies) {
+        for (const family of familiesToProcess) {
           const familyMembers = await Database.query(`
             SELECT i.id, i.first_name, i.last_name, i.people_type, i.is_child
             FROM individuals i
             JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
-            WHERE i.family_id = ? AND i.is_active = true AND i.church_id = ?
+            WHERE i.family_id = ? AND i.is_active = 1 AND i.church_id = ?
             ORDER BY i.first_name
           `, [gatheringTypeId, family.family_id, req.user.church_id]);
 
           for (const member of familyMembers) {
+            // When using snapshot logic, filter by individual absence count
+            if (useSnapshotLogic) {
+              const absences = absenceMap.get(member.id) || 0;
+              const isLocal = member.people_type === 'local_visitor';
+              const limit = isLocal ? visitorConfig.localVisitorServiceLimit : visitorConfig.travellerVisitorServiceLimit;
+              if (absences >= limit) continue;
+            }
+
             const isLocal = member.people_type === 'local_visitor';
             processedVisitors.push({
               id: member.id,
@@ -990,23 +1192,27 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
     let sessionId = null;
+    let rosterSnapshotted = false;
     let visitors = [];
 
     const visitorConfig = await getVisitorConfig(req.user.church_id);
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
+    const useSnapshotLogicFull = await hasSnapshotData(gatheringTypeId, req.user.church_id);
+    const absenceMapFull = useSnapshotLogicFull ? await getVisitorAbsenceCounts(gatheringTypeId, req.user.church_id) : new Map();
+    const localServiceDates = useSnapshotLogicFull ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
+    const travellerServiceDates = useSnapshotLogicFull ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
 
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
+      rosterSnapshotted = sessions[0].roster_snapshotted === 1;
 
       // Get visitor families (using the fixed query with people_type_at_time)
       // Include both current visitors AND people who were visitors at that time (even if now regular)
@@ -1024,7 +1230,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           f.family_notes,
           f.family_type,
           f.last_attended,
-          COALESCE(ar.present, false) as present
+          COALESCE(ar.present, 0) as present
         FROM individuals i
         JOIN families f ON i.family_id = f.id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
@@ -1033,7 +1239,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             f.family_type IN ('local_visitor', 'traveller_visitor')
             OR ar.people_type_at_time IN ('local_visitor', 'traveller_visitor')
           )
-          AND i.is_active = true
+          AND i.is_active = 1
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1097,28 +1303,13 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         })
       );
 
-      // Apply service-limit filtering
-      visitors = allVisitors.filter(visitor => {
-        if (visitor.present) return true;
-
-        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
-        const effectiveDate = visitor.lastAttendanceDate || visitor.createdAt;
-        if (!effectiveDate) return true;
-
-        const relevantServiceDates = visitor.peopleType === 'local_visitor' ?
-          localServiceDates : travellerServiceDates;
-
-        const parsedDate = new Date(effectiveDate);
-        parsedDate.setHours(0, 0, 0, 0);
-        const effectiveDateStr = parsedDate.toISOString().split('T')[0];
-
-        if (relevantServiceDates.length === 0) return false;
-
-        const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
-        if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
-
-        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-        return effectiveDateStr >= oldestServiceDateStr;
+      // Apply service-limit filtering (snapshot-based or legacy date-based)
+      visitors = filterVisitorsByAbsence(allVisitors, {
+        useSnapshotLogic: useSnapshotLogicFull,
+        absenceMap: absenceMapFull,
+        visitorConfig,
+        localServiceDates,
+        travellerServiceDates
       });
     }
 
@@ -1135,7 +1326,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
              i.badge_text, i.badge_color, i.badge_icon,
              f.family_name, f.id as family_id,
              f.family_notes,
-             COALESCE(ar.present, false) as present,
+             COALESCE(ar.present, 0) as present,
              ${peopleTypeExpression},
              f.family_type AS familyType,
              f.last_attended AS lastAttended
@@ -1144,7 +1335,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       WHERE gl.gathering_type_id = ?
-        AND i.is_active = true
+        AND i.is_active = 1
         AND i.church_id = ?
         ${glChurchFilterFull}
     `;
@@ -1183,7 +1374,41 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
     attendanceListQuery += ` ORDER BY f.family_name, i.first_name`;
 
-    const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+    let attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+
+    // For legacy (non-snapshotted) sessions, include people with attendance_records
+    // but no longer on the gathering list
+    if (sessionId && !rosterSnapshotted) {
+      const attendanceListIds = new Set(attendanceList.map(a => a.id));
+      const orphanedRecords = await Database.query(`
+        SELECT i.id, i.first_name, i.last_name, i.is_child,
+               i.badge_text, i.badge_color, i.badge_icon,
+               f.family_name, f.id as family_id,
+               f.family_notes,
+               ar.present,
+               COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+               f.family_type AS familyType,
+               f.last_attended AS lastAttended
+        FROM attendance_records ar
+        JOIN individuals i ON ar.individual_id = i.id
+        LEFT JOIN families f ON i.family_id = f.id
+        WHERE ar.session_id = ?
+          AND ar.church_id = ?
+          AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
+          AND (f.family_type = 'regular' OR f.family_type IS NULL)
+        ORDER BY i.last_name, i.first_name
+      `, [sessionId, req.user.church_id]);
+
+      for (const record of orphanedRecords) {
+        if (!attendanceListIds.has(record.id)) {
+          attendanceList.push(record);
+        }
+      }
+      attendanceList.sort((a, b) => {
+        const lastCmp = (a.family_name || '').localeCompare(b.family_name || '');
+        return lastCmp !== 0 ? lastCmp : (a.first_name || '').localeCompare(b.first_name || '');
+      });
+    }
 
     // Get potential visitors (people who haven't been for a while)
     const potentialVisitors = await Database.query(`
@@ -1209,7 +1434,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       JOIN families f ON i.family_id = f.id
       WHERE i.people_type IN ('local_visitor', 'traveller_visitor')
         AND f.family_type IN ('local_visitor', 'traveller_visitor')
-        AND i.is_active = true
+        AND i.is_active = 1
         AND i.church_id = ?
       ORDER BY f.family_name, i.first_name
     `, [sixWeeksAgo.toISOString().split('T')[0], twoWeeksAgo.toISOString().split('T')[0], req.user.church_id]);
@@ -1232,7 +1457,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
       if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
 
-      const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+      const oldestServiceDateStr = String(oldestServiceDate.session_date).split('T')[0];
       return effectiveDateStr >= oldestServiceDateStr;
     });
 
@@ -1290,26 +1515,181 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
     let sessionId = null;
+    let rosterSnapshotted = false;
     let visitors = [];
-    
-    // Get visitor configuration for filtering (moved here to use in both visitors and potentialVisitors)
-    const visitorConfig = await getVisitorConfig(req.user.church_id);
-    // Get service dates relative to the viewed date, not today
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
 
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
-      
+      rosterSnapshotted = sessions[0].roster_snapshotted === 1;
+    }
+
+    // Get visitor configuration for filtering (used in both paths)
+    const visitorConfig = await getVisitorConfig(req.user.church_id);
+    // Check if snapshot-based absence counting is available
+    const useSnapshotLogic = await hasSnapshotData(gatheringTypeId, req.user.church_id);
+    const absenceMap = useSnapshotLogic ? await getVisitorAbsenceCounts(gatheringTypeId, req.user.church_id) : new Map();
+    // Get service dates relative to the viewed date, not today (only needed for legacy logic)
+    const localServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, date);
+    const travellerServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, date);
+
+    // ===== PATH A: Snapshotted session — use attendance_records as source of truth =====
+    if (rosterSnapshotted && sessionId) {
+      // Regular attendees from the snapshot (not current gathering list)
+      // No is_active filter — show archived people who were on the historical roster
+      let snapshotAttendanceQuery = `
+        SELECT i.id, i.first_name, i.last_name, i.is_child,
+               i.badge_text, i.badge_color, i.badge_icon,
+               f.family_name, f.id as family_id,
+               f.family_notes,
+               ar.present,
+               COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+               f.family_type AS familyType,
+               f.last_attended AS lastAttended,
+               i.is_active
+        FROM attendance_records ar
+        JOIN individuals i ON ar.individual_id = i.id
+        LEFT JOIN families f ON i.family_id = f.id
+        WHERE ar.session_id = ?
+          AND ar.church_id = ?
+          AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
+          AND (f.family_type = 'regular' OR f.family_type IS NULL)
+      `;
+      let snapshotAttendanceParams = [sessionId, req.user.church_id];
+
+      if (search && search.trim()) {
+        snapshotAttendanceQuery += ` AND (
+          i.first_name LIKE ? OR
+          i.last_name LIKE ? OR
+          f.family_name LIKE ?
+        )`;
+        const searchTerm = `%${search.trim()}%`;
+        snapshotAttendanceParams.push(searchTerm, searchTerm, searchTerm);
+      }
+
+      snapshotAttendanceQuery += ` ORDER BY i.last_name, i.first_name`;
+      const attendanceList = await Database.query(snapshotAttendanceQuery, snapshotAttendanceParams);
+
+      // Visitor families from the snapshot
+      const snapshotVisitorFamilies = await Database.query(`
+        SELECT
+          i.id,
+          i.first_name,
+          i.last_name,
+          i.is_child,
+          i.last_attendance_date,
+          i.created_at as individual_created_at,
+          COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+          f.id as family_id,
+          f.family_name,
+          f.family_notes,
+          f.family_type,
+          f.last_attended,
+          ar.present,
+          i.is_active
+        FROM attendance_records ar
+        JOIN individuals i ON ar.individual_id = i.id
+        JOIN families f ON i.family_id = f.id
+        WHERE ar.session_id = ?
+          AND ar.church_id = ?
+          AND COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
+        ORDER BY f.family_name, i.first_name
+      `, [sessionId, req.user.church_id]);
+
+      // Group visitor families and format
+      const familyGroups = {};
+      snapshotVisitorFamilies.forEach(individual => {
+        const familyId = individual.family_id;
+        if (!familyGroups[familyId]) {
+          familyGroups[familyId] = {
+            familyId: familyId,
+            familyName: individual.family_name,
+            familyNotes: individual.family_notes,
+            familyType: individual.family_type,
+            lastAttended: individual.last_attended,
+            members: []
+          };
+        }
+        familyGroups[familyId].members.push({
+          id: individual.id,
+          name: `${individual.first_name} ${individual.last_name}`,
+          firstName: individual.first_name,
+          lastName: individual.last_name,
+          isChild: Boolean(individual.is_child),
+          present: individual.present === 1 || individual.present === true,
+          lastAttendanceDate: individual.last_attendance_date,
+          createdAt: individual.individual_created_at,
+          peopleType: individual.people_type,
+          notes: null
+        });
+      });
+
+      const allSnapshotVisitors = Object.values(familyGroups).flatMap(family =>
+        family.members.map(member => {
+          const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const notesFromFamily = family.familyNotes || '';
+          const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
+          const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
+          const isInfrequent = isTraveller && lastDate && lastDate < thresholdDateStr;
+          return {
+            id: member.id,
+            name: member.name,
+            isChild: member.isChild,
+            visitorType: visitorTypeFromFamily,
+            visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
+            visitorFamilyGroup: family.familyId.toString(),
+            notes: notesFromFamily || member.notes,
+            lastAttended: family.lastAttended,
+            familyId: family.familyId,
+            familyName: family.familyName,
+            present: member.present,
+            peopleType: member.peopleType,
+            lastAttendanceDate: member.lastAttendanceDate,
+            createdAt: member.createdAt
+          };
+        })
+      );
+
+      // Apply absence-count filtering (snapshot-based or legacy date-based)
+      visitors = filterVisitorsByAbsence(allSnapshotVisitors, {
+        useSnapshotLogic,
+        absenceMap,
+        visitorConfig,
+        localServiceDates,
+        travellerServiceDates
+      });
+
+      const responseData = processApiResponse({
+        attendanceList: attendanceList.map(attendee => ({
+          ...attendee,
+          present: attendee.present === 1 || attendee.present === true,
+          isChild: Boolean(attendee.is_child),
+          badgeText: attendee.badge_text || null,
+          badgeColor: attendee.badge_color || null,
+          badgeIcon: attendee.badge_icon || null,
+          familyNotes: attendee.family_notes || null,
+          peopleType: attendee.people_type,
+          lastAttended: attendee.last_attended,
+          isActive: attendee.is_active === 1
+        })),
+        visitors,
+        potentialVisitors: []
+      });
+
+      return res.json(responseData);
+    }
+
+    // ===== PATH B: No snapshot (new/future sessions, or legacy sessions) — use gathering_lists =====
+
+    if (sessionId) {
       // Get visitor families for this session limited to the active gathering (via gathering_lists)
       // Use people_type_at_time to show historical visitor records even if type has changed
       const visitorFamilies = await Database.query(`
@@ -1326,13 +1706,13 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           f.family_notes,
           f.family_type,
           f.last_attended,
-          COALESCE(ar.present, false) as present
+          COALESCE(ar.present, 0) as present
         FROM individuals i
         JOIN families f ON i.family_id = f.id
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
         LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
         WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
-          AND i.is_active = true
+          AND i.is_active = 1
           AND (
             COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
           )
@@ -1354,7 +1734,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
             members: []
           };
         }
-        
+
         familyGroups[familyId].members.push({
           id: individual.id,
           name: `${individual.first_name} ${individual.last_name}`,
@@ -1370,14 +1750,14 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       });
 
       // Convert to flat list for backward compatibility
-      const allVisitors = Object.values(familyGroups).flatMap(family => 
+      const allVisitors = Object.values(familyGroups).flatMap(family =>
         family.members.map(member => {
           const visitorTypeFromFamily = family.familyType === 'local_visitor' ? 'potential_regular' : 'temporary_other';
           const notesFromFamily = family.familyNotes || '';
           const isTraveller = (member.peopleType === 'traveller_visitor') || (family.familyType === 'traveller_visitor');
           const lastDate = member.lastAttendanceDate ? String(member.lastAttendanceDate).split('T')[0] : null;
           const isInfrequent = isTraveller && lastDate && lastDate < thresholdDateStr;
-          
+
           return {
             id: member.id,
             name: member.name,
@@ -1397,28 +1777,92 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         })
       );
 
-      // Apply service-limit filtering to visitors array
-      visitors = allVisitors.filter(visitor => {
-        if (visitor.present) return true;
-        
-        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
-        const effectiveDate = visitor.lastAttendanceDate || visitor.createdAt;
-        if (!effectiveDate) return true;
-        
-        const relevantServiceDates = visitor.peopleType === 'local_visitor' ? 
-          localServiceDates : travellerServiceDates;
-        
-        const parsedDate = new Date(effectiveDate);
-        parsedDate.setHours(0, 0, 0, 0);
-        const effectiveDateStr = parsedDate.toISOString().split('T')[0];
-        
-        if (relevantServiceDates.length === 0) return false;
-        
-        const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
-        if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
-        
-        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-        return effectiveDateStr >= oldestServiceDateStr;
+      // For legacy (non-snapshotted) sessions, also include visitor records from
+      // attendance_records for people no longer on the gathering list
+      if (!rosterSnapshotted) {
+        const existingVisitorIds = new Set(allVisitors.map(v => v.id));
+        const orphanedVisitorFamilies = await Database.query(`
+          SELECT
+            i.id,
+            i.first_name,
+            i.last_name,
+            i.is_child,
+            i.last_attendance_date,
+            i.created_at as individual_created_at,
+            COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+            f.id as family_id,
+            f.family_name,
+            f.family_notes,
+            f.family_type,
+            f.last_attended,
+            ar.present
+          FROM attendance_records ar
+          JOIN individuals i ON ar.individual_id = i.id
+          JOIN families f ON i.family_id = f.id
+          WHERE ar.session_id = ?
+            AND ar.church_id = ?
+            AND COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
+          ORDER BY f.family_name, i.first_name
+        `, [sessionId, req.user.church_id]);
+
+        for (const individual of orphanedVisitorFamilies) {
+          if (existingVisitorIds.has(individual.id)) continue;
+          existingVisitorIds.add(individual.id);
+
+          const familyId = individual.family_id;
+          if (!familyGroups[familyId]) {
+            familyGroups[familyId] = {
+              familyId: familyId,
+              familyName: individual.family_name,
+              familyNotes: individual.family_notes,
+              familyType: individual.family_type,
+              lastAttended: individual.last_attended,
+              members: []
+            };
+          }
+          familyGroups[familyId].members.push({
+            id: individual.id,
+            name: `${individual.first_name} ${individual.last_name}`,
+            firstName: individual.first_name,
+            lastName: individual.last_name,
+            isChild: Boolean(individual.is_child),
+            present: individual.present === 1 || individual.present === true,
+            lastAttendanceDate: individual.last_attendance_date,
+            createdAt: individual.individual_created_at,
+            peopleType: individual.people_type,
+            notes: null
+          });
+
+          const visitorTypeFromFamily = individual.family_type === 'local_visitor' ? 'potential_regular' : 'temporary_other';
+          const isTraveller = (individual.people_type === 'traveller_visitor') || (individual.family_type === 'traveller_visitor');
+          const lastDate = individual.last_attendance_date ? String(individual.last_attendance_date).split('T')[0] : null;
+          const isInfrequent = isTraveller && lastDate && lastDate < thresholdDateStr;
+          allVisitors.push({
+            id: individual.id,
+            name: `${individual.first_name} ${individual.last_name}`,
+            isChild: Boolean(individual.is_child),
+            visitorType: visitorTypeFromFamily,
+            visitorStatus: isInfrequent ? 'infrequent' : (isTraveller ? 'traveller' : 'local'),
+            visitorFamilyGroup: familyId.toString(),
+            notes: individual.family_notes || null,
+            lastAttended: individual.last_attended,
+            familyId: familyId,
+            familyName: individual.family_name,
+            present: individual.present === 1 || individual.present === true,
+            peopleType: individual.people_type,
+            lastAttendanceDate: individual.last_attendance_date,
+            createdAt: individual.individual_created_at
+          });
+        }
+      }
+
+      // Apply service-limit filtering (snapshot-based or legacy date-based)
+      visitors = filterVisitorsByAbsence(allVisitors, {
+        useSnapshotLogic,
+        absenceMap,
+        visitorConfig,
+        localServiceDates,
+        travellerServiceDates
       });
     }
 
@@ -1426,12 +1870,12 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     // Check if people_type_at_time column exists for historical type support
     const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
     const hasGatheringListsChurchId = await columnExists('gathering_lists', 'church_id');
-    
+
     // Use historical people_type if available, otherwise fall back to current type
-    const peopleTypeExpression = hasPeopleTypeAtTime 
+    const peopleTypeExpression = hasPeopleTypeAtTime
       ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
       : `i.people_type`;
-    
+
     // Regular attendees: on gathering list, not visitors. Include gl.church_id filter when column exists for multi-tenant isolation.
     const glChurchFilter = hasGatheringListsChurchId ? ` AND (gl.church_id = ? OR gl.church_id IS NULL)` : '';
     let attendanceListQuery = `
@@ -1439,7 +1883,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
              i.badge_text, i.badge_color, i.badge_icon,
              f.family_name, f.id as family_id,
              f.family_notes,
-             COALESCE(ar.present, false) as present,
+             COALESCE(ar.present, 0) as present,
              ${peopleTypeExpression},
              f.family_type AS familyType,
              f.last_attended AS lastAttended
@@ -1448,7 +1892,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
       WHERE gl.gathering_type_id = ?
-        AND i.is_active = true
+        AND i.is_active = 1
         AND i.church_id = ?
         ${glChurchFilter}
     `;
@@ -1457,7 +1901,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const currentDate = new Date(date);
     const sixWeeksAgo = new Date(currentDate);
     sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42); // 6 weeks = 42 days
-    
+
     const twoWeeksAgo = new Date(currentDate);
     twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14); // 2 weeks = 14 days
 
@@ -1478,8 +1922,8 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       attendanceListQuery += ` AND (
         (f.family_type = 'regular' OR f.family_type IS NULL) AND ${effectivePeopleType} = 'regular'
       ) AND (
-        i.first_name LIKE ? OR 
-        i.last_name LIKE ? OR 
+        i.first_name LIKE ? OR
+        i.last_name LIKE ? OR
         f.family_name LIKE ?
       )`;
       const searchTerm = `%${search.trim()}%`;
@@ -1498,20 +1942,55 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
     attendanceListQuery += ` ORDER BY i.last_name, i.first_name`;
 
-    const attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+    let attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
+
+    // For legacy (non-snapshotted) sessions with existing records, also include people who
+    // have attendance_records but are no longer on the gathering list (e.g., removed from roster)
+    if (sessionId && !rosterSnapshotted) {
+      const attendanceListIds = new Set(attendanceList.map(a => a.id));
+      const orphanedRecords = await Database.query(`
+        SELECT i.id, i.first_name, i.last_name, i.is_child,
+               i.badge_text, i.badge_color, i.badge_icon,
+               f.family_name, f.id as family_id,
+               f.family_notes,
+               ar.present,
+               COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+               f.family_type AS familyType,
+               f.last_attended AS lastAttended
+        FROM attendance_records ar
+        JOIN individuals i ON ar.individual_id = i.id
+        LEFT JOIN families f ON i.family_id = f.id
+        WHERE ar.session_id = ?
+          AND ar.church_id = ?
+          AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
+          AND (f.family_type = 'regular' OR f.family_type IS NULL)
+        ORDER BY i.last_name, i.first_name
+      `, [sessionId, req.user.church_id]);
+
+      for (const record of orphanedRecords) {
+        if (!attendanceListIds.has(record.id)) {
+          attendanceList.push(record);
+        }
+      }
+      // Re-sort after merging
+      attendanceList.sort((a, b) => {
+        const lastCmp = (a.last_name || '').localeCompare(b.last_name || '');
+        return lastCmp !== 0 ? lastCmp : (a.first_name || '').localeCompare(b.first_name || '');
+      });
+    }
 
     // Get potential visitor attendees based on service-based filtering
     // (visitor config and service dates already fetched above for reuse)
-    
+
     // Build the visitor query using service-based filtering
     // Use historical people_type if available
     const visitorPeopleTypeExpression = hasPeopleTypeAtTime
       ? `COALESCE(ar.people_type_at_time, i.people_type) as people_type`
       : `i.people_type`;
-    
+
     let visitorQuery = `
-      SELECT DISTINCT 
-        CONCAT(i.first_name, ' ', i.last_name) as name,
+      SELECT DISTINCT
+        i.first_name || ' ' || i.last_name as name,
         CASE WHEN ${hasPeopleTypeAtTime ? 'COALESCE(ar.people_type_at_time, i.people_type)' : 'i.people_type'} = 'local_visitor' THEN 'potential_regular' ELSE 'temporary_other' END as visitor_type,
         f.id as visitor_family_group,
         f.family_notes as notes,
@@ -1526,10 +2005,10 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       JOIN families f ON i.family_id = f.id
       JOIN gathering_lists gl ON i.id = gl.individual_id AND gl.gathering_type_id = ?
       LEFT JOIN attendance_records ar ON ar.individual_id = i.id AND ar.session_id = ?
-      WHERE ${hasPeopleTypeAtTime 
+      WHERE ${hasPeopleTypeAtTime
         ? `(COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor') OR (ar.people_type_at_time IS NULL AND i.people_type IN ('local_visitor', 'traveller_visitor')))`
         : `i.people_type IN ('local_visitor', 'traveller_visitor')`}
-        AND (i.is_active = true OR ar.present = 1 OR ar.present = true)
+        AND (i.is_active = 1 OR ar.present = 1 OR ar.present = 1)
         AND f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.church_id = ?
     `;
@@ -1538,56 +2017,92 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
 
     // Add search filter if provided
     if (search && search.trim()) {
-      visitorQuery += ` AND (CONCAT(i.first_name, ' ', i.last_name) LIKE ? OR f.family_name LIKE ?)`;
+      visitorQuery += ` AND (i.first_name || ' ' || i.last_name LIKE ? OR f.family_name LIKE ?)`;
       const searchTerm = `%${search.trim()}%`;
       visitorParams.push(searchTerm, searchTerm);
     }
 
     visitorQuery += ` ORDER BY i.last_attendance_date DESC, f.family_name`;
 
-    const allPotentialVisitors = await Database.query(visitorQuery, visitorParams);
+    let allPotentialVisitors = await Database.query(visitorQuery, visitorParams);
 
-    // Filter visitors based on service-based logic (not when searching)
-    const potentialVisitors = search && search.trim() ? 
-      allPotentialVisitors : 
+    // For legacy (non-snapshotted) sessions, also include visitors with attendance_records
+    // but no longer on the gathering list
+    if (sessionId && !rosterSnapshotted) {
+      const existingVisitorIds = new Set(allPotentialVisitors.map(v => v.id));
+      const orphanedVisitors = await Database.query(`
+        SELECT DISTINCT
+          i.first_name || ' ' || i.last_name as name,
+          CASE WHEN COALESCE(ar.people_type_at_time, i.people_type) = 'local_visitor' THEN 'potential_regular' ELSE 'temporary_other' END as visitor_type,
+          f.id as visitor_family_group,
+          f.family_notes as notes,
+          i.last_attendance_date as last_attended,
+          i.created_at as individual_created_at,
+          f.family_name,
+          f.id as family_id,
+          i.id,
+          COALESCE(ar.people_type_at_time, i.people_type) as people_type,
+          i.is_active
+        FROM attendance_records ar
+        JOIN individuals i ON ar.individual_id = i.id
+        JOIN families f ON i.family_id = f.id
+        WHERE ar.session_id = ?
+          AND ar.church_id = ?
+          AND COALESCE(ar.people_type_at_time, i.people_type) IN ('local_visitor', 'traveller_visitor')
+        ORDER BY i.last_attendance_date DESC, f.family_name
+      `, [sessionId, req.user.church_id]);
+
+      for (const visitor of orphanedVisitors) {
+        if (!existingVisitorIds.has(visitor.id)) {
+          allPotentialVisitors.push(visitor);
+        }
+      }
+    }
+
+    // Filter visitors based on absence logic (not when searching)
+    const potentialVisitors = search && search.trim() ?
+      allPotentialVisitors :
       allPotentialVisitors.filter(visitor => {
         const currentDate = new Date(date);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const isPastGathering = currentDate < today;
-        
+
         // For archived visitors: only show them if they have attendance records for past gatherings
         if (visitor.is_active === false || visitor.is_active === 0) {
-          // For past gatherings: show archived visitors only if they have attendance records
           if (isPastGathering) {
             return visitor.present === 1 || visitor.present === true;
           }
-          // For current/future gatherings: don't show archived visitors
           return false;
         }
-        
-        // Use lastAttendanceDate, falling back to createdAt for visitors who never attended
+
+        if (useSnapshotLogic) {
+          // Snapshot-based: count consecutive absences
+          const absences = absenceMap.get(visitor.id) || 0;
+          const historicalPeopleType = visitor.people_type || 'regular';
+          const isLocal = historicalPeopleType === 'local_visitor';
+          const limit = isLocal ? visitorConfig.localVisitorServiceLimit : visitorConfig.travellerVisitorServiceLimit;
+          return absences < limit;
+        }
+
+        // Legacy date-based filtering
         const effectiveDate = visitor.last_attended || visitor.individual_created_at;
         if (!effectiveDate) return true;
-        
-        // Use historical people_type if available, otherwise use current type
+
         const historicalPeopleType = visitor.people_type || (hasPeopleTypeAtTime ? null : 'regular');
-        const relevantServiceDates = historicalPeopleType === 'local_visitor' ? 
+        const relevantServiceDates = historicalPeopleType === 'local_visitor' ?
           localServiceDates : travellerServiceDates;
-        
-        // Check if effective date is within the relevant service dates
+
         const parsedEffective = new Date(effectiveDate);
         parsedEffective.setHours(0, 0, 0, 0);
         const effectiveDateStr = parsedEffective.toISOString().split('T')[0];
-        
-        // Check if visitor's last attendance is within the time window (on or after the oldest service date)
+
         if (relevantServiceDates.length === 0) return false;
-        
-        // Get the oldest service date (last in the array since they're ordered DESC)
+
         const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
         if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
-        
-        const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
+
+        const oldestServiceDateStr = String(oldestServiceDate.session_date).split('T')[0];
         return effectiveDateStr >= oldestServiceDateStr;
       });
 
@@ -1646,39 +2161,40 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
       } else {
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
           VALUES (?, ?, ?)
-          ON DUPLICATE KEY UPDATE updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id]);
       }
 
       logger.debugLog('Session result', sessionResult);
 
-      let sessionId;
-      if (sessionResult.insertId) {
-        sessionId = Number(sessionResult.insertId);
-      } else {
-        // If no insertId, the session already exists, so get its ID
-        const sessions = hasSessionsChurchId
-          ? await conn.query(
-              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-              [gatheringTypeId, date, req.user.church_id]
-            )
-          : await conn.query(
-              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-              [gatheringTypeId, date]
-            );
-        if (sessions.length === 0) {
-          throw new Error('Failed to create or retrieve attendance session');
-        }
-        sessionId = Number(sessions[0].id);
+      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+      const sessions1 = hasSessionsChurchId
+        ? await conn.query(
+            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+            [gatheringTypeId, date, req.user.church_id]
+          )
+        : await conn.query(
+            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+            [gatheringTypeId, date]
+          );
+      if (sessions1.length === 0) {
+        throw new Error('Failed to create or retrieve attendance session');
       }
+      const sessionId = Number(sessions1[0].id);
 
       logger.debugLog('Session ID', sessionId);
+
+      // Snapshot roster when any record is being marked present
+      if (attendanceRecords && attendanceRecords.some(r => r.present)) {
+        await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
+      }
 
       // Update individual attendance records with timestamp-based conflict detection
       if (attendanceRecords && attendanceRecords.length > 0) {
@@ -1744,25 +2260,25 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
             }
           }
 
-          // Use INSERT ... ON DUPLICATE KEY UPDATE with timestamp and user tracking
+          // Use INSERT ... ON CONFLICT DO UPDATE SET with timestamp and user tracking
           if (hasAttendanceRecordsChurchId) {
             if (hasPeopleTypeAtTime && peopleTypeAtTime) {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time, updated_by)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  present = VALUES(present),
-                  people_type_at_time = VALUES(people_type_at_time),
-                  updated_by = VALUES(updated_by),
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = excluded.present,
+                  people_type_at_time = excluded.people_type_at_time,
+                  updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, req.user.church_id, peopleTypeAtTime, req.user.id]);
             } else {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, church_id, updated_by)
                 VALUES (?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  present = VALUES(present),
-                  updated_by = VALUES(updated_by),
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = excluded.present,
+                  updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, req.user.church_id, req.user.id]);
             }
@@ -1771,19 +2287,19 @@ router.post('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, aud
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time, updated_by)
                 VALUES (?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  present = VALUES(present),
-                  people_type_at_time = VALUES(people_type_at_time),
-                  updated_by = VALUES(updated_by),
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = excluded.present,
+                  people_type_at_time = excluded.people_type_at_time,
+                  updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, peopleTypeAtTime, req.user.id]);
             } else {
               await conn.query(`
                 INSERT INTO attendance_records (session_id, individual_id, present, updated_by)
                 VALUES (?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                  present = VALUES(present),
-                  updated_by = VALUES(updated_by),
+                ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                  present = excluded.present,
+                  updated_by = excluded.updated_by,
                   updated_at = CURRENT_TIMESTAMP
               `, [sessionId, record.individualId, record.present, req.user.id]);
             }
@@ -1868,117 +2384,82 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
     
     // Get visitor configuration for this church
     const visitorConfig = await getVisitorConfig(req.user.church_id);
-    
-    // Get the last N service dates for filtering (relative to today for recent visitors endpoint)
+
+    // Check if snapshot-based absence counting is available
+    const useSnapshotLogic = await hasSnapshotData(gatheringTypeId, req.user.church_id);
+    const absenceMap = useSnapshotLogic ? await getVisitorAbsenceCounts(gatheringTypeId, req.user.church_id) : new Map();
+
+    // Get the last N service dates for filtering (only needed for legacy logic)
     const today = new Date().toISOString().split('T')[0];
-    const localServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
-    const travellerServiceDates = await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
-    
+    const localServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.localVisitorServiceLimit, today);
+    const travellerServiceDates = useSnapshotLogic ? [] : await getLastNServiceDates(gatheringTypeId, req.user.church_id, visitorConfig.travellerVisitorServiceLimit, today);
+
     // Get all visitor families who have attended this gathering OR were created recently
     const allVisitorFamilies = await Database.query(`
-      SELECT DISTINCT 
+      SELECT DISTINCT
         f.id as family_id,
         f.family_name,
         f.family_notes,
         f.family_type,
         COALESCE(f.last_attended, f.created_at) as last_activity,
-        GROUP_CONCAT(CONCAT(i.first_name, ' ', i.last_name) ORDER BY i.first_name SEPARATOR ' & ') as member_names,
-        GROUP_CONCAT(DISTINCT i.people_type ORDER BY i.people_type SEPARATOR ',') as people_types
+        GROUP_CONCAT(i.first_name || ' ' || i.last_name, ' & ') as member_names,
+        GROUP_CONCAT(DISTINCT i.people_type) as people_types
       FROM families f
       JOIN individuals i ON f.id = i.family_id
       WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND i.is_active = true
+        AND i.is_active = 1
         AND f.church_id = ?
         AND EXISTS (
-          SELECT 1 FROM attendance_records ar2 
-          JOIN attendance_sessions s2 ON ar2.session_id = s2.id 
+          SELECT 1 FROM attendance_records ar2
+          JOIN attendance_sessions s2 ON ar2.session_id = s2.id
           WHERE ar2.individual_id = i.id AND s2.gathering_type_id = ? AND ar2.church_id = ?
         )
       GROUP BY f.id
       ORDER BY last_activity DESC, f.family_name
     `, [req.user.church_id, gatheringTypeId, req.user.church_id]);
-    
-    // Filter families based on service dates relative to today
-    // For the recent visitors endpoint, we use today's date (no specific viewing date)
-    
-    console.log('🔍 Recent visitors debug - Service dates:', {
-      today: today,
-      localServiceDatesCount: localServiceDates.length,
-      localServiceDates: localServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
-      travellerServiceDatesCount: travellerServiceDates.length,
-      travellerServiceDates: travellerServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
-      allVisitorFamiliesCount: allVisitorFamilies.length
-    });
-    
-    const recentVisitorFamilies = allVisitorFamilies.filter(family => {
-      // Apply service-based filtering for all families
-      // Use family_type as the primary determinant (traveller_visitor families use traveller limits)
-      // Only use local limits if family_type is explicitly local_visitor
+
+    // When using snapshot logic, we filter at the individual level after fetching members
+    // When using legacy logic, we filter at the family level first
+    const familiesToProcess = useSnapshotLogic ? allVisitorFamilies : allVisitorFamilies.filter(family => {
       const isLocal = family.family_type === 'local_visitor';
       const relevantServiceDates = isLocal ? localServiceDates : travellerServiceDates;
-      
-      if (!family.last_activity) {
-        console.log(`❌ ${family.family_name} - No last_activity`);
-        return false;
-      }
-      
+
+      if (!family.last_activity || relevantServiceDates.length === 0) return false;
+
       const lastActivityDate = new Date(family.last_activity);
       lastActivityDate.setHours(0, 0, 0, 0);
       const lastActivityStr = lastActivityDate.toISOString().split('T')[0];
-      
-      // Debug logging for all visitor families
-      const debugInfo = {
-        family_name: family.family_name,
-        family_type: family.family_type,
-        people_types: family.people_types,
-        last_activity: lastActivityStr,
-        isLocal: isLocal,
-        today: today,
-        relevantServiceDatesCount: relevantServiceDates.length,
-        relevantServiceDates: relevantServiceDates.map(s => s.session_date ? s.session_date.toISOString().split('T')[0] : 'undefined'),
-        oldestServiceDate: relevantServiceDates.length > 0 ? (relevantServiceDates[relevantServiceDates.length - 1]?.session_date?.toISOString().split('T')[0] || 'none') : 'none',
-      };
-      
-      // Check if visitor's last activity is within the time window (on or after the oldest service date)
-      // This checks if they attended within the last N services relative to today
-      if (relevantServiceDates.length === 0) {
-        console.log(`❌ ${family.family_name} - No relevant service dates`, debugInfo);
-        return false;
-      }
-      
-      // Get the oldest service date (last in the array since they're ordered DESC)
+
       const oldestServiceDate = relevantServiceDates[relevantServiceDates.length - 1];
-      if (!oldestServiceDate || !oldestServiceDate.session_date) {
-        console.log(`❌ ${family.family_name} - Invalid oldest service date`, debugInfo);
-        return false;
-      }
-      
-      const oldestServiceDateStr = oldestServiceDate.session_date.toISOString().split('T')[0];
-      const shouldAppear = lastActivityStr >= oldestServiceDateStr;
-      
-      console.log(`${shouldAppear ? '✅' : '❌'} ${family.family_name} - Last activity: ${lastActivityStr}, Oldest service: ${oldestServiceDateStr}`, debugInfo);
-      
-      return shouldAppear;
+      if (!oldestServiceDate || !oldestServiceDate.session_date) return false;
+
+      const oldestServiceDateStr = String(oldestServiceDate.session_date).split('T')[0];
+      return lastActivityStr >= oldestServiceDateStr;
     });
 
     // Convert family data to individual visitor format to match main API
     // IMPORTANT: Only return individuals who are actually in gathering_lists for this gathering
-    // This prevents showing entire families when only one individual was added
     const processedVisitors = [];
-    
-    for (const family of recentVisitorFamilies) {
-      // Get individual family members who are actually in gathering_lists for this gathering
+
+    for (const family of familiesToProcess) {
       const familyMembers = await Database.query(`
         SELECT i.id, i.first_name, i.last_name, i.people_type, i.is_child
         FROM individuals i
         JOIN gathering_lists gl ON gl.individual_id = i.id AND gl.gathering_type_id = ?
-        WHERE i.family_id = ? AND i.is_active = true AND i.church_id = ?
+        WHERE i.family_id = ? AND i.is_active = 1 AND i.church_id = ?
         ORDER BY i.first_name
       `, [gatheringTypeId, family.family_id, req.user.church_id]);
 
-      // Create visitor object for each individual
       for (const member of familyMembers) {
+        // When using snapshot logic, filter by individual absence count
+        if (useSnapshotLogic) {
+          const absences = absenceMap.get(member.id) || 0;
+          const isLocal = member.people_type === 'local_visitor';
+          const limit = isLocal ? visitorConfig.localVisitorServiceLimit : visitorConfig.travellerVisitorServiceLimit;
+          if (absences >= limit) continue;
+        }
+
         const isLocal = member.people_type === 'local_visitor';
 
         processedVisitors.push({
@@ -2017,7 +2498,7 @@ router.get('/visitors/all', async (req, res) => {
       JOIN individuals i ON f.id = i.family_id
       WHERE f.family_type IN ('local_visitor', 'traveller_visitor')
         AND i.people_type IN ('local_visitor', 'traveller_visitor')
-        AND i.is_active = true
+        AND i.is_active = 1
         AND f.church_id = ?
       GROUP BY f.id
       ORDER BY last_activity DESC, f.family_name
@@ -2029,7 +2510,7 @@ router.get('/visitors/all', async (req, res) => {
       const familyMembers = await Database.query(`
         SELECT id, first_name, last_name, people_type
         FROM individuals 
-        WHERE family_id = ? AND is_active = true AND church_id = ?
+        WHERE family_id = ? AND is_active = 1 AND church_id = ?
         ORDER BY first_name
       `, [family.family_id, req.user.church_id]);
 
@@ -2070,19 +2551,16 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
       let sessionResult = await conn.query(`
         INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
         VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
       `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
 
-      let sessionId;
-      if (sessionResult.insertId) {
-        sessionId = Number(sessionResult.insertId);
-      } else {
-        const sessions = await conn.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-          [gatheringTypeId, date, req.user.church_id]
-        );
-        sessionId = Number(sessions[0].id);
-      }
+      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+      const sessionsLookup = await conn.query(
+        'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+        [gatheringTypeId, date, req.user.church_id]
+      );
+      const sessionId = Number(sessionsLookup[0].id);
 
       // Prepare people to create
       let peopleToCreate = [];
@@ -2211,18 +2689,18 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
           if (familyId) {
             await conn.query(`
               UPDATE individuals 
-              SET family_id = ?, people_type = ?, updated_at = NOW()
+              SET family_id = ?, people_type = ?, updated_at = datetime('now')
               WHERE id = ?
             `, [familyId, peopleType, individualId]);
             
             // Sync family_type for new family
             const newFamilyMembers = await conn.query(
-              'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+              'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1',
               [familyId]
             );
             if (newFamilyMembers.length === 1 && newFamilyMembers[0].people_type) {
               await conn.query(
-                'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                `UPDATE families SET family_type = ?, updated_at = datetime('now') WHERE id = ?`,
                 [newFamilyMembers[0].people_type, familyId]
               );
             }
@@ -2230,12 +2708,12 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
             // Sync old family if family_id changed
             if (oldFamilyId && oldFamilyId !== familyId) {
               const oldFamilyMembers = await conn.query(
-                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1',
                 [oldFamilyId]
               );
               if (oldFamilyMembers.length === 1 && oldFamilyMembers[0].people_type) {
                 await conn.query(
-                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                  `UPDATE families SET family_type = ?, updated_at = datetime('now') WHERE id = ?`,
                   [oldFamilyMembers[0].people_type, oldFamilyId]
                 );
               }
@@ -2244,19 +2722,19 @@ router.post('/:gatheringTypeId/:date/visitors', requireGatheringAccess, auditLog
             // Even if not joining a family, update people_type to match visitor type
             await conn.query(`
               UPDATE individuals 
-              SET people_type = ?, updated_at = NOW()
+              SET people_type = ?, updated_at = datetime('now')
               WHERE id = ?
             `, [peopleType, individualId]);
             
             // Sync old family if individual was in a family
             if (oldFamilyId) {
               const oldFamilyMembers = await conn.query(
-                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true',
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1',
                 [oldFamilyId]
               );
               if (oldFamilyMembers.length === 1 && oldFamilyMembers[0].people_type) {
                 await conn.query(
-                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ?',
+                  `UPDATE families SET family_type = ?, updated_at = datetime('now') WHERE id = ?`,
                   [oldFamilyMembers[0].people_type, oldFamilyId]
                 );
               }
@@ -2343,19 +2821,16 @@ router.put('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAccess
       let sessionResult = await conn.query(`
         INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
         VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+        ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
       `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
 
-      let sessionId;
-      if (sessionResult.insertId) {
-        sessionId = Number(sessionResult.insertId);
-      } else {
-        const sessions = await conn.query(
-          'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-          [gatheringTypeId, date, req.user.church_id]
-        );
-        sessionId = Number(sessions[0].id);
-      }
+      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+      const sessionsLookup = await conn.query(
+        'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+        [gatheringTypeId, date, req.user.church_id]
+      );
+      const sessionId = Number(sessionsLookup[0].id);
 
       // Treat visitorId as individual_id; update or replace the individuals and gathering list
       // Remove the old individual's attendance and gathering list assignment for this session
@@ -2527,7 +3002,7 @@ router.post('/:gatheringTypeId/:date/regulars', requireGatheringAccess, auditLog
           WHERE LOWER(first_name) = LOWER(?) 
             AND LOWER(last_name) = LOWER(?) 
             AND (people_type = 'regular' OR people_type IS NULL)
-            AND is_active = true
+            AND is_active = 1
         `, [firstName, lastName]);
 
         let individualId;
@@ -2615,7 +3090,7 @@ router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAcc
 
       if (deleteFamily === 'true' && ind.family_id) {
         const familyMembers = await conn.query(
-          'SELECT id, first_name, last_name FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+          'SELECT id, first_name, last_name FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
           [ind.family_id, req.user.church_id]
         );
         targetIds = familyMembers.map(m => Number(m.id));
@@ -2648,7 +3123,25 @@ router.delete('/:gatheringTypeId/:date/visitors/:visitorId', requireGatheringAcc
 // Add visitor family to service
 router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGatheringAccess, auditLog('ADD_VISITOR_FAMILY_TO_SERVICE'), async (req, res) => {
   try {
-    const { gatheringTypeId, date, familyId } = req.params;
+    const gatheringTypeId = Number(req.params.gatheringTypeId);
+    const date = req.params.date;
+    const familyId = Number(req.params.familyId);
+
+    if (!Number.isInteger(gatheringTypeId) || gatheringTypeId <= 0) {
+      return res.status(400).json({ error: 'Invalid gathering type' });
+    }
+    if (!Number.isInteger(familyId) || familyId <= 0) {
+      return res.status(400).json({ error: 'Invalid family' });
+    }
+
+    // Validate gathering type exists in this church (prevents FOREIGN KEY failure on gathering_lists)
+    const hasGatheringChurchId = await columnExists('gathering_types', 'church_id');
+    const gatheringCheck = hasGatheringChurchId
+      ? await Database.query('SELECT id FROM gathering_types WHERE id = ? AND church_id = ?', [gatheringTypeId, req.user.church_id])
+      : await Database.query('SELECT id FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+    if (gatheringCheck.length === 0) {
+      return res.status(404).json({ error: 'Gathering not found' });
+    }
 
     await Database.transaction(async (conn) => {
       // Verify the family exists and is a visitor family
@@ -2669,37 +3162,37 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
       } else {
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
           VALUES (?, ?, ?)
-          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id]);
       }
 
-      let sessionId;
-      if (sessionResult.insertId) {
-        sessionId = Number(sessionResult.insertId);
-      } else {
-        const sessions = hasSessionsChurchId
-          ? await conn.query(
-              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
-              [gatheringTypeId, date, req.user.church_id]
-            )
-          : await conn.query(
-              'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-              [gatheringTypeId, date]
-            );
-        sessionId = Number(sessions[0].id);
-      }
+      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+      const sessionsLookup = hasSessionsChurchId
+        ? await conn.query(
+            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+            [gatheringTypeId, date, req.user.church_id]
+          )
+        : await conn.query(
+            'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+            [gatheringTypeId, date]
+          );
+      const sessionId = Number(sessionsLookup[0].id);
 
-      // Get all individuals in the visitor family
+      // Snapshot roster before recording visitor attendance
+      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
+
+      // Get all individuals in the visitor family (use numeric id for FK consistency)
       const individuals = await conn.query(`
-        SELECT id, first_name, last_name 
+        SELECT id, first_name, last_name, people_type 
         FROM individuals 
-        WHERE family_id = ? AND is_active = true
+        WHERE family_id = ? AND is_active = 1
       `, [familyId]);
 
       if (individuals.length === 0) {
@@ -2707,39 +3200,41 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
       }
 
       const createdIndividuals = [];
+      const addedBy = req.user.id != null ? Number(req.user.id) : null;
 
       // Add each individual to the gathering list and mark as present
       for (const individual of individuals) {
+        const individualId = Number(individual.id);
         // Add to gathering list if not already there
         const existingGatheringList = await conn.query(`
           SELECT id FROM gathering_lists 
           WHERE gathering_type_id = ? AND individual_id = ? AND church_id = ?
-        `, [gatheringTypeId, individual.id, req.user.church_id]);
+        `, [gatheringTypeId, individualId, req.user.church_id]);
 
         if (existingGatheringList.length === 0) {
         await conn.query(`
           INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
           VALUES (?, ?, ?, ?)
-        `, [gatheringTypeId, individual.id, req.user.id, req.user.church_id]);
+        `, [gatheringTypeId, individualId, addedBy, req.user.church_id]);
         }
 
         // Mark as present in attendance records
         // Store historical people_type if column exists
         const hasPeopleTypeAtTime = await columnExists('attendance_records', 'people_type_at_time');
         const peopleTypeAtTime = individual.people_type || null;
-        
+
         if (hasPeopleTypeAtTime && peopleTypeAtTime) {
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
-            VALUES (?, ?, true, ?, ?)
-            ON DUPLICATE KEY UPDATE present = VALUES(present), people_type_at_time = VALUES(people_type_at_time)
-          `, [sessionId, individual.id, req.user.church_id, peopleTypeAtTime]);
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = excluded.present, people_type_at_time = excluded.people_type_at_time
+          `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id)
-            VALUES (?, ?, true, ?)
-            ON DUPLICATE KEY UPDATE present = VALUES(present)
-          `, [sessionId, individual.id, req.user.church_id]);
+            VALUES (?, ?, 1, ?)
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = excluded.present
+          `, [sessionId, individualId, req.user.church_id]);
         }
 
         // Update last_attendance_date for the individual
@@ -2747,10 +3242,10 @@ router.post('/:gatheringTypeId/:date/visitor-family/:familyId', requireGathering
         UPDATE individuals 
         SET last_attendance_date = ? 
         WHERE id = ? AND church_id = ?
-      `, [date, individual.id, req.user.church_id]);
+      `, [date, individualId, req.user.church_id]);
 
         createdIndividuals.push({
-          id: Number(individual.id),
+          id: individualId,
           firstName: individual.first_name,
           lastName: individual.last_name,
           present: true
@@ -2843,30 +3338,30 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id, req.user.church_id]);
       } else {
         sessionResult = await conn.query(`
           INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by)
           VALUES (?, ?, ?)
-          ON DUPLICATE KEY UPDATE created_by = VALUES(created_by), updated_at = NOW()
+          ON CONFLICT(gathering_type_id, session_date, church_id) DO UPDATE SET created_by = excluded.created_by, updated_at = datetime('now')
         `, [gatheringTypeId, date, req.user.id]);
       }
 
-      let sessionId;
-      if (sessionResult.insertId) {
-        sessionId = Number(sessionResult.insertId);
-      } else {
-        const sessions = await conn.query(
-          hasSessionsChurchId
-            ? 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?'
-            : 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
-          hasSessionsChurchId 
-            ? [gatheringTypeId, date, req.user.church_id]
-            : [gatheringTypeId, date]
-        );
-        sessionId = Number(sessions[0].id);
-      }
+      // Always SELECT the session ID after UPSERT — lastInsertRowid is unreliable
+      // when ON CONFLICT DO UPDATE fires (it returns a stale value from a prior INSERT)
+      const sessionsLookup = await conn.query(
+        hasSessionsChurchId
+          ? 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?'
+          : 'SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+        hasSessionsChurchId
+          ? [gatheringTypeId, date, req.user.church_id]
+          : [gatheringTypeId, date]
+      );
+      const sessionId = Number(sessionsLookup[0].id);
+
+      // Snapshot roster before recording individual attendance
+      await createRosterSnapshot(conn, sessionId, gatheringTypeId, req.user.church_id, date);
 
       // Add individual to gathering list if not already there
       const existingGatheringList = await conn.query(
@@ -2909,13 +3404,13 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
             VALUES (?, ?, 1, ?, ?)
-            ON DUPLICATE KEY UPDATE present = 1, people_type_at_time = VALUES(people_type_at_time)
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
           `, [sessionId, individualId, req.user.church_id, peopleTypeAtTime]);
         } else {
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, church_id)
             VALUES (?, ?, 1, ?)
-            ON DUPLICATE KEY UPDATE present = 1
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
           `, [sessionId, individualId, req.user.church_id]);
         }
       } else {
@@ -2923,13 +3418,13 @@ router.post('/:gatheringTypeId/:date/individual/:individualId', requireGathering
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time)
             VALUES (?, ?, 1, ?)
-            ON DUPLICATE KEY UPDATE present = 1, people_type_at_time = VALUES(people_type_at_time)
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1, people_type_at_time = excluded.people_type_at_time
           `, [sessionId, individualId, peopleTypeAtTime]);
         } else {
           await conn.query(`
             INSERT INTO attendance_records (session_id, individual_id, present)
             VALUES (?, ?, 1)
-            ON DUPLICATE KEY UPDATE present = 1
+            ON CONFLICT(session_id, individual_id) DO UPDATE SET present = 1
           `, [sessionId, individualId]);
         }
       }

@@ -30,7 +30,7 @@ router.get('/', async (req, res) => {
 router.put('/:id/read', async (req, res) => {
   try {
     await Database.query(`
-      UPDATE notifications SET is_read = true 
+      UPDATE notifications SET is_read = 1 
       WHERE id = ? AND user_id = ? AND church_id = ?
     `, [req.params.id, req.user.id, req.user.church_id]);
 

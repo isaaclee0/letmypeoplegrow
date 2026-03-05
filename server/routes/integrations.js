@@ -305,8 +305,8 @@ router.post('/elvanto/connect', async (req, res) => {
     await Database.query(`
       INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
       VALUES (?, 'elvanto_api_key', ?, ?)
-      ON DUPLICATE KEY UPDATE
-        preference_value = VALUES(preference_value),
+      ON CONFLICT(user_id, preference_key) DO UPDATE SET
+        preference_value = excluded.preference_value,
         updated_at = CURRENT_TIMESTAMP
     `, [req.user.id, JSON.stringify(integrationData), req.user.church_id]);
 
@@ -898,7 +898,7 @@ router.post('/elvanto/import-gatherings', async (req, res) => {
           ]
         );
 
-        const gatheringInsertId = Array.isArray(result) ? result[0]?.insertId : result?.insertId;
+        const gatheringInsertId = result?.insertId;
         importedGatherings.push({
           id: gatheringInsertId ? Number(gatheringInsertId) : null,
           name: gatheringData.name,
@@ -1012,7 +1012,7 @@ router.post('/elvanto/import-gatherings', async (req, res) => {
           ]
         );
 
-        const gatheringInsertId = Array.isArray(result) ? result[0]?.insertId : result?.insertId;
+        const gatheringInsertId = result?.insertId;
         importedGatherings.push({
           id: gatheringInsertId ? Number(gatheringInsertId) : null,
           name: gatheringData.name,
@@ -1272,10 +1272,10 @@ router.post('/elvanto/import', async (req, res) => {
               
               const familyResult = await Database.query(`
                 INSERT INTO families (family_name, church_id, created_at, updated_at)
-                VALUES (?, ?, NOW(), NOW())
+                VALUES (?, ?, datetime('now'), datetime('now'))
               `, [familyName, req.user.church_id]);
 
-              const familyInsertId = Array.isArray(familyResult) ? familyResult[0]?.insertId : familyResult?.insertId;
+              const familyInsertId = familyResult?.insertId;
               if (!familyInsertId) {
                 errors.push(`Failed to create family for person ${personId}: no insertId returned`);
                 console.error(`Family insert result:`, familyResult);
@@ -1284,10 +1284,10 @@ router.post('/elvanto/import', async (req, res) => {
 
               const individualResult = await Database.query(`
                 INSERT INTO individuals (first_name, last_name, family_id, people_type, church_id, created_at, updated_at)
-                VALUES (?, ?, ?, 'regular', ?, NOW(), NOW())
+                VALUES (?, ?, ?, 'regular', ?, datetime('now'), datetime('now'))
               `, [person.firstname, person.lastname, familyInsertId, req.user.church_id]);
 
-              const individualInsertId = Array.isArray(individualResult) ? individualResult[0]?.insertId : individualResult?.insertId;
+              const individualInsertId = individualResult?.insertId;
               if (individualInsertId) {
                 imported.people.push({ elvantoId: personId, localId: individualInsertId, name: `${person.firstname} ${person.lastname}` });
               }
@@ -1361,11 +1361,10 @@ router.post('/elvanto/import', async (req, res) => {
 
               const familyResult = await Database.query(`
                 INSERT INTO families (family_name, church_id, created_at, updated_at)
-                VALUES (?, ?, NOW(), NOW())
+                VALUES (?, ?, datetime('now'), datetime('now'))
               `, [familyName, req.user.church_id]);
 
-              // MariaDB returns an object with insertId for INSERT queries, not an array
-              const localFamilyId = Array.isArray(familyResult) ? familyResult[0]?.insertId : familyResult?.insertId;
+              const localFamilyId = familyResult?.insertId;
               
               if (!localFamilyId) {
                 errors.push(`Family ${familyId}: Database insert failed - no insertId returned`);
@@ -1383,7 +1382,7 @@ router.post('/elvanto/import', async (req, res) => {
 
                   await Database.query(`
                     INSERT INTO individuals (first_name, last_name, family_id, people_type, church_id, created_at, updated_at)
-                    VALUES (?, ?, ?, 'regular', ?, NOW(), NOW())
+                    VALUES (?, ?, ?, 'regular', ?, datetime('now'), datetime('now'))
                   `, [person.firstname, person.lastname, localFamilyId, req.user.church_id]);
                 } catch (err) {
                   errors.push(`Failed to import ${person.firstname} ${person.lastname}: ${err.message}`);
@@ -1443,7 +1442,7 @@ router.post('/elvanto/import', async (req, res) => {
           try {
             familyResult = await Database.query(`
               INSERT INTO families (family_name, church_id, created_at, updated_at)
-              VALUES (?, ?, NOW(), NOW())
+              VALUES (?, ?, datetime('now'), datetime('now'))
             `, [familyName, req.user.church_id]);
           } catch (dbErr) {
             errors.push(`Failed to create family for person ${personId} (${person.firstname} ${person.lastname}): ${dbErr.message}`);
@@ -1451,7 +1450,7 @@ router.post('/elvanto/import', async (req, res) => {
             continue;
           }
 
-          const familyInsertId = Array.isArray(familyResult) ? familyResult[0]?.insertId : familyResult?.insertId;
+          const familyInsertId = familyResult?.insertId;
           if (!familyInsertId) {
             errors.push(`Failed to create family for person ${personId}: no insertId returned`);
             console.error(`Family insert result:`, familyResult);
@@ -1462,7 +1461,7 @@ router.post('/elvanto/import', async (req, res) => {
           try {
             individualResult = await Database.query(`
               INSERT INTO individuals (first_name, last_name, family_id, people_type, church_id, created_at, updated_at)
-              VALUES (?, ?, ?, 'regular', ?, NOW(), NOW())
+              VALUES (?, ?, ?, 'regular', ?, datetime('now'), datetime('now'))
             `, [person.firstname, person.lastname, familyInsertId, req.user.church_id]);
           } catch (dbErr) {
             errors.push(`Failed to create individual for person ${personId} (${person.firstname} ${person.lastname}): ${dbErr.message}`);
@@ -1476,7 +1475,7 @@ router.post('/elvanto/import', async (req, res) => {
             continue;
           }
 
-          const individualInsertId = Array.isArray(individualResult) ? individualResult[0]?.insertId : individualResult?.insertId;
+          const individualInsertId = individualResult?.insertId;
           if (individualInsertId) {
             imported.people.push({ elvantoId: personId, localId: individualInsertId, name: `${person.firstname} ${person.lastname}` });
           }
@@ -2105,7 +2104,7 @@ router.post('/planning-center/import-people', async (req, res) => {
         // Create family
         const familyResult = await Database.query(`
           INSERT INTO families (church_id, family_name, created_by, created_at)
-          VALUES (?, ?, ?, NOW())
+          VALUES (?, ?, ?, datetime('now'))
         `, [churchId, familyName, userId]);
 
         const familyId = familyResult.insertId;
@@ -2121,24 +2120,19 @@ router.post('/planning-center/import-people', async (req, res) => {
           const person = sortedMembers[i];
           const attrs = person.attributes;
 
-          const isMainContact1 = i === 0; // First adult is MC1
-          const isMainContact2 = i === 1 && adults.length >= 2; // Second adult is MC2
+          const isChild = attrs.child === true ? 1 : 0;
 
           const individualResult = await Database.query(`
             INSERT INTO individuals
-            (church_id, family_id, first_name, last_name, email, mobile, date_of_birth,
-             people_type, is_main_contact_1, is_main_contact_2, is_active, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'regular', ?, ?, true, ?, NOW())
+            (church_id, family_id, first_name, last_name,
+             people_type, is_child, is_active, created_by, created_at)
+            VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'))
           `, [
             churchId,
             familyId,
             attrs.first_name || '',
             attrs.last_name || '',
-            attrs.emails?.[0] || null,
-            attrs.phone_numbers?.[0] || null,
-            attrs.birthdate || null,
-            isMainContact1,
-            isMainContact2,
+            isChild,
             userId
           ]);
 

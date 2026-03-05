@@ -19,7 +19,7 @@ router.get('/', async (req, res) => {
         f.last_attended AS lastAttended,
         COUNT(i.id) AS memberCount
       FROM families f
-      JOIN individuals i ON f.id = i.family_id AND i.is_active = true
+      JOIN individuals i ON f.id = i.family_id AND i.is_active = 1
       WHERE f.church_id = ?
       GROUP BY f.id
       ORDER BY f.family_name
@@ -49,7 +49,7 @@ router.get('/all', requireRole(['admin']), async (req, res) => {
         f.family_notes AS familyNotes,
         f.family_type AS familyType,
         f.last_attended AS lastAttended,
-        COUNT(CASE WHEN i.is_active = true THEN i.id END) AS activeMemberCount,
+        COUNT(CASE WHEN i.is_active = 1 THEN i.id END) AS activeMemberCount,
         COUNT(i.id) AS totalMemberCount
       FROM families f
       LEFT JOIN individuals i ON f.id = i.family_id
@@ -120,7 +120,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMIL
     values.push(id, req.user.church_id);
 
     const result = await Database.query(
-      `UPDATE families SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ? AND church_id = ?`,
+      `UPDATE families SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
       values
     );
 
@@ -132,7 +132,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMIL
     if (familyType && ['regular', 'local_visitor', 'traveller_visitor'].includes(familyType)) {
       try {
         await Database.query(
-          'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE family_id = ? AND is_active = true AND church_id = ?',
+          `UPDATE individuals SET people_type = ?, updated_at = datetime('now') WHERE family_id = ? AND is_active = 1 AND church_id = ?`,
           [familyType, id, req.user.church_id]
         );
       } catch (error) {
@@ -155,7 +155,7 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_FAMILY_IF_EMPTY')
 
     // Check active member count
     const members = await Database.query(
-      'SELECT COUNT(1) as cnt FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+      'SELECT COUNT(1) as cnt FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
       [id, req.user.church_id]
     );
 
@@ -164,7 +164,7 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_FAMILY_IF_EMPTY')
     }
 
     const result = await Database.query(
-      'UPDATE families SET is_active = false, updated_at = NOW() WHERE id = ? AND church_id = ?',
+      `UPDATE families SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
       [id, req.user.church_id]
     );
 
@@ -188,7 +188,7 @@ router.post('/visitor', requireRole(['admin', 'coordinator', 'attendance_taker']
       return res.status(400).json({ error: 'Family name, people type, and people are required' });
     }
 
-    await Database.transaction(async (conn) => {
+    const payload = await Database.transaction(async (conn) => {
       // Create family with specific visitor type - now family_type matches people_type
       const familyResult = await conn.query(`
         INSERT INTO families (family_name, family_notes, family_type, created_by, church_id)
@@ -236,11 +236,14 @@ router.post('/visitor', requireRole(['admin', 'coordinator', 'attendance_taker']
         });
       }
 
-      res.status(201).json({ 
-        message: 'Family created successfully',
-        familyId: familyId,
-        individuals: createdIndividuals
-      });
+      return { familyId, createdIndividuals };
+    });
+
+    // Send response after transaction has committed so addVisitorFamilyToService sees the new rows
+    res.status(201).json({
+      message: 'Family created successfully',
+      familyId: payload.familyId,
+      individuals: payload.createdIndividuals
     });
   } catch (error) {
     console.error('Create family error:', error);
@@ -278,7 +281,7 @@ router.post('/merge', requireRole(['admin']), auditLog('MERGE_FAMILIES'), async 
         
         await conn.query(`
           UPDATE families 
-          SET ${updateFields.join(', ')}, updated_at = NOW()
+          SET ${updateFields.join(', ')}, updated_at = datetime('now')
           WHERE id = ? AND church_id = ?
         `, [...updateValues, req.user.church_id]);
       }
@@ -286,14 +289,14 @@ router.post('/merge', requireRole(['admin']), auditLog('MERGE_FAMILIES'), async 
       // Move all individuals from merged families to the kept family
       await conn.query(`
         UPDATE individuals 
-        SET family_id = ?, updated_at = NOW()
+        SET family_id = ?, updated_at = datetime('now')
         WHERE family_id IN (?) AND church_id = ?
       `, [keepFamilyId, mergeFamilyIds, req.user.church_id]);
       
       // Soft delete the merged families
       await conn.query(`
         UPDATE families
-        SET is_active = false, updated_at = NOW()
+        SET is_active = 0, updated_at = datetime('now')
         WHERE id IN (?) AND church_id = ?
       `, [mergeFamilyIds, req.user.church_id]);
     });
@@ -335,7 +338,7 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
       // Move individuals to the new family
       await conn.query(`
         UPDATE individuals 
-        SET family_id = ?, updated_at = NOW()
+        SET family_id = ?, updated_at = datetime('now')
         WHERE id IN (?) AND church_id = ?
       `, [newFamilyId, individualIds, req.user.church_id]);
       
@@ -353,7 +356,7 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
           await conn.query(`
             INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
             VALUES (?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE added_by = VALUES(added_by)
+            ON CONFLICT(gathering_type_id, individual_id) DO UPDATE SET added_by = excluded.added_by
           `, [assignment.gathering_type_id, newFamilyId, req.user.id, req.user.church_id]);
         }
       }

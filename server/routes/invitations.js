@@ -151,13 +151,13 @@ router.post('/send',
       if (email) {
         console.log('📧 [INVITATION_DEBUG] Checking for pending invitation with email:', email ? email.substring(0, 3) + '***' : 'null');
         existingInvitationChecks.push(
-          Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = false AND expires_at > NOW() AND church_id = ?', [email, req.user.church_id])
+          Database.query('SELECT id FROM user_invitations WHERE email = ? AND accepted = 0 AND expires_at > datetime(\'now\') AND church_id = ?', [email, req.user.church_id])
         );
       }
       if (normalizedMobile) {
         console.log('📱 [INVITATION_DEBUG] Checking for pending invitation with mobile:', normalizedMobile);
         existingInvitationChecks.push(
-          Database.query('SELECT id FROM user_invitations WHERE mobile_number = ? AND accepted = false AND expires_at > NOW() AND church_id = ?', [normalizedMobile, req.user.church_id])
+          Database.query('SELECT id FROM user_invitations WHERE mobile_number = ? AND accepted = 0 AND expires_at > datetime(\'now\') AND church_id = ?', [normalizedMobile, req.user.church_id])
         );
       }
 
@@ -249,7 +249,7 @@ router.post('/send',
         console.log('👤 [INVITATION_DEBUG] Creating invited user account for OTC login');
         const createUserResult = await conn.query(`
           INSERT INTO users (email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, is_invited, first_login_completed, church_id)
-          VALUES (?, ?, ?, ?, ?, ?, true, true, false, ?)
+          VALUES (?, ?, ?, ?, ?, ?, 1, 1, 0, ?)
         `, [
           email || null,
           normalizedMobile || null,
@@ -318,7 +318,7 @@ router.get('/pending', requireRole(['admin', 'coordinator']), async (req, res) =
              u.first_name as invited_by_first_name, u.last_name as invited_by_last_name
       FROM user_invitations ui
       JOIN users u ON ui.invited_by = u.id
-      WHERE ui.accepted = false AND ui.expires_at > NOW() AND ui.church_id = ?
+      WHERE ui.accepted = 0 AND ui.expires_at > datetime('now') AND ui.church_id = ?
     `;
     
     let params = [req.user.church_id];
@@ -368,7 +368,7 @@ router.post('/resend/:id',
         SELECT ui.*, u.first_name as invited_by_first_name, u.last_name as invited_by_last_name
         FROM user_invitations ui
         JOIN users u ON ui.invited_by = u.id
-        WHERE ui.id = ? AND ui.accepted = false AND ui.church_id = ?
+        WHERE ui.id = ? AND ui.accepted = 0 AND ui.church_id = ?
       `, [id, req.user.church_id]);
 
       if (invitations.length === 0) {
@@ -388,7 +388,7 @@ router.post('/resend/:id',
 
       await Database.query(`
         UPDATE user_invitations 
-        SET invitation_token = ?, expires_at = ?, updated_at = NOW()
+        SET invitation_token = ?, expires_at = ?, updated_at = datetime('now')
         WHERE id = ?
       `, [newToken, newExpiresAt, id]);
 
@@ -424,7 +424,7 @@ router.delete('/:id',
 
       // Check invitation exists and permissions
       const invitations = await Database.query(
-        'SELECT invited_by FROM user_invitations WHERE id = ? AND accepted = false AND church_id = ?',
+        'SELECT invited_by FROM user_invitations WHERE id = ? AND accepted = 0 AND church_id = ?',
         [id, req.user.church_id]
       );
 

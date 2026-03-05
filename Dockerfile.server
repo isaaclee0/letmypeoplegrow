@@ -1,5 +1,8 @@
 # Node.js server
-FROM node:18-alpine
+FROM node:20-alpine
+
+# Install build tools for native modules (better-sqlite3)
+RUN apk add --no-cache python3 make g++
 
 # Set working directory
 WORKDIR /app
@@ -32,8 +35,8 @@ COPY server/admin ./admin
 COPY server/package*.json ./
 COPY server/.env* ./
 
-# Create uploads directory
-RUN mkdir -p uploads
+# Create directories
+RUN mkdir -p uploads data/churches
 
 # Expose ports (3001 for main server, 7777 for admin panel)
 EXPOSE 3001
@@ -44,4 +47,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
 
 # Start the server
-CMD ["npm", "start"] 
+CMD ["npm", "start"]

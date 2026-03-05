@@ -78,8 +78,7 @@ const validateChurchOwnership = (tableName, idField = 'id') => {
         });
       }
 
-      // Check if the resource belongs to the user's church
-      const [resources] = await Database.query(
+      const resources = await Database.query(
         `SELECT ${idField} FROM ${tableName} WHERE ${idField} = ? AND church_id = ?`,
         [resourceId, req.user.church_id]
       );

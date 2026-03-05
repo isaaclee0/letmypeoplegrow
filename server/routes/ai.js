@@ -108,7 +108,7 @@ async function buildChurchContext(churchId) {
       SELECT 
         i.id, i.first_name, i.last_name, i.people_type, i.is_active,
         f.family_name,
-        GROUP_CONCAT(DISTINCT gt.name ORDER BY gt.name SEPARATOR ', ') as gatherings
+        GROUP_CONCAT(DISTINCT gt.name, ', ') as gatherings
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
@@ -651,7 +651,7 @@ async function buildEnrichedContext(churchId) {
   if (weatherHistory.length > 0) {
     // Get attendance session dates to match weather
     const sessionDates = await Database.query(`
-      SELECT DISTINCT DATE_FORMAT(session_date, '%Y-%m-%d') as d
+      SELECT DISTINCT strftime('%Y-%m-%d', session_date) as d
       FROM attendance_sessions
       WHERE church_id = ? AND session_date >= ?
       ORDER BY session_date

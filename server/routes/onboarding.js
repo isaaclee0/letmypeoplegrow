@@ -125,7 +125,7 @@ const saveOnboardingProgress = async (userId, currentStep, data = {}, completedS
       if (updateColumns.length > 0) {
         updateValues.push(userId);
         await Database.query(
-          `UPDATE onboarding_progress SET ${updateColumns.join(', ')}, updated_at = NOW() WHERE user_id = ?`,
+          `UPDATE onboarding_progress SET ${updateColumns.join(', ')}, updated_at = datetime('now') WHERE user_id = ?`,
           updateValues
         );
       }
@@ -267,7 +267,7 @@ router.post('/church-info',
           params.push(locationName, locationLat, locationLng);
         }
 
-        query += `, updated_at = NOW() WHERE id = ? AND church_id = ?`;
+        query += `, updated_at = datetime('now') WHERE id = ? AND church_id = ?`;
         params.push(existingSettings[0].id, req.user.church_id);
         await Database.query(query, params);
       } else {
@@ -700,7 +700,7 @@ router.post('/complete',
     try {
       await Database.query(`
         UPDATE church_settings 
-        SET onboarding_completed = true, updated_at = NOW()
+        SET onboarding_completed = 1, updated_at = datetime('now')
         WHERE id = (SELECT id FROM church_settings LIMIT 1)
       `);
 

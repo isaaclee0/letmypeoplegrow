@@ -82,7 +82,7 @@ router.put('/me',
       if (updateFields.length === 0) {
         return res.status(400).json({ error: 'No fields to update' });
       }
-      updateFields.push('updated_at = NOW()');
+      updateFields.push("updated_at = datetime('now')");
       updateValues.push(userId);
 
       await Database.query(`
@@ -118,7 +118,7 @@ router.get('/', requireRole(['admin', 'coordinator']), async (req, res) => {
       FROM users u
       LEFT JOIN user_gathering_assignments uga 
         ON u.id = uga.user_id AND uga.church_id = u.church_id
-      WHERE u.church_id = ? AND u.is_active = true
+      WHERE u.church_id = ? AND u.is_active = 1
     `;
     
     let params = [req.user.church_id];
@@ -202,7 +202,7 @@ router.get('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
       FROM user_gathering_assignments uga
       JOIN gathering_types gt ON uga.gathering_type_id = gt.id
       LEFT JOIN users u ON uga.assigned_by = u.id
-      WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+      WHERE uga.user_id = ? AND gt.is_active = 1 AND gt.church_id = ? AND uga.church_id = ?
       ORDER BY gt.name
     `, [id, req.user.church_id, req.user.church_id]);
 
@@ -316,7 +316,7 @@ router.post('/',
 
       const result = await Database.query(`
         INSERT INTO users (email, mobile_number, primary_contact_method, role, first_name, last_name, is_invited, church_id)
-        VALUES (?, ?, ?, ?, ?, ?, true, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
       `, [email || null, normalizedMobile, primaryContactMethod, role, firstName, lastName, req.user.church_id]);
 
       res.status(201).json({ 
@@ -514,7 +514,7 @@ router.put('/:id',
         return res.status(400).json({ error: 'No fields to update' });
       }
 
-      updateFields.push('updated_at = NOW()');
+      updateFields.push("updated_at = datetime('now')");
       updateValues.push(id);
 
       await Database.query(`
@@ -547,7 +547,7 @@ router.delete('/:id',
       // Prevent deleting the last admin user
       if (parseInt(id) === req.user.id) {
         const adminCount = await Database.query(
-          'SELECT COUNT(*) as count FROM users WHERE role = "admin" AND is_active = true'
+          'SELECT COUNT(*) as count FROM users WHERE role = "admin" AND is_active = 1'
         );
         
         if (adminCount[0].count <= 1) {
@@ -567,7 +567,7 @@ router.delete('/:id',
 
       // Soft delete by setting is_active to false
       await Database.query(
-        'UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ?',
+        "UPDATE users SET is_active = 0, updated_at = datetime('now') WHERE id = ?",
         [id]
       );
 
@@ -633,7 +633,7 @@ router.post('/:userId/gatherings',
         if (parseInt(userId) === req.user.id) {
           // Coordinators can associate themselves with any active gathering in their church
           availableGatherings = await Database.query(`
-            SELECT id, name FROM gathering_types WHERE is_active = true AND church_id = ?
+            SELECT id, name FROM gathering_types WHERE is_active = 1 AND church_id = ?
           `, [req.user.church_id]);
         } else {
           // Coordinators can only manage users where they share gatherings (within the same church)
@@ -641,12 +641,12 @@ router.post('/:userId/gatherings',
             SELECT gt.id, gt.name 
             FROM gathering_types gt
             JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-            WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+            WHERE uga.user_id = ? AND gt.is_active = 1 AND gt.church_id = ? AND uga.church_id = ?
           `, [req.user.id, req.user.church_id, req.user.church_id]);
         }
       } else {
         availableGatherings = await Database.query(`
-          SELECT id, name FROM gathering_types WHERE is_active = true AND church_id = ?
+          SELECT id, name FROM gathering_types WHERE is_active = 1 AND church_id = ?
         `, [req.user.church_id]);
       }
 
@@ -676,7 +676,7 @@ router.post('/:userId/gatherings',
 
       // Mark first login as completed if user now has assignments
       await Database.query(
-        'UPDATE users SET first_login_completed = true WHERE id = ?',
+        'UPDATE users SET first_login_completed = 1 WHERE id = ?',
         [userId]
       );
 
@@ -731,7 +731,7 @@ router.get('/:userId/gatherings',
         FROM user_gathering_assignments uga
         JOIN gathering_types gt ON uga.gathering_type_id = gt.id
         LEFT JOIN users u ON uga.assigned_by = u.id
-        WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+        WHERE uga.user_id = ? AND gt.is_active = 1 AND gt.church_id = ? AND uga.church_id = ?
         ORDER BY gt.name
       `, [userId, req.user.church_id, req.user.church_id]);
 
@@ -743,7 +743,7 @@ router.get('/:userId/gatherings',
           availableGatherings = await Database.query(`
             SELECT id, name, description
             FROM gathering_types 
-            WHERE is_active = true AND church_id = ?
+            WHERE is_active = 1 AND church_id = ?
             ORDER BY name
           `, [req.user.church_id]);
         } else {
@@ -751,7 +751,7 @@ router.get('/:userId/gatherings',
             SELECT gt.id, gt.name, gt.description
             FROM gathering_types gt
             JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
-            WHERE uga.user_id = ? AND gt.is_active = true AND gt.church_id = ? AND uga.church_id = ?
+            WHERE uga.user_id = ? AND gt.is_active = 1 AND gt.church_id = ? AND uga.church_id = ?
             ORDER BY gt.name
           `, [req.user.id, req.user.church_id, req.user.church_id]);
         }
@@ -759,7 +759,7 @@ router.get('/:userId/gatherings',
         availableGatherings = await Database.query(`
           SELECT id, name, description
           FROM gathering_types 
-          WHERE is_active = true AND church_id = ?
+          WHERE is_active = 1 AND church_id = ?
           ORDER BY name
         `, [req.user.church_id]);
       }
@@ -846,8 +846,8 @@ router.post('/me/preferences',
       await Database.query(`
         INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
         VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-          preference_value = VALUES(preference_value),
+        ON CONFLICT(user_id, preference_key) DO UPDATE SET
+          preference_value = excluded.preference_value,
           updated_at = CURRENT_TIMESTAMP
       `, [userId, key, JSON.stringify(value), churchId]);
 
@@ -891,8 +891,8 @@ router.post('/me/preferences/batch',
         await Database.query(`
           INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
           VALUES (?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE 
-            preference_value = VALUES(preference_value),
+          ON CONFLICT(user_id, preference_key) DO UPDATE SET
+            preference_value = excluded.preference_value,
             updated_at = CURRENT_TIMESTAMP
         `, [userId, key, JSON.stringify(value), churchId]);
       }

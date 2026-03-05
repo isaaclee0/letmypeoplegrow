@@ -602,7 +602,7 @@ router.post('/mass-assign/:gatheringId',
           try {
             // Check if individual exists and is active
             const individual = await conn.query(
-              'SELECT id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              'SELECT id FROM individuals WHERE id = ? AND is_active = 1 AND church_id = ?',
               [individualId, req.user.church_id]
             );
 
@@ -706,7 +706,7 @@ router.put('/mass-update-type',
           try {
             // Check if individual exists
             const individual = await conn.query(
-              'SELECT id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              'SELECT id FROM individuals WHERE id = ? AND is_active = 1 AND church_id = ?',
               [individualId, req.user.church_id]
             );
 
@@ -718,7 +718,7 @@ router.put('/mass-update-type',
             // Update the individual's people type (legacy API defaults visitors to local_visitor)
             const peopleType = isVisitor ? 'local_visitor' : 'regular';
             await conn.query(
-              'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+              'UPDATE individuals SET people_type = ?, updated_at = datetime(\'now\') WHERE id = ? AND church_id = ?',
               [peopleType, individualId, req.user.church_id]
             );
 
@@ -771,7 +771,7 @@ router.put('/mass-update-people-type',
           try {
             // Check if individual exists
             const individual = await conn.query(
-              'SELECT id, family_id FROM individuals WHERE id = ? AND is_active = true AND church_id = ?',
+              'SELECT id, family_id FROM individuals WHERE id = ? AND is_active = 1 AND church_id = ?',
               [individualId, req.user.church_id]
             );
 
@@ -782,7 +782,7 @@ router.put('/mass-update-people-type',
 
             // Update the individual's people type
             await conn.query(
-              'UPDATE individuals SET people_type = ?, updated_at = NOW() WHERE id = ?',
+              'UPDATE individuals SET people_type = ?, updated_at = datetime(\'now\') WHERE id = ?',
               [peopleType, individualId]
             );
 
@@ -791,14 +791,14 @@ router.put('/mass-update-people-type',
             if (familyId) {
               // Check if all family members now have the same people_type
               const familyMembers = await conn.query(
-                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = true AND church_id = ?',
+                'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
                 [familyId, req.user.church_id]
               );
 
               // If all family members have the same type, update the family type to match
               if (familyMembers.length === 1 && familyMembers[0].people_type) {
                 await conn.query(
-                  'UPDATE families SET family_type = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+                  'UPDATE families SET family_type = ?, updated_at = datetime(\'now\') WHERE id = ? AND church_id = ?',
                   [familyMembers[0].people_type, familyId, req.user.church_id]
                 );
               }
@@ -1037,7 +1037,7 @@ router.post('/update-existing',
           // Update is_child if the column was provided in the TSV
           if (hasChildColumn) {
             await conn.query(
-              'UPDATE individuals SET is_child = ?, updated_at = NOW() WHERE id = ? AND church_id = ?',
+              'UPDATE individuals SET is_child = ?, updated_at = datetime(\'now\') WHERE id = ? AND church_id = ?',
               [isChild ? true : false, individual.id, req.user.church_id]
             );
           }
