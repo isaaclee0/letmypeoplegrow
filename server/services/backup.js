@@ -93,18 +93,27 @@ async function gzipFile(filePath) {
 
 // Upload a file to S3
 async function uploadToS3(localPath, key) {
-  const body = fs.createReadStream(localPath);
-  const stat = fs.statSync(localPath);
+  const fileBuffer = fs.readFileSync(localPath);
 
-  await s3Client.send(new PutObjectCommand({
-    Bucket: backupConfig.bucket,
-    Key: key,
-    Body: body,
-    ContentType: 'application/gzip',
-    ContentLength: stat.size,
-  }));
+  try {
+    await s3Client.send(new PutObjectCommand({
+      Bucket: backupConfig.bucket,
+      Key: key,
+      Body: fileBuffer,
+      ContentType: 'application/gzip',
+      ContentLength: fileBuffer.length,
+    }));
+  } catch (err) {
+    console.error('Backup: S3 upload error details:', {
+      name: err.name,
+      message: err.message,
+      code: err.Code || err.$metadata?.httpStatusCode,
+      metadata: err.$metadata,
+    });
+    throw err;
+  }
 
-  return stat.size;
+  return fileBuffer.length;
 }
 
 // Download a file from S3
