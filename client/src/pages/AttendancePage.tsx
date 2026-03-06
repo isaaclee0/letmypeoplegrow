@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, useTransition } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
@@ -68,7 +68,6 @@ const AttendancePage: React.FC = () => {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
-  const [isPending, startTransition] = useTransition();
   // Refs to avoid stale closures and reduce heavy deps in effects
   const attendanceListRef = useRef<Individual[]>([]);
   const visitorsRef = useRef<Visitor[]>([]);
@@ -1444,14 +1443,6 @@ const AttendancePage: React.FC = () => {
     date: string,
     records: Array<{ individualId: number; present: boolean }>
   ) => {
-    logger.log('🔍 sendAttendanceChange called:', {
-      webSocketModeEnabled: webSocketMode.enabled,
-      webSocketMode,
-      isWebSocketConnected,
-      gatheringId,
-      date,
-      recordsCount: records.length
-    });
 
     // Add timestamps to records for conflict detection
     const recordsWithTimestamps = records.map(record => ({
@@ -1462,7 +1453,6 @@ const AttendancePage: React.FC = () => {
     let response;
 
     if (!webSocketMode.enabled) {
-      logger.log('📡 Using REST API (WebSocket disabled)');
       // WebSocket disabled - use API directly
       response = await attendanceAPI.record(gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
@@ -1475,7 +1465,6 @@ const AttendancePage: React.FC = () => {
     const shouldUseWebSocket = isWebSocketConnected && connectionStatus === 'connected';
 
     if (!shouldUseWebSocket && webSocketMode.fallbackAllowed) {
-      logger.log('📡 WebSocket not available, using REST API fallback');
       response = await attendanceAPI.record(gatheringId, date, {
         attendanceRecords: recordsWithTimestamps,
         visitors: []
@@ -1485,16 +1474,7 @@ const AttendancePage: React.FC = () => {
 
     // WebSocket enabled and connected - try WebSocket first
     try {
-      const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-      logger.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Attempting to send attendance via WebSocket:`, {
-        gatheringId,
-        date,
-        recordsCount: records.length,
-        isPWAMode: isPWA,
-        connectionStatus
-      });
       await sendAttendanceUpdate(gatheringId, date, recordsWithTimestamps);
-      logger.log(`🔌 [${isPWA ? 'PWA' : 'Browser'}] Successfully sent attendance via WebSocket`);
       return null; // WebSocket doesn't return response data
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
@@ -1522,31 +1502,7 @@ const AttendancePage: React.FC = () => {
       return;
     }
 
-    // Add additional debug logging to track duplicate calls
-    logger.log(`🔄 Toggling attendance for individual ${individualId} at ${Date.now()}`);
-    
-    // Track recent toggle calls to prevent duplicates
-    const recentToggles = (window as any)._recentToggles || new Map();
     const now = Date.now();
-    const lastToggle = recentToggles.get(individualId) || 0;
-    
-    if (now - lastToggle < 500) { // Prevent toggles within 500ms
-      logger.log(`⚠️ Duplicate toggle detected for ${individualId}, ignoring (${now - lastToggle}ms ago)`);
-      console.trace('Duplicate toggle call stack:');
-      return;
-    }
-    
-    recentToggles.set(individualId, now);
-    // Clean up old entries
-    for (const [id, timestamp] of recentToggles.entries()) {
-      if (now - timestamp > 2000) {
-        recentToggles.delete(id);
-      }
-    }
-    (window as any)._recentToggles = recentToggles;
-    
-    const person = attendanceListRef.current.find(p => p.id === individualId);
-    logger.log(`🔄 Toggling attendance for ${person?.firstName} ${person?.lastName} (ID: ${individualId})`);
     
     setLastUserModification(prev => ({ ...prev, [individualId]: now }));
     // Track timestamp for conflict detection (adjusted for server time)
@@ -1556,13 +1512,9 @@ const AttendancePage: React.FC = () => {
     const currentPresent = (presentByIdRef.current[individualId] ?? attendanceListRef.current.find(p => p.id === individualId)?.present) ?? false;
     const newPresent = !currentPresent;
 
-    logger.log(`📊 Attendance change: ${currentPresent} → ${newPresent} for gathering ${selectedGathering?.id} on ${selectedDate}`);
-
-    // Batch optimistic updates to prevent race conditions
-    startTransition(() => {
-      setSavingById(prev => ({ ...prev, [individualId]: true }));
-      setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
-    });
+    // Immediate optimistic update — do NOT wrap in startTransition (that deprioritizes the render)
+    setSavingById(prev => ({ ...prev, [individualId]: true }));
+    setPresentById(prev => ({ ...prev, [individualId]: newPresent }));
 
     if (!selectedGathering || !selectedDate) {
       console.error('❌ Missing gathering or date context');
@@ -1587,14 +1539,6 @@ const AttendancePage: React.FC = () => {
     // Online mode - send via configured method (WebSocket, API, or WebSocket with fallback)
     const run = async () => {
       try {
-        logger.log(`💾 Saving attendance record:`, {
-          gatheringId: selectedGathering.id,
-          date: selectedDate,
-          individualId,
-          present: newPresent,
-          personName: `${person?.firstName} ${person?.lastName}`
-        });
-
         const response = await sendAttendanceChange(selectedGathering.id, selectedDate, [
           { individualId, present: newPresent }
         ]);
@@ -1611,7 +1555,7 @@ const AttendancePage: React.FC = () => {
 
         setSavingById(prev => ({ ...prev, [individualId]: false }));
       } catch (err) {
-        console.error(`❌ Failed to save attendance change for ${person?.firstName} ${person?.lastName}:`, err);
+        console.error('Failed to save attendance change:', err);
         setError(err instanceof Error ? err.message : 'Failed to save change');
         setSavingById(prev => ({ ...prev, [individualId]: false }));
         setPresentById(prev => ({ ...prev, [individualId]: currentPresent }));
@@ -1626,57 +1570,21 @@ const AttendancePage: React.FC = () => {
 
   const toggleAllFamily = async (familyId: number) => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    logger.log('=== TOGGLE ALL FAMILY DEBUG ===');
-    logger.log('Toggling all family attendance for family:', familyId);
-    logger.log('Total attendance list length:', attendanceList.length);
-    
-    // Debug: Show all families in the attendance list
-    const allFamilies = attendanceList.reduce((acc, person) => {
-      if (person.familyId) {
-        if (!acc[person.familyId]) {
-          acc[person.familyId] = [];
-        }
-        acc[person.familyId].push(person);
-      }
-      return acc;
-    }, {} as Record<number, Individual[]>);
-    
-    logger.log('All families in attendance list:', Object.keys(allFamilies).map(familyId => ({
-      familyId: parseInt(familyId),
-      memberCount: allFamilies[parseInt(familyId)].length,
-      members: allFamilies[parseInt(familyId)].map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, present: p.present }))
-    })));
-    
-    // Family operation flags removed - no longer needed without polling
-    
+
     // Get family members from attendance list
     const familyMembers = attendanceList.filter(person => person.familyId === familyId);
     const familyMemberIds = familyMembers.map(person => person.id);
-    
-    logger.log('Family members found:', familyMembers.length);
-    logger.log('Family member IDs:', familyMemberIds);
-    logger.log('Family members details:', familyMembers.map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, familyId: p.familyId, present: p.present })));
-    
+
     // Count how many family members are currently present using current state
-    // Use presentById state first, fallback to attendanceList.present if not in presentById
     const presentCount = familyMemberIds.filter(id => {
       const presentInState = presentById[id];
-      if (presentInState !== undefined) {
-        logger.log(`Person ${id}: present in state = ${presentInState}`);
-        return presentInState;
-      }
-      // Fallback to attendanceList if not in presentById
+      if (presentInState !== undefined) return presentInState;
       const person = familyMembers.find(p => p.id === id);
-      const fallbackPresent = person ? Boolean(person.present) : false;
-      logger.log(`Person ${id}: fallback present = ${fallbackPresent} (from attendanceList)`);
-      return fallbackPresent;
+      return person ? Boolean(person.present) : false;
     }).length;
-    
+
     // If any are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount === 0;
-    logger.log('Family members present:', presentCount, 'Should check all:', shouldCheckAll);
-    logger.log('Current presentById state:', presentById);
-    logger.log('=== END TOGGLE ALL FAMILY DEBUG ===');
     
     if (!selectedGathering || !selectedDate) {
       // Family operation flag clearing removed - no longer needed
@@ -1716,8 +1624,6 @@ const AttendancePage: React.FC = () => {
         individualId: person.id,
         present: shouldCheckAll
       }));
-
-      logger.log('Sending attendance records:', familyAttendanceRecords);
 
       await sendAttendanceChange(selectedGathering.id, selectedDate, familyAttendanceRecords);
 
@@ -2382,20 +2288,7 @@ const AttendancePage: React.FC = () => {
     return groupVisitors(availableChurchPeople);
   }, [allChurchVisitors, attendanceList, allRecentVisitorsPool, searchTerm, groupVisitors]);
 
-  // Sort members within each group: adults first, then by name (firstName when ungrouped)
-  filteredGroupedAttendees.forEach((group: any) => {
-    group.members.sort((a: Individual, b: Individual) => {
-      const aChild = a.isChild ? 1 : 0;
-      const bChild = b.isChild ? 1 : 0;
-      if (aChild !== bChild) return aChild - bChild;
-      if (!groupByFamily || !group.familyName) {
-        return (a.firstName || '').localeCompare(b.firstName || '');
-      }
-      const lastNameComparison = (a.lastName || '').localeCompare(b.lastName || '');
-      if (lastNameComparison !== 0) return lastNameComparison;
-      return (a.firstName || '').localeCompare(b.firstName || '');
-    });
-  });
+  // Sorting is already done inside filteredGroupedAttendees useMemo above
 
   // Add toggle function for visitors
   const toggleVisitorAttendance = async (visitorId: number) => {

@@ -274,6 +274,15 @@ class Database {
     return registryDb;
   }
 
+  static closeChurchDb(churchId) {
+    const db = churchDbs.get(churchId);
+    if (db) {
+      try { db.close(); } catch (_) {}
+      churchDbs.delete(churchId);
+    }
+    churchTxLocks.delete(churchId);
+  }
+
   static closeAll() {
     for (const [, db] of churchDbs) {
       try { db.close(); } catch (_) {}

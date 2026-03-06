@@ -814,4 +814,10 @@ export const visitorConfigAPI = {
     api.put('/visitor-config', config)
 };
 
-export default api; 
+// Takeout API (data export + account deletion)
+export const takeoutAPI = {
+  exportData: () => api.get('/takeout/export', { responseType: 'blob', timeout: 120000 }),
+  deleteChurch: (confirmChurchName: string) => api.post('/takeout/delete', { confirmChurchName }),
+};
+
+export default api;

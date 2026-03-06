@@ -638,7 +638,9 @@
                   <td class="timestamp">${formatRelative(c.last_activity)}</td>
                   <td class="actions">
                     <button class="action-btn" onclick="viewChurchDetails('${c.church_id}')" title="View Details">👁</button>
+                    <button class="action-btn" onclick="exportChurch('${c.church_id}')" title="Export Data">📥</button>
                     <button class="action-btn danger" onclick="archiveChurch('${c.church_id}', true)" title="Archive Church">📦</button>
+                    <button class="action-btn danger" onclick="deleteChurch('${c.church_id}')" title="Delete Church">🗑️</button>
                   </td>
                 </tr>
               `).join('')}
@@ -837,6 +839,40 @@
         }
       } catch (err) {
         alert('Failed to set church name: ' + err.message);
+      }
+    }
+
+    // Export church data
+    function exportChurch(churchId) {
+      window.open(`/api/churches/${churchId}/export`, '_blank');
+    }
+
+    // Delete church permanently
+    async function deleteChurch(churchId) {
+      if (!confirm(`WARNING: This will permanently delete church "${churchId}" and ALL its data.\n\nThis cannot be undone. Are you sure?`)) return;
+      const confirmId = prompt(`Type the church ID to confirm deletion: ${churchId}`);
+      if (confirmId !== churchId) {
+        if (confirmId !== null) alert('Church ID did not match. Deletion cancelled.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/churches/${churchId}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmChurchId: churchId })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          alert(data.message);
+          loadChurches();
+          loadStats();
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (err) {
+        alert('Failed to delete church: ' + err.message);
       }
     }
 

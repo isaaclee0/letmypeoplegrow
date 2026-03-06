@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI } from '../services/api';
+import { integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
 import BadgeIcon, { BADGE_ICON_OPTIONS, BadgeIconType } from '../components/icons/BadgeIcon';
@@ -18,12 +18,13 @@ import {
   LinkSlashIcon,
   MapPinIcon,
   UserGroupIcon,
+  ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations' | 'visitors'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations' | 'visitors' | 'data'>('general');
 
   // Elvanto integration state
   const [elvantoStatus, setElvantoStatus] = useState<{
@@ -126,6 +127,7 @@ const SettingsPage: React.FC = () => {
     { id: 'system', name: 'System Info', icon: InformationCircleIcon },
     ...(user?.role === 'admin' ? [{ id: 'visitors', name: 'Visitors', icon: UserGroupIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
+    ...(user?.role === 'admin' ? [{ id: 'data', name: 'Data', icon: ArrowDownTrayIcon }] : []),
   ];
 
   // Fetch Elvanto integration status
@@ -392,8 +394,8 @@ const SettingsPage: React.FC = () => {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
-    if (tabParam && ['general', 'system', 'integrations', 'visitors'].includes(tabParam)) {
-      setActiveTab(tabParam as 'general' | 'system' | 'integrations' | 'visitors');
+    if (tabParam && ['general', 'system', 'integrations', 'visitors', 'data'].includes(tabParam)) {
+      setActiveTab(tabParam as 'general' | 'system' | 'integrations' | 'visitors' | 'data');
     }
 
     // Handle Planning Center OAuth callback
@@ -433,6 +435,59 @@ const SettingsPage: React.FC = () => {
       logger.error('Failed to save visitor config:', err);
     } finally {
       setVisitorConfigLoading(false);
+    }
+  };
+
+  // Data takeout state
+  const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [churchName, setChurchName] = useState('');
+
+  // Load church name when data tab is active
+  useEffect(() => {
+    if (activeTab === 'data' && user?.role === 'admin') {
+      settingsAPI.getAll().then(res => {
+        setChurchName(res.data.settings?.church_name || '');
+      }).catch(err => {
+        logger.error('Failed to load church name:', err);
+      });
+    }
+  }, [activeTab, user?.role]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const response = await takeoutAPI.exportData();
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `church-data-export-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      logger.error('Export failed:', err);
+      alert('Failed to export data. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await takeoutAPI.deleteChurch(deleteConfirmName);
+      // Redirect to login after deletion
+      window.location.href = '/login';
+    } catch (err: any) {
+      logger.error('Delete failed:', err);
+      alert(err.response?.data?.error || 'Failed to delete church account. Please try again.');
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1542,8 +1597,116 @@ const SettingsPage: React.FC = () => {
             </div>
           )}
 
+          {activeTab === 'data' && user?.role === 'admin' && (
+            <div className="space-y-6">
+              {/* Export Section */}
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">Export All Data</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Download all your church data as CSV files in a ZIP archive. This includes members, families, attendance records, gatherings, and all other church data.
+                </p>
+              </div>
+
+              <div className="border border-gray-200 rounded-lg p-6">
+                <p className="text-sm text-gray-600 mb-4">
+                  The export includes all tables from your church database. Sensitive fields (API keys) are automatically redacted.
+                </p>
+                <button
+                  onClick={handleExport}
+                  disabled={exporting}
+                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                >
+                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                  {exporting ? 'Generating export...' : 'Download Data Export'}
+                </button>
+              </div>
+
+              {/* Delete Section */}
+              <div className="mt-10">
+                <h3 className="text-lg font-medium text-red-900">Delete Church Account</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Permanently delete your church account and all associated data. This action cannot be undone.
+                </p>
+              </div>
+
+              <div className="border border-red-200 rounded-lg p-6 bg-red-50">
+                <div className="bg-white border border-red-300 rounded-md p-4 mb-4">
+                  <p className="text-sm font-medium text-red-800 mb-2">This will permanently:</p>
+                  <ul className="text-sm text-red-700 list-disc list-inside space-y-1">
+                    <li>Delete all church data (members, families, attendance, gatherings)</li>
+                    <li>Remove all user accounts associated with this church</li>
+                    <li>Log out all users immediately</li>
+                  </ul>
+                  <p className="text-sm font-bold text-red-800 mt-2">This cannot be recovered. Please export your data first.</p>
+                </div>
+
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Type <span className="font-bold">{churchName}</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmName}
+                  onChange={(e) => setDeleteConfirmName(e.target.value)}
+                  placeholder="Type church name here"
+                  className="block w-full max-w-md rounded-md border-gray-300 shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm mb-4"
+                />
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  disabled={deleteConfirmName.trim() !== churchName.trim() || !churchName}
+                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Delete Church Account
+                </button>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
+
+      {/* Delete Church Confirmation Modal */}
+      <Modal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+      >
+        <div className="p-6">
+          <div className="flex justify-between items-start mb-4">
+            <h3 className="text-lg font-medium text-gray-900">Are you absolutely sure?</h3>
+            <button onClick={() => setShowDeleteConfirm(false)} className="text-gray-400 hover:text-gray-500">
+              <XMarkIcon className="h-6 w-6" />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-red-100 rounded-full">
+            <ExclamationTriangleIcon className="h-8 w-8 text-red-600" />
+          </div>
+
+          <div className="text-center mb-6">
+            <p className="text-sm text-gray-600 mb-2">
+              This will permanently delete <span className="font-bold">{churchName}</span> and all its data.
+            </p>
+            <p className="text-sm text-red-600 font-medium">
+              This action cannot be undone.
+            </p>
+          </div>
+
+          <div className="flex space-x-3">
+            <button
+              onClick={() => setShowDeleteConfirm(false)}
+              className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+            >
+              {deleting ? 'Deleting...' : 'Yes, Delete Everything'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* API Key Setup Guide Modal */}
       <Modal

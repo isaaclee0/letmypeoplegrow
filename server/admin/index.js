@@ -532,6 +532,98 @@ app.get('/api/audit-log', async (req, res) => {
   }
 });
 
+// Export church data as ZIP of CSVs
+app.get('/api/churches/:churchId/export', async (req, res) => {
+  try {
+    const { churchId } = req.params;
+    const archiver = require('archiver');
+
+    const EXPORT_TABLES = [
+      'church_settings', 'users', 'gathering_types', 'user_gathering_assignments',
+      'families', 'individuals', 'gathering_lists', 'attendance_sessions',
+      'attendance_records', 'headcount_records', 'kiosk_checkins',
+      'notification_rules', 'notifications', 'visitor_config', 'audit_log',
+      'ai_chat_conversations', 'ai_chat_messages', 'user_preferences',
+    ];
+    const REDACT_COLUMNS = ['brevo_api_key', 'anthropic_api_key', 'openai_api_key', 'elvanto_api_key'];
+
+    function escapeCsvValue(val) {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${churchId}-export-${new Date().toISOString().split('T')[0]}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Export failed' });
+    });
+    archive.pipe(res);
+
+    for (const table of EXPORT_TABLES) {
+      try {
+        const rows = await Database.queryForChurch(churchId, `SELECT * FROM ${table}`);
+        if (rows.length > 0) {
+          const columns = Object.keys(rows[0]).filter(c => !REDACT_COLUMNS.includes(c));
+          const header = columns.map(escapeCsvValue).join(',');
+          const lines = rows.map(row => columns.map(col => escapeCsvValue(row[col])).join(','));
+          archive.append(header + '\n' + lines.join('\n') + '\n', { name: `${table}.csv` });
+        }
+      } catch (err) {
+        console.warn(`Export: skipped table ${table}:`, err.message);
+      }
+    }
+
+    await archive.finalize();
+  } catch (error) {
+    console.error('Export error:', error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete a church and all its data
+app.delete('/api/churches/:churchId', async (req, res) => {
+  try {
+    const { churchId } = req.params;
+    const { confirmChurchId } = req.body;
+
+    if (confirmChurchId !== churchId) {
+      return res.status(400).json({ error: 'Church ID confirmation does not match' });
+    }
+
+    // Remove from registry
+    await Database.registryQuery('DELETE FROM user_lookup WHERE church_id = ?', [churchId]);
+    await Database.registryQuery('DELETE FROM churches WHERE church_id = ?', [churchId]);
+
+    // Close and delete database files
+    Database.closeChurchDb(churchId);
+
+    const fs = require('fs');
+    const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR ||
+      path.join(__dirname, '..', 'data');
+    const dbPath = path.join(dataDir, 'churches', `${churchId}.sqlite`);
+
+    for (const suffix of ['', '-wal', '-shm']) {
+      const file = dbPath + suffix;
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        console.log(`Deleted: ${file}`);
+      }
+    }
+
+    res.json({ success: true, message: `Church ${churchId} and all data permanently deleted.` });
+  } catch (error) {
+    console.error('Delete church error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Serve admin UI
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
