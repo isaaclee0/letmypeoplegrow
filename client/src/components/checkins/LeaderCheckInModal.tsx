@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { XMarkIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { Individual } from '../../services/api';
 import { useBadgeSettings } from '../../hooks/useBadgeSettings';
-import BadgeIcon from '../icons/BadgeIcon';
+import BadgeIcon, { BadgeIconType } from '../icons/BadgeIcon';
 import Modal from '../Modal';
 
 interface LeaderCheckInModalProps {
@@ -98,7 +98,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
                           className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-medium"
                           style={badge.styles}
                         >
-                          {badge.icon && <BadgeIcon icon={badge.icon} size={12} />}
+                          {badge.icon && <BadgeIcon type={badge.icon as BadgeIconType} className="w-3 h-3 flex-shrink-0" />}
                           {badge.text && <span>{badge.text}</span>}
                         </span>
                       )}

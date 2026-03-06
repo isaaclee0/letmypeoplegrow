@@ -19,6 +19,9 @@ function isHashedAsset(url) {
   return url.pathname.match(/\/assets\/.*-[a-zA-Z0-9]{8,}\.(js|css)$/);
 }
 
+// Minimal offline fallback page (inlined so it works even with empty cache)
+const OFFLINE_HTML = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#9B51E0"><title>Let My People Grow</title><style>body{margin:0;background:#F9FAFB;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh}.c{text-align:center;padding:2rem}h2{color:#374151;margin-bottom:.5rem}p{color:#6B7280;font-size:14px;margin-bottom:1.5rem}button{background:#9B51E0;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer}button:active{background:#7C3AED}</style></head><body><div class="c"><h2>Unable to Load</h2><p>Please check your internet connection and try again.</p><button onclick="location.reload()">Retry</button></div></body></html>';
+
 // Install event - cache shell resources
 self.addEventListener('install', (event) => {
   console.log('Service Worker installing...', CACHE_NAME, 'Version:', APP_VERSION);
@@ -26,12 +29,13 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME)
       .then((cache) => {
         console.log('Opened cache:', CACHE_NAME);
-        return cache.addAll(urlsToCache).catch((error) => {
-          console.warn('Failed to cache some resources:', error);
-          return Promise.resolve();
-        });
+        return cache.addAll(urlsToCache);
       })
       .then(() => self.skipWaiting())
+      .catch((error) => {
+        console.warn('Precache failed, staying as waiting worker:', error);
+        // Do NOT call skipWaiting — old SW keeps serving from its cache
+      })
   );
 });
 
@@ -89,6 +93,16 @@ self.addEventListener('fetch', (event) => {
 
         // Return cached immediately if available, otherwise wait for network
         return cached || networkFetch;
+      }).then((response) => {
+        // If both cache and network failed, serve an inline offline page
+        // This prevents the white screen on iOS when the PWA is reopened offline
+        if (!response) {
+          return new Response(OFFLINE_HTML, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          });
+        }
+        return response;
       })
     );
     return;
@@ -107,6 +121,10 @@ self.addEventListener('fetch', (event) => {
             caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           }
           return response;
+        }).catch(() => {
+          // Asset not in cache and network failed — return a proper error
+          // so the browser doesn't hang silently
+          return new Response('', { status: 504, statusText: 'Offline' });
         });
       })
     );
