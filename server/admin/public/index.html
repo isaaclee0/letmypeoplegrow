@@ -470,6 +470,7 @@
       <button class="tab" onclick="showView('churches')">Churches</button>
       <button class="tab" onclick="showView('users')">All Users</button>
       <button class="tab" onclick="showView('audit')">Audit Log</button>
+      <button class="tab" onclick="showView('backups')">Backups</button>
     </div>
 
     <!-- Dashboard View -->
@@ -530,6 +531,98 @@
         </div>
         <div id="audit-log-table">
           <div class="loading">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backups View -->
+    <div id="view-backups" style="display: none;">
+      <!-- Status Card -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Backup Status</h2>
+          <div id="backup-status-indicator" style="font-size: 0.875rem; color: #94a3b8;">Loading...</div>
+        </div>
+        <div class="modal-body" id="backup-status-content">
+          <div class="loading">Loading backup status...</div>
+        </div>
+      </div>
+
+      <!-- Configuration -->
+      <div class="section">
+        <div class="section-header">
+          <h2>S3 Configuration</h2>
+        </div>
+        <div class="modal-body">
+          <form id="backup-config-form" onsubmit="saveBackupConfig(event)" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">S3 Endpoint</label>
+              <input type="text" id="cfg-endpoint" class="search-box" style="width: 100%;" placeholder="https://us-east-1.linodeobjects.com">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Bucket</label>
+              <input type="text" id="cfg-bucket" class="search-box" style="width: 100%;" placeholder="my-backups">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Region</label>
+              <input type="text" id="cfg-region" class="search-box" style="width: 100%;" placeholder="us-east-1" value="us-east-1">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Prefix</label>
+              <input type="text" id="cfg-prefix" class="search-box" style="width: 100%;" placeholder="backups" value="backups">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Access Key</label>
+              <input type="text" id="cfg-accesskey" class="search-box" style="width: 100%;" placeholder="Access Key ID">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Secret Key</label>
+              <input type="password" id="cfg-secretkey" class="search-box" style="width: 100%;" placeholder="Secret Access Key">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Retention (days)</label>
+              <input type="number" id="cfg-retention" class="search-box" style="width: 100%;" value="30" min="1">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.25rem;">Schedule (cron)</label>
+              <input type="text" id="cfg-schedule" class="search-box" style="width: 100%;" value="0 2 * * *" placeholder="0 2 * * *">
+            </div>
+            <div style="grid-column: 1 / -1; display: flex; gap: 0.5rem;">
+              <button type="submit" class="tab active" style="cursor: pointer;">Save & Test Connection</button>
+              <button type="button" class="tab" style="cursor: pointer;" onclick="testBackupConnection()">Test Connection</button>
+            </div>
+          </form>
+          <div id="backup-config-msg" style="margin-top: 0.75rem; font-size: 0.875rem;"></div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Actions</h2>
+        </div>
+        <div class="modal-body" style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+          <button class="tab" style="cursor: pointer;" onclick="runFullBackup()">Run Full Backup Now</button>
+          <button class="tab" style="cursor: pointer;" onclick="toggleSchedule(true)">Start Schedule</button>
+          <button class="tab" style="cursor: pointer;" onclick="toggleSchedule(false)">Stop Schedule</button>
+          <button class="tab" style="cursor: pointer; border-color: #dc2626; color: #fca5a5;" onclick="pruneOldSnapshots()">Prune Old Snapshots</button>
+        </div>
+        <div id="backup-action-msg" style="padding: 0 1.5rem 1rem; font-size: 0.875rem;"></div>
+      </div>
+
+      <!-- Snapshots Browser -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Snapshots</h2>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <select id="snapshot-target" class="search-box" style="width: auto;" onchange="loadSnapshots()">
+              <option value="registry">Registry</option>
+            </select>
+            <button class="tab" style="cursor: pointer; padding: 0.4rem 0.75rem;" onclick="loadSnapshots()">Refresh</button>
+          </div>
+        </div>
+        <div id="snapshots-table">
+          <div class="empty-state">Select a target and click Refresh</div>
         </div>
       </div>
     </div>
@@ -806,6 +899,7 @@
       // Load data if needed
       if (view === 'users') loadAllUsers(1);
       if (view === 'audit') loadAuditLog();
+      if (view === 'backups') loadBackupStatus();
     }
 
     // Debounced search
@@ -1081,6 +1175,288 @@
 
     // Refresh health every 30s
     setInterval(loadHealth, 30000);
+
+    // ============================================
+    // Backup functions
+    // ============================================
+
+    function formatBytes(bytes) {
+      if (!bytes) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    async function loadBackupStatus() {
+      try {
+        const status = await fetchJSON('/api/backups/status');
+        const indicator = document.getElementById('backup-status-indicator');
+
+        if (status.configured) {
+          indicator.innerHTML = '<span style="color: #22c55e;">Configured</span>';
+        } else {
+          indicator.innerHTML = '<span style="color: #f59e0b;">Not Configured</span>';
+        }
+
+        let lastBackupHtml = '<div style="color: #64748b;">No backups have been run yet.</div>';
+        if (status.lastBackup) {
+          const lb = status.lastBackup;
+          lastBackupHtml = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+              <div>
+                <div style="font-size: 0.75rem; color: #94a3b8;">Last Backup</div>
+                <div>${formatDate(lb.timestamp)}</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: #94a3b8;">Churches Backed Up</div>
+                <div>${lb.churches?.length || 0}</div>
+              </div>
+              <div>
+                <div style="font-size: 0.75rem; color: #94a3b8;">Duration</div>
+                <div>${lb.duration ? (lb.duration / 1000).toFixed(1) + 's' : '-'}</div>
+              </div>
+            </div>
+            ${lb.errors?.length ? `<div style="margin-top: 0.75rem; color: #fca5a5;">Errors: ${lb.errors.map(e => e.target + ': ' + e.error).join(', ')}</div>` : ''}
+          `;
+        }
+
+        document.getElementById('backup-status-content').innerHTML = `
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <div style="font-size: 0.75rem; color: #94a3b8;">Endpoint</div>
+              <div style="font-size: 0.875rem; word-break: break-all;">${status.endpoint || '-'}</div>
+            </div>
+            <div>
+              <div style="font-size: 0.75rem; color: #94a3b8;">Bucket</div>
+              <div style="font-size: 0.875rem;">${status.bucket || '-'}</div>
+            </div>
+            <div>
+              <div style="font-size: 0.75rem; color: #94a3b8;">Schedule</div>
+              <div style="font-size: 0.875rem;">${status.schedule || '-'} ${status.schedulerRunning ? '<span style="color: #22c55e;">(running)</span>' : '<span style="color: #64748b;">(stopped)</span>'}</div>
+            </div>
+            <div>
+              <div style="font-size: 0.75rem; color: #94a3b8;">Retention</div>
+              <div style="font-size: 0.875rem;">${status.retentionDays ? status.retentionDays + ' days' : '-'}</div>
+            </div>
+          </div>
+          ${lastBackupHtml}
+        `;
+
+        // Pre-fill config form if configured
+        if (status.endpoint) {
+          document.getElementById('cfg-endpoint').value = status.endpoint;
+          document.getElementById('cfg-bucket').value = status.bucket || '';
+          document.getElementById('cfg-region').value = status.region || 'us-east-1';
+          document.getElementById('cfg-prefix').value = status.prefix || 'backups';
+          document.getElementById('cfg-retention').value = status.retentionDays || 30;
+          document.getElementById('cfg-schedule').value = status.schedule || '0 2 * * *';
+        }
+
+        // Populate snapshot target dropdown with churches
+        await populateSnapshotTargets();
+      } catch (err) {
+        document.getElementById('backup-status-content').innerHTML =
+          `<div style="color: #fca5a5; padding: 1rem;">Failed to load status: ${err.message}</div>`;
+      }
+    }
+
+    async function populateSnapshotTargets() {
+      try {
+        const churches = await fetchJSON('/api/churches');
+        const select = document.getElementById('snapshot-target');
+        // Keep registry option, add churches
+        const existing = select.querySelector('option[value="registry"]');
+        select.innerHTML = '';
+        select.appendChild(existing);
+        for (const c of churches) {
+          const opt = document.createElement('option');
+          opt.value = c.church_id;
+          opt.textContent = c.church_name || c.church_id;
+          select.appendChild(opt);
+        }
+      } catch (_) {}
+    }
+
+    async function saveBackupConfig(event) {
+      event.preventDefault();
+      const msgEl = document.getElementById('backup-config-msg');
+      msgEl.innerHTML = '<span style="color: #94a3b8;">Saving and testing connection...</span>';
+
+      try {
+        const res = await fetch('/api/backups/configure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: document.getElementById('cfg-endpoint').value,
+            bucket: document.getElementById('cfg-bucket').value,
+            region: document.getElementById('cfg-region').value,
+            accessKeyId: document.getElementById('cfg-accesskey').value,
+            secretAccessKey: document.getElementById('cfg-secretkey').value,
+            prefix: document.getElementById('cfg-prefix').value,
+            retentionDays: parseInt(document.getElementById('cfg-retention').value),
+            schedule: document.getElementById('cfg-schedule').value,
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          msgEl.innerHTML = `<span style="color: #22c55e;">${data.message}</span>`;
+          loadBackupStatus();
+        } else {
+          msgEl.innerHTML = `<span style="color: #fca5a5;">${data.error}</span>`;
+        }
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function testBackupConnection() {
+      const msgEl = document.getElementById('backup-config-msg');
+      msgEl.innerHTML = '<span style="color: #94a3b8;">Testing connection...</span>';
+
+      try {
+        const res = await fetch('/api/backups/test', { method: 'POST' });
+        const data = await res.json();
+        msgEl.innerHTML = res.ok
+          ? `<span style="color: #22c55e;">${data.message}</span>`
+          : `<span style="color: #fca5a5;">${data.error}</span>`;
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function runFullBackup() {
+      if (!confirm('Run a full backup of all churches and registry now?')) return;
+      const msgEl = document.getElementById('backup-action-msg');
+      msgEl.innerHTML = '<span style="color: #94a3b8;">Running backup... this may take a while.</span>';
+
+      try {
+        const res = await fetch('/api/backups/run', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          msgEl.innerHTML = `<span style="color: #22c55e;">Backup complete! ${data.churches?.length || 0} churches backed up in ${(data.duration / 1000).toFixed(1)}s.` +
+            (data.errors?.length ? ` <span style="color: #fca5a5;">${data.errors.length} error(s).</span>` : '') + '</span>';
+          loadBackupStatus();
+        } else {
+          msgEl.innerHTML = `<span style="color: #fca5a5;">${data.error}</span>`;
+        }
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function toggleSchedule(enabled) {
+      const msgEl = document.getElementById('backup-action-msg');
+      try {
+        const res = await fetch('/api/backups/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        const data = await res.json();
+        msgEl.innerHTML = res.ok
+          ? `<span style="color: #22c55e;">${data.message}</span>`
+          : `<span style="color: #fca5a5;">${data.error}</span>`;
+        loadBackupStatus();
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function pruneOldSnapshots() {
+      if (!confirm('Delete snapshots older than the retention period?')) return;
+      const msgEl = document.getElementById('backup-action-msg');
+      msgEl.innerHTML = '<span style="color: #94a3b8;">Pruning...</span>';
+
+      try {
+        const res = await fetch('/api/backups/prune', { method: 'POST' });
+        const data = await res.json();
+        msgEl.innerHTML = res.ok
+          ? `<span style="color: #22c55e;">Pruned ${data.deleted} snapshot(s).</span>`
+          : `<span style="color: #fca5a5;">${data.error}</span>`;
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${err.message}</span>`;
+      }
+    }
+
+    async function loadSnapshots() {
+      const target = document.getElementById('snapshot-target').value;
+      const container = document.getElementById('snapshots-table');
+      container.innerHTML = '<div class="loading">Loading snapshots...</div>';
+
+      try {
+        const res = await fetch(`/api/backups/snapshots/${encodeURIComponent(target)}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+          container.innerHTML = `<div class="empty-state">${data.error}</div>`;
+          return;
+        }
+
+        if (!data.length) {
+          container.innerHTML = '<div class="empty-state">No snapshots found</div>';
+          return;
+        }
+
+        const isChurch = target !== 'registry';
+        container.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Size</th>
+                <th>Date</th>
+                ${isChurch ? '<th>Actions</th>' : ''}
+              </tr>
+            </thead>
+            <tbody>
+              ${data.map(s => `
+                <tr>
+                  <td style="font-family: monospace; font-size: 0.8rem;">${s.filename}</td>
+                  <td>${formatBytes(s.size)}</td>
+                  <td class="timestamp">${formatDate(s.lastModified)}</td>
+                  ${isChurch ? `<td class="actions">
+                    <button class="action-btn" onclick="restoreSnapshot('${target}', '${s.key.replace(/'/g, "\\'")}')" title="Restore this snapshot">Restore</button>
+                  </td>` : ''}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      } catch (err) {
+        container.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+      }
+    }
+
+    async function restoreSnapshot(churchId, snapshotKey) {
+      if (!confirm(`WARNING: This will replace the current database for "${churchId}" with this snapshot.\n\nA pre-rollback copy will be saved locally. Continue?`)) return;
+      if (!confirm(`Final confirmation: Restore ${churchId}?`)) return;
+
+      const container = document.getElementById('snapshots-table');
+      const prevHtml = container.innerHTML;
+      container.insertAdjacentHTML('afterbegin',
+        '<div style="padding: 1rem; color: #94a3b8;">Restoring... please wait.</div>');
+
+      try {
+        const res = await fetch(`/api/backups/restore/${encodeURIComponent(churchId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ snapshotKey })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Restore successful!\n\nPre-rollback backup saved at:\n${data.preRollbackBackup}`);
+        } else {
+          alert('Restore failed: ' + data.error);
+        }
+      } catch (err) {
+        alert('Restore failed: ' + err.message);
+      }
+
+      container.innerHTML = prevHtml;
+    }
   </script>
 </body>
 </html>

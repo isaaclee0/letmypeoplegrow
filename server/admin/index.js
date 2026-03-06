@@ -13,8 +13,9 @@ const express = require('express');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-// Import database
+// Import database and backup service
 const Database = require('../config/database');
+const BackupService = require('../services/backup');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -29,6 +30,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize database on startup
 Database.initialize();
+
+// Initialize backup service from env vars
+if (BackupService.loadConfigFromEnv()) {
+  BackupService.startSchedule();
+}
 
 // Dashboard stats (aggregate across all churches)
 app.get('/api/stats', async (req, res) => {
@@ -621,6 +627,128 @@ app.delete('/api/churches/:churchId', async (req, res) => {
   } catch (error) {
     console.error('Delete church error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// Backup API Routes
+// ============================================
+
+// Get backup status
+app.get('/api/backups/status', (req, res) => {
+  res.json(BackupService.getStatus());
+});
+
+// Configure backup (save S3 settings)
+app.post('/api/backups/configure', async (req, res) => {
+  try {
+    const { endpoint, bucket, region, accessKeyId, secretAccessKey, prefix, retentionDays, schedule } = req.body;
+    if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
+      return res.status(400).json({ error: 'endpoint, bucket, accessKeyId, and secretAccessKey are required' });
+    }
+
+    BackupService.configure({ endpoint, bucket, region, accessKeyId, secretAccessKey, prefix, retentionDays, schedule });
+
+    // Test the connection
+    await BackupService.testConnection();
+
+    res.json({ success: true, message: 'Backup configured and connection verified.' });
+  } catch (error) {
+    res.status(500).json({ error: `Configuration failed: ${error.message}` });
+  }
+});
+
+// Test S3 connection
+app.post('/api/backups/test', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    await BackupService.testConnection();
+    res.json({ success: true, message: 'Connection successful.' });
+  } catch (error) {
+    res.status(500).json({ error: `Connection test failed: ${error.message}` });
+  }
+});
+
+// Start/stop backup schedule
+app.post('/api/backups/schedule', (req, res) => {
+  const { enabled } = req.body;
+  if (enabled) {
+    const started = BackupService.startSchedule();
+    res.json({ success: started, message: started ? 'Schedule started.' : 'Failed to start schedule.' });
+  } else {
+    BackupService.stopSchedule();
+    res.json({ success: true, message: 'Schedule stopped.' });
+  }
+});
+
+// Trigger manual backup of everything
+app.post('/api/backups/run', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    const results = await BackupService.backupAll();
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: `Backup failed: ${error.message}` });
+  }
+});
+
+// Backup a single church
+app.post('/api/backups/churches/:churchId', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    const result = await BackupService.backupChurch(req.params.churchId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: `Backup failed: ${error.message}` });
+  }
+});
+
+// List snapshots for a target (registry or churchId)
+app.get('/api/backups/snapshots/:target', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    const snapshots = await BackupService.listSnapshots(req.params.target);
+    res.json(snapshots);
+  } catch (error) {
+    res.status(500).json({ error: `Failed to list snapshots: ${error.message}` });
+  }
+});
+
+// Restore a church from a snapshot
+app.post('/api/backups/restore/:churchId', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    const { snapshotKey } = req.body;
+    if (!snapshotKey) {
+      return res.status(400).json({ error: 'snapshotKey is required' });
+    }
+    const result = await BackupService.restoreChurch(req.params.churchId, snapshotKey);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: `Restore failed: ${error.message}` });
+  }
+});
+
+// Prune old snapshots
+app.post('/api/backups/prune', async (req, res) => {
+  try {
+    if (!BackupService.isConfigured()) {
+      return res.status(400).json({ error: 'Backup not configured' });
+    }
+    const result = await BackupService.pruneSnapshots();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: `Prune failed: ${error.message}` });
   }
 });
 
