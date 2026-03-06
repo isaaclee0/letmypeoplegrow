@@ -102,7 +102,6 @@ async function uploadToS3(localPath, key) {
     Body: body,
     ContentType: 'application/gzip',
     ContentLength: stat.size,
-    ServerSideEncryption: 'AES256',
   }));
 
   return stat.size;
@@ -184,6 +183,7 @@ async function backupAll() {
   try {
     results.registry = await backupRegistry();
   } catch (err) {
+    console.error('Backup: Registry backup failed:', err.message);
     results.errors.push({ target: 'registry', error: err.message });
   }
 
@@ -193,6 +193,7 @@ async function backupAll() {
       const result = await backupChurch(church.church_id);
       results.churches.push(result);
     } catch (err) {
+      console.error(`Backup: Church ${church.church_id} backup failed:`, err.message);
       results.errors.push({ target: church.church_id, error: err.message });
     }
   }
