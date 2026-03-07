@@ -262,6 +262,11 @@ router.post('/send',
         const newUserId = createUserResult.insertId;
         console.log('✅ [INVITATION_DEBUG] User created with ID:', newUserId);
 
+        // Register in registry.sqlite so the user can be found during login
+        console.log('📋 [INVITATION_DEBUG] Registering user in registry for login lookup');
+        Database.registerUserLookup(newUserId, email || null, normalizedMobile || null, req.user.church_id);
+        console.log('✅ [INVITATION_DEBUG] User registered in registry');
+
         // Assign gatherings now if provided
         if (gatheringIds.length > 0) {
           console.log('🏛️ [INVITATION_DEBUG] Assigning gatherings to invited user now:', gatheringIds);
