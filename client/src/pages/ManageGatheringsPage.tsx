@@ -37,6 +37,7 @@ interface Gathering {
     };
   };
   kioskEnabled?: boolean;
+  leaderCheckinEnabled?: boolean;
   isActive: boolean;
   memberCount?: number;
   recentVisitorCount?: number;
@@ -64,6 +65,7 @@ interface CreateGatheringData {
     };
   };
   kioskEnabled?: boolean;
+  leaderCheckinEnabled?: boolean;
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -92,7 +94,8 @@ const ManageGatheringsPage: React.FC = () => {
     frequency: 'weekly',
     attendanceType: 'standard' as 'standard' | 'headcount',
     customSchedule: undefined as any,
-    kioskEnabled: false
+    kioskEnabled: false,
+    leaderCheckinEnabled: false
   });
 
   const [createGatheringData, setCreateGatheringData] = useState<CreateGatheringData>({
@@ -103,7 +106,8 @@ const ManageGatheringsPage: React.FC = () => {
     endTime: '11:00',
     frequency: 'weekly',
     attendanceType: 'standard',
-    kioskEnabled: false
+    kioskEnabled: false,
+    leaderCheckinEnabled: false
   });
 
   // Confirmation modal states
@@ -233,7 +237,8 @@ const ManageGatheringsPage: React.FC = () => {
         frequency: createGatheringData.frequency,
         attendanceType: createGatheringData.attendanceType,
         customSchedule: createGatheringData.customSchedule,
-        kioskEnabled: createGatheringData.kioskEnabled
+        kioskEnabled: createGatheringData.kioskEnabled,
+        leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled
       };
       
       logger.log('Creating gathering with data:', gatheringData);
@@ -253,6 +258,7 @@ const ManageGatheringsPage: React.FC = () => {
         attendanceType: createGatheringData.attendanceType,
         customSchedule: createGatheringData.customSchedule,
         kioskEnabled: createGatheringData.kioskEnabled,
+        leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -305,7 +311,8 @@ const ManageGatheringsPage: React.FC = () => {
       frequency: gathering.frequency,
       attendanceType: gathering.attendanceType,
       customSchedule: gathering.customSchedule,
-      kioskEnabled: gathering.kioskEnabled || false
+      kioskEnabled: gathering.kioskEnabled || false,
+      leaderCheckinEnabled: gathering.leaderCheckinEnabled || false
     });
     setShowEditForm(true);
   }, []);
@@ -954,9 +961,10 @@ const ManageGatheringsPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Check-ins Toggle - only for standard gatherings */}
+                {/* Check-in Mode Toggles - only for standard gatherings */}
                 {editFormData.attendanceType === 'standard' && (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
+                    <label className="block text-sm font-medium text-gray-700">Check-in Modes</label>
                     <div>
                       <label className="flex items-center cursor-pointer">
                         <input
@@ -966,13 +974,35 @@ const ManageGatheringsPage: React.FC = () => {
                           className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                         />
                         <span className="ml-2 text-sm font-medium text-gray-700">
-                          Enable Check-ins
+                          Self Check-in
                         </span>
                       </label>
                       <p className="mt-1 text-xs text-gray-500 ml-6">
-                        Enables the check-ins page with self-service and leader check-in modes. Uses the gathering's end time to close sign-in.
+                        Self-service / kiosk mode where individuals check themselves in.
                       </p>
                     </div>
+                    <div>
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editFormData.leaderCheckinEnabled || false}
+                          onChange={(e) => setEditFormData({ ...editFormData, leaderCheckinEnabled: e.target.checked })}
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-2 text-sm font-medium text-gray-700">
+                          Leader Check-in
+                        </span>
+                      </label>
+                      <p className="mt-1 text-xs text-gray-500 ml-6">
+                        A leader checks people in and out on their behalf.
+                      </p>
+                    </div>
+                    {(editFormData.kioskEnabled || editFormData.leaderCheckinEnabled) && (
+                      <p className="text-xs text-gray-500 ml-6">
+                        Uses the gathering's end time to close sign-in.
+                        {editFormData.kioskEnabled && editFormData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1122,9 +1152,10 @@ const ManageGatheringsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Check-ins Toggle - only for standard gatherings */}
+                  {/* Check-in Mode Toggles - only for standard gatherings */}
                   {createGatheringData.attendanceType === 'standard' && (
-                    <div className="space-y-4">
+                    <div className="space-y-3">
+                      <label className="block text-sm font-medium text-gray-700">Check-in Modes</label>
                       <div>
                         <label className="flex items-center cursor-pointer">
                           <input
@@ -1134,13 +1165,35 @@ const ManageGatheringsPage: React.FC = () => {
                             className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                           />
                           <span className="ml-2 text-sm font-medium text-gray-700">
-                            Enable Check-ins
+                            Self Check-in
                           </span>
                         </label>
                         <p className="mt-1 text-xs text-gray-500 ml-6">
-                          Enables the check-ins page with self-service and leader check-in modes. Uses the gathering's end time to close sign-in.
+                          Self-service / kiosk mode where individuals check themselves in.
                         </p>
                       </div>
+                      <div>
+                        <label className="flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={createGatheringData.leaderCheckinEnabled || false}
+                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, leaderCheckinEnabled: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <span className="ml-2 text-sm font-medium text-gray-700">
+                            Leader Check-in
+                          </span>
+                        </label>
+                        <p className="mt-1 text-xs text-gray-500 ml-6">
+                          A leader checks people in and out on their behalf.
+                        </p>
+                      </div>
+                      {(createGatheringData.kioskEnabled || createGatheringData.leaderCheckinEnabled) && (
+                        <p className="text-xs text-gray-500 ml-6">
+                          Uses the gathering's end time to close sign-in.
+                          {createGatheringData.kioskEnabled && createGatheringData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
+                        </p>
+                      )}
                     </div>
                   )}
 

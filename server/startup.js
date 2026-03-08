@@ -7,15 +7,12 @@ async function runMigrations() {
   try {
     console.log(`🔄 Checking migrations for church ${churchId}...`);
 
+    // Migration versions are prefixed with the server version that introduced them
+    // (e.g. v1.8.5_description) to avoid collisions. New columns/tables should be
+    // added to schema.js for fresh databases; migrations here handle upgrades for
+    // existing databases.
     const migrationFiles = [
-      { version: '001', name: 'fix_audit_log', description: 'Fix audit log table structure' },
-      { version: '002', name: 'add_contact_fields', description: 'Add contact method fields to users' },
-      { version: '003', name: 'enhance_visitors_table', description: 'Enhance visitors table with additional fields' },
-      { version: '004', name: 'fix_attendance_duplicates', description: 'Fix duplicate attendance records' },
-      { version: '005', name: 'add_attendance_updated_at', description: 'Add updated_at field to attendance records' },
-      { version: '006', name: 'fix_attendance_sessions_unique_constraint', description: 'Fix attendance sessions unique constraint to include church_id' },
-      { version: '007', name: 'add_visitor_config', description: 'Add visitor filtering configuration table' },
-      { version: '008_add_roster_snapshotted', name: 'add_roster_snapshotted', description: 'Add roster_snapshotted column to attendance_sessions and backfill people_type_at_time' }
+      { version: 'v1.8.5_add_leader_checkin_enabled', name: 'add_leader_checkin_enabled', description: 'Add leader_checkin_enabled column to gathering_types' }
     ];
 
     const executedMigrations = await Database.query(
@@ -31,25 +28,12 @@ async function runMigrations() {
     for (const migration of pendingMigrations) {
       const startTime = Date.now();
       try {
-        // Execute migration-specific SQL
-        if (migration.version === '008_add_roster_snapshotted') {
-          // Add roster_snapshotted column to attendance_sessions if missing
-          const cols = await Database.query(`PRAGMA table_info(attendance_sessions)`);
-          if (!cols.some(c => c.name === 'roster_snapshotted')) {
-            await Database.query(`ALTER TABLE attendance_sessions ADD COLUMN roster_snapshotted INTEGER DEFAULT 0`);
-            console.log(`  ✅ Added roster_snapshotted column to attendance_sessions`);
+        if (migration.version === 'v1.8.5_add_leader_checkin_enabled') {
+          const cols = await Database.query(`PRAGMA table_info(gathering_types)`);
+          if (!cols.some(c => c.name === 'leader_checkin_enabled')) {
+            await Database.query(`ALTER TABLE gathering_types ADD COLUMN leader_checkin_enabled INTEGER DEFAULT 0`);
+            console.log(`  ✅ Added leader_checkin_enabled column to gathering_types`);
           }
-          // Backfill NULL people_type_at_time with current people_type (best available data)
-          await Database.query(`
-            UPDATE attendance_records
-            SET people_type_at_time = (
-              SELECT COALESCE(i.people_type, 'regular')
-              FROM individuals i
-              WHERE i.id = attendance_records.individual_id
-            )
-            WHERE people_type_at_time IS NULL
-          `);
-          console.log(`  ✅ Backfilled NULL people_type_at_time values`);
         }
 
         await Database.query(

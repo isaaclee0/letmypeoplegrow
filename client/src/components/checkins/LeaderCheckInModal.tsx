@@ -48,8 +48,10 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
     }
   }, [uniqueFamilyNotes.length]);
 
+  const isCheckout = action === 'checkout';
+
   const handleSubmit = async () => {
-    if (hasChildren && !signerName.trim()) {
+    if (hasChildren && isCheckout && !signerName.trim()) {
       setError('Please enter the authorised person\'s name.');
       return;
     }
@@ -67,6 +69,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
   };
 
   const isCheckin = action === 'checkin';
+  const signerRequired = hasChildren && isCheckout;
   const title = isCheckin
     ? `Check In ${selectedPeople.length} ${selectedPeople.length === 1 ? 'Person' : 'People'}`
     : `Check Out ${selectedPeople.length} ${selectedPeople.length === 1 ? 'Person' : 'People'}`;
@@ -108,11 +111,12 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
               </div>
             </div>
 
-            {/* Signer name — only required when children are being checked in/out */}
+            {/* Signer name — shown when children are present; required only for checkout */}
             {hasChildren && (
               <div>
                 <label htmlFor="leader-signer-name" className="block text-sm font-medium text-gray-700 mb-1">
-                  Authorised person name <span className="text-red-500">*</span>
+                  Authorised person name {signerRequired && <span className="text-red-500">*</span>}
+                  {!signerRequired && <span className="text-gray-400 text-xs ml-1">(optional)</span>}
                 </label>
                 <input
                   id="leader-signer-name"
@@ -169,7 +173,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
             </button>
             <button
               onClick={handleSubmit}
-              disabled={isSubmitting || (hasChildren && !signerName.trim())}
+              disabled={isSubmitting || (signerRequired && !signerName.trim())}
               className={`flex-1 px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white disabled:opacity-50 disabled:cursor-not-allowed ${
                 isCheckin
                   ? 'bg-primary-600 hover:bg-primary-700'

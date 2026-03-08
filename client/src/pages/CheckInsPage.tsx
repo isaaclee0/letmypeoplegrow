@@ -41,7 +41,7 @@ const CheckInsPage: React.FC = () => {
         if (cachedGatherings) {
           const parsed = JSON.parse(cachedGatherings);
           const all: GatheringType[] = parsed.gatherings || [];
-          const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
+          const kioskList = all.filter((g: GatheringType) => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
           if (kioskList.length > 0) {
             setKioskGatherings(kioskList);
             setNoGatherings(false);
@@ -56,7 +56,7 @@ const CheckInsPage: React.FC = () => {
       try {
         const response = await gatheringsAPI.getAll();
         const all: GatheringType[] = response.data.gatherings || [];
-        const kioskList = all.filter(g => g.kioskEnabled && g.attendanceType === 'standard');
+        const kioskList = all.filter(g => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
         setKioskGatherings(kioskList);
         setNoGatherings(kioskList.length === 0);
         try {
@@ -99,7 +99,7 @@ const CheckInsPage: React.FC = () => {
           if (cachedGatherings) {
             const parsed = JSON.parse(cachedGatherings);
             const all: GatheringType[] = parsed.gatherings || [];
-            const kioskList = all.filter((g: GatheringType) => g.kioskEnabled && g.attendanceType === 'standard');
+            const kioskList = all.filter((g: GatheringType) => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
             setKioskGatherings(kioskList);
             setNoGatherings(kioskList.length === 0);
           } else {
@@ -188,6 +188,18 @@ const CheckInsPage: React.FC = () => {
     setSelectedGathering(gathering);
     setGatheringDate(date);
     setDaysAway(da);
+
+    // If only one mode is enabled, skip mode selection and go directly
+    const hasSelf = gathering.kioskEnabled;
+    const hasLeader = gathering.leaderCheckinEnabled;
+    if (hasSelf && !hasLeader) {
+      checkIns.setMode('self');
+      setActiveMode('self');
+    } else if (hasLeader && !hasSelf) {
+      checkIns.startLeaderSession(gathering.id, gathering.name, date);
+      setActiveMode('leader');
+    }
+    // If both are enabled, show mode selection (no auto-start)
   };
 
   return (
@@ -210,8 +222,8 @@ const CheckInsPage: React.FC = () => {
           daysAway={daysAway}
         />
 
-        {/* Mode selection */}
-        {selectedGathering && (
+        {/* Mode selection - only shown when both modes are enabled */}
+        {selectedGathering && selectedGathering.kioskEnabled && selectedGathering.leaderCheckinEnabled && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Mode</label>
             <div className="grid grid-cols-2 gap-3">

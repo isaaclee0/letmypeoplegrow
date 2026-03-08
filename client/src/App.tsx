@@ -191,7 +191,6 @@ function App() {
                       </RoleProtectedRoute>
                     } 
                   />
-                  {/* Advanced Migrations removed */}
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route

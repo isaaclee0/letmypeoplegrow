@@ -74,7 +74,7 @@ const Layout: React.FC = () => {
       try {
         const response = await gatheringsAPI.getAll();
         const gatherings = response.data.gatherings || [];
-        const hasCheckIns = gatherings.some((g: any) => g.kioskEnabled);
+        const hasCheckIns = gatherings.some((g: any) => g.kioskEnabled || g.leaderCheckinEnabled);
         setCheckInsAvailable(hasCheckIns);
         localStorage.setItem('checkins_available', hasCheckIns.toString());
       } catch (error) {

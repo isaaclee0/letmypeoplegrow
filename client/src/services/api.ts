@@ -179,6 +179,7 @@ export interface GatheringType {
   };
   endTime?: string;
   kioskEnabled?: boolean;
+  leaderCheckinEnabled?: boolean;
   kioskMessage?: string;
   isActive: boolean;
   memberCount?: number;
@@ -310,10 +311,11 @@ export const gatheringsAPI = {
       };
     };
     kioskEnabled?: boolean;
+    leaderCheckinEnabled?: boolean;
     setAsDefault?: boolean;
-  }) => 
+  }) =>
     api.post('/gatherings', data),
-    
+
   update: (gatheringId: number, data: {
     name: string;
     description?: string;
@@ -334,7 +336,8 @@ export const gatheringsAPI = {
       };
     };
     kioskEnabled?: boolean;
-  }) => 
+    leaderCheckinEnabled?: boolean;
+  }) =>
     api.put(`/gatherings/${gatheringId}`, data),
     
   getMembers: (gatheringId: number) => 
@@ -481,8 +484,6 @@ export const usersAPI = {
   savePreferences: (preferences: Record<string, any>) => 
     api.post('/users/me/preferences/batch', { preferences }),
 };
-
-// Advanced Migrations API is now in advancedMigrationsAPI.ts
 
 // Invitations API
 export const invitationsAPI = {

@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   attendance_type TEXT DEFAULT 'standard' CHECK(attendance_type IN ('standard', 'headcount')),
   custom_schedule TEXT,
   kiosk_enabled INTEGER DEFAULT 0,
+  leader_checkin_enabled INTEGER DEFAULT 0,
   kiosk_message TEXT,
   kiosk_end_time TEXT,
   group_by_family INTEGER DEFAULT 1,

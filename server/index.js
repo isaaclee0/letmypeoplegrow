@@ -56,7 +56,7 @@ const loadRoutes = () => {
   const routeFiles = [
     'auth', 'users', 'gatherings', 'families', 'individuals',
     'attendance', 'reports', 'notifications', 'onboarding',
-    'invitations', 'csv-import', 'migrations', 'advancedMigrations', 'test',
+    'invitations', 'csv-import', 'test',
     'notification_rules',
     // 'importrange', // Disabled - external data access feature
     'settings', 'activities', 'visitor-config', 'integrations', 'ai', 'kiosk', 'takeout'
