@@ -628,13 +628,15 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
-        >
-          <ArrowLeftIcon className="h-4 w-4 mr-1" />
-          Back
-        </button>
+        {user?.role !== 'attendance_taker' ? (
+          <button
+            onClick={onBack}
+            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeftIcon className="h-4 w-4 mr-1" />
+            Back
+          </button>
+        ) : <div />}
         <div className="text-center flex-1">
           <h1 className="text-lg font-bold text-gray-900">Leader Check-in</h1>
           <p className="text-xs text-gray-500">

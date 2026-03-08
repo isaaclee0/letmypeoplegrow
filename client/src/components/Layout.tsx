@@ -101,6 +101,9 @@ const Layout: React.FC = () => {
 
   const navigation = user?.role === 'attendance_taker' ? [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
+    ...(checkInsAvailable ? [
+      { name: 'Check-ins', href: '/app/checkins', icon: ClipboardDocumentCheckIcon }
+    ] : []),
   ] : [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
     { name: 'People', href: '/app/people', icon: UsersIcon },

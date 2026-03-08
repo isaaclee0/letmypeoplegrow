@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
+import { useAuth } from '../contexts/AuthContext';
 import { useCheckIns } from '../contexts/CheckInsContext';
 import { gatheringsAPI, GatheringType } from '../services/api';
 import { getNextGatheringDate } from '../components/checkins/GatheringDateSelector';
@@ -15,7 +16,9 @@ import {
 } from '@heroicons/react/24/outline';
 
 const CheckInsPage: React.FC = () => {
+  const { user } = useAuth();
   const checkIns = useCheckIns();
+  const isAttendanceTaker = user?.role === 'attendance_taker';
 
   // Gathering selection
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
@@ -63,6 +66,30 @@ const CheckInsPage: React.FC = () => {
           localStorage.setItem('gatherings_cached_data', JSON.stringify({ gatherings: all, timestamp: Date.now() }));
         } catch {
           // ignore cache write failures
+        }
+
+        // Auto-start for attendance_taker with single gathering + single mode
+        if (isAttendanceTaker && kioskList.length === 1 && !checkIns.gatheringId) {
+          const g = kioskList[0];
+          const hasSelf = !!g.kioskEnabled;
+          const hasLeader = !!g.leaderCheckinEnabled;
+          if (hasLeader && !hasSelf) {
+            // Leader-only: go straight to leader check-in
+            const { date, daysAway: da } = getNextGatheringDate(g);
+            setSelectedGathering(g);
+            setGatheringDate(date);
+            setDaysAway(da);
+            checkIns.startLeaderSession(g.id, g.name, date);
+            setActiveMode('leader');
+          } else if (hasSelf && !hasLeader) {
+            // Self-only: auto-select gathering but show setup page (don't auto-start)
+            const { date, daysAway: da } = getNextGatheringDate(g);
+            setSelectedGathering(g);
+            setGatheringDate(date);
+            setDaysAway(da);
+            checkIns.setMode('self');
+            setActiveMode('self');
+          }
         }
 
         // Restore persisted session from context
@@ -189,17 +216,19 @@ const CheckInsPage: React.FC = () => {
     setGatheringDate(date);
     setDaysAway(da);
 
-    // If only one mode is enabled, skip mode selection and go directly
-    const hasSelf = gathering.kioskEnabled;
-    const hasLeader = gathering.leaderCheckinEnabled;
-    if (hasSelf && !hasLeader) {
-      checkIns.setMode('self');
-      setActiveMode('self');
-    } else if (hasLeader && !hasSelf) {
-      checkIns.startLeaderSession(gathering.id, gathering.name, date);
-      setActiveMode('leader');
+    // For attendance_takers, auto-start if only one mode is available
+    if (isAttendanceTaker) {
+      const hasSelf = !!gathering.kioskEnabled;
+      const hasLeader = !!gathering.leaderCheckinEnabled;
+      if (hasSelf && !hasLeader) {
+        checkIns.setMode('self');
+        setActiveMode('self');
+      } else if (hasLeader && !hasSelf) {
+        checkIns.startLeaderSession(gathering.id, gathering.name, date);
+        setActiveMode('leader');
+      }
     }
-    // If both are enabled, show mode selection (no auto-start)
+    // Admin/coordinator always see mode selection buttons
   };
 
   return (
@@ -222,46 +251,50 @@ const CheckInsPage: React.FC = () => {
           daysAway={daysAway}
         />
 
-        {/* Mode selection - only shown when both modes are enabled */}
-        {selectedGathering && selectedGathering.kioskEnabled && selectedGathering.leaderCheckinEnabled && (
+        {/* Mode selection buttons */}
+        {selectedGathering && (!!selectedGathering.kioskEnabled || !!selectedGathering.leaderCheckinEnabled) && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Mode</label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => {
-                  if (selectedGathering) {
-                    checkIns.startLeaderSession(selectedGathering.id, selectedGathering.name, gatheringDate);
-                  }
-                  setActiveMode('leader');
-                }}
-                className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
-              >
-                <UsersIcon className="h-8 w-8 text-primary-600 mb-2" />
-                <span className="text-sm font-medium text-gray-900">Leader Check-in</span>
-                <span className="text-xs text-gray-500 mt-1 text-center">
-                  Check in/out by a leader
-                </span>
-              </button>
-              <button
-                onClick={() => {
-                  checkIns.setMode('self');
-                  setActiveMode('self');
-                }}
-                className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
-              >
-                <UserIcon className="h-8 w-8 text-primary-600 mb-2" />
-                <span className="text-sm font-medium text-gray-900">Self Check-in</span>
-                <span className="text-xs text-gray-500 mt-1 text-center">
-                  Self-service or 'Kiosk' mode
-                </span>
-              </button>
+            <div className={`grid gap-3 ${selectedGathering.kioskEnabled && selectedGathering.leaderCheckinEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {!!selectedGathering.leaderCheckinEnabled && (
+                <button
+                  onClick={() => {
+                    if (selectedGathering) {
+                      checkIns.startLeaderSession(selectedGathering.id, selectedGathering.name, gatheringDate);
+                    }
+                    setActiveMode('leader');
+                  }}
+                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
+                >
+                  <UsersIcon className="h-8 w-8 text-primary-600 mb-2" />
+                  <span className="text-sm font-medium text-gray-900">Leader Check-in</span>
+                  <span className="text-xs text-gray-500 mt-1 text-center">
+                    Check in/out by a leader
+                  </span>
+                </button>
+              )}
+              {!!selectedGathering.kioskEnabled && (
+                <button
+                  onClick={() => {
+                    checkIns.setMode('self');
+                    setActiveMode('self');
+                  }}
+                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
+                >
+                  <UserIcon className="h-8 w-8 text-primary-600 mb-2" />
+                  <span className="text-sm font-medium text-gray-900">Self Check-in</span>
+                  <span className="text-xs text-gray-500 mt-1 text-center">
+                    Self-service or 'Kiosk' mode
+                  </span>
+                </button>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* History */}
-      {selectedGathering && (
+      {/* History - hidden for attendance takers */}
+      {selectedGathering && !isAttendanceTaker && (
         <CheckInHistory
           gatheringId={selectedGathering.id}
           gatheringName={selectedGathering.name}

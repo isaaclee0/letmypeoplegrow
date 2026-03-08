@@ -138,7 +138,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
   daysAway,
   onBack,
 }) => {
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const checkIns = useCheckIns();
   const { isConnected, socket, sendKioskAction, onAttendanceUpdate, onKioskCheckout, onReconnect } = useWebSocket();
 

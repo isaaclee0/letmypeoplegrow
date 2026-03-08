@@ -202,7 +202,7 @@ router.get('/history/:gatheringTypeId', disableCache, async (req, res) => {
     const sessions = [];
     for (const row of dates) {
       const dateStr = typeof row.session_date === 'string'
-        ? row.session_date
+        ? row.session_date.split(' ')[0]
         : new Date(row.session_date).toISOString().split('T')[0];
 
       // Get all kiosk records for this date
@@ -219,7 +219,7 @@ router.get('/history/:gatheringTypeId', disableCache, async (req, res) => {
         FROM kiosk_checkins kc
         LEFT JOIN individuals i ON kc.individual_id = i.id
         LEFT JOIN families f ON i.family_id = f.id
-        WHERE kc.gathering_type_id = ? AND kc.session_date = ? AND kc.church_id = ?
+        WHERE kc.gathering_type_id = ? AND DATE(kc.session_date) = ? AND kc.church_id = ?
         ORDER BY kc.created_at ASC
       `, [gatheringTypeId, dateStr, churchId]);
 
@@ -269,7 +269,7 @@ router.get('/history/:gatheringTypeId/:date', disableCache, async (req, res) => 
       LEFT JOIN individuals i ON kc.individual_id = i.id
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN users u ON kc.user_id = u.id
-      WHERE kc.gathering_type_id = ? AND kc.session_date = ? AND kc.church_id = ?
+      WHERE kc.gathering_type_id = ? AND DATE(kc.session_date) = ? AND kc.church_id = ?
       ORDER BY kc.created_at ASC
     `, [gatheringTypeId, date, churchId]);
 
@@ -342,7 +342,7 @@ router.delete('/history/:gatheringTypeId/:date', requireGatheringAccess, async (
 
     const result = await Database.query(`
       DELETE FROM kiosk_checkins
-      WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?
+      WHERE gathering_type_id = ? AND DATE(session_date) = ? AND church_id = ?
     `, [gatheringTypeId, date, churchId]);
 
     const deletedCount = Number(result.affectedRows || 0);
