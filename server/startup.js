@@ -12,7 +12,8 @@ async function runMigrations() {
     // added to schema.js for fresh databases; migrations here handle upgrades for
     // existing databases.
     const migrationFiles = [
-      { version: 'v1.8.5_add_leader_checkin_enabled', name: 'add_leader_checkin_enabled', description: 'Add leader_checkin_enabled column to gathering_types' }
+      { version: 'v1.8.6_add_leader_checkin_enabled', name: 'add_leader_checkin_enabled', description: 'Add leader_checkin_enabled column to gathering_types' },
+      { version: 'v1.8.6_backfill_leader_checkin', name: 'backfill_leader_checkin', description: 'Enable leader check-in for gatherings that had self check-in enabled' }
     ];
 
     const executedMigrations = await Database.query(
@@ -28,12 +29,19 @@ async function runMigrations() {
     for (const migration of pendingMigrations) {
       const startTime = Date.now();
       try {
-        if (migration.version === 'v1.8.5_add_leader_checkin_enabled') {
+        if (migration.version === 'v1.8.6_add_leader_checkin_enabled') {
           const cols = await Database.query(`PRAGMA table_info(gathering_types)`);
           if (!cols.some(c => c.name === 'leader_checkin_enabled')) {
             await Database.query(`ALTER TABLE gathering_types ADD COLUMN leader_checkin_enabled INTEGER DEFAULT 0`);
+            // Enable leader check-in for any gathering that already had self check-in enabled
+            await Database.query(`UPDATE gathering_types SET leader_checkin_enabled = 1 WHERE kiosk_enabled = 1`);
             console.log(`  ✅ Added leader_checkin_enabled column to gathering_types`);
           }
+        }
+
+        if (migration.version === 'v1.8.6_backfill_leader_checkin') {
+          await Database.query(`UPDATE gathering_types SET leader_checkin_enabled = 1 WHERE kiosk_enabled = 1`);
+          console.log(`  ✅ Enabled leader check-in for existing self-checkin gatherings`);
         }
 
         await Database.query(

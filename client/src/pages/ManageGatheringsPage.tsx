@@ -265,6 +265,8 @@ const ManageGatheringsPage: React.FC = () => {
       };
 
       setGatherings([...gatherings, newGathering]);
+      localStorage.removeItem('gatherings_cached_data');
+      localStorage.removeItem('checkins_available');
       setSuccess(`Gathering "${createGatheringData.name}" created successfully.`);
       setShowAddGatheringWizard(false);
       resetWizardState();
@@ -324,19 +326,23 @@ const ManageGatheringsPage: React.FC = () => {
       await gatheringsAPI.update(editingGathering.id, editFormData);
       
       // Update the gathering in the local state
-      setGatherings(gatherings.map(g => 
-        g.id === editingGathering.id 
+      setGatherings(gatherings.map(g =>
+        g.id === editingGathering.id
           ? { ...g, ...editFormData }
           : g
       ));
-      
+
       setShowEditForm(false);
       setEditingGathering(null);
       setError('');
-      
+
       // Clear selection after successful edit
       setSelectedGatherings([]);
-      
+
+      // Invalidate cache so CheckInsPage fetches fresh data on next visit
+      localStorage.removeItem('gatherings_cached_data');
+      localStorage.removeItem('checkins_available');
+
       setSuccess('Gathering updated successfully');
       setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
@@ -364,10 +370,12 @@ const ManageGatheringsPage: React.FC = () => {
       if (selectedGathering?.id === deleteConfirmation.gatheringId) {
         setSelectedGathering(null);
       }
-      
+
       // Remove from selection if it was selected
       setSelectedGatherings(prev => prev.filter(id => id !== deleteConfirmation.gatheringId));
-      
+
+      localStorage.removeItem('gatherings_cached_data');
+      localStorage.removeItem('checkins_available');
       setSuccess('Gathering deleted successfully');
       setTimeout(() => setSuccess(''), 5000);
     } catch (err: any) {
@@ -385,7 +393,9 @@ const ManageGatheringsPage: React.FC = () => {
       
       // Add the new gathering to the list
       setGatherings([...gatherings, newGathering]);
-      
+      localStorage.removeItem('gatherings_cached_data');
+      localStorage.removeItem('checkins_available');
+
       // Close modal and reset state
       setShowDuplicateModal(false);
       setDuplicateGathering(null);
