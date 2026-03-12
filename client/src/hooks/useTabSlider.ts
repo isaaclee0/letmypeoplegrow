@@ -17,128 +17,92 @@ export interface UseTabSliderReturn {
 }
 
 export function useTabSlider(deps: any[]): UseTabSliderReturn {
-  // Tab slider drag state
-  const [isDragging, setIsDragging] = useState(false);
-  const [startX, setStartX] = useState(0);
-  const [scrollLeft, setScrollLeft] = useState(0);
-  const [showRightFade, setShowRightFade] = useState(true);
-  const [showDesktopRightFade, setShowDesktopRightFade] = useState(true);
+  // Fade indicator state (the only things that need re-renders)
+  const [showRightFade, setShowRightFade] = useState(false);
+  const [showDesktopRightFade, setShowDesktopRightFade] = useState(false);
   const [showLeftFade, setShowLeftFade] = useState(false);
   const [showDesktopLeftFade, setShowDesktopLeftFade] = useState(false);
+
   const tabSliderRef = useRef<HTMLDivElement>(null);
   const desktopTabSliderRef = useRef<HTMLDivElement>(null);
 
-  // Performance optimization refs
-  const animationFrameRef = useRef<number | null>(null);
-  const lastTouchTimeRef = useRef<number>(0);
-  const touchThrottleDelay = 16; // ~60fps
+  // Drag state as refs — no re-renders during drag, no stale closures
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const scrollLeftRef = useRef(0);
 
   // Tab slider drag handlers
-  const handleMouseDown = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!sliderRef.current) return;
-    setIsDragging(true);
-    setStartX(e.pageX - sliderRef.current.offsetLeft);
-    setScrollLeft(sliderRef.current.scrollLeft);
+    isDraggingRef.current = true;
+    startXRef.current = e.pageX - sliderRef.current.offsetLeft;
+    scrollLeftRef.current = sliderRef.current.scrollLeft;
     sliderRef.current.style.cursor = 'grabbing';
-  };
+  }, []);
 
-  const handleMouseLeave = (sliderRef: React.RefObject<HTMLDivElement>) => {
+  const handleMouseLeave = useCallback((sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!sliderRef.current) return;
-    setIsDragging(false);
+    isDraggingRef.current = false;
     sliderRef.current.style.cursor = 'grab';
-  };
+  }, []);
 
-  const handleMouseUp = (sliderRef: React.RefObject<HTMLDivElement>) => {
+  const handleMouseUp = useCallback((sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!sliderRef.current) return;
-    setIsDragging(false);
+    isDraggingRef.current = false;
     sliderRef.current.style.cursor = 'grab';
-  };
+  }, []);
 
-  const handleMouseMove = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!isDragging || !sliderRef.current) return;
+  const handleMouseMove = useCallback((e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!isDraggingRef.current || !sliderRef.current) return;
     e.preventDefault();
     const x = e.pageX - sliderRef.current.offsetLeft;
-    const walk = (x - startX) * 2; // Scroll speed multiplier
-    sliderRef.current.scrollLeft = scrollLeft - walk;
-  };
+    const walk = (x - startXRef.current) * 2;
+    sliderRef.current.scrollLeft = scrollLeftRef.current - walk;
+  }, []);
 
-  // Optimized touch handlers for mobile with better performance
-  const handleTouchStart = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+  // Touch handlers — extract pageX synchronously, then apply in rAF
+  const handleTouchStart = useCallback((e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
     if (!sliderRef.current) return;
+    isDraggingRef.current = true;
+    startXRef.current = e.touches[0].pageX - sliderRef.current.offsetLeft;
+    scrollLeftRef.current = sliderRef.current.scrollLeft;
+  }, []);
 
-    // Cancel any pending animation frame
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
+  const handleTouchMove = useCallback((e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
+    if (!isDraggingRef.current || !sliderRef.current) return;
 
-    setIsDragging(true);
-    setStartX(e.touches[0].pageX - sliderRef.current.offsetLeft);
-    setScrollLeft(sliderRef.current.scrollLeft);
-    lastTouchTimeRef.current = Date.now();
-  };
+    // Extract the value synchronously before the synthetic event is recycled
+    const pageX = e.touches[0].pageX;
+    const offsetLeft = sliderRef.current.offsetLeft;
+    const el = sliderRef.current;
 
-  const handleTouchMove = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!isDragging || !sliderRef.current) return;
+    const x = pageX - offsetLeft;
+    const walk = (x - startXRef.current) * 2;
+    el.scrollLeft = scrollLeftRef.current - walk;
+  }, []);
 
-    // Throttle touch events for better performance
-    const now = Date.now();
-    if (now - lastTouchTimeRef.current < touchThrottleDelay) {
-      return;
-    }
-    lastTouchTimeRef.current = now;
-
-    e.preventDefault();
-
-    // Use requestAnimationFrame for smooth scrolling
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-
-    animationFrameRef.current = requestAnimationFrame(() => {
-      if (!sliderRef.current) return;
-      const x = e.touches[0].pageX - sliderRef.current.offsetLeft;
-      const walk = (x - startX) * 2;
-      sliderRef.current.scrollLeft = scrollLeft - walk;
-    });
-  };
-
-  const handleTouchEnd = () => {
-    setIsDragging(false);
-
-    // Clean up animation frame
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-  };
-
-  // Cleanup animation frames on unmount
-  useEffect(() => {
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
+  const handleTouchEnd = useCallback(() => {
+    isDraggingRef.current = false;
   }, []);
 
   // Check scroll position and update fade indicators
   const checkScrollPosition = useCallback((sliderRef: React.RefObject<HTMLDivElement>, isMobile: boolean) => {
     if (!sliderRef.current) return;
     const { scrollLeft, scrollWidth, clientWidth } = sliderRef.current;
-    const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5; // 5px tolerance
-    const isAtStart = scrollLeft <= 5; // 5px tolerance
+    const canScroll = scrollWidth > clientWidth + 1; // 1px tolerance for sub-pixel rounding
+    const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5;
+    const isAtStart = scrollLeft <= 5;
 
     if (isMobile) {
-      setShowRightFade(!isAtEnd);
-      setShowLeftFade(!isAtStart);
+      setShowRightFade(canScroll && !isAtEnd);
+      setShowLeftFade(canScroll && !isAtStart);
     } else {
-      setShowDesktopRightFade(!isAtEnd);
-      setShowDesktopLeftFade(!isAtStart);
+      setShowDesktopRightFade(canScroll && !isAtEnd);
+      setShowDesktopLeftFade(canScroll && !isAtStart);
     }
   }, []);
 
-  // Add scroll event listeners for fade indicators
+  // Add scroll event listeners and ResizeObserver for fade indicators
   useEffect(() => {
     const handleScroll = () => {
       checkScrollPosition(tabSliderRef, true);
@@ -149,14 +113,24 @@ export function useTabSlider(deps: any[]): UseTabSliderReturn {
     const desktopSlider = desktopTabSliderRef.current;
 
     if (mobileSlider) {
-      mobileSlider.addEventListener('scroll', handleScroll);
+      mobileSlider.addEventListener('scroll', handleScroll, { passive: true });
     }
     if (desktopSlider) {
-      desktopSlider.addEventListener('scroll', handleScroll);
+      desktopSlider.addEventListener('scroll', handleScroll, { passive: true });
     }
 
-    // Initial check
-    handleScroll();
+    // Use ResizeObserver to detect when content or container size changes
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        handleScroll();
+      });
+      if (mobileSlider) resizeObserver.observe(mobileSlider);
+      if (desktopSlider) resizeObserver.observe(desktopSlider);
+    }
+
+    // Initial check — defer to next frame so DOM has laid out
+    requestAnimationFrame(handleScroll);
 
     return () => {
       if (mobileSlider) {
@@ -165,7 +139,11 @@ export function useTabSlider(deps: any[]): UseTabSliderReturn {
       if (desktopSlider) {
         desktopSlider.removeEventListener('scroll', handleScroll);
       }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
   return {

@@ -129,10 +129,6 @@ const Layout: React.FC = () => {
     navigate('/login');
   };
 
-  const handleMyProfile = () => {
-    setSidebarOpen(false);
-    navigate('/app/settings?tab=myinfo');
-  };
 
   // Check-in locked mode: hide sidebar and top bar entirely
   // Uses fixed positioning to prevent iOS Safari from scrolling the body when inputs are focused
@@ -198,15 +194,8 @@ const Layout: React.FC = () => {
               ))}
             </nav>
 
-            {/* Profile Actions */}
+            {/* Actions */}
             <div className="px-2 space-y-1 mt-4">
-              <button
-                onClick={handleMyProfile}
-                className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
-              >
-                <UserCircleIcon className="mr-4 h-6 w-6" />
-                My Profile
-              </button>
               <button
                 onClick={handleLogout}
                 className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
@@ -267,15 +256,8 @@ const Layout: React.FC = () => {
                   </Link>
                 ))}
               </nav>
-              {/* Profile Actions - Desktop */}
+              {/* Actions - Desktop */}
               <div className="px-2 space-y-1 mt-2 hidden lg:block">
-                <button
-                  onClick={handleMyProfile}
-                  className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
-                >
-                  <UserCircleIcon className="mr-3 h-6 w-6" />
-                  My Profile
-                </button>
                 <button
                   onClick={handleLogout}
                   className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"

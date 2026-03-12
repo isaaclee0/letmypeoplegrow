@@ -804,6 +804,76 @@ const SettingsPage: React.FC = () => {
                 </div>
               )}
 
+              {/* Visitor Settings - admin only */}
+              {user?.role === 'admin' && (
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Visitor Settings</h3>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    Configure how long visitors appear in recent visitor lists.
+                  </p>
+
+                  <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Local Visitor Limit
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="52"
+                          value={visitorConfig.localVisitorServiceLimit}
+                          onChange={(e) => setVisitorConfig(prev => ({
+                            ...prev,
+                            localVisitorServiceLimit: parseInt(e.target.value) || 1
+                          }))}
+                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Consecutive absences before a local visitor is hidden from recent lists.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Traveller Visitor Limit
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="52"
+                          value={visitorConfig.travellerVisitorServiceLimit}
+                          onChange={(e) => setVisitorConfig(prev => ({
+                            ...prev,
+                            travellerVisitorServiceLimit: parseInt(e.target.value) || 1
+                          }))}
+                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Consecutive absences before a traveller visitor is hidden from recent lists.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end mt-6 space-x-3">
+                      {visitorConfigSuccess && (
+                        <span className="text-sm text-green-600 dark:text-green-400 flex items-center">
+                          <CheckCircleIcon className="h-4 w-4 mr-1" />
+                          Saved
+                        </span>
+                      )}
+                      <button
+                        onClick={saveVisitorConfig}
+                        disabled={visitorConfigLoading}
+                        className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                      >
+                        {visitorConfigLoading ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Default Badge Settings */}
               {user?.role === 'admin' && (
                 <div className="space-y-6">
@@ -1082,76 +1152,6 @@ const SettingsPage: React.FC = () => {
                   {defaultBadgeError && (
                     <p className="text-sm text-red-600 dark:text-red-400">{defaultBadgeError}</p>
                   )}
-                </div>
-              )}
-
-              {/* Visitor Settings - admin only */}
-              {user?.role === 'admin' && (
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Visitor Settings</h3>
-                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                    Configure how long visitors appear in recent visitor lists.
-                  </p>
-
-                  <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                          Local Visitor Limit
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="52"
-                          value={visitorConfig.localVisitorServiceLimit}
-                          onChange={(e) => setVisitorConfig(prev => ({
-                            ...prev,
-                            localVisitorServiceLimit: parseInt(e.target.value) || 1
-                          }))}
-                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                        />
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Consecutive absences before a local visitor is hidden from recent lists.
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                          Traveller Visitor Limit
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="52"
-                          value={visitorConfig.travellerVisitorServiceLimit}
-                          onChange={(e) => setVisitorConfig(prev => ({
-                            ...prev,
-                            travellerVisitorServiceLimit: parseInt(e.target.value) || 1
-                          }))}
-                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                        />
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Consecutive absences before a traveller visitor is hidden from recent lists.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-end mt-6 space-x-3">
-                      {visitorConfigSuccess && (
-                        <span className="text-sm text-green-600 dark:text-green-400 flex items-center">
-                          <CheckCircleIcon className="h-4 w-4 mr-1" />
-                          Saved
-                        </span>
-                      )}
-                      <button
-                        onClick={saveVisitorConfig}
-                        disabled={visitorConfigLoading}
-                        className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                      >
-                        {visitorConfigLoading ? 'Saving...' : 'Save'}
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
