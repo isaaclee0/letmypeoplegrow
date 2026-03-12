@@ -122,12 +122,12 @@ const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Gathering</label>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Gathering</label>
       {kioskGatherings.length === 1 ? (
-        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <div className="font-medium text-gray-900">{kioskGatherings[0].name}</div>
+        <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+          <div className="font-medium text-gray-900 dark:text-gray-100">{kioskGatherings[0].name}</div>
           {kioskGatherings[0].dayOfWeek && (
-            <div className="text-sm text-gray-500">{kioskGatherings[0].dayOfWeek}</div>
+            <div className="text-sm text-gray-500 dark:text-gray-400">{kioskGatherings[0].dayOfWeek}</div>
           )}
         </div>
       ) : (
@@ -137,8 +137,8 @@ const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
               key={g.id}
               className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-colors ${
                 selectedGathering?.id === g.id
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 hover:border-gray-300'
+                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
               }`}
             >
               <input
@@ -146,12 +146,12 @@ const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
                 name="gathering"
                 checked={selectedGathering?.id === g.id}
                 onChange={() => handleGatheringSelect(g)}
-                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
               />
               <div className="ml-3">
-                <div className="font-medium text-gray-900">{g.name}</div>
+                <div className="font-medium text-gray-900 dark:text-gray-100">{g.name}</div>
                 {g.dayOfWeek && g.startTime && (
-                  <div className="text-sm text-gray-500">{g.dayOfWeek} at {g.startTime}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{g.dayOfWeek} at {g.startTime}</div>
                 )}
               </div>
             </label>
@@ -160,7 +160,7 @@ const GatheringDateSelector: React.FC<GatheringDateSelectorProps> = ({
       )}
 
       {selectedGathering && daysAway > 0 && (
-        <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+        <div className="mt-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg p-3 text-sm text-amber-700 dark:text-amber-300">
           Next gathering is on{' '}
           <span className="font-medium">
             {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', {

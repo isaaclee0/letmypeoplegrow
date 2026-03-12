@@ -131,14 +131,14 @@ const Layout: React.FC = () => {
 
   const handleMyProfile = () => {
     setSidebarOpen(false);
-    navigate('/app/profile');
+    navigate('/app/settings?tab=myinfo');
   };
 
   // Check-in locked mode: hide sidebar and top bar entirely
   // Uses fixed positioning to prevent iOS Safari from scrolling the body when inputs are focused
   if (checkInsCtx.isLocked) {
     return (
-      <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 overflow-hidden">
+      <div className="fixed inset-0 bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-900 overflow-hidden">
         <main className="h-full overflow-y-auto overscroll-none focus:outline-none">
           <div className="py-6">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
@@ -151,14 +151,14 @@ const Layout: React.FC = () => {
   }
 
   return (
-    <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50">
+    <div className="h-screen bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-900">
       {/* Update notification bar removed with migrations */}
 
       <div className="flex overflow-hidden h-full">
         {/* Mobile sidebar */}
       <div className={`fixed inset-0 flex z-40 lg:hidden ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="fixed inset-0 bg-primary-900 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
-        <div className="relative flex-1 flex flex-col max-w-xs w-full bg-primary-500">
+        <div className="relative flex-1 flex flex-col max-w-xs w-full bg-primary-500 dark:bg-gray-800">
           <div className="absolute top-0 right-0 -mr-12 pt-2">
             <button
               className="ml-1 flex items-center justify-center h-10 w-10 rounded-full focus:outline-none focus:ring-2 focus:ring-inset focus:ring-secondary-300"
@@ -169,7 +169,7 @@ const Layout: React.FC = () => {
           </div>
           <div className="flex-1 h-0 pt-5 pb-4 overflow-y-auto scrollbar-hide flex flex-col">
             {/* User Profile Section */}
-            <div className="px-4 py-3 border-b border-primary-400">
+            <div className="px-4 py-3 border-b border-primary-400 dark:border-gray-700">
               <div className="flex items-center">
                 <UserCircleIcon className="h-10 w-10 text-white" />
                 <div className="ml-3">
@@ -188,7 +188,7 @@ const Layout: React.FC = () => {
                   className={`${
                     location.pathname === item.href
                       ? 'bg-secondary-500 text-white shadow-md'
-                      : 'text-white hover:bg-primary-600 hover:text-white'
+                      : 'text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white'
                   } group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200`}
                   onClick={() => setSidebarOpen(false)}
                 >
@@ -202,14 +202,14 @@ const Layout: React.FC = () => {
             <div className="px-2 space-y-1 mt-4">
               <button
                 onClick={handleMyProfile}
-                className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
+                className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
               >
                 <UserCircleIcon className="mr-4 h-6 w-6" />
                 My Profile
               </button>
               <button
                 onClick={handleLogout}
-                className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
+                className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-base font-medium rounded-md transition-colors duration-200"
               >
                 <ArrowRightOnRectangleIcon className="mr-4 h-6 w-6" />
                 Logout
@@ -249,9 +249,9 @@ const Layout: React.FC = () => {
       {/* Desktop sidebar */}
       <div className="hidden lg:flex lg:flex-shrink-0">
         <div className="flex flex-col w-64">
-          <div className="flex flex-col h-0 flex-1 border-r border-primary-700 bg-primary-500">
+          <div className="flex flex-col h-0 flex-1 border-r border-primary-700 dark:border-gray-700 bg-primary-500 dark:bg-gray-800">
                         <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto scrollbar-hide">
-              <nav className="flex-1 px-2 bg-primary-500 space-y-1">
+              <nav className="flex-1 px-2 bg-primary-500 dark:bg-gray-800 space-y-1">
                 {navigation.map((item) => (
                   <Link
                     key={item.name}
@@ -259,7 +259,7 @@ const Layout: React.FC = () => {
                     className={`${
                       location.pathname === item.href
                         ? 'bg-secondary-500 text-white shadow-md'
-                        : 'text-white hover:bg-primary-600 hover:text-white'
+                        : 'text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white'
                     } group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200`}
                   >
                     <item.icon className="mr-3 h-6 w-6" />
@@ -271,14 +271,14 @@ const Layout: React.FC = () => {
               <div className="px-2 space-y-1 mt-2 hidden lg:block">
                 <button
                   onClick={handleMyProfile}
-                  className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
+                  className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
                 >
                   <UserCircleIcon className="mr-3 h-6 w-6" />
                   My Profile
                 </button>
                 <button
                   onClick={handleLogout}
-                  className="w-full text-white hover:bg-primary-600 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
+                  className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
                 >
                   <ArrowRightOnRectangleIcon className="mr-3 h-6 w-6" />
                   Logout
@@ -318,7 +318,7 @@ const Layout: React.FC = () => {
       {/* Main content */}
       <div className="flex flex-col w-0 flex-1 overflow-hidden">
         {/* Top bar */}
-        <div className="relative z-10 flex-shrink-0 flex h-16 bg-white shadow-lg">
+        <div className="relative z-10 flex-shrink-0 flex h-16 bg-white dark:bg-gray-800 shadow-lg">
           <button
             className="px-4 border-r border-primary-200 text-primary-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500 lg:hidden"
             onClick={() => setSidebarOpen(true)}
@@ -330,7 +330,7 @@ const Layout: React.FC = () => {
               <div className="w-full flex lg:ml-0">
                 <div className="relative w-full text-gray-400 focus-within:text-gray-600">
                   <div className="absolute inset-y-0 left-0 flex items-center">
-                    <h2 className="text-lg font-bold text-primary-700 ml-2 font-title">
+                    <h2 className="text-lg font-bold text-primary-700 dark:text-primary-300 ml-2 font-title">
                       {navigation.find(item => item.href === location.pathname)?.name || 'Attendance'}
                     </h2>
                   </div>
@@ -343,7 +343,7 @@ const Layout: React.FC = () => {
               <div className="relative" ref={notificationsRef}>
                 <button 
                   onClick={() => setShowNotifications(!showNotifications)}
-                  className="ml-2 bg-white p-1 rounded-full text-primary-400 hover:text-primary-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200"
+                  className="ml-2 bg-white dark:bg-gray-700 p-1 rounded-full text-primary-400 dark:text-primary-300 hover:text-primary-600 dark:hover:text-primary-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-200"
                   title="Notifications"
                 >
                   <BellIcon className="h-6 w-6" />
@@ -355,18 +355,18 @@ const Layout: React.FC = () => {
 
                 {/* Notifications Dropdown */}
                 {showNotifications && (
-                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                  <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50">
                     <div className="p-4">
-                      <h3 className="text-lg font-medium text-gray-900 mb-3">Notifications</h3>
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-3">Notifications</h3>
                       
                       {/* App Update Notification */}
                       {updateAvailable && (
-                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
                           <div className="flex items-start">
                             <ArrowPathIcon className="h-5 w-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0" />
                             <div className="flex-1">
-                              <h4 className="text-sm font-medium text-blue-900">App Update Available</h4>
-                              <p className="text-sm text-blue-700 mt-1">
+                              <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200">App Update Available</h4>
+                              <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
                                 A new version of the app is ready. Click to update now.
                               </p>
                               <button
@@ -388,11 +388,11 @@ const Layout: React.FC = () => {
                       {user?.role !== 'attendance_taker' && (
                         <div>
                           {user?.unreadNotifications && user.unreadNotifications > 0 ? (
-                            <div className="text-sm text-gray-600">
+                            <div className="text-sm text-gray-600 dark:text-gray-400">
                               You have {user.unreadNotifications} unread notification{user.unreadNotifications !== 1 ? 's' : ''}.
                             </div>
                           ) : (
-                            <div className="text-sm text-gray-500">
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
                               No new notifications.
                             </div>
                           )}
@@ -401,7 +401,7 @@ const Layout: React.FC = () => {
 
                       {/* Show message for attendance takers when no updates */}
                       {user?.role === 'attendance_taker' && !updateAvailable && (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
                           No notifications.
                         </div>
                       )}

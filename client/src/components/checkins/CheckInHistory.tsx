@@ -161,20 +161,20 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
     <div className="mt-8">
       <div className="flex items-center mb-4">
         <ClockIcon className="h-5 w-5 text-gray-400 mr-2" />
-        <h2 className="text-lg font-semibold text-gray-900">Past Check-in Sessions</h2>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Past Check-in Sessions</h2>
       </div>
 
       {historyLoading ? (
         <div className="text-center py-6">
           <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-2 text-sm text-gray-500">Loading history...</p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading history...</p>
         </div>
       ) : historySessions.length === 0 ? (
-        <div className="bg-white shadow rounded-lg p-6 text-center">
-          <p className="text-sm text-gray-500">No past check-in sessions found for this gathering.</p>
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 text-center">
+          <p className="text-sm text-gray-500 dark:text-gray-400">No past check-in sessions found for this gathering.</p>
         </div>
       ) : (
-        <div className="bg-white shadow rounded-lg divide-y divide-gray-200">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg divide-y divide-gray-200 dark:divide-gray-700">
           {historySessions.map(session => {
             const isExpanded = expandedDate === session.date;
             const checkinCount = session.records.filter(r => r.action === 'checkin').length;
@@ -186,10 +186,10 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                 <div className="flex items-center">
                   <button
                     onClick={() => loadHistoryDetail(session.date)}
-                    className="flex-1 flex items-center justify-between p-4 hover:bg-gray-50 transition-colors text-left"
+                    className="flex-1 flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
                   >
                     <div>
-                      <div className="font-medium text-gray-900">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">
                         {new Date(session.date + 'T00:00:00').toLocaleDateString('en-US', {
                           weekday: 'long',
                           year: 'numeric',
@@ -197,7 +197,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                           day: 'numeric',
                         })}
                       </div>
-                      <div className="text-sm text-gray-500 mt-0.5">
+                      <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                         {uniqueIndividuals} checked in &middot; {checkoutCount} check-out{checkoutCount !== 1 ? 's' : ''}
                       </div>
                     </div>
@@ -234,7 +234,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                         <div className="flex justify-end mb-3">
                           <button
                             onClick={exportToTSV}
-                            className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                            className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
                           >
                             <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
                             Export TSV
@@ -244,22 +244,22 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                         <div className="overflow-x-auto">
                           <table className="min-w-full text-sm">
                             <thead>
-                              <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 pr-4 font-medium text-gray-700">Name</th>
-                                <th className="text-left py-2 pr-4 font-medium text-gray-700">Family</th>
-                                <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-in</th>
-                                <th className="text-left py-2 pr-4 font-medium text-gray-700">Signed by</th>
-                                <th className="text-left py-2 pr-4 font-medium text-gray-700">Check-out</th>
-                                <th className="text-left py-2 font-medium text-gray-700">Signed by</th>
+                              <tr className="border-b border-gray-200 dark:border-gray-700">
+                                <th className="text-left py-2 pr-4 font-medium text-gray-700 dark:text-gray-300">Name</th>
+                                <th className="text-left py-2 pr-4 font-medium text-gray-700 dark:text-gray-300">Family</th>
+                                <th className="text-left py-2 pr-4 font-medium text-gray-700 dark:text-gray-300">Check-in</th>
+                                <th className="text-left py-2 pr-4 font-medium text-gray-700 dark:text-gray-300">Signed by</th>
+                                <th className="text-left py-2 pr-4 font-medium text-gray-700 dark:text-gray-300">Check-out</th>
+                                <th className="text-left py-2 font-medium text-gray-700 dark:text-gray-300">Signed by</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100">
+                            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                               {historyDetail.individuals.map(person => (
-                                <tr key={person.individualId} className="hover:bg-gray-50">
-                                  <td className="py-2 pr-4 text-gray-900">
+                                <tr key={person.individualId} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                  <td className="py-2 pr-4 text-gray-900 dark:text-gray-100">
                                     {person.firstName} {person.lastName}
                                   </td>
-                                  <td className="py-2 pr-4 text-gray-500">
+                                  <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">
                                     {person.familyName || '-'}
                                   </td>
                                   <td className="py-2 pr-4 text-green-600">
@@ -267,7 +267,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                       ? new Date(person.checkins[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                       : '-'}
                                   </td>
-                                  <td className="py-2 pr-4 text-gray-500">
+                                  <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">
                                     {person.checkins.length > 0
                                       ? (person.checkins[0].signerName || person.checkins[0].userName || '-')
                                       : '-'}
@@ -280,7 +280,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                                       ? new Date(person.checkouts[0].time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                       : '-'}
                                   </td>
-                                  <td className="py-2 text-gray-500">
+                                  <td className="py-2 text-gray-500 dark:text-gray-400">
                                     {person.checkouts.length > 0
                                       ? (person.checkouts[0].signerName || person.checkouts[0].userName || '-')
                                       : '-'}
@@ -295,7 +295,7 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                         </div>
 
                         {historyDetail.individuals.length === 0 && (
-                          <p className="text-center text-sm text-gray-500 py-3">No records for this date.</p>
+                          <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-3">No records for this date.</p>
                         )}
                       </>
                     ) : null}

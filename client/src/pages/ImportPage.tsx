@@ -812,7 +812,7 @@ const ImportPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-64">
         <ArrowPathIcon className="h-8 w-8 animate-spin text-primary-600" />
-        <span className="ml-3 text-gray-600">Checking Elvanto connection...</span>
+        <span className="ml-3 text-gray-600 dark:text-gray-400">Checking Elvanto connection...</span>
       </div>
     );
   }
@@ -820,12 +820,12 @@ const ImportPage: React.FC = () => {
   if (!isConnected) {
     return (
       <div className="max-w-2xl mx-auto">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
           <div className="flex">
             <XCircleIcon className="h-6 w-6 text-yellow-600 mr-3" />
             <div>
-              <h3 className="text-lg font-medium text-yellow-800">Elvanto Not Connected</h3>
-              <p className="mt-2 text-sm text-yellow-700">
+              <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-300">Elvanto Not Connected</h3>
+              <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-400">
                 You need to connect your Elvanto account before you can import data.
               </p>
               <div className="mt-4">
@@ -846,12 +846,12 @@ const ImportPage: React.FC = () => {
   return (
     <div className="space-y-6 pb-32">
         {/* Header */}
-      <div className="bg-white overflow-hidden shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Import</h1>
-              <p className="mt-1 text-sm text-gray-500">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Import</h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Import people, families, and gatherings from external services
               </p>
             </div>
@@ -859,7 +859,7 @@ const ImportPage: React.FC = () => {
               <button
                 onClick={activeTab === 'people' ? loadFamilies : loadGatherings}
                 disabled={loading || loadingGatherings}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
               >
                 <ArrowPathIcon className={`h-4 w-4 mr-2 ${(loading || loadingGatherings) ? 'animate-spin' : ''}`} />
                 Refresh
@@ -868,14 +868,14 @@ const ImportPage: React.FC = () => {
           </div>
 
           {/* Source Tabs */}
-          <div className="mt-6 border-b border-gray-200">
+          <div className="mt-6 border-b border-gray-200 dark:border-gray-700">
             <nav className="-mb-px flex space-x-8">
               <button
                 onClick={() => setSourceTab('elvanto')}
                 className={`${
                   sourceTab === 'elvanto'
                     ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                 } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
               >
                 <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
@@ -887,7 +887,7 @@ const ImportPage: React.FC = () => {
                 className={`${
                   sourceTab === 'planning-center'
                     ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                 } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
               >
                 <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
@@ -902,17 +902,17 @@ const ImportPage: React.FC = () => {
       {/* Elvanto Tab Content */}
       {sourceTab === 'elvanto' && (
         <>
-      <div className="bg-white overflow-hidden shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           {/* Elvanto Sub-tabs */}
-          <div className="border-b border-gray-200">
+          <div className="border-b border-gray-200 dark:border-gray-700">
             <nav className="-mb-px flex space-x-8">
             <button
                 onClick={() => setActiveTab('people')}
                 className={`${
                 activeTab === 'people'
                     ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                 } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
             >
                 <UsersIcon className="h-5 w-5 mr-2" />
@@ -923,7 +923,7 @@ const ImportPage: React.FC = () => {
                 className={`${
                   activeTab === 'gatherings'
                     ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                 } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
             >
                 <CalendarDaysIcon className="h-5 w-5 mr-2" />
@@ -939,7 +939,7 @@ const ImportPage: React.FC = () => {
       {activeTab === 'people' && (
         <>
           {/* Search & Filters */}
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
           <div className="flex space-x-4">
             <div className="flex-1">
@@ -950,20 +950,20 @@ const ImportPage: React.FC = () => {
                   onChange={(e) => setSearchTerm(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
                       placeholder="Search families and people..."
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
+                      className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
                 />
                 <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               </div>
             </div>
             <button
               onClick={handleSearch}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
             >
               Search
             </button>
               </div>
               
-              <div className="mt-4 pt-4 border-t border-gray-200">
+              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
                     <input
@@ -971,15 +971,15 @@ const ImportPage: React.FC = () => {
                       id="showArchived"
                       checked={showArchived}
                       onChange={(e) => setShowArchived(e.target.checked)}
-                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                     />
-                    <label htmlFor="showArchived" className="text-sm font-medium text-gray-700">
+                    <label htmlFor="showArchived" className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       Show archived people
                     </label>
                   </div>
                   <div className="flex items-center gap-4">
                     {archivedCount > 0 && !showArchived && (
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
                         {archivedCount} archived {archivedCount === 1 ? 'person' : 'people'} hidden
                       </span>
                     )}
@@ -996,15 +996,15 @@ const ImportPage: React.FC = () => {
           </div>
 
           {/* Families List */}
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg leading-6 font-medium text-gray-900">
+                <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
                   Families & People ({families.reduce((acc, f) => acc + (f.people?.person?.length || 0), 0)})
                 </h3>
                 <div className="flex items-center space-x-3">
                   {totalSelected > 0 ? (
-                    <div className="flex items-center space-x-2 text-sm text-gray-600">
+                    <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                       <span>{totalSelected} selected</span>
                       <button onClick={clearSelection} className="text-primary-600 hover:text-primary-700">
                         Clear
@@ -1021,13 +1021,13 @@ const ImportPage: React.FC = () => {
           {loading ? (
             <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-primary-600" />
-              <span className="ml-3 text-gray-600">Loading...</span>
+              <span className="ml-3 text-gray-600 dark:text-gray-400">Loading...</span>
             </div>
               ) : families.length === 0 ? (
                 <div className="text-center py-8">
                   <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No families found</h3>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No families found</h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                     {searchTerm ? 'Try adjusting your search.' : 'No families available to import.'}
                   </p>
                 </div>
@@ -1044,21 +1044,21 @@ const ImportPage: React.FC = () => {
                       <div
                         key={family.id}
                         className={`border rounded-lg overflow-hidden ${
-                          isFamilySelected ? 'border-primary-500 bg-primary-50'
-                            : isPartiallySelected ? 'border-primary-300 bg-primary-25'
-                            : 'border-gray-200'
+                          isFamilySelected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                            : isPartiallySelected ? 'border-primary-300 bg-primary-25 dark:bg-primary-900/10'
+                            : 'border-gray-200 dark:border-gray-700'
                         }`}
                       >
                         <div
-                          className={`flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 ${
-                            isFamilySelected ? 'hover:bg-primary-100' : ''
+                          className={`flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                            isFamilySelected ? 'hover:bg-primary-100 dark:hover:bg-primary-900/30' : ''
                           }`}
                           onClick={() => toggleFamilyExpanded(family.id)}
                         >
                           <div className="flex items-center space-x-3 flex-1 min-w-0">
                             <button
                               onClick={(e) => { e.stopPropagation(); toggleFamilyExpanded(family.id); }}
-                              className="text-gray-400 hover:text-gray-600"
+                              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                             >
                               {isExpanded ? <ChevronDownIcon className="h-5 w-5" /> : <ChevronRightIcon className="h-5 w-5" />}
                             </button>
@@ -1068,22 +1068,22 @@ const ImportPage: React.FC = () => {
                               ref={(el) => { if (el) el.indeterminate = isPartiallySelected; }}
                               onChange={(e) => { e.stopPropagation(); toggleFamilySelection(family.id, members); }}
                           onClick={(e) => e.stopPropagation()}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                             />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <h4 className="text-md font-medium text-gray-900 truncate">{family.name}</h4>
+                                <h4 className="text-md font-medium text-gray-900 dark:text-gray-100 truncate">{family.name}</h4>
                                 {family.alreadyImported && (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
                                     <CheckCircleIcon className="h-3 w-3 mr-1" />
                                     Already Imported
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-gray-500">
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
                                 {members.length} {members.length === 1 ? 'member' : 'members'}
                                 {family.isIndividual && (
-                                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-gray-600 text-gray-800 dark:text-gray-200">
                                     Individual
                                   </span>
                                 )}
@@ -1093,7 +1093,7 @@ const ImportPage: React.FC = () => {
                         </div>
 
                         {isExpanded && members.length > 0 && (
-                          <div className="border-t border-gray-200 bg-gray-50 p-4">
+                          <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50 p-4">
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                               {members.map((person) => {
                                 const isSelected = selectedPeople.has(person.id);
@@ -1104,9 +1104,9 @@ const ImportPage: React.FC = () => {
                                   <div
                                     key={person.id}
                                     className={`flex items-center p-3 rounded-md border-2 cursor-pointer transition-colors ${
-                                      isSelected ? 'border-primary-500 bg-white'
-                                        : isArchived ? 'border-gray-200 bg-gray-100 opacity-75'
-                                        : 'border-gray-200 bg-white hover:border-gray-300'
+                                      isSelected ? 'border-primary-500 bg-white dark:bg-gray-800'
+                                        : isArchived ? 'border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-700 opacity-75'
+                                        : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-500'
                                     }`}
                                     onClick={() => togglePersonSelection(person.id, family.id, members)}
                                   >
@@ -1115,21 +1115,21 @@ const ImportPage: React.FC = () => {
                                       checked={isSelected}
                                       onChange={() => togglePersonSelection(person.id, family.id, members)}
                                       onClick={(e) => e.stopPropagation()}
-                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded mr-3 flex-shrink-0"
+                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded mr-3 flex-shrink-0"
                                     />
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-2">
-                                        <span className={`text-sm font-medium truncate ${isArchived ? 'text-gray-500' : 'text-gray-900'}`}>
+                                        <span className={`text-sm font-medium truncate ${isArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-gray-100'}`}>
                                           {displayName}
                                         </span>
                                         {isArchived && (
-                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">
+                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300">
                                             Archived
                                           </span>
                                         )}
                                       </div>
                                       {person.family_relationship && person.family_relationship !== 'Primary Contact' && (
-                                        <span className="text-xs text-gray-500">{person.family_relationship}</span>
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">{person.family_relationship}</span>
                                       )}
                                     </div>
                                   </div>
@@ -1152,7 +1152,7 @@ const ImportPage: React.FC = () => {
       {activeTab === 'gatherings' && (
         <>
           {/* Search */}
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="relative">
                 <input
@@ -1160,7 +1160,7 @@ const ImportPage: React.FC = () => {
                   value={gatheringsSearchTerm}
                   onChange={(e) => setGatheringsSearchTerm(e.target.value)}
                   placeholder="Search groups..."
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
+                  className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
                 />
                 <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               </div>
@@ -1168,28 +1168,28 @@ const ImportPage: React.FC = () => {
           </div>
 
           {/* Groups Section */}
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
+                <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100 flex items-center">
                   <UserGroupIcon className="h-5 w-5 mr-2 text-gray-500" />
                   Groups ({filteredGroups.length})
                 </h3>
                 {selectedGroups.size > 0 && (
-                  <span className="text-sm text-gray-600">{selectedGroups.size} selected</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">{selectedGroups.size} selected</span>
                 )}
               </div>
 
               {loadingGatherings ? (
                 <div className="flex items-center justify-center h-32">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-primary-600" />
-                  <span className="ml-3 text-gray-600">Loading groups...</span>
+                  <span className="ml-3 text-gray-600 dark:text-gray-400">Loading groups...</span>
                 </div>
               ) : filteredGroups.length === 0 ? (
                 <div className="text-center py-8">
                   <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No groups found</h3>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No groups found</h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                     {gatheringsSearchTerm ? 'Try adjusting your search.' : 'No groups available in Elvanto.'}
                   </p>
                 </div>
@@ -1202,7 +1202,7 @@ const ImportPage: React.FC = () => {
                         key={group.id}
                         onClick={() => toggleGroupSelection(group.id)}
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-colors ${
-                          isSelected ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
+                          isSelected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <div className="flex items-start">
@@ -1211,12 +1211,12 @@ const ImportPage: React.FC = () => {
                             checked={isSelected}
                             onChange={() => toggleGroupSelection(group.id)}
                             onClick={(e) => e.stopPropagation()}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded mt-1 mr-3"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded mt-1 mr-3"
                           />
                           <div className="flex-1 min-w-0">
-                            <h4 className="text-sm font-medium text-gray-900">{group.name}</h4>
+                            <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">{group.name}</h4>
                             {group.meeting_day && (
-                              <p className="text-xs text-gray-500 mt-1">
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 {group.meeting_day} {group.meeting_time && `at ${group.meeting_time}`}
                                 {group.meeting_frequency && ` (${group.meeting_frequency})`}
                               </p>
@@ -1237,28 +1237,28 @@ const ImportPage: React.FC = () => {
           </div>
 
           {/* Service Types Section */}
-          <div className="bg-white shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
+                <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100 flex items-center">
                   <CalendarDaysIcon className="h-5 w-5 mr-2 text-gray-500" />
                   Service Types ({serviceTypes.length})
                 </h3>
                 {selectedServiceTypes.size > 0 && (
-                  <span className="text-sm text-gray-600">{selectedServiceTypes.size} selected</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">{selectedServiceTypes.size} selected</span>
                 )}
               </div>
 
               {loadingGatherings ? (
                 <div className="flex items-center justify-center h-32">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-primary-600" />
-                  <span className="ml-3 text-gray-600">Loading services...</span>
+                  <span className="ml-3 text-gray-600 dark:text-gray-400">Loading services...</span>
                 </div>
               ) : serviceTypes.length === 0 ? (
                 <div className="text-center py-8">
                   <CalendarDaysIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No service types found</h3>
-                  <p className="mt-1 text-sm text-gray-500">No services available in Elvanto.</p>
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No service types found</h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">No services available in Elvanto.</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1269,7 +1269,7 @@ const ImportPage: React.FC = () => {
                         key={serviceType.id}
                         onClick={() => toggleServiceTypeSelection(serviceType.id)}
                         className={`p-4 rounded-lg border-2 cursor-pointer transition-colors ${
-                          isSelected ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
+                          isSelected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <div className="flex items-start">
@@ -1278,11 +1278,11 @@ const ImportPage: React.FC = () => {
                             checked={isSelected}
                             onChange={() => toggleServiceTypeSelection(serviceType.id)}
                             onClick={(e) => e.stopPropagation()}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded mt-1 mr-3"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded mt-1 mr-3"
                           />
                           <div className="flex-1 min-w-0">
-                            <h4 className="text-sm font-medium text-gray-900">{serviceType.name}</h4>
-                            <p className="text-xs text-gray-500 mt-1">
+                            <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">{serviceType.name}</h4>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                               {serviceType.count} upcoming {serviceType.count === 1 ? 'service' : 'services'}
                             </p>
                           </div>
@@ -1301,7 +1301,7 @@ const ImportPage: React.FC = () => {
       {activeTab === 'people' && totalSelected > 0 && (
         <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[9999]">
           <div className="flex items-center space-x-3">
-            <div className="bg-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap border border-gray-200">
+            <div className="bg-white dark:bg-gray-800 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap border border-gray-200 dark:border-gray-700">
               Import {totalSelected} {totalSelected === 1 ? 'person' : 'people'}
             </div>
               <button
@@ -1324,7 +1324,7 @@ const ImportPage: React.FC = () => {
       {activeTab === 'gatherings' && totalGatheringsSelected > 0 && (
         <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[9999]">
           <div className="flex items-center space-x-3">
-            <div className="bg-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap border border-gray-200">
+            <div className="bg-white dark:bg-gray-800 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap border border-gray-200 dark:border-gray-700">
               Import {totalGatheringsSelected} {totalGatheringsSelected === 1 ? 'gathering' : 'gatherings'}
             </div>
               <button
@@ -1447,9 +1447,9 @@ const ImportPage: React.FC = () => {
       {showGatheringEditModal && gatheringsNeedingInfo.length > 0 && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]">
           <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Add/Edit Gathering
                 </h3>
                 <button
@@ -1457,23 +1457,23 @@ const ImportPage: React.FC = () => {
                     setShowGatheringEditModal(false);
                     setGatheringsNeedingInfo([]);
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XCircleIcon className="h-6 w-6" />
                 </button>
               </div>
 
               <div className="mb-4">
-                <p className="text-sm text-gray-600 mb-2">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                   Gathering {currentGatheringIndex + 1} of {gatheringsNeedingInfo.length}
                 </p>
                 {gatheringsNeedingInfo[currentGatheringIndex]?.isDuplicate && (
-                  <p className="text-sm text-yellow-600 mb-2">
+                  <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-2">
                     ⚠️ A gathering with this name already exists. Please change the name.
                   </p>
                 )}
                 {!gatheringsNeedingInfo[currentGatheringIndex]?.dayOfWeek || !gatheringsNeedingInfo[currentGatheringIndex]?.startTime ? (
-                  <p className="text-sm text-yellow-600 mb-2">
+                  <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-2">
                     ⚠️ Day of week and start time are required.
                   </p>
                 ) : null}
@@ -1481,7 +1481,7 @@ const ImportPage: React.FC = () => {
 
               <form onSubmit={(e) => { e.preventDefault(); handleGatheringEditNext(); }} className="space-y-4">
                 <div>
-                  <label htmlFor="gathering-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="gathering-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Gathering Name *
                   </label>
                   <input
@@ -1489,14 +1489,14 @@ const ImportPage: React.FC = () => {
                     type="text"
                     value={gatheringEditData.name}
                     onChange={(e) => setGatheringEditData({ ...gatheringEditData, name: e.target.value })}
-                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Sunday Service"
                     required
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="gathering-description" className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="gathering-description" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Description
                   </label>
                   <textarea
@@ -1504,21 +1504,21 @@ const ImportPage: React.FC = () => {
                     value={gatheringEditData.description}
                     onChange={(e) => setGatheringEditData({ ...gatheringEditData, description: e.target.value })}
                     rows={2}
-                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Weekly worship service"
                   />
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label htmlFor="dayOfWeek" className="block text-sm font-medium text-gray-700 mb-1">
+                    <label htmlFor="dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Day of Week *
                     </label>
                     <select
                       id="dayOfWeek"
                       value={gatheringEditData.dayOfWeek}
                       onChange={(e) => setGatheringEditData({ ...gatheringEditData, dayOfWeek: e.target.value })}
-                      className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       required
                     >
                       <option value="Sunday">Sunday</option>
@@ -1532,7 +1532,7 @@ const ImportPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label htmlFor="startTime" className="block text-sm font-medium text-gray-700 mb-1">
+                    <label htmlFor="startTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Start Time *
                     </label>
                     <input
@@ -1540,20 +1540,20 @@ const ImportPage: React.FC = () => {
                       type="time"
                       value={gatheringEditData.startTime}
                       onChange={(e) => setGatheringEditData({ ...gatheringEditData, startTime: e.target.value })}
-                      className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       required
                     />
                   </div>
 
                   <div>
-                    <label htmlFor="frequency" className="block text-sm font-medium text-gray-700 mb-1">
+                    <label htmlFor="frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Frequency *
                     </label>
                     <select
                       id="frequency"
                       value={gatheringEditData.frequency}
                       onChange={(e) => setGatheringEditData({ ...gatheringEditData, frequency: e.target.value })}
-                      className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       required
                     >
                       <option value="weekly">Weekly</option>
@@ -1570,7 +1570,7 @@ const ImportPage: React.FC = () => {
                       setShowGatheringEditModal(false);
                       setGatheringsNeedingInfo([]);
                     }}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                   >
                     Cancel
                   </button>
@@ -1592,9 +1592,9 @@ const ImportPage: React.FC = () => {
       {showGatheringSelectionModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]">
           <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Assign to Gatherings
                 </h3>
                 <button
@@ -1603,27 +1603,27 @@ const ImportPage: React.FC = () => {
                     setPendingImportData(null);
                     setSelectedGatheringIds(new Set());
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XCircleIcon className="h-6 w-6" />
                 </button>
               </div>
 
               <div className="mb-4">
-                <p className="text-sm text-gray-600 mb-2">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                   Select which gatherings to assign the imported people to. You can skip this step and assign them later.
                 </p>
               </div>
 
-              <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-md p-4 mb-4">
+              <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-md p-4 mb-4">
                 {availableGatherings.length === 0 ? (
-                  <p className="text-sm text-gray-500 text-center py-4">No gatherings available</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No gatherings available</p>
                 ) : (
                   <div className="space-y-2">
                     {availableGatherings.map((gathering) => (
                       <label
                         key={gathering.id}
-                        className="flex items-center space-x-3 p-2 hover:bg-gray-50 rounded cursor-pointer"
+                        className="flex items-center space-x-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded cursor-pointer"
                       >
                         <input
                           type="checkbox"
@@ -1639,9 +1639,9 @@ const ImportPage: React.FC = () => {
                               });
                             }
                           }}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                         />
-                        <span className="text-sm text-gray-700">{gathering.name}</span>
+                        <span className="text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
                       </label>
                     ))}
                   </div>
@@ -1655,7 +1655,7 @@ const ImportPage: React.FC = () => {
                     setPendingImportData(null);
                     setSelectedGatheringIds(new Set());
                   }}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1679,33 +1679,33 @@ const ImportPage: React.FC = () => {
       {import.meta.env.DEV && sourceTab === 'planning-center' && (
         <>
         {planningCenterStatus.loading ? (
-          <div className="bg-white overflow-hidden shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex items-center justify-center py-12">
                 <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
-                <span className="ml-3 text-gray-500">Checking connection status...</span>
+                <span className="ml-3 text-gray-500 dark:text-gray-400">Checking connection status...</span>
               </div>
             </div>
           </div>
         ) : !planningCenterStatus.enabled ? (
-          <div className="bg-white overflow-hidden shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="text-center py-12">
                 <InformationCircleIcon className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">Planning Center Not Available</h3>
-                <p className="mt-1 text-sm text-gray-500">
+                <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">Planning Center Not Available</h3>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                   Planning Center integration has not been enabled for this installation.
                 </p>
               </div>
             </div>
           </div>
         ) : !planningCenterStatus.connected ? (
-          <div className="bg-white overflow-hidden shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <div className="text-center py-12">
                 <LinkIcon className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">Planning Center Not Connected</h3>
-                <p className="mt-1 text-sm text-gray-500">
+                <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">Planning Center Not Connected</h3>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                   Connect to Planning Center in{' '}
                   <a href="/app/settings?tab=integrations" className="text-primary-600 hover:text-primary-500 font-medium">
                     Settings → Integrations
@@ -1718,16 +1718,16 @@ const ImportPage: React.FC = () => {
         ) : (
           <>
           {/* Sub-tabs: People / Check-ins */}
-          <div className="bg-white overflow-hidden shadow rounded-lg">
+          <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
-              <div className="border-b border-gray-200">
+              <div className="border-b border-gray-200 dark:border-gray-700">
                 <nav className="-mb-px flex space-x-8">
                   <button
                     onClick={() => setPcActiveTab('people')}
                     className={`${
                       pcActiveTab === 'people'
                         ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                     } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
                   >
                     <UsersIcon className="h-5 w-5 mr-2" />
@@ -1738,7 +1738,7 @@ const ImportPage: React.FC = () => {
                     className={`${
                       pcActiveTab === 'checkins'
                         ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
                     } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
                   >
                     <CalendarDaysIcon className="h-5 w-5 mr-2" />
@@ -1751,12 +1751,12 @@ const ImportPage: React.FC = () => {
 
           {/* People Sub-tab */}
           {pcActiveTab === 'people' && (
-            <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h3 className="text-lg font-medium text-gray-900">People from Planning Center</h3>
-                    <p className="text-sm text-gray-500">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">People from Planning Center</h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
                       {pcPeopleLoaded
                         ? `${pcPeople.reduce((sum, f) => sum + f.members.length, 0)} people in ${pcPeople.length} families`
                         : 'Load people from your Planning Center account to preview before importing.'}
@@ -1766,7 +1766,7 @@ const ImportPage: React.FC = () => {
                     <button
                       onClick={loadPcPeople}
                       disabled={pcPeopleLoading}
-                      className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                      className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
                     >
                       <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcPeopleLoading ? 'animate-spin' : ''}`} />
                       {pcPeopleLoaded ? 'Refresh' : 'Load People'}
@@ -1794,11 +1794,11 @@ const ImportPage: React.FC = () => {
                 </div>
 
                 {pcError && (
-                  <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                     <div className="flex">
                       <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
                       <div className="ml-2">
-                        <p className="text-sm text-red-700">{pcError}</p>
+                        <p className="text-sm text-red-700 dark:text-red-400">{pcError}</p>
                       </div>
                     </div>
                   </div>
@@ -1807,7 +1807,7 @@ const ImportPage: React.FC = () => {
                 {pcPeopleLoading && (
                   <div className="flex items-center justify-center py-12">
                     <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
-                    <span className="ml-3 text-gray-500">Loading people from Planning Center...</span>
+                    <span className="ml-3 text-gray-500 dark:text-gray-400">Loading people from Planning Center...</span>
                   </div>
                 )}
 
@@ -1822,7 +1822,7 @@ const ImportPage: React.FC = () => {
                             value={pcSearchTerm}
                             onChange={(e) => setPcSearchTerm(e.target.value)}
                             placeholder="Filter families..."
-                            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
+                            className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
                           />
                           <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                         </div>
@@ -1832,7 +1832,7 @@ const ImportPage: React.FC = () => {
                     {/* Family list */}
                     <div className="space-y-2 max-h-[600px] overflow-y-auto">
                       {pcPeople.length === 0 ? (
-                        <p className="text-center text-sm text-gray-500 py-8">No people found in Planning Center.</p>
+                        <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-8">No people found in Planning Center.</p>
                       ) : (
                         pcPeople
                           .filter(family => {
@@ -1844,10 +1844,10 @@ const ImportPage: React.FC = () => {
                               );
                           })
                           .map((family) => (
-                            <div key={family.householdId} className="border border-gray-200 rounded-lg">
+                            <div key={family.householdId} className="border border-gray-200 dark:border-gray-700 rounded-lg">
                               <button
                                 onClick={() => togglePcFamily(family.householdId)}
-                                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50"
+                                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700"
                               >
                                 <div className="flex items-center">
                                   {pcExpandedFamilies.has(family.householdId) ? (
@@ -1856,20 +1856,20 @@ const ImportPage: React.FC = () => {
                                     <ChevronRightIcon className="h-4 w-4 text-gray-400 mr-2" />
                                   )}
                                   <UserGroupIcon className="h-5 w-5 text-gray-400 mr-2" />
-                                  <span className="text-sm font-medium text-gray-900">{family.familyName}</span>
+                                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{family.familyName}</span>
                                 </div>
-                                <span className="text-xs text-gray-500">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
                               </button>
                               {pcExpandedFamilies.has(family.householdId) && (
-                                <div className="border-t border-gray-100 px-4 py-2 bg-gray-50">
+                                <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-2 bg-gray-50 dark:bg-gray-700/50">
                                   {family.members.map((member: any) => (
                                     <div key={member.id} className="flex items-center justify-between py-1.5">
                                       <div className="flex items-center">
-                                        <span className="text-sm text-gray-700">
+                                        <span className="text-sm text-gray-700 dark:text-gray-300">
                                           {member.firstName} {member.lastName}
                                         </span>
                                         {member.child && (
-                                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
                                             Child
                                           </span>
                                         )}
@@ -1889,7 +1889,7 @@ const ImportPage: React.FC = () => {
                 {!pcPeopleLoaded && !pcPeopleLoading && !pcError && (
                   <div className="text-center py-12">
                     <UsersIcon className="mx-auto h-12 w-12 text-gray-300" />
-                    <p className="mt-2 text-sm text-gray-500">Click "Load People" to fetch data from Planning Center.</p>
+                    <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Click "Load People" to fetch data from Planning Center.</p>
                   </div>
                 )}
               </div>
@@ -1898,21 +1898,21 @@ const ImportPage: React.FC = () => {
 
           {/* Check-ins Sub-tab */}
           {pcActiveTab === 'checkins' && (
-            <div className="bg-white overflow-hidden shadow rounded-lg">
+            <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
                 <div className="mb-4">
-                  <h3 className="text-lg font-medium text-gray-900">Check-ins from Planning Center</h3>
-                  <p className="text-sm text-gray-500">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Check-ins from Planning Center</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
                     Select a date range to view check-in data from Planning Center.
                   </p>
                 </div>
 
                 {pcError && (
-                  <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                     <div className="flex">
                       <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
                       <div className="ml-2">
-                        <p className="text-sm text-red-700">{pcError}</p>
+                        <p className="text-sm text-red-700 dark:text-red-400">{pcError}</p>
                       </div>
                     </div>
                   </div>
@@ -1921,7 +1921,7 @@ const ImportPage: React.FC = () => {
                 {/* Date Range Picker */}
                 <div className="flex items-end space-x-3 mb-6">
                   <div>
-                    <label htmlFor="pc-checkins-start" className="block text-xs font-medium text-gray-700 mb-1">
+                    <label htmlFor="pc-checkins-start" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Start Date
                     </label>
                     <input
@@ -1929,11 +1929,11 @@ const ImportPage: React.FC = () => {
                       id="pc-checkins-start"
                       value={pcCheckinsStartDate}
                       onChange={(e) => setPcCheckinsStartDate(e.target.value)}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
+                      className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                     />
                   </div>
                   <div>
-                    <label htmlFor="pc-checkins-end" className="block text-xs font-medium text-gray-700 mb-1">
+                    <label htmlFor="pc-checkins-end" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                       End Date
                     </label>
                     <input
@@ -1941,13 +1941,13 @@ const ImportPage: React.FC = () => {
                       id="pc-checkins-end"
                       value={pcCheckinsEndDate}
                       onChange={(e) => setPcCheckinsEndDate(e.target.value)}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
+                      className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm"
                     />
                   </div>
                   <button
                     onClick={loadPcCheckins}
                     disabled={pcCheckinsLoading || !pcCheckinsStartDate || !pcCheckinsEndDate}
-                    className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
                   >
                     <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcCheckinsLoading ? 'animate-spin' : ''}`} />
                     {pcCheckinsLoaded ? 'Refresh' : 'Load Check-ins'}
@@ -1957,36 +1957,36 @@ const ImportPage: React.FC = () => {
                 {pcCheckinsLoading && (
                   <div className="flex items-center justify-center py-12">
                     <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
-                    <span className="ml-3 text-gray-500">Loading check-ins from Planning Center...</span>
+                    <span className="ml-3 text-gray-500 dark:text-gray-400">Loading check-ins from Planning Center...</span>
                   </div>
                 )}
 
                 {pcCheckinsLoaded && !pcCheckinsLoading && (
                   <div>
-                    <p className="text-sm text-gray-600 mb-3">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                       {pcCheckins.length} check-in{pcCheckins.length !== 1 ? 's' : ''} found
                     </p>
                     {pcCheckins.length > 0 ? (
-                      <div className="overflow-hidden border border-gray-200 rounded-lg">
+                      <div className="overflow-hidden border border-gray-200 dark:border-gray-700 rounded-lg">
                         <div className="max-h-[500px] overflow-y-auto">
-                          <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50 sticky top-0">
+                          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                            <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
                               <tr>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Person</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Event</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Checked In</th>
                               </tr>
                             </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
+                            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                               {pcCheckins.map((checkin: any) => (
-                                <tr key={checkin.id} className="hover:bg-gray-50">
-                                  <td className="px-4 py-3 text-sm text-gray-900">
+                                <tr key={checkin.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                  <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
                                     {checkin.person?.name || 'Unknown'}
                                   </td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">
+                                  <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
                                     {checkin.event?.name || 'Unknown Event'}
                                   </td>
-                                  <td className="px-4 py-3 text-sm text-gray-500">
+                                  <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                                     {checkin.checkedInAt ? new Date(checkin.checkedInAt).toLocaleString() : '-'}
                                   </td>
                                 </tr>
@@ -1996,7 +1996,7 @@ const ImportPage: React.FC = () => {
                         </div>
                       </div>
                     ) : (
-                      <p className="text-center text-sm text-gray-500 py-8">No check-ins found for this date range.</p>
+                      <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-8">No check-ins found for this date range.</p>
                     )}
                   </div>
                 )}
@@ -2004,7 +2004,7 @@ const ImportPage: React.FC = () => {
                 {!pcCheckinsLoaded && !pcCheckinsLoading && !pcError && (
                   <div className="text-center py-12">
                     <CalendarDaysIcon className="mx-auto h-12 w-12 text-gray-300" />
-                    <p className="mt-2 text-sm text-gray-500">Select a date range and click "Load Check-ins" to view data.</p>
+                    <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Select a date range and click "Load Check-ins" to view data.</p>
                   </div>
                 )}
               </div>

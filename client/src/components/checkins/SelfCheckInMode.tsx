@@ -800,24 +800,24 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 mb-3">
             <LockClosedIcon className="h-7 w-7 text-primary-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Self Check-in Setup</h1>
-          <p className="text-sm text-gray-500 mt-1">Configure self sign-in for your gathering</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Self Check-in Setup</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Configure self sign-in for your gathering</p>
         </div>
 
         {error && (
-          <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          <div className="mb-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-400">
             {error}
           </div>
         )}
 
-        <div className="bg-white shadow rounded-lg p-6 space-y-5">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 space-y-5">
           {/* Gathering display (already selected via props) */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Gathering</label>
-            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <div className="font-medium text-gray-900">{selectedGathering.name}</div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Gathering</label>
+            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+              <div className="font-medium text-gray-900 dark:text-gray-100">{selectedGathering.name}</div>
               {selectedGathering.dayOfWeek && (
-                <div className="text-sm text-gray-500">{selectedGathering.dayOfWeek}</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">{selectedGathering.dayOfWeek}</div>
               )}
             </div>
           </div>
@@ -825,7 +825,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           {/* Times */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label htmlFor="checkin-start" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="checkin-start" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Start Time
               </label>
               <input
@@ -833,11 +833,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                 type="time"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
-                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
             <div>
-              <label htmlFor="checkin-end" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="checkin-end" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 End Time
               </label>
               <input
@@ -845,18 +845,18 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                 type="time"
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
-                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
           </div>
 
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             The check-in will default to Check In before the gathering and switch to Check Out 15 minutes before the end time.
           </p>
 
           {/* Custom Welcome Message */}
           <div>
-            <label htmlFor="checkin-message" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="checkin-message" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Custom Welcome Message
             </label>
             <textarea
@@ -865,17 +865,17 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
               onChange={(e) => setCustomMessage(e.target.value)}
               rows={4}
               placeholder="# Welcome&#10;Please use this to **sign in/out**"
-              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+              className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Supports markdown: <code className="bg-gray-100 px-1 rounded">**bold**</code>, <code className="bg-gray-100 px-1 rounded">*italic*</code>, <code className="bg-gray-100 px-1 rounded"># Heading</code>, <code className="bg-gray-100 px-1 rounded">[link](url)</code>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Supports markdown: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">**bold**</code>, <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">*italic*</code>, <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded"># Heading</code>, <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">[link](url)</code>
             </p>
             {/* Live preview */}
             {customMessage.trim() && (
-              <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                <p className="text-xs font-medium text-gray-500 mb-2">Preview:</p>
+              <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Preview:</p>
                 <div
-                  className="text-center text-xl font-bold text-gray-800 leading-tight [&_h1]:text-2xl [&_h2]:text-lg [&_h3]:text-base [&_p]:mb-0.5 [&_a]:underline [&_a]:text-primary-600"
+                  className="text-center text-xl font-bold text-gray-800 dark:text-gray-200 leading-tight [&_h1]:text-2xl [&_h2]:text-lg [&_h3]:text-base [&_p]:mb-0.5 [&_a]:underline [&_a]:text-primary-600"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(customMessage) }}
                 />
               </div>
@@ -884,7 +884,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
           {/* Show next gathering date info */}
           {daysAway > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
+            <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-sm text-amber-700 dark:text-amber-400">
               Next gathering is on{' '}
               <span className="font-medium">
                 {new Date(gatheringDate + 'T00:00:00').toLocaleDateString('en-US', {
@@ -901,7 +901,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           <div className="flex space-x-3">
             <button
               onClick={onBack}
-              className="py-3 px-4 text-base font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              className="py-3 px-4 text-base font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
             >
               Back
             </button>
@@ -926,15 +926,15 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 mb-3">
             <LockClosedIcon className="h-7 w-7 text-primary-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Set a PIN</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Set a PIN</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             This PIN will be required to exit check-in mode
           </p>
         </div>
 
-        <div className="bg-white shadow rounded-lg p-6 space-y-4">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 space-y-4">
           <div>
-            <label htmlFor="pin-input" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="pin-input" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Enter PIN (4+ digits)
             </label>
             <input
@@ -944,14 +944,14 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
               maxLength={8}
               value={pinInput}
               onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, '')); setPinError(''); }}
-              className="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
+              className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
               placeholder="----"
               autoFocus
             />
           </div>
 
           <div>
-            <label htmlFor="pin-confirm" className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="pin-confirm" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Confirm PIN
             </label>
             <input
@@ -962,19 +962,19 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
               value={pinConfirm}
               onChange={(e) => { setPinConfirm(e.target.value.replace(/\D/g, '')); setPinError(''); }}
               onKeyDown={(e) => e.key === 'Enter' && handleSetPin()}
-              className="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
+              className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
               placeholder="----"
             />
           </div>
 
           {pinError && (
-            <p className="text-sm text-red-600 text-center">{pinError}</p>
+            <p className="text-sm text-red-600 dark:text-red-400 text-center">{pinError}</p>
           )}
 
           <div className="flex space-x-3">
             <button
               onClick={() => setPhase('setup')}
-              className="flex-1 py-2.5 px-4 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="flex-1 py-2.5 px-4 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600"
             >
               Back
             </button>
@@ -998,7 +998,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
       {/* Unlock button (top-left) */}
       <button
         onClick={() => { setShowUnlockModal(true); setUnlockPinInput(''); setUnlockError(''); }}
-        className="fixed top-4 left-4 z-50 p-2 text-gray-300 hover:text-gray-500 transition-colors"
+        className="fixed top-4 left-4 z-50 p-2 text-gray-300 hover:text-gray-500 dark:hover:text-gray-300 transition-colors"
         title="Unlock"
       >
         <LockOpenIcon className="h-5 w-5" />
@@ -1006,10 +1006,10 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
       {/* Header */}
       <div className="text-center mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
           {selectedGathering?.name || checkIns.gatheringName}
         </h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           {new Date(gatheringDate + 'T00:00:00').toLocaleDateString('en-US', {
             weekday: 'long',
             year: 'numeric',
@@ -1027,11 +1027,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
       {/* Custom Welcome Message - rendered with markdown */}
       <div className="text-center mb-6 px-4">
         <div
-          className="text-3xl font-bold text-gray-800 leading-tight [&_h1]:text-4xl [&_h2]:text-2xl [&_h3]:text-xl [&_p]:mb-1 [&_a]:underline [&_a]:text-primary-600"
+          className="text-3xl font-bold text-gray-800 dark:text-gray-200 leading-tight [&_h1]:text-4xl [&_h2]:text-2xl [&_h3]:text-xl [&_p]:mb-1 [&_a]:underline [&_a]:text-primary-600"
           dangerouslySetInnerHTML={{ __html: renderMarkdown(customMessage) }}
         />
         {selectedGathering?.endTime && (
-          <p className="text-sm text-gray-500 mt-2">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
             Sign-in closes at {selectedGathering.endTime.substring(0, 5)}
           </p>
         )}
@@ -1039,13 +1039,13 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
       {/* Check-in / Check-out Toggle */}
       <div className="flex items-center justify-center mb-6">
-        <div className="bg-gray-100 rounded-full p-1 flex">
+        <div className="bg-gray-100 dark:bg-gray-700 rounded-full p-1 flex">
           <button
             onClick={() => { setMode('checkin'); setSelectedFamily(null); setCheckedMembers(new Set()); setSearchTerm(''); }}
             className={`px-6 py-2 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkin'
                 ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Check In
@@ -1055,7 +1055,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
             className={`px-6 py-2 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkout'
                 ? 'bg-orange-500 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Check Out
@@ -1065,9 +1065,9 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
       {/* Error */}
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 flex items-center justify-between">
+        <div className="mb-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-400 flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
+          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600 dark:hover:text-red-300">
             <XMarkIcon className="h-4 w-4" />
           </button>
         </div>
@@ -1081,8 +1081,8 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           }`}>
             <CheckCircleIcon className={`h-10 w-10 ${mode === 'checkin' ? 'text-green-600' : 'text-orange-600'}`} />
           </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">{successMessage}</h2>
-          <p className="text-sm text-gray-500 mb-6">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">{successMessage}</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
             This screen will refresh in {refreshCountdown} second{refreshCountdown !== 1 ? 's' : ''}...
           </p>
           <button
@@ -1097,11 +1097,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
 
       {/* Sign-in/out Flow */}
       {!successMessage && (
-        <div className="bg-white shadow rounded-lg p-6">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6">
           {/* Search */}
           {!selectedFamily && (
             <>
-              <label htmlFor="kiosk-search" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="kiosk-search" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 {mode === 'checkin' ? 'Search for your family or name' : 'Search to check out'}
               </label>
               <div className="relative">
@@ -1114,7 +1114,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg text-lg focus:ring-primary-500 focus:border-primary-500"
+                  className="block w-full pl-10 pr-3 py-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg text-lg focus:ring-primary-500 focus:border-primary-500"
                   placeholder="Type your surname..."
                   autoFocus
                   autoComplete="off"
@@ -1124,7 +1124,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
               {searchTerm.trim().length >= 1 && (
                 <div className="mt-3 space-y-2">
                   {filteredFamilies.length === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-4">
+                    <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
                       {mode === 'checkin'
                         ? "No matching families found. Use the + button below to add yourself."
                         : "No matching families currently checked in."}
@@ -1134,10 +1134,10 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                       <button
                         key={group.familyId}
                         onClick={() => handleSelectFamily(group)}
-                        className="w-full text-left p-3 border border-gray-200 rounded-lg hover:border-primary-300 hover:bg-primary-50 transition-colors"
+                        className="w-full text-left p-3 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
                       >
-                        <div className="font-medium text-gray-900">{group.familyName}</div>
-                        <div className="text-sm text-gray-500 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                        <div className="font-medium text-gray-900 dark:text-gray-100">{group.familyName}</div>
+                        <div className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
                           {group.members.map((m, i) => (
                             <span key={m.id} className={m.present ? 'text-green-600 font-medium' : ''}>
                               {m.present && <CheckCircleIcon className="inline h-3.5 w-3.5 mr-0.5 -mt-0.5" />}
@@ -1157,10 +1157,10 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
           {selectedFamily && (
             <>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">{selectedFamily.familyName}</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{selectedFamily.familyName}</h3>
                 <button
                   onClick={() => { setSelectedFamily(null); setCheckedMembers(new Set()); setSignerName(''); }}
-                  className="text-sm text-gray-500 hover:text-gray-700 underline"
+                  className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 underline"
                 >
                   Change
                 </button>
@@ -1177,10 +1177,10 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                         key={member.id}
                         className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-colors ${
                           isPresent
-                            ? 'border-green-300 bg-green-50 opacity-75'
+                            ? 'border-green-300 bg-green-50 dark:bg-green-900/30 dark:border-green-700 opacity-75'
                             : isChecked
-                            ? 'border-primary-500 bg-primary-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <input
@@ -1188,13 +1188,13 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                           checked={isPresent || isChecked}
                           disabled={isPresent}
                           onChange={() => toggleMember(member.id)}
-                          className="h-5 w-5 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-5 w-5 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-3 text-base text-gray-900">
+                        <span className="ml-3 text-base text-gray-900 dark:text-gray-100">
                           {member.firstName} {member.lastName}
                         </span>
                         {isPresent && (
-                          <span className="ml-auto text-xs text-green-600 font-medium">Already signed in</span>
+                          <span className="ml-auto text-xs text-green-600 dark:text-green-400 font-medium">Already signed in</span>
                         )}
                       </label>
                     );
@@ -1205,15 +1205,15 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                         key={member.id}
                         className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-colors ${
                           isChecked
-                            ? 'border-orange-500 bg-orange-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/30'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => toggleMember(member.id)}
-                          className="h-5 w-5 text-orange-600 focus:ring-orange-500 border-gray-300 rounded"
+                          className="h-5 w-5 text-orange-600 focus:ring-orange-500 border-gray-300 dark:border-gray-500 rounded"
                         />
                         <span className="ml-3 text-base text-gray-900">
                           {member.firstName} {member.lastName}

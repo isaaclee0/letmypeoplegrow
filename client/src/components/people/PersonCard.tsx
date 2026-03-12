@@ -62,8 +62,8 @@ const PersonCard: React.FC<PersonCardProps> = ({
         isGrouped ? 'border-2' : 'border'
       } cursor-pointer transition-colors ${
         isSelected
-          ? 'border-primary-500 bg-primary-50'
-          : isGrouped ? 'border-gray-200 hover:border-gray-300' : 'border-gray-200 hover:bg-gray-50'
+          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+          : isGrouped ? 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500' : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
       } ${needsWideLayout ? 'col-span-2' : ''}`}
       onClick={() => onToggleSelection(person.id)}
     >
@@ -72,12 +72,12 @@ const PersonCard: React.FC<PersonCardProps> = ({
           type="checkbox"
           checked={isSelected}
           onChange={() => onToggleSelection(person.id)}
-          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+          className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 flex-shrink-0"
           onClick={(e) => e.stopPropagation()}
         />
         <div className={isGrouped ? 'flex-1 min-w-0' : 'flex-1 min-w-0'}>
           <div className="flex items-center space-x-2 min-w-0">
-            <span className="text-sm font-medium text-gray-900 truncate">
+            <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {displayName}
             </span>
             <div className="flex items-center space-x-1 flex-shrink-0">
@@ -90,11 +90,6 @@ const PersonCard: React.FC<PersonCardProps> = ({
               ))}
             </div>
           </div>
-          {isGrouped && (
-            <div className="text-xs text-gray-500 mt-0.5">
-              {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
-            </div>
-          )}
         </div>
       </div>
 

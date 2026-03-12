@@ -542,24 +542,24 @@ const UsersPage: React.FC = () => {
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
       case 'admin':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300';
       case 'coordinator':
-        return 'bg-blue-100 text-blue-800';
+        return 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300';
       case 'attendance_taker':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300';
     }
   };
 
   const getStatusBadge = (user: User) => {
     if (!user.isActive) {
-      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Inactive</span>;
+      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300">Inactive</span>;
     }
     if (!user.firstLoginCompleted) {
-      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Pending Setup</span>;
+      return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300">Pending Setup</span>;
     }
-    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>;
+    return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">Active</span>;
   };
 
   const formatDateTime = (value?: string | null): string => {
@@ -580,14 +580,14 @@ const UsersPage: React.FC = () => {
   return (
     <div className="space-y-6 pb-32">
       {/* Header */}
-      <div className="bg-white overflow-hidden shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 Manage Users
               </h1>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Manage users, send invitations, and assign gathering access
               </p>
             </div>
@@ -597,37 +597,37 @@ const UsersPage: React.FC = () => {
 
       {/* Alerts */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4">
           <div className="flex">
             <XMarkIcon className="h-5 w-5 text-red-400" />
             <div className="ml-3">
-              <p className="text-sm text-red-700">{error}</p>
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
             </div>
           </div>
         </div>
       )}
 
       {success && (
-        <div className="bg-green-50 border border-green-200 rounded-md p-4">
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-md p-4">
           <div className="flex">
             <CheckIcon className="h-5 w-5 text-green-400" />
             <div className="ml-3">
-              <p className="text-sm text-green-700">{success}</p>
+              <p className="text-sm text-green-700 dark:text-green-400">{success}</p>
             </div>
           </div>
         </div>
       )}
 
       {/* Users Section */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
+            <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
               Users ({users.length})
             </h3>
             <div className="flex items-center space-x-3">
               {selectedUsers.length > 0 ? (
-                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                   <span>{selectedUsers.length} selected</span>
                   <button
                     onClick={clearSelection}
@@ -654,8 +654,8 @@ const UsersPage: React.FC = () => {
                 key={user.id} 
                 className={`relative rounded-lg p-4 border cursor-pointer transition-colors ${
                   selectedUsers.includes(user.id)
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                    : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600'
                 }`}
                 onClick={() => toggleUserSelection(user.id)}
               >
@@ -666,7 +666,7 @@ const UsersPage: React.FC = () => {
                       type="checkbox"
                       checked={selectedUsers.includes(user.id)}
                       onChange={() => toggleUserSelection(user.id)}
-                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                       onClick={(e) => e.stopPropagation()}
                     />
                   </div>
@@ -674,7 +674,7 @@ const UsersPage: React.FC = () => {
                   {/* User Info Column */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-base font-medium text-gray-900 truncate">
+                      <h4 className="text-base font-medium text-gray-900 dark:text-gray-100 truncate">
                         {user.firstName} {user.lastName}
                       </h4>
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-2`}>
@@ -682,7 +682,7 @@ const UsersPage: React.FC = () => {
                       </span>
                     </div>
                     
-                    <div className="text-sm text-gray-500 mt-1">
+                    <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                       {user.primaryContactMethod === 'email' ? (
                         <div className="flex items-center">
                           <EnvelopeIcon className="h-4 w-4 mr-1" />
@@ -700,7 +700,7 @@ const UsersPage: React.FC = () => {
                       {getStatusBadge(user)}
                     </div>
                     
-                    <div className="text-sm text-gray-600 mt-2">
+                    <div className="text-sm text-gray-600 dark:text-gray-400 mt-2">
                       {user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''}
                     </div>
                   </div>
@@ -716,8 +716,8 @@ const UsersPage: React.FC = () => {
                 key={user.id} 
                 className={`border rounded-lg p-6 cursor-pointer transition-all ${
                   selectedUsers.includes(user.id)
-                    ? 'border-primary-500 bg-primary-50 shadow-md'
-                    : 'bg-white border-gray-200 hover:shadow-md'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 shadow-md'
+                    : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:shadow-md'
                 }`}
                 onClick={() => toggleUserSelection(user.id)}
               >
@@ -728,7 +728,7 @@ const UsersPage: React.FC = () => {
                       type="checkbox"
                       checked={selectedUsers.includes(user.id)}
                       onChange={() => toggleUserSelection(user.id)}
-                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                      className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 h-4 w-4"
                       onClick={(e) => e.stopPropagation()}
                     />
                   </div>
@@ -736,7 +736,7 @@ const UsersPage: React.FC = () => {
                   {/* User Info Column */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between mb-3">
-                      <h4 className="text-lg font-semibold text-gray-900 truncate">
+                      <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
                         {user.firstName} {user.lastName}
                       </h4>
                       <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-3`}>
@@ -745,15 +745,15 @@ const UsersPage: React.FC = () => {
                     </div>
                     
                     <div className="space-y-3">
-                      <div className="text-sm text-gray-700">
-                        <div className="font-medium text-gray-900">Contact Information</div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300">
+                        <div className="font-medium text-gray-900 dark:text-gray-100">Contact Information</div>
                         <div className="space-y-1 mt-1">
-                          <div className="flex items-center text-sm text-gray-600">
+                          <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
                             <EnvelopeIcon className="h-4 w-4 mr-2 flex-shrink-0" />
                             <span className="truncate">{user.email || 'No email'}</span>
                           </div>
                           {user.mobileNumber && (
-                            <div className="flex items-center text-sm text-gray-600">
+                            <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
                               <PhoneIcon className="h-4 w-4 mr-2 flex-shrink-0" />
                               <span className="truncate">{user.mobileNumber}</span>
                             </div>
@@ -761,19 +761,19 @@ const UsersPage: React.FC = () => {
                         </div>
                       </div>
                       
-                      <div className="text-sm text-gray-700">
-                        <div className="font-medium text-gray-900">Gathering Access</div>
-                        <div className="flex items-center text-sm text-gray-600 mt-1">
+                      <div className="text-sm text-gray-700 dark:text-gray-300">
+                        <div className="font-medium text-gray-900 dark:text-gray-100">Gathering Access</div>
+                        <div className="flex items-center text-sm text-gray-600 dark:text-gray-400 mt-1">
                           <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
                           <span>{user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''} assigned</span>
                         </div>
                       </div>
                       
-                      <div className="text-sm text-gray-700">
-                        <div className="font-medium text-gray-900">Account Status</div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300">
+                        <div className="font-medium text-gray-900 dark:text-gray-100">Account Status</div>
                         <div className="mt-1">
                           {getStatusBadge(user)}
-                          <div className="text-xs text-gray-500 mt-1">
+                          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                             Last login: {formatDateTime(user.lastLoginAt as any)}
                           </div>
                         </div>
@@ -793,7 +793,7 @@ const UsersPage: React.FC = () => {
           {/* Edit User Button - only for single selection */}
           {selectedUsers.length === 1 && (
             <div className="flex items-center justify-end space-x-3">
-              <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+              <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Edit User
               </div>
               <button
@@ -808,7 +808,7 @@ const UsersPage: React.FC = () => {
           
           {/* Assign to Gathering Button */}
           <div className="flex items-center justify-end space-x-3">
-            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+            <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
               {selectedUsers.length === 1 ? "Assign to Gathering" : "Assign to Gatherings"}
             </div>
             <button
@@ -822,7 +822,7 @@ const UsersPage: React.FC = () => {
           
           {/* Delete User Button */}
           <div className="flex items-center justify-end space-x-3">
-            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+            <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
               {selectedUsers.length === 1 ? "Delete User" : "Delete Users"}
             </div>
             <button
@@ -849,14 +849,14 @@ const UsersPage: React.FC = () => {
       {/* Invite User Modal */}
       {showInviteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Invite New User</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Invite New User</h3>
               
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       First Name
                       <span className="text-red-500 ml-1">*</span>
                     </label>
@@ -871,16 +871,16 @@ const UsersPage: React.FC = () => {
                         }
                       }}
                       placeholder="Enter first name"
-                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
-                        validationErrors.firstName ? 'border-red-300' : 'border-gray-300'
+                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-700 dark:text-gray-100 ${
+                        validationErrors.firstName ? 'border-red-300 dark:border-red-600' : 'border-gray-300 dark:border-gray-600'
                       }`}
                     />
                     {validationErrors.firstName && (
-                      <p className="mt-1 text-sm text-red-600">{validationErrors.firstName}</p>
+                      <p className="mt-1 text-sm text-red-600 dark:text-red-400">{validationErrors.firstName}</p>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Last Name
                       <span className="text-red-500 ml-1">*</span>
                     </label>
@@ -895,18 +895,18 @@ const UsersPage: React.FC = () => {
                         }
                       }}
                       placeholder="Enter last name"
-                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
-                        validationErrors.lastName ? 'border-red-300' : 'border-gray-300'
+                      className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 dark:bg-gray-700 dark:text-gray-100 ${
+                        validationErrors.lastName ? 'border-red-300 dark:border-red-600' : 'border-gray-300 dark:border-gray-600'
                       }`}
                     />
                     {validationErrors.lastName && (
-                      <p className="mt-1 text-sm text-red-600">{validationErrors.lastName}</p>
+                      <p className="mt-1 text-sm text-red-600 dark:text-red-400">{validationErrors.lastName}</p>
                     )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Email Address
                     <span className="text-red-500 ml-1">*</span>
                   </label>
@@ -922,16 +922,16 @@ const UsersPage: React.FC = () => {
                     }}
                     placeholder="Enter email address"
                     className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
-                      validationErrors.email ? 'border-red-300' : 'border-gray-300'
+                      validationErrors.email ? 'border-red-300 dark:border-red-600' : 'border-gray-300 dark:border-gray-600'
                     }`}
                   />
                   {validationErrors.email && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.email}</p>
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">{validationErrors.email}</p>
                   )}
-                  <p className="mt-1 text-sm text-gray-500">Required for login and notifications</p>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Required for login and notifications</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Mobile Number
                     <span className="text-gray-400 ml-1">(optional)</span>
                   </label>
@@ -947,21 +947,21 @@ const UsersPage: React.FC = () => {
                     }}
                     placeholder="e.g., 0412 345 678, +61 4 1234 5678, +61 (0) 478 622 814"
                     className={`mt-1 block w-full rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${
-                      validationErrors.mobileNumber ? 'border-red-300' : 'border-gray-300'
+                      validationErrors.mobileNumber ? 'border-red-300 dark:border-red-600' : 'border-gray-300 dark:border-gray-600'
                     }`}
                   />
                   {validationErrors.mobileNumber && (
-                    <p className="mt-1 text-sm text-red-600">{validationErrors.mobileNumber}</p>
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">{validationErrors.mobileNumber}</p>
                   )}
-                  <p className="mt-1 text-sm text-gray-500">Accepts any format: spaces, dashes, +61, leading zeros</p>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Accepts any format: spaces, dashes, +61, leading zeros</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Role</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role</label>
                   <select
                     value={inviteForm.role}
                     onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as 'coordinator' | 'attendance_taker' })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   >
                     <option value="attendance_taker">Attendance Taker</option>
                     <option value="coordinator">Coordinator</option>
@@ -969,8 +969,8 @@ const UsersPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Assign to Gatherings (Optional)</label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Assign to Gatherings (Optional)</label>
+                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-3">
                     {gatherings.map((gathering) => (
                       <label key={gathering.id} className="flex items-center">
                         <input
@@ -989,14 +989,14 @@ const UsersPage: React.FC = () => {
                               });
                             }
                           }}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-2 text-sm text-gray-700">{gathering.name}</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
                       </label>
                     ))}
                   </div>
                   {gatherings.length === 0 && (
-                    <p className="mt-1 text-sm text-gray-500">No gatherings available</p>
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">No gatherings available</p>
                   )}
                 </div>
               </div>
@@ -1004,7 +1004,7 @@ const UsersPage: React.FC = () => {
               <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
                   onClick={() => setShowInviteModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1036,40 +1036,40 @@ const UsersPage: React.FC = () => {
       {/* User Details Modal */}
       {showUserDetails && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">User Details</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">User Details</h3>
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Name</label>
-                  <p className="mt-1 text-sm text-gray-900">{selectedUser.firstName} {selectedUser.lastName}</p>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Name</label>
+                  <p className="mt-1 text-sm text-gray-900 dark:text-gray-100">{selectedUser.firstName} {selectedUser.lastName}</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Contact</label>
-                  <p className="mt-1 text-sm text-gray-900">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contact</label>
+                  <p className="mt-1 text-sm text-gray-900 dark:text-gray-100">
                     {selectedUser.primaryContactMethod === 'email' ? selectedUser.email : selectedUser.mobileNumber}
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Role</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role</label>
                   <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(selectedUser.role)}`}>
                     {selectedUser.role.replace('_', ' ')}
                   </span>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Status</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Status</label>
                   <div className="mt-1">{getStatusBadge(selectedUser)}</div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Gathering Assignments</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Gathering Assignments</label>
                   <div className="mt-1">
                     {userAssignments.length > 0 ? (
-                      <ul className="text-sm text-gray-900">
+                      <ul className="text-sm text-gray-900 dark:text-gray-100">
                         {userAssignments.map((gathering) => (
                           <li key={gathering.id} className="py-1">
                             {gathering.name}
@@ -1077,7 +1077,7 @@ const UsersPage: React.FC = () => {
                         ))}
                       </ul>
                     ) : (
-                      <p className="text-sm text-gray-500">No gatherings assigned</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">No gatherings assigned</p>
                     )}
                   </div>
                 </div>
@@ -1086,7 +1086,7 @@ const UsersPage: React.FC = () => {
               <div className="flex justify-end mt-6">
                 <button
                   onClick={() => setShowUserDetails(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Close
                 </button>
@@ -1100,16 +1100,16 @@ const UsersPage: React.FC = () => {
       {/* Assign Gatherings Modal */}
       {showAssignGatherings && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
                 Assign Gatherings - {selectedUser.firstName} {selectedUser.lastName}
               </h3>
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Select Gatherings</label>
-                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Select Gatherings</label>
+                  <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-3">
                     {availableGatherings.map((gathering) => (
                       <label key={gathering.id} className="flex items-center">
                         <input
@@ -1128,14 +1128,14 @@ const UsersPage: React.FC = () => {
                               });
                             }
                           }}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-2 text-sm text-gray-700">{gathering.name}</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
                       </label>
                     ))}
                   </div>
                   {availableGatherings.length === 0 && (
-                    <p className="mt-1 text-sm text-gray-500">No gatherings available</p>
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">No gatherings available</p>
                   )}
                 </div>
               </div>
@@ -1143,7 +1143,7 @@ const UsersPage: React.FC = () => {
               <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
                   onClick={() => setShowAssignGatherings(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1163,10 +1163,10 @@ const UsersPage: React.FC = () => {
       {/* Edit User Modal */}
       {showEditUserModal && selectedUser ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Edit User - {selectedUser.firstName} {selectedUser.lastName}
                 </h3>
                 <button
@@ -1182,7 +1182,7 @@ const UsersPage: React.FC = () => {
                       role: 'attendance_taker'
                     });
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
@@ -1191,31 +1191,31 @@ const UsersPage: React.FC = () => {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">First Name</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
                     <input
                       type="text"
                       value={editForm.firstName}
                       onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
                     <input
                       type="text"
                       value={editForm.lastName}
                       onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Primary Contact Method</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Primary Contact Method</label>
                   <select
                     value={editForm.primaryContactMethod}
                     onChange={(e) => setEditForm({ ...editForm, primaryContactMethod: e.target.value as 'email' | 'sms' })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   >
                     <option value="email">Email</option>
                     <option value="sms">SMS</option>
@@ -1223,32 +1223,32 @@ const UsersPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Email (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email (optional)</label>
                   <input
                     type="email"
                     value={editForm.email}
                     onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Mobile Number (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Mobile Number (optional)</label>
                   <input
                     type="tel"
                     value={editForm.mobileNumber}
                     onChange={(e) => setEditForm({ ...editForm, mobileNumber: e.target.value })}
                     placeholder="e.g., 0412 345 678, +61 4 1234 5678, +61 (0) 478 622 814"
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   />
-                  <p className="mt-1 text-sm text-gray-500">Accepts any format: spaces, dashes, +61, leading zeros</p>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Accepts any format: spaces, dashes, +61, leading zeros</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Role</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Role</label>
                   <select
                     value={editForm.role}
                     onChange={(e) => setEditForm({ ...editForm, role: e.target.value as 'admin' | 'coordinator' | 'attendance_taker' })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   >
                     <option value="attendance_taker">Attendance Taker</option>
                     <option value="coordinator">Coordinator</option>
@@ -1285,7 +1285,7 @@ const UsersPage: React.FC = () => {
                       role: 'attendance_taker'
                     });
                   }}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1308,36 +1308,36 @@ const UsersPage: React.FC = () => {
       {/* Invite User Confirmation Modal */}
       {showInviteConfirmation ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Invitation
                 </h3>
                 <button
                   onClick={() => setShowInviteConfirmation(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
               
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-blue-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-blue-100 dark:bg-blue-900/30 rounded-full">
                 <EnvelopeIcon className="h-6 w-6 text-blue-600" />
               </div>
               
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500 mb-2">
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
                   You are about to invite <strong>{inviteForm.firstName} {inviteForm.lastName}</strong> to join your organization.
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   They will receive an invitation email and can log in using their email address with a one-time code.
                 </p>
               </div>
               
-              <div className="bg-gray-50 rounded-lg p-4 mb-6">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Invitation Details:</h4>
-                <div className="space-y-1 text-sm text-gray-600">
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-6">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Invitation Details:</h4>
+                <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
                   <div><strong>Name:</strong> {inviteForm.firstName} {inviteForm.lastName}</div>
                   <div><strong>Email:</strong> {inviteForm.email}</div>
                   {inviteForm.mobileNumber && <div><strong>Mobile:</strong> {inviteForm.mobileNumber}</div>}
@@ -1351,7 +1351,7 @@ const UsersPage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowInviteConfirmation(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1376,26 +1376,26 @@ const UsersPage: React.FC = () => {
       {/* Deactivate User Confirmation Modal */}
       {showDeactivateModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Deactivation
                 </h3>
                 <button
                   onClick={() => setShowDeactivateModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
               
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
               
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to deactivate <strong>{deactivateConfirmation.userName}</strong>? This action cannot be undone.
                 </p>
               </div>
@@ -1403,7 +1403,7 @@ const UsersPage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowDeactivateModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>

@@ -589,14 +589,14 @@ const ManageGatheringsPage: React.FC = () => {
   return (
     <div className="space-y-6 pb-32">
       {/* Header */}
-      <div className="bg-white overflow-hidden shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 Manage Gatherings
               </h1>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Manage your church gatherings and their members
               </p>
             </div>
@@ -605,31 +605,31 @@ const ManageGatheringsPage: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4">
           <div className="flex">
-            <div className="text-sm text-red-700">{error}</div>
+            <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
           </div>
         </div>
       )}
 
       {success && (
-        <div className="bg-green-50 border border-green-200 rounded-md p-4">
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-md p-4">
           <div className="flex">
-            <div className="text-sm text-green-700">{success}</div>
+            <div className="text-sm text-green-700 dark:text-green-400">{success}</div>
           </div>
         </div>
       )}
 
       {/* Gatherings List */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
+            <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
               Your Gatherings ({gatherings.length})
             </h3>
             <div className="flex items-center space-x-3">
               {selectedGatherings.length > 0 ? (
-                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                   <span>{selectedGatherings.length} selected</span>
                   <button
                     onClick={clearSelection}
@@ -652,8 +652,8 @@ const ManageGatheringsPage: React.FC = () => {
           {gatherings.length === 0 ? (
             <div className="relative text-center py-12">
               <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No gatherings</h3>
-              <p className="mt-1 text-sm text-gray-500">
+              <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No gatherings</h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Get started by creating your first gathering.
               </p>
               {/* Prominent guidance to add button */}
@@ -672,8 +672,8 @@ const ManageGatheringsPage: React.FC = () => {
                   key={gathering.id} 
                   className={`border rounded-lg p-6 cursor-pointer transition-all ${
                     selectedGatherings.includes(gathering.id)
-                      ? 'border-primary-500 bg-primary-50 shadow-md'
-                      : 'bg-white border-gray-200 hover:shadow-md'
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 shadow-md'
+                      : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:shadow-md'
                   }`}
                   onClick={() => toggleGatheringSelection(gathering.id)}
                 >
@@ -684,7 +684,7 @@ const ManageGatheringsPage: React.FC = () => {
                         type="checkbox"
                         checked={selectedGatherings.includes(gathering.id)}
                         onChange={() => toggleGatheringSelection(gathering.id)}
-                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                        className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 h-4 w-4"
                         onClick={(e) => e.stopPropagation()}
                       />
                     </div>
@@ -692,26 +692,26 @@ const ManageGatheringsPage: React.FC = () => {
                     {/* Gathering Info Column */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between mb-3">
-                        <h4 className="text-lg font-semibold text-gray-900 truncate">
+                        <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
                           {gathering.name}
                         </h4>
                         <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
                           gathering.attendanceType === 'headcount' 
-                            ? 'bg-blue-100 text-blue-800' 
-                            : 'bg-green-100 text-green-800'
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300'
+                            : 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
                         } flex-shrink-0 ml-3`}>
                           {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
                         </span>
                       </div>
                       
                       <div className="space-y-3">
-                        <div className="text-sm text-gray-700">
+                        <div className="text-sm text-gray-700 dark:text-gray-300">
                           {gathering.attendanceType === 'headcount' && gathering.customSchedule ? (
                             // Show custom schedule info for headcount gatherings
                             gathering.customSchedule.type === 'one_off' ? (
                               <div>
-                                <div className="font-medium text-gray-900">One-off Event</div>
-                                <div className="text-gray-600">{new Date(gathering.customSchedule.startDate).toLocaleDateString('en-US', { 
+                                <div className="font-medium text-gray-900 dark:text-gray-100">One-off Event</div>
+                                <div className="text-gray-600 dark:text-gray-400">{new Date(gathering.customSchedule.startDate).toLocaleDateString('en-US', { 
                                   weekday: 'long',
                                   year: 'numeric',
                                   month: 'long',
@@ -720,8 +720,8 @@ const ManageGatheringsPage: React.FC = () => {
                               </div>
                             ) : (
                               <div>
-                                <div className="font-medium text-gray-900">Custom Schedule</div>
-                                <div className="text-gray-600">
+                                <div className="font-medium text-gray-900 dark:text-gray-100">Custom Schedule</div>
+                                <div className="text-gray-600 dark:text-gray-400">
                                   {gathering.customSchedule.pattern?.frequency || 'recurring'} from {new Date(gathering.customSchedule.startDate).toLocaleDateString()}
                                   {gathering.customSchedule.endDate && ` to ${new Date(gathering.customSchedule.endDate).toLocaleDateString()}`}
                                 </div>
@@ -729,8 +729,8 @@ const ManageGatheringsPage: React.FC = () => {
                             )
                           ) : (
                             <div>
-                              <div className="font-medium text-gray-900">Regular Schedule</div>
-                              <div className="text-gray-600">
+                              <div className="font-medium text-gray-900 dark:text-gray-100">Regular Schedule</div>
+                              <div className="text-gray-600 dark:text-gray-400">
                                 {gathering.dayOfWeek}s at {gathering.startTime}
                                 {gathering.frequency && gathering.frequency !== 'weekly' && ` (${gathering.frequency})`}
                               </div>
@@ -739,17 +739,17 @@ const ManageGatheringsPage: React.FC = () => {
                         </div>
                         
                         {gathering.description && (
-                          <div className="text-sm text-gray-700">
-                            <div className="font-medium text-gray-900">Description</div>
-                            <div className="text-gray-600">{gathering.description}</div>
+                          <div className="text-sm text-gray-700 dark:text-gray-300">
+                            <div className="font-medium text-gray-900 dark:text-gray-100">Description</div>
+                            <div className="text-gray-600 dark:text-gray-400">{gathering.description}</div>
                           </div>
                         )}
                         
                         {gathering.attendanceType === 'standard' && (
-                          <div className="flex items-center text-sm text-gray-700 bg-gray-50 p-3 rounded-md">
+                          <div className="flex items-center text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 p-3 rounded-md">
                             <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
                             <div>
-                              <div className="font-medium text-gray-900">
+                              <div className="font-medium text-gray-900 dark:text-gray-100">
                                 {gathering.memberCount || 0} regular attendees
                               </div>
                               {(gathering.recentVisitorCount || 0) > 0 && (
@@ -805,15 +805,15 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Edit Gathering Modal */}
       {showEditForm && editingGathering ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Edit Gathering
                 </h3>
                 <button
                   onClick={closeEditModal}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-300"
                 >
                   <span className="sr-only">Close</span>
                   <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -824,7 +824,7 @@ const ManageGatheringsPage: React.FC = () => {
               
               <form onSubmit={(e) => { e.preventDefault(); handleUpdateGathering(); }} className="space-y-4">
                 <div>
-                  <label htmlFor="edit-name" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="edit-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Gathering Name *
                   </label>
                   <input
@@ -832,14 +832,14 @@ const ManageGatheringsPage: React.FC = () => {
                     type="text"
                     value={editFormData.name}
                     onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Sunday Service"
                     required
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="edit-description" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="edit-description" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Description
                   </label>
                   <textarea
@@ -847,7 +847,7 @@ const ManageGatheringsPage: React.FC = () => {
                     value={editFormData.description}
                     onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
                     rows={2}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Weekly worship service"
                   />
                 </div>
@@ -857,14 +857,14 @@ const ManageGatheringsPage: React.FC = () => {
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
-                        <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700">
+                        <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Day of Week *
                         </label>
                         <select
                           id="edit-dayOfWeek"
                           value={editFormData.dayOfWeek}
                           onChange={(e) => setEditFormData({ ...editFormData, dayOfWeek: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           required
                         >
                           <option value="Sunday">Sunday</option>
@@ -878,7 +878,7 @@ const ManageGatheringsPage: React.FC = () => {
                       </div>
 
                       <div>
-                        <label htmlFor="edit-startTime" className="block text-sm font-medium text-gray-700">
+                        <label htmlFor="edit-startTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Start Time *
                         </label>
                         <input
@@ -897,13 +897,13 @@ const ManageGatheringsPage: React.FC = () => {
                               endTime: editFormData.endTime || autoEndTime
                             });
                           }}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           required
                         />
                       </div>
 
                       <div>
-                        <label htmlFor="edit-endTime" className="block text-sm font-medium text-gray-700">
+                        <label htmlFor="edit-endTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           End Time
                         </label>
                         <input
@@ -911,19 +911,19 @@ const ManageGatheringsPage: React.FC = () => {
                           type="time"
                           value={editFormData.endTime || ''}
                           onChange={(e) => setEditFormData({ ...editFormData, endTime: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         />
                       </div>
 
                       <div>
-                        <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700">
+                        <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Frequency *
                         </label>
                         <select
                           id="edit-frequency"
                           value={editFormData.frequency}
                           onChange={(e) => setEditFormData({ ...editFormData, frequency: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           required
                         >
                           <option value="weekly">Weekly</option>
@@ -937,7 +937,7 @@ const ManageGatheringsPage: React.FC = () => {
 
                 {/* Attendance Type (editable if no attendance records) */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Attendance Type
                   </label>
                   <div className="mt-1 space-y-2">
@@ -949,9 +949,9 @@ const ManageGatheringsPage: React.FC = () => {
                           value="standard"
                           checked={editFormData.attendanceType === 'standard'}
                           onChange={(e) => setEditFormData({ ...editFormData, attendanceType: e.target.value as 'standard' | 'headcount' })}
-                          className="mr-2"
+                          className="mr-2 dark:border-gray-500"
                         />
-                        <span className="text-sm">Standard Attendance</span>
+                        <span className="text-sm dark:text-gray-300">Standard Attendance</span>
                       </label>
                       <label className="flex items-center">
                         <input
@@ -960,12 +960,12 @@ const ManageGatheringsPage: React.FC = () => {
                           value="headcount"
                           checked={editFormData.attendanceType === 'headcount'}
                           onChange={(e) => setEditFormData({ ...editFormData, attendanceType: e.target.value as 'standard' | 'headcount' })}
-                          className="mr-2"
+                          className="mr-2 dark:border-gray-500"
                         />
-                        <span className="text-sm">Headcount Only</span>
+                        <span className="text-sm dark:text-gray-300">Headcount Only</span>
                       </label>
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
                       Note: Changing attendance type is only allowed when no attendance records exist
                     </p>
                   </div>
@@ -974,20 +974,20 @@ const ManageGatheringsPage: React.FC = () => {
                 {/* Check-in Mode Toggles - only for standard gatherings */}
                 {editFormData.attendanceType === 'standard' && (
                   <div className="space-y-3">
-                    <label className="block text-sm font-medium text-gray-700">Check-in Modes</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
                     <div>
                       <label className="flex items-center cursor-pointer">
                         <input
                           type="checkbox"
                           checked={editFormData.kioskEnabled || false}
                           onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-2 text-sm font-medium text-gray-700">
+                        <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                           Self Check-in
                         </span>
                       </label>
-                      <p className="mt-1 text-xs text-gray-500 ml-6">
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
                         Self-service / kiosk mode where individuals check themselves in.
                       </p>
                     </div>
@@ -997,18 +997,18 @@ const ManageGatheringsPage: React.FC = () => {
                           type="checkbox"
                           checked={editFormData.leaderCheckinEnabled || false}
                           onChange={(e) => setEditFormData({ ...editFormData, leaderCheckinEnabled: e.target.checked })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-2 text-sm font-medium text-gray-700">
+                        <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                           Leader Check-in
                         </span>
                       </label>
-                      <p className="mt-1 text-xs text-gray-500 ml-6">
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
                         A leader checks people in and out on their behalf.
                       </p>
                     </div>
                     {(editFormData.kioskEnabled || editFormData.leaderCheckinEnabled) && (
-                      <p className="text-xs text-gray-500 ml-6">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                         Uses the gathering's end time to close sign-in.
                         {editFormData.kioskEnabled && editFormData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
                       </p>
@@ -1018,9 +1018,9 @@ const ManageGatheringsPage: React.FC = () => {
 
                 {/* Custom Schedule Display for Headcount Gatherings */}
                 {editFormData.attendanceType === 'headcount' && editFormData.customSchedule && (
-                  <div className="bg-blue-50 p-4 rounded-lg border">
-                    <h4 className="text-sm font-medium text-blue-900 mb-2">Custom Schedule</h4>
-                    <div className="text-sm text-blue-700">
+                  <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg border dark:border-blue-800">
+                    <h4 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-2">Custom Schedule</h4>
+                    <div className="text-sm text-blue-700 dark:text-blue-300">
                       <p><strong>Type:</strong> {editFormData.customSchedule.type === 'one_off' ? 'One-off event' : 'Recurring pattern'}</p>
                       <p><strong>Start Date:</strong> {new Date(editFormData.customSchedule.startDate).toLocaleDateString()}</p>
                       {editFormData.customSchedule.endDate && (
@@ -1038,7 +1038,7 @@ const ManageGatheringsPage: React.FC = () => {
                         </>
                       )}
                     </div>
-                    <p className="text-xs text-blue-600 mt-2">
+                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-2">
                       Custom schedule details cannot be modified after creation. Delete and recreate the gathering to change the schedule.
                     </p>
                   </div>
@@ -1050,7 +1050,7 @@ const ManageGatheringsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowEditForm(false)}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                   >
                     Cancel
                   </button>
@@ -1071,10 +1071,10 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Add Gathering Modal (simplified) */}
       {showAddGatheringWizard ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Gathering Details
                 </h3>
                 <button
@@ -1082,7 +1082,7 @@ const ManageGatheringsPage: React.FC = () => {
                     setShowAddGatheringWizard(false);
                     resetWizardState();
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-300"
                 >
                   <span className="sr-only">Close</span>
                   <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1093,7 +1093,7 @@ const ManageGatheringsPage: React.FC = () => {
               
               <div className="space-y-4">
                   <div>
-                    <label htmlFor="add-name" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="add-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Gathering Name *
                     </label>
                     <input
@@ -1101,14 +1101,14 @@ const ManageGatheringsPage: React.FC = () => {
                       type="text"
                       value={createGatheringData.name}
                       onChange={(e) => setCreateGatheringData({ ...createGatheringData, name: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       placeholder="Sunday Service"
                       required
                     />
                   </div>
 
                   <div>
-                    <label htmlFor="add-description" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="add-description" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Description
                     </label>
                     <textarea
@@ -1116,13 +1116,13 @@ const ManageGatheringsPage: React.FC = () => {
                       value={createGatheringData.description}
                       onChange={(e) => setCreateGatheringData({ ...createGatheringData, description: e.target.value })}
                       rows={2}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       placeholder="Weekly worship service"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Attendance Type *
                     </label>
                     <div className="space-y-2">
@@ -1137,9 +1137,9 @@ const ManageGatheringsPage: React.FC = () => {
                             attendanceType: e.target.value as 'standard' | 'headcount',
                             customSchedule: undefined
                           })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                         />
-                        <span className="ml-2 text-sm text-gray-700">
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                           <strong>Standard Attendance</strong> - Track individual people by name
                         </span>
                       </label>
@@ -1153,9 +1153,9 @@ const ManageGatheringsPage: React.FC = () => {
                             ...createGatheringData, 
                             attendanceType: e.target.value as 'standard' | 'headcount'
                           })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                         />
-                        <span className="ml-2 text-sm text-gray-700">
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                           <strong>Headcount Only</strong> - Just track total numbers
                         </span>
                       </label>
@@ -1165,20 +1165,20 @@ const ManageGatheringsPage: React.FC = () => {
                   {/* Check-in Mode Toggles - only for standard gatherings */}
                   {createGatheringData.attendanceType === 'standard' && (
                     <div className="space-y-3">
-                      <label className="block text-sm font-medium text-gray-700">Check-in Modes</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
                       <div>
                         <label className="flex items-center cursor-pointer">
                           <input
                             type="checkbox"
                             checked={createGatheringData.kioskEnabled || false}
                             onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
-                          <span className="ml-2 text-sm font-medium text-gray-700">
+                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                             Self Check-in
                           </span>
                         </label>
-                        <p className="mt-1 text-xs text-gray-500 ml-6">
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
                           Self-service / kiosk mode where individuals check themselves in.
                         </p>
                       </div>
@@ -1188,18 +1188,18 @@ const ManageGatheringsPage: React.FC = () => {
                             type="checkbox"
                             checked={createGatheringData.leaderCheckinEnabled || false}
                             onChange={(e) => setCreateGatheringData({ ...createGatheringData, leaderCheckinEnabled: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
-                          <span className="ml-2 text-sm font-medium text-gray-700">
+                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                             Leader Check-in
                           </span>
                         </label>
-                        <p className="mt-1 text-xs text-gray-500 ml-6">
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
                           A leader checks people in and out on their behalf.
                         </p>
                       </div>
                       {(createGatheringData.kioskEnabled || createGatheringData.leaderCheckinEnabled) && (
-                        <p className="text-xs text-gray-500 ml-6">
+                        <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                           Uses the gathering's end time to close sign-in.
                           {createGatheringData.kioskEnabled && createGatheringData.leaderCheckinEnabled && ' Both modes will be available on the check-ins page.'}
                         </p>
@@ -1208,9 +1208,9 @@ const ManageGatheringsPage: React.FC = () => {
                   )}
 
                   {createGatheringData.attendanceType === 'headcount' && (
-                    <div className="bg-blue-50 p-4 rounded-lg">
-                      <h4 className="text-sm font-medium text-blue-900 mb-2">Custom Schedule Options</h4>
-                      <p className="text-sm text-blue-700 mb-3">
+                    <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg">
+                      <h4 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-2">Custom Schedule Options</h4>
+                      <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
                         For headcount gatherings, you can use flexible scheduling or stick with regular weekly/biweekly/monthly patterns.
                       </p>
                       <div className="space-y-2">
@@ -1224,9 +1224,9 @@ const ManageGatheringsPage: React.FC = () => {
                               ...createGatheringData, 
                               customSchedule: undefined 
                             })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                           />
-                          <span className="ml-2 text-sm text-gray-700">
+                          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                             Use regular schedule (weekly/biweekly/monthly)
                           </span>
                         </label>
@@ -1243,9 +1243,9 @@ const ManageGatheringsPage: React.FC = () => {
                                 startDate: new Date().toISOString().split('T')[0]
                               }
                             })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                           />
-                          <span className="ml-2 text-sm text-gray-700">
+                          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                             Use custom schedule (one-off events, daily for X days, etc.)
                           </span>
                         </label>
@@ -1255,12 +1255,12 @@ const ManageGatheringsPage: React.FC = () => {
 
                   {/* Custom Schedule Configuration */}
                   {createGatheringData.attendanceType === 'headcount' && createGatheringData.customSchedule && (
-                    <div className="bg-gray-50 p-4 rounded-lg border">
-                      <h4 className="text-sm font-medium text-gray-900 mb-3">Custom Schedule Configuration</h4>
+                    <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg border dark:border-gray-600">
+                      <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Custom Schedule Configuration</h4>
                       
                       {/* Schedule Type Selection */}
                       <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Schedule Type
                         </label>
                         <div className="space-y-2">
@@ -1277,9 +1277,9 @@ const ManageGatheringsPage: React.FC = () => {
                                   type: e.target.value as 'one_off' | 'recurring'
                                 }
                               })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                             />
-                            <span className="ml-2 text-sm text-gray-700">
+                            <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                               One-off event (single occurrence)
                             </span>
                           </label>
@@ -1296,9 +1296,9 @@ const ManageGatheringsPage: React.FC = () => {
                                   type: e.target.value as 'one_off' | 'recurring'
                                 }
                               })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                             />
-                            <span className="ml-2 text-sm text-gray-700">
+                            <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
                               Recurring pattern (multiple occurrences)
                             </span>
                           </label>
@@ -1307,7 +1307,7 @@ const ManageGatheringsPage: React.FC = () => {
 
                       {/* Start Date */}
                       <div className="mb-4">
-                        <label htmlFor="custom-startDate" className="block text-sm font-medium text-gray-700 mb-1">
+                        <label htmlFor="custom-startDate" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Start Date *
                         </label>
                         <input
@@ -1321,7 +1321,7 @@ const ManageGatheringsPage: React.FC = () => {
                               startDate: e.target.value
                             }
                           })}
-                          className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           required
                         />
                       </div>
@@ -1329,7 +1329,7 @@ const ManageGatheringsPage: React.FC = () => {
                       {/* End Date for Recurring */}
                       {createGatheringData.customSchedule.type === 'recurring' && (
                         <div className="mb-4">
-                          <label htmlFor="custom-endDate" className="block text-sm font-medium text-gray-700 mb-1">
+                          <label htmlFor="custom-endDate" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                             End Date *
                           </label>
                           <input
@@ -1343,7 +1343,7 @@ const ManageGatheringsPage: React.FC = () => {
                                 endDate: e.target.value
                               }
                             })}
-                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             required
                           />
                         </div>
@@ -1353,7 +1353,7 @@ const ManageGatheringsPage: React.FC = () => {
                       {createGatheringData.customSchedule.type === 'recurring' && (
                         <div className="space-y-4">
                           <div>
-                            <label htmlFor="pattern-frequency" className="block text-sm font-medium text-gray-700 mb-1">
+                            <label htmlFor="pattern-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                               Frequency *
                             </label>
                             <select
@@ -1370,7 +1370,7 @@ const ManageGatheringsPage: React.FC = () => {
                                   }
                                 }
                               })}
-                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                              className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                               required
                             >
                               <option value="">Select frequency</option>
@@ -1382,7 +1382,7 @@ const ManageGatheringsPage: React.FC = () => {
                           </div>
 
                           <div>
-                            <label htmlFor="pattern-interval" className="block text-sm font-medium text-gray-700 mb-1">
+                            <label htmlFor="pattern-interval" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                               Interval *
                             </label>
                             <input
@@ -1400,11 +1400,11 @@ const ManageGatheringsPage: React.FC = () => {
                                   }
                                 }
                               })}
-                              className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                              className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                               placeholder="1"
                               required
                             />
-                            <p className="mt-1 text-xs text-gray-500">
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                               {createGatheringData.customSchedule.pattern?.frequency === 'daily' && 'Every X days'}
                               {createGatheringData.customSchedule.pattern?.frequency === 'weekly' && 'Every X weeks'}
                               {createGatheringData.customSchedule.pattern?.frequency === 'biweekly' && 'Every X bi-weekly periods'}
@@ -1415,7 +1415,7 @@ const ManageGatheringsPage: React.FC = () => {
                           {/* Days of Week for Weekly */}
                           {createGatheringData.customSchedule.pattern?.frequency === 'weekly' && (
                             <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 Days of Week *
                               </label>
                               
@@ -1503,17 +1503,17 @@ const ManageGatheringsPage: React.FC = () => {
                                           }
                                         });
                                       }}
-                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                                     />
-                                    <span className="ml-2 text-sm text-gray-700">{day}</span>
+                                    <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{day}</span>
                                   </label>
                                 ))}
                               </div>
                               
                               {/* Selected Days Summary */}
                               {createGatheringData.customSchedule.pattern?.daysOfWeek && createGatheringData.customSchedule.pattern.daysOfWeek.length > 0 && (
-                                <div className="mt-2 p-2 bg-blue-50 rounded border">
-                                  <p className="text-sm text-blue-700">
+                                <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded border dark:border-blue-800">
+                                  <p className="text-sm text-blue-700 dark:text-blue-300">
                                     <strong>Selected:</strong> {createGatheringData.customSchedule.pattern.daysOfWeek.join(', ')}
                                   </p>
                                 </div>
@@ -1524,7 +1524,7 @@ const ManageGatheringsPage: React.FC = () => {
                           {/* Day of Month for Monthly */}
                           {createGatheringData.customSchedule.pattern?.frequency === 'monthly' && (
                             <div>
-                              <label htmlFor="pattern-dayOfMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                              <label htmlFor="pattern-dayOfMonth" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 Day of Month *
                               </label>
                               <input
@@ -1543,7 +1543,7 @@ const ManageGatheringsPage: React.FC = () => {
                                     }
                                   }
                                 })}
-                                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                                className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                                 required
                               />
                             </div>
@@ -1552,22 +1552,22 @@ const ManageGatheringsPage: React.FC = () => {
                           {/* Custom Date Selection for Daily */}
                           {createGatheringData.customSchedule.pattern?.frequency === 'daily' && (
                             <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 Custom Date Selection (Optional)
                               </label>
-                              <p className="text-sm text-gray-600 mb-3">
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
                                 Leave empty to use the start/end date range, or specify specific dates.
                               </p>
                               <div className="space-y-2">
                                 <div>
-                                  <label htmlFor="custom-dates" className="block text-xs text-gray-600 mb-1">
+                                  <label htmlFor="custom-dates" className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
                                     Specific Dates (one per line, YYYY-MM-DD format)
                                   </label>
                                   <textarea
                                     id="custom-dates"
                                     rows={3}
                                     placeholder="2024-03-15&#10;2024-03-18&#10;2024-03-22"
-                                    className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-sm"
+                                    className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-sm"
                                     onChange={(e) => {
                                       const dates = e.target.value
                                         .split('\n')
@@ -1586,7 +1586,7 @@ const ManageGatheringsPage: React.FC = () => {
                                       });
                                     }}
                                   />
-                                  <p className="text-xs text-gray-500 mt-1">
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                     Enter specific dates in YYYY-MM-DD format, one per line
                                   </p>
                                 </div>
@@ -1597,9 +1597,9 @@ const ManageGatheringsPage: React.FC = () => {
                       )}
 
                       {/* Schedule Preview */}
-                      <div className="mt-4 p-3 bg-blue-50 rounded border">
-                        <h5 className="text-sm font-medium text-blue-900 mb-1">Schedule Preview</h5>
-                        <p className="text-sm text-blue-700">
+                      <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 rounded border dark:border-blue-800">
+                        <h5 className="text-sm font-medium text-blue-900 dark:text-blue-300 mb-1">Schedule Preview</h5>
+                        <p className="text-sm text-blue-700 dark:text-blue-300">
                           {createGatheringData.customSchedule.type === 'one_off' ? (
                             `Single event on ${new Date(createGatheringData.customSchedule.startDate).toLocaleDateString()}`
                           ) : (
@@ -1621,14 +1621,14 @@ const ManageGatheringsPage: React.FC = () => {
                     <>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
-                          <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700">
+                          <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                             Day of Week {createGatheringData.attendanceType === 'standard' ? '*' : ''}
                           </label>
                           <select
                             id="add-dayOfWeek"
                             value={createGatheringData.dayOfWeek || ''}
                             onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             required={createGatheringData.attendanceType === 'standard'}
                           >
                             <option value="">Select day</option>
@@ -1643,7 +1643,7 @@ const ManageGatheringsPage: React.FC = () => {
                         </div>
 
                         <div>
-                          <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700">
+                          <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                             Start Time {createGatheringData.attendanceType === 'standard' ? '*' : ''}
                           </label>
                           <input
@@ -1651,20 +1651,20 @@ const ManageGatheringsPage: React.FC = () => {
                             type="time"
                             value={createGatheringData.startTime || ''}
                             onChange={(e) => setCreateGatheringData({ ...createGatheringData, startTime: e.target.value })}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             required={createGatheringData.attendanceType === 'standard'}
                           />
                         </div>
 
                         <div>
-                          <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700">
+                          <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                             Frequency {createGatheringData.attendanceType === 'standard' ? '*' : ''}
                           </label>
                           <select
                             id="add-frequency"
                             value={createGatheringData.frequency || ''}
                             onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                             required={createGatheringData.attendanceType === 'standard'}
                           >
                             <option value="">Select frequency</option>
@@ -1681,7 +1681,7 @@ const ManageGatheringsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={closeAddModal}
-                      className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                     >
                       Cancel
                     </button>
@@ -1706,26 +1706,26 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Delete Gathering Confirmation Modal */}
       {showDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Deletion
                 </h3>
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
               
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
               
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to delete <strong>{deleteConfirmation.gatheringName}</strong>? This will also remove all member associations and cannot be undone.
                 </p>
               </div>
@@ -1733,7 +1733,7 @@ const ManageGatheringsPage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1759,22 +1759,22 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Manage Occurrences Modal */}
       {showManageOccurrencesModal && gatheringOccurrences.gathering ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Manage Occurrences - {gatheringOccurrences.gathering.name}
                 </h3>
                 <button
                   onClick={() => setShowManageOccurrencesModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
               
               <div className="mb-4">
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   Select specific occurrences to remove from this gathering's schedule. This will not delete the gathering itself, just those specific dates.
                 </p>
               </div>
@@ -1782,8 +1782,8 @@ const ManageGatheringsPage: React.FC = () => {
               {gatheringOccurrences.occurrences.length === 0 ? (
                 <div className="text-center py-8">
                   <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No upcoming occurrences</h3>
-                  <p className="mt-1 text-sm text-gray-500">
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No upcoming occurrences</h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                     This gathering has no scheduled occurrences in the next 3 months.
                   </p>
                 </div>
@@ -1791,19 +1791,19 @@ const ManageGatheringsPage: React.FC = () => {
                 <>
                   <div className="mb-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                         Upcoming Occurrences ({gatheringOccurrences.occurrences.length})
                       </span>
                       <div className="flex space-x-2">
                         <button
                           onClick={() => setSelectedOccurrences(gatheringOccurrences.occurrences.map(o => o.date))}
-                          className="text-xs text-blue-600 hover:text-blue-800"
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800"
                         >
                           Select All
                         </button>
                         <button
                           onClick={() => setSelectedOccurrences([])}
-                          className="text-xs text-gray-600 hover:text-gray-800"
+                          className="text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800"
                         >
                           Clear All
                         </button>
@@ -1818,7 +1818,7 @@ const ManageGatheringsPage: React.FC = () => {
                         className={`p-3 border rounded-lg cursor-pointer transition-colors ${
                           selectedOccurrences.includes(occurrence.date)
                             ? 'border-primary-500 bg-primary-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                         onClick={() => {
                           if (selectedOccurrences.includes(occurrence.date)) {
@@ -1833,10 +1833,10 @@ const ManageGatheringsPage: React.FC = () => {
                             type="checkbox"
                             checked={selectedOccurrences.includes(occurrence.date)}
                             onChange={() => {}} // Handled by parent div click
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
                           <div className="ml-3">
-                            <p className="text-sm font-medium text-gray-900">
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
                               {new Date(occurrence.date).toLocaleDateString('en-US', { 
                                 weekday: 'long',
                                 year: 'numeric',
@@ -1844,7 +1844,7 @@ const ManageGatheringsPage: React.FC = () => {
                                 day: 'numeric'
                               })}
                             </p>
-                            <p className="text-xs text-gray-500">
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
                               {new Date(occurrence.date).toLocaleDateString()}
                             </p>
                           </div>
@@ -1854,10 +1854,10 @@ const ManageGatheringsPage: React.FC = () => {
                   </div>
 
                   {selectedOccurrences.length > 0 && (
-                    <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
                       <div className="flex items-center">
                         <TrashIcon className="h-5 w-5 text-red-600 mr-2" />
-                        <span className="text-sm font-medium text-red-800">
+                        <span className="text-sm font-medium text-red-800 dark:text-red-300">
                           {selectedOccurrences.length} occurrence(s) selected for deletion
                         </span>
                       </div>
@@ -1867,7 +1867,7 @@ const ManageGatheringsPage: React.FC = () => {
                   <div className="flex justify-end space-x-3 pt-4">
                     <button
                       onClick={() => setShowManageOccurrencesModal(false)}
-                      className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                     >
                       Cancel
                     </button>
@@ -1890,10 +1890,10 @@ const ManageGatheringsPage: React.FC = () => {
       {/* Duplicate Gathering Modal */}
       {showDuplicateModal && duplicateGathering ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Duplicate Gathering
                 </h3>
                 <button
@@ -1902,21 +1902,21 @@ const ManageGatheringsPage: React.FC = () => {
                     setDuplicateGathering(null);
                     setDuplicateName('');
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
               
               <div className="mb-4">
-                <p className="text-sm text-gray-600 mb-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                   Duplicating: <span className="font-medium">{duplicateGathering.name}</span>
                 </p>
-                <p className="text-sm text-gray-500 mb-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                   This will copy all details, people assignments, and user assignments to a new gathering.
                 </p>
                 
-                <label htmlFor="duplicate-name" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="duplicate-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   New Gathering Name *
                 </label>
                 <input
@@ -1924,7 +1924,7 @@ const ManageGatheringsPage: React.FC = () => {
                   type="text"
                   value={duplicateName}
                   onChange={(e) => setDuplicateName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   placeholder="Enter new gathering name"
                   autoFocus
                 />
@@ -1937,7 +1937,7 @@ const ManageGatheringsPage: React.FC = () => {
                     setDuplicateGathering(null);
                     setDuplicateName('');
                   }}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1963,7 +1963,7 @@ const ManageGatheringsPage: React.FC = () => {
             <>
               {/* Edit Gathering Button */}
               <div className="flex items-center justify-end space-x-3">
-                <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Edit Gathering
                 </div>
                 <button
@@ -1977,7 +1977,7 @@ const ManageGatheringsPage: React.FC = () => {
               
               {/* Duplicate Gathering Button */}
               <div className="flex items-center justify-end space-x-3">
-                <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Duplicate Gathering
                 </div>
                 <button
@@ -1995,7 +1995,7 @@ const ManageGatheringsPage: React.FC = () => {
                 if (gathering?.attendanceType === 'headcount') {
                   return (
                     <div className="flex items-center justify-end space-x-3">
-                      <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                      <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                         Manage Occurrences
                       </div>
                       <button
@@ -2015,7 +2015,7 @@ const ManageGatheringsPage: React.FC = () => {
           
           {/* Delete Gathering Button - always shown when selections exist */}
           <div className="flex items-center justify-end space-x-3">
-            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+            <div className="bg-white dark:bg-gray-700 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
               {selectedGatherings.length === 1 ? "Delete Gathering" : "Delete Gatherings"}
             </div>
             <button

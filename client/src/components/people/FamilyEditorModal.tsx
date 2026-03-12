@@ -42,37 +42,37 @@ const FamilyEditorModal: React.FC<FamilyEditorModalProps> = ({
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
+        <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Edit Family</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Edit Family</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-              <div className="text-sm text-red-700">{error}</div>
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+              <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
             </div>
           )}
 
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Family Name</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Family Name</label>
                 <input 
                   type="text" 
                   value={familyEditor.familyName} 
                   onChange={(e) => setFamilyEditor(d => ({ ...d, familyName: e.target.value }))} 
-                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Family Type</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Family Type</label>
                 <select 
                   value={familyEditor.familyType} 
                   onChange={(e) => setFamilyEditor(d => ({ ...d, familyType: e.target.value as any }))} 
-                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                 >
                   <option value="regular">Regular</option>
                   <option value="local_visitor">Local Visitor</option>
@@ -82,14 +82,14 @@ const FamilyEditorModal: React.FC<FamilyEditorModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Members</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Members</label>
               <div className="flex items-center space-x-2 mb-2">
                 <input 
                   list="people-options" 
                   value={familyEditor.addMemberQuery} 
                   onChange={(e) => setFamilyEditor(d => ({ ...d, addMemberQuery: e.target.value }))} 
                   placeholder="Search people by name" 
-                  className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                  className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
                 />
                 <button 
                   onClick={() => {
@@ -110,9 +110,9 @@ const FamilyEditorModal: React.FC<FamilyEditorModalProps> = ({
                   <option key={p.id} value={`${p.firstName} ${p.lastName}`} />
                 ))}
               </datalist>
-              <div className="border border-gray-200 rounded-md p-3 max-h-64 overflow-y-auto">
+              <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3 max-h-64 overflow-y-auto">
                 {familyEditor.memberIds.length === 0 ? (
-                  <div className="text-sm text-gray-500">No members</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">No members</div>
                 ) : (
                   <div className="space-y-2">
                     {familyEditor.memberIds.map(id => {
@@ -133,7 +133,7 @@ const FamilyEditorModal: React.FC<FamilyEditorModalProps> = ({
                   </div>
                 )}
               </div>
-              <div className="text-xs text-gray-500 mt-2">
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                 Adding a member will move them into this family. Removing will detach them from any family.
               </div>
             </div>
@@ -141,7 +141,7 @@ const FamilyEditorModal: React.FC<FamilyEditorModalProps> = ({
             <div className="flex justify-end space-x-3 pt-2">
               <button 
                 onClick={onClose} 
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 disabled={isLoading}
               >
                 Cancel

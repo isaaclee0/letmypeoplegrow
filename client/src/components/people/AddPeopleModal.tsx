@@ -617,30 +617,30 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   return createPortal(
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
+        <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               {addModalMode === 'person' && 'Add New People'}
               {addModalMode === 'csv' && 'Upload TSV File'}
               {addModalMode === 'copy-paste' && 'Copy & Paste Data'}
             </h3>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
           {/* Mode Selection Tabs */}
-          <div className="border-b border-gray-200 mb-6">
+          <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
             <nav className="hidden md:flex -mb-px space-x-2 items-center" aria-label="Tabs">
               <button
                 onClick={() => setAddModalMode('person')}
                 className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                   addModalMode === 'person'
                     ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                 }`}
               >
                 Add People
@@ -650,7 +650,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                   addModalMode === 'csv'
                     ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                 }`}
               >
                 TSV Upload
@@ -660,7 +660,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 className={`whitespace-nowrap py-2 px-4 font-medium text-sm transition-all duration-300 rounded-t-lg ${
                   addModalMode === 'copy-paste'
                     ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                 }`}
               >
                 Copy & Paste
@@ -692,7 +692,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                         addModalMode === 'person'
                           ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                       }`}
                     >
                       <div className="flex items-center justify-center h-full">
@@ -713,7 +713,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                         addModalMode === 'csv'
                           ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                       }`}
                     >
                       <div className="flex items-center justify-center h-full">
@@ -734,7 +734,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                         addModalMode === 'copy-paste'
                           ? 'bg-primary-500 text-white'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                       }`}
                     >
                       <div className="flex items-center justify-center h-full">
@@ -748,8 +748,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
                 {/* Fade indicators */}
                 {showModalTabLeftFade && (
-                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 16 16" fill="currentColor">
                         <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
@@ -757,8 +757,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                   </div>
                 )}
                 {showModalTabRightFade && (
-                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
+                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
+                    <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 16 16" fill="currentColor">
                         <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
@@ -770,8 +770,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-              <div className="text-sm text-red-700">{error}</div>
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+              <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
             </div>
           )}
 
@@ -780,7 +780,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
             <form onSubmit={(e) => { e.preventDefault(); handleAddPeople(); }} className="space-y-4">
               {/* Person Type Selection */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Person Type
                 </label>
                 <div className="flex space-x-4">
@@ -791,9 +791,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       value="regular"
                       checked={addPeopleForm.personType === 'regular'}
                       onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                     />
-                    <span className="ml-2 text-sm text-gray-900">Regular Member</span>
+                    <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Regular Member</span>
                   </label>
                   <label className="flex items-center">
                     <input
@@ -802,9 +802,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       value="local_visitor"
                       checked={addPeopleForm.personType === 'local_visitor'}
                       onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                     />
-                    <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
+                    <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Local Visitor</span>
                   </label>
                   <label className="flex items-center">
                     <input
@@ -813,9 +813,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       value="traveller_visitor"
                       checked={addPeopleForm.personType === 'traveller_visitor'}
                       onChange={(e) => setAddPeopleForm({ ...addPeopleForm, personType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor' })}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                     />
-                    <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
+                    <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Traveller Visitor</span>
                   </label>
                 </div>
               </div>
@@ -823,14 +823,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               {/* Persons List */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Family Members (up to 10)
                   </label>
                 </div>
                 {addPeopleForm.persons.map((person, index) => (
-                  <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200' : ''}`}>
+                  <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' : ''}`}>
                     <div>
-                      <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700">
+                      <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         First Name {index + 1}
                       </label>
                       <input
@@ -838,13 +838,13 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         type="text"
                         value={person.firstName}
                         onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         placeholder="First name"
                         required
                       />
                     </div>
                     <div className="relative">
-                      <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700">
+                      <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Last Name {index + 1}
                       </label>
                       <input
@@ -853,7 +853,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                         value={person.lastName}
                         onChange={(e) => updatePerson(index, { lastName: e.target.value })}
                         disabled={person.lastNameUnknown || (index > 0 && person.fillLastNameFromAbove)}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 dark:disabled:bg-gray-600"
                         placeholder="Last name"
                       />
                       <div className="flex flex-col space-y-1 mt-1">
@@ -863,9 +863,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                             type="checkbox"
                             checked={person.lastNameUnknown}
                             onChange={(e) => updatePerson(index, { lastNameUnknown: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
-                          <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900">
+                          <label htmlFor={`personLastNameUnknown-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
                             Unknown
                           </label>
                         </div>
@@ -877,9 +877,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                               checked={person.fillLastNameFromAbove}
                               onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
                               disabled={person.lastNameUnknown}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                             />
-                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
                               Fill from above
                             </label>
                           </div>
@@ -902,9 +902,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                           type="checkbox"
                           checked={person.isChild}
                           onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                         />
-                        <span className="ml-2 text-sm text-gray-700">Child</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">Child</span>
                       </label>
                     </div>
                   </div>
@@ -917,7 +917,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                   <button
                     type="button"
                     onClick={addPerson}
-                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200"
+                    className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 dark:text-primary-300 bg-primary-100 dark:bg-primary-900/30 hover:bg-primary-200 dark:hover:bg-primary-900/50"
                   >
                     <PlusIcon className="h-4 w-4 mr-2" />
                     Add Another Person
@@ -927,22 +927,22 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
               {/* Family Name Display */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Family Name
                 </label>
-                <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                <div className="mt-1 p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-900 font-medium">
+                    <span className="text-sm text-gray-900 dark:text-gray-100 font-medium">
                       {computedFamilyName || 'Enter family member names above'}
                     </span>
                     {computedFamilyName && (
-                      <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                      <span className="text-xs text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded">
                         Auto-generated
                       </span>
                     )}
                   </div>
                 </div>
-                <p className="mt-1 text-sm text-gray-500">
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                   Family name is automatically generated from the member names above.
                 </p>
               </div>
@@ -950,7 +950,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               {/* Gathering Assignments - only for regular members */}
               {addPeopleForm.personType === 'regular' && gatheringTypes.length > 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Assign to Gatherings (Optional)
                   </label>
                   <div className="grid grid-cols-2 gap-2">
@@ -967,9 +967,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                                 [gathering.id]: e.target.checked
                               }
                             })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
-                          <span className="ml-2 text-sm text-gray-900">{gathering.name}</span>
+                          <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">{gathering.name}</span>
                         </label>
                       ))}
                   </div>
@@ -979,14 +979,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               {/* Notes field - only for visitors */}
               {(addPeopleForm.personType === 'local_visitor' || addPeopleForm.personType === 'traveller_visitor') && (
                 <div>
-                  <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Notes
                   </label>
                   <textarea
                     id="notes"
                     value={addPeopleForm.notes}
                     onChange={(e) => setAddPeopleForm({ ...addPeopleForm, notes: e.target.value })}
-                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="Any additional notes (optional)"
                     rows={3}
                   />
@@ -997,7 +997,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1017,7 +1017,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
             <div className="space-y-4">
               {/* TSV Analysis section - continuing from previous code */}
               {tsvAnalysis && (
-                <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-4">
                   <div className="flex">
                     <div className="flex-shrink-0">
                       <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
@@ -1025,10 +1025,10 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       </svg>
                     </div>
                     <div className="ml-3">
-                      <h3 className="text-sm font-medium text-blue-800">
+                      <h3 className="text-sm font-medium text-blue-800 dark:text-blue-300">
                         Upload Analysis
                       </h3>
-                      <div className="mt-2 text-sm text-blue-700">
+                      <div className="mt-2 text-sm text-blue-700 dark:text-blue-300">
                         <p>Found {tsvAnalysis.totalRows} rows in your TSV file:</p>
                         <ul className="mt-2 space-y-1">
                           {tsvAnalysis.newPeople > 0 && (
@@ -1060,7 +1060,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
               {/* New People Warning */}
               {tsvAnalysis && tsvAnalysis.newPeople > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
+                <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-md p-4">
                   <div className="flex">
                     <div className="flex-shrink-0">
                       <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
@@ -1068,10 +1068,10 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       </svg>
                     </div>
                     <div className="ml-3">
-                      <h3 className="text-sm font-medium text-amber-800">
+                      <h3 className="text-sm font-medium text-amber-800 dark:text-amber-300">
                         Adding New People
                       </h3>
-                      <div className="mt-2 text-sm text-amber-700">
+                      <div className="mt-2 text-sm text-amber-700 dark:text-amber-300">
                         <p>
                           <strong>{tsvAnalysis.newPeople} new people</strong> will be added to your system.
                           Make sure these are not duplicates of existing people.
@@ -1135,7 +1135,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               )}
 
               <div>
-                <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="csvFile" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   Select TSV File
                 </label>
                 <input
@@ -1152,26 +1152,26 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       reader.readAsText(file);
                     }
                   }}
-                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                 />
               </div>
 
               {csvData && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Preview
                   </label>
                   <textarea
                     value={csvData}
                     onChange={(e) => setCsvData(e.target.value)}
                     rows={6}
-                    className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                     placeholder="CSV data will appear here..."
                   />
                 </div>
               )}
 
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-gray-500 dark:text-gray-400">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <p>Expected TSV format:</p>
                   <button
@@ -1197,14 +1197,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                     Download template
                   </button>
                 </div>
-                <div className="mt-1 bg-gray-50 p-3 rounded border border-gray-200 overflow-x-auto">
+                <div className="mt-1 bg-gray-50 dark:bg-gray-700 p-3 rounded border border-gray-200 dark:border-gray-600 overflow-x-auto">
                   <table className="w-full text-xs font-mono">
                     <thead>
                       <tr className="border-b border-gray-300">
-                        <th className="text-left py-1 px-2 font-semibold text-gray-700">FIRST NAME</th>
-                        <th className="text-left py-1 px-2 font-semibold text-gray-700">LAST NAME</th>
-                        <th className="text-left py-1 px-2 font-semibold text-gray-700">FAMILY NAME</th>
-                        <th className="text-left py-1 px-2 font-semibold text-gray-700">GATHERINGS</th>
+                        <th className="text-left py-1 px-2 font-semibold text-gray-700 dark:text-gray-300">FIRST NAME</th>
+                        <th className="text-left py-1 px-2 font-semibold text-gray-700 dark:text-gray-300">LAST NAME</th>
+                        <th className="text-left py-1 px-2 font-semibold text-gray-700 dark:text-gray-300">FAMILY NAME</th>
+                        <th className="text-left py-1 px-2 font-semibold text-gray-700 dark:text-gray-300">GATHERINGS</th>
                         <th className="text-left py-1 px-2 font-semibold text-gray-400">ADULT/CHILD</th>
                       </tr>
                     </thead>
@@ -1244,7 +1244,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -1263,7 +1263,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           {addModalMode === 'copy-paste' && (
             <div className="space-y-4">
               <div>
-                <label htmlFor="copyPasteData" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="copyPasteData" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   Paste your data here
                 </label>
                 <textarea
@@ -1271,12 +1271,12 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                   value={copyPasteData}
                   onChange={(e) => setCopyPasteData(e.target.value)}
                   rows={10}
-                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                   placeholder="Paste data from Excel, Google Sheets, or any tabular format..."
                 />
               </div>
 
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-gray-500 dark:text-gray-400">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <p>Expected format (tab or comma separated):</p>
                   <button
@@ -1302,14 +1302,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                     Download template
                   </button>
                 </div>
-                <div className="mt-1 bg-gray-50 border border-gray-200 rounded overflow-hidden">
+                <div className="mt-1 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded overflow-hidden">
                   <table className="w-full text-xs">
-                    <thead className="bg-gray-100">
+                    <thead className="bg-gray-100 dark:bg-gray-600">
                       <tr>
-                        <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FIRST NAME</th>
-                        <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">LAST NAME</th>
-                        <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">FAMILY NAME</th>
-                        <th className="px-2 py-1 text-left font-medium text-gray-700 border-r border-gray-200">GATHERINGS</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-600">FIRST NAME</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-600">LAST NAME</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-600">FAMILY NAME</th>
+                        <th className="px-2 py-1 text-left font-medium text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-600">GATHERINGS</th>
                         <th className="px-2 py-1 text-left font-medium text-gray-400">ADULT/CHILD</th>
                       </tr>
                     </thead>
@@ -1351,7 +1351,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>

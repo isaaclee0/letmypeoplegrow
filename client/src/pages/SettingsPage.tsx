@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
+import { usersAPI, integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
 import BadgeIcon, { BADGE_ICON_OPTIONS, BadgeIconType } from '../components/icons/BadgeIcon';
@@ -17,14 +17,24 @@ import {
   ExclamationTriangleIcon,
   LinkSlashIcon,
   MapPinIcon,
-  UserGroupIcon,
+  UserIcon,
   ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
-  const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'system' | 'integrations' | 'visitors' | 'data'>('general');
+  const { user, updateUser } = useAuth();
+  const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'integrations' | 'data'>('general');
+
+  // My Info (profile) state
+  const [profileFirstName, setProfileFirstName] = useState('');
+  const [profileLastName, setProfileLastName] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profileMobileNumber, setProfileMobileNumber] = useState('');
+  const [profilePrimaryContactMethod, setProfilePrimaryContactMethod] = useState<'email' | 'sms'>('email');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileSuccess, setProfileSuccess] = useState('');
+  const [profileError, setProfileError] = useState('');
 
   // Elvanto integration state
   const [elvantoStatus, setElvantoStatus] = useState<{
@@ -124,8 +134,7 @@ const SettingsPage: React.FC = () => {
 
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
-    { id: 'system', name: 'System Info', icon: InformationCircleIcon },
-    ...(user?.role === 'admin' ? [{ id: 'visitors', name: 'Visitors', icon: UserGroupIcon }] : []),
+    { id: 'myinfo', name: 'My Info', icon: UserIcon },
     ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'data', name: 'Data', icon: ArrowDownTrayIcon }] : []),
   ];
@@ -394,8 +403,8 @@ const SettingsPage: React.FC = () => {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
-    if (tabParam && ['general', 'system', 'integrations', 'visitors', 'data'].includes(tabParam)) {
-      setActiveTab(tabParam as 'general' | 'system' | 'integrations' | 'visitors' | 'data');
+    if (tabParam && ['general', 'myinfo', 'integrations', 'data'].includes(tabParam)) {
+      setActiveTab(tabParam as 'general' | 'myinfo' | 'integrations' | 'data');
     }
 
     // Handle Planning Center OAuth callback
@@ -413,9 +422,9 @@ const SettingsPage: React.FC = () => {
     }
   }, [fetchPlanningCenterStatus]);
 
-  // Load visitor config when visitors tab is active
+  // Load visitor config when general tab is active (visitor settings are in general)
   useEffect(() => {
-    if (activeTab === 'visitors' && user?.role === 'admin') {
+    if (activeTab === 'general' && user?.role === 'admin') {
       visitorConfigAPI.getConfig().then(res => {
         setVisitorConfig(res.data);
       }).catch(err => {
@@ -491,21 +500,65 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const getSystemInfo = () => {
-    return {
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      language: navigator.language,
-      cookieEnabled: navigator.cookieEnabled,
-      onLine: navigator.onLine,
-      screenResolution: `${window.screen.width}x${window.screen.height}`,
-      windowSize: `${window.innerWidth}x${window.innerHeight}`,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      currentTime: new Date().toISOString(),
-    };
-  };
+  // Load profile data when My Info tab is active
+  useEffect(() => {
+    if (activeTab === 'myinfo' && user) {
+      setProfileFirstName(user.firstName || '');
+      setProfileLastName(user.lastName || '');
+      setProfileEmail(user.email || '');
+      setProfileMobileNumber(user.mobileNumber || '');
+      setProfilePrimaryContactMethod(user.primaryContactMethod);
+    }
+  }, [activeTab, user]);
 
-  const systemInfo = getSystemInfo();
+  const handleProfileSave = async () => {
+    if (!user) return;
+    setProfileError('');
+    setProfileSuccess('');
+
+    if (!profileFirstName || !profileLastName) {
+      setProfileError('First name and last name are required');
+      return;
+    }
+    if (profilePrimaryContactMethod === 'email' && !profileEmail) {
+      setProfileError('Email is required when primary contact method is email');
+      return;
+    }
+    if (profilePrimaryContactMethod === 'sms' && !profileMobileNumber) {
+      setProfileError('Mobile number is required when primary contact method is SMS');
+      return;
+    }
+    if (!profileEmail && !profileMobileNumber) {
+      setProfileError('Provide at least an email or a mobile number');
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const payload = {
+        firstName: profileFirstName,
+        lastName: profileLastName,
+        email: profileEmail === '' ? null : profileEmail,
+        mobileNumber: profileMobileNumber === '' ? null : profileMobileNumber,
+        primaryContactMethod: profilePrimaryContactMethod,
+      };
+      await usersAPI.updateMe(payload);
+      updateUser({
+        firstName: profileFirstName,
+        lastName: profileLastName,
+        email: profileEmail || undefined,
+        mobileNumber: profileMobileNumber || undefined,
+        primaryContactMethod: profilePrimaryContactMethod,
+      });
+      setProfileSuccess('Profile updated');
+    } catch (err: any) {
+      const serverErrors = err.response?.data?.errors;
+      const message = err.response?.data?.error || (Array.isArray(serverErrors) && serverErrors[0]?.msg) || 'Failed to update profile';
+      setProfileError(message);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   // Handle Elvanto connect with API key
   const handleElvantoConnect = async () => {
@@ -643,17 +696,17 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-          <p className="mt-1 text-sm text-gray-600">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
             Manage your account settings and system preferences
           </p>
         </div>
 
         {/* Tabs */}
-        <div className="border-b border-gray-200">
+        <div className="border-b border-gray-200 dark:border-gray-700">
           <nav className="-mb-px flex space-x-8 px-6">
             {tabs.map((tab) => (
               <button
@@ -662,7 +715,7 @@ const SettingsPage: React.FC = () => {
                 className={`py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === tab.id
                     ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
                 }`}
               >
                 <tab.icon className="inline-block w-5 h-5 mr-2" />
@@ -676,48 +729,24 @@ const SettingsPage: React.FC = () => {
         <div className="p-6">
           {activeTab === 'general' && (
             <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">User Information</h3>
-                <div className="mt-4 bg-gray-50 rounded-lg p-4">
-                  <dl className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Name</dt>
-                      <dd className="mt-1 text-sm text-gray-900">
-                        {user?.firstName} {user?.lastName}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Email</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{user?.email}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Role</dt>
-                      <dd className="mt-1 text-sm text-gray-900 capitalize">
-                        {user?.role?.replace('_', ' ')}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-
               {/* Church Location */}
               {user?.role === 'admin' && (
                 <div>
-                  <h3 className="text-lg font-medium text-gray-900">Church Location</h3>
-                  <p className="mt-1 text-sm text-gray-600">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Church Location</h3>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                     Set your church's location to enable weather and holiday-aware attendance predictions.
                   </p>
 
-                  <div className="mt-4 bg-gray-50 rounded-lg p-4">
+                  <div className="mt-4 bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                     {locationName && (
-                      <div className="flex items-center mb-4 text-sm text-gray-900">
+                      <div className="flex items-center mb-4 text-sm text-gray-900 dark:text-gray-100">
                         <MapPinIcon className="h-5 w-5 text-gray-400 mr-2 flex-shrink-0" />
                         <span className="font-medium">{locationName}</span>
                       </div>
                     )}
 
                     <div className="relative" ref={locationDropdownRef}>
-                      <label htmlFor="location-search" className="block text-sm font-medium text-gray-700">
+                      <label htmlFor="location-search" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         {locationName ? 'Change location' : 'Search for your city'}
                       </label>
                       <div className="mt-1 relative">
@@ -729,7 +758,7 @@ const SettingsPage: React.FC = () => {
                           onFocus={() => {
                             if (locationResults.length > 0) setShowLocationDropdown(true);
                           }}
-                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pr-10"
+                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pr-10"
                           placeholder="e.g. Sydney, London, New York..."
                           disabled={locationSaving}
                         />
@@ -742,17 +771,17 @@ const SettingsPage: React.FC = () => {
 
                       {/* Dropdown results */}
                       {showLocationDropdown && locationResults.length > 0 && (
-                        <div className="absolute z-10 mt-1 w-full bg-white shadow-lg rounded-md border border-gray-200 max-h-60 overflow-auto">
+                        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-800 shadow-lg rounded-md border border-gray-200 dark:border-gray-700 max-h-60 overflow-auto">
                           {locationResults.map((result, idx) => (
                             <button
                               key={idx}
                               onClick={() => handleLocationSelect(result)}
-                              className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                              className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0 transition-colors"
                             >
-                              <div className="text-sm font-medium text-gray-900">
+                              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                 {result.name}
                               </div>
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
                                 {[result.admin1, result.country].filter(Boolean).join(', ')}
                               </div>
                             </button>
@@ -769,7 +798,7 @@ const SettingsPage: React.FC = () => {
                     )}
 
                     {locationError && (
-                      <p className="mt-2 text-sm text-red-600">{locationError}</p>
+                      <p className="mt-2 text-sm text-red-600 dark:text-red-400">{locationError}</p>
                     )}
                   </div>
                 </div>
@@ -779,22 +808,22 @@ const SettingsPage: React.FC = () => {
               {user?.role === 'admin' && (
                 <div className="space-y-6">
                   <div>
-                    <h3 className="text-lg font-medium text-gray-900">Default Badge Settings</h3>
-                    <p className="mt-1 text-sm text-gray-600">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Default Badge Settings</h3>
+                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                       Configure default badges for children and adults. Badges show an icon by default, with optional text.
                     </p>
                   </div>
 
                   {/* Child Badge Settings */}
-                  <div className="bg-blue-50 rounded-lg p-4">
-                    <h4 className="text-md font-medium text-gray-900 mb-3">Default Child Badge</h4>
-                    <p className="text-sm text-gray-600 mb-4">
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
+                    <h4 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-3">Default Child Badge</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                       Select "None" to remove badges from children unless they have custom text.
                     </p>
                     <div className="space-y-4">
                       {/* Badge Icon */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Badge Icon</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Badge Icon</label>
                         <div className="grid grid-cols-6 gap-2">
                           <button
                             type="button"
@@ -803,12 +832,12 @@ const SettingsPage: React.FC = () => {
                             className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
                               !childBadgeIcon
                                 ? 'border-primary-500 bg-primary-50'
-                                : 'border-gray-200 hover:border-gray-300'
+                                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                             } disabled:opacity-50 disabled:cursor-not-allowed`}
                             title="None"
                           >
                             <XMarkIcon className="w-5 h-5 text-gray-400" />
-                            <span className="text-xs mt-1 text-gray-600">None</span>
+                            <span className="text-xs mt-1 text-gray-600 dark:text-gray-400">None</span>
                           </button>
                           {BADGE_ICON_OPTIONS.map((option) => (
                             <button
@@ -819,12 +848,12 @@ const SettingsPage: React.FC = () => {
                               className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
                                 childBadgeIcon === option.value
                                   ? 'border-primary-500 bg-primary-50'
-                                  : 'border-gray-200 hover:border-gray-300'
+                                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                               } disabled:opacity-50 disabled:cursor-not-allowed`}
                               title={option.label}
                             >
-                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700" />
-                              <span className="text-xs mt-1 text-gray-600 truncate w-full text-center">{option.label}</span>
+                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                              <span className="text-xs mt-1 text-gray-600 dark:text-gray-400 truncate w-full text-center">{option.label}</span>
                             </button>
                           ))}
                         </div>
@@ -832,7 +861,7 @@ const SettingsPage: React.FC = () => {
 
                       {/* Badge Text (Optional) */}
                       <div>
-                        <label htmlFor="child-badge-text" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="child-badge-text" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Badge Text (Optional)
                         </label>
                         <input
@@ -841,7 +870,7 @@ const SettingsPage: React.FC = () => {
                           value={childBadgeText}
                           onChange={(e) => setChildBadgeText(e.target.value)}
                           disabled={defaultBadgeSaving}
-                          className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="block w-full max-w-xs rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                           placeholder="Leave empty for icon only"
                           maxLength={50}
                         />
@@ -849,7 +878,7 @@ const SettingsPage: React.FC = () => {
 
                       {/* Badge Color */}
                       <div>
-                        <label htmlFor="child-badge-color" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="child-badge-color" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Background Color
                         </label>
                         <div className="flex items-center space-x-3">
@@ -859,7 +888,7 @@ const SettingsPage: React.FC = () => {
                             value={childBadgeColor}
                             onChange={(e) => setChildBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="h-10 w-20 rounded border border-gray-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           <input
                             type="text"
@@ -874,7 +903,7 @@ const SettingsPage: React.FC = () => {
                             type="button"
                             onClick={handleResetChildBadge}
                             disabled={defaultBadgeSaving}
-                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Reset
                           </button>
@@ -884,7 +913,7 @@ const SettingsPage: React.FC = () => {
                       {/* Preview */}
                       {(childBadgeIcon || childBadgeText) && (
                         <div className="flex items-center space-x-2">
-                          <span className="text-xs text-gray-700 font-medium">Preview:</span>
+                          <span className="text-xs text-gray-700 dark:text-gray-300 font-medium">Preview:</span>
                           <span
                             className={`flex items-center space-x-1 shadow-sm ${
                               childBadgeText ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
@@ -904,15 +933,15 @@ const SettingsPage: React.FC = () => {
                   </div>
 
                   {/* Adult Badge Settings */}
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <h4 className="text-md font-medium text-gray-900 mb-3">Default Adult Badge (Optional)</h4>
-                    <p className="text-sm text-gray-600 mb-4">
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                    <h4 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-3">Default Adult Badge (Optional)</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                       By default, adults have no badge. You can optionally configure a default adult badge.
                     </p>
                     <div className="space-y-4">
                       {/* Badge Icon */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Badge Icon</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Badge Icon</label>
                         <div className="grid grid-cols-6 gap-2">
                           <button
                             type="button"
@@ -921,12 +950,12 @@ const SettingsPage: React.FC = () => {
                             className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
                               !adultBadgeIcon
                                 ? 'border-primary-500 bg-primary-50'
-                                : 'border-gray-200 hover:border-gray-300'
+                                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                             } disabled:opacity-50 disabled:cursor-not-allowed`}
                             title="None"
                           >
                             <XMarkIcon className="w-5 h-5 text-gray-400" />
-                            <span className="text-xs mt-1 text-gray-600">None</span>
+                            <span className="text-xs mt-1 text-gray-600 dark:text-gray-400">None</span>
                           </button>
                           {BADGE_ICON_OPTIONS.filter(option => option.value !== 'person').map((option) => (
                             <button
@@ -937,12 +966,12 @@ const SettingsPage: React.FC = () => {
                               className={`flex flex-col items-center justify-center p-2 rounded-md border-2 transition-all ${
                                 adultBadgeIcon === option.value
                                   ? 'border-primary-500 bg-primary-50'
-                                  : 'border-gray-200 hover:border-gray-300'
+                                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                               } disabled:opacity-50 disabled:cursor-not-allowed`}
                               title={option.label}
                             >
-                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700" />
-                              <span className="text-xs mt-1 text-gray-600 truncate w-full text-center">{option.label}</span>
+                              <BadgeIcon type={option.value as BadgeIconType} className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                              <span className="text-xs mt-1 text-gray-600 dark:text-gray-400 truncate w-full text-center">{option.label}</span>
                             </button>
                           ))}
                         </div>
@@ -951,7 +980,7 @@ const SettingsPage: React.FC = () => {
                       {/* Badge Text (Optional) */}
                       {adultBadgeIcon && (
                         <div>
-                          <label htmlFor="adult-badge-text" className="block text-sm font-medium text-gray-700 mb-2">
+                          <label htmlFor="adult-badge-text" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Badge Text (Optional)
                           </label>
                           <input
@@ -960,7 +989,7 @@ const SettingsPage: React.FC = () => {
                             value={adultBadgeText}
                             onChange={(e) => setAdultBadgeText(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="block w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="block w-full max-w-xs rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             placeholder="Leave empty for icon only"
                             maxLength={50}
                           />
@@ -969,7 +998,7 @@ const SettingsPage: React.FC = () => {
 
                       {/* Badge Color */}
                       <div>
-                        <label htmlFor="adult-badge-color" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="adult-badge-color" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Background Color
                         </label>
                         <div className="flex items-center space-x-3">
@@ -979,7 +1008,7 @@ const SettingsPage: React.FC = () => {
                             value={adultBadgeColor || '#c5aefb'}
                             onChange={(e) => setAdultBadgeColor(e.target.value)}
                             disabled={defaultBadgeSaving}
-                            className="h-10 w-20 rounded border border-gray-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-10 w-20 rounded border border-gray-300 dark:border-gray-600 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           <input
                             type="text"
@@ -994,7 +1023,7 @@ const SettingsPage: React.FC = () => {
                             type="button"
                             onClick={handleResetAdultBadge}
                             disabled={defaultBadgeSaving}
-                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Reset
                           </button>
@@ -1004,7 +1033,7 @@ const SettingsPage: React.FC = () => {
                       {/* Preview */}
                       {adultBadgeIcon && (
                         <div className="flex items-center space-x-2">
-                          <span className="text-xs text-gray-700 font-medium">Preview:</span>
+                          <span className="text-xs text-gray-700 dark:text-gray-300 font-medium">Preview:</span>
                           <span
                             className={`flex items-center space-x-1 shadow-sm ${
                               adultBadgeText ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
@@ -1023,7 +1052,7 @@ const SettingsPage: React.FC = () => {
 
                   {/* Save Button */}
                   {hasUnsavedBadgeChanges && (
-                    <div className="pt-4 border-t border-gray-200">
+                    <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
                       <button
                         type="button"
                         onClick={handleSaveBadgeSettings}
@@ -1044,151 +1073,153 @@ const SettingsPage: React.FC = () => {
 
                   {/* Status messages */}
                   {defaultBadgeSuccess && (
-                    <p className="text-sm text-green-600 flex items-center">
+                    <p className="text-sm text-green-600 dark:text-green-400 flex items-center">
                       <CheckCircleIcon className="h-4 w-4 mr-1" />
                       Badge settings saved successfully!
                     </p>
                   )}
 
                   {defaultBadgeError && (
-                    <p className="text-sm text-red-600">{defaultBadgeError}</p>
+                    <p className="text-sm text-red-600 dark:text-red-400">{defaultBadgeError}</p>
                   )}
+                </div>
+              )}
+
+              {/* Visitor Settings - admin only */}
+              {user?.role === 'admin' && (
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Visitor Settings</h3>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    Configure how long visitors appear in recent visitor lists.
+                  </p>
+
+                  <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Local Visitor Limit
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="52"
+                          value={visitorConfig.localVisitorServiceLimit}
+                          onChange={(e) => setVisitorConfig(prev => ({
+                            ...prev,
+                            localVisitorServiceLimit: parseInt(e.target.value) || 1
+                          }))}
+                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Consecutive absences before a local visitor is hidden from recent lists.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Traveller Visitor Limit
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="52"
+                          value={visitorConfig.travellerVisitorServiceLimit}
+                          onChange={(e) => setVisitorConfig(prev => ({
+                            ...prev,
+                            travellerVisitorServiceLimit: parseInt(e.target.value) || 1
+                          }))}
+                          className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Consecutive absences before a traveller visitor is hidden from recent lists.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end mt-6 space-x-3">
+                      {visitorConfigSuccess && (
+                        <span className="text-sm text-green-600 dark:text-green-400 flex items-center">
+                          <CheckCircleIcon className="h-4 w-4 mr-1" />
+                          Saved
+                        </span>
+                      )}
+                      <button
+                        onClick={saveVisitorConfig}
+                        disabled={visitorConfigLoading}
+                        className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                      >
+                        {visitorConfigLoading ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           )}
 
-          {activeTab === 'system' && (
+          {/* My Info Tab */}
+          {activeTab === 'myinfo' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-lg font-medium text-gray-900">System Information</h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Technical details about your browser and system environment.
-                </p>
-                
-                <div className="mt-4 bg-gray-50 rounded-lg p-4">
-                  <dl className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
-                    {Object.entries(systemInfo).map(([key, value]) => (
-                      <div key={key}>
-                        <dt className="text-sm font-medium text-gray-500">
-                          {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-                        </dt>
-                        <dd className="mt-1 text-sm text-gray-900 break-all">
-                          {typeof value === 'boolean' ? (
-                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                              value 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-red-100 text-red-800'
-                            }`}>
-                              {value ? 'Yes' : 'No'}
-                            </span>
-                          ) : (
-                            value
-                          )}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              </div>
-
-              {/* Manual Update Section */}
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">App Updates</h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Force check for app updates (useful for iOS devices).
-                </p>
-                
-                <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <h4 className="text-sm font-medium text-blue-900">Manual Update Check</h4>
-                      <p className="mt-1 text-sm text-blue-700">
-                        If you're not seeing automatic updates, you can manually check for and apply updates here.
-                      </p>
-                    </div>
-                    <div className="ml-4">
-                      <button
-                        onClick={() => window.location.reload()}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                      >
-                        <ArrowPathIcon className="h-4 w-4 mr-2" />
-                        Refresh App
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'visitors' && user?.role === 'admin' && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">Visitor Settings</h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Configure how long visitors appear in recent visitor lists. These limits control both the Attendance page (based on absences from services) and the People page (based on weeks from the last weekend).
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">My Information</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  Update your personal details and contact preferences.
                 </p>
               </div>
 
-              <div className="border border-gray-200 rounded-lg p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {profileError && (
+                <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-400">{profileError}</div>
+              )}
+              {profileSuccess && (
+                <div className="rounded-md bg-green-50 dark:bg-green-900/20 p-3 text-sm text-green-700 dark:text-green-400">{profileSuccess}</div>
+              )}
+
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Local Visitor Limit
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="52"
-                      value={visitorConfig.localVisitorServiceLimit}
-                      onChange={(e) => setVisitorConfig(prev => ({
-                        ...prev,
-                        localVisitorServiceLimit: parseInt(e.target.value) || 1
-                      }))}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Number of consecutive absences before a local visitor is hidden from recent lists.
-                    </p>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
+                    <input className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={profileFirstName} onChange={e => setProfileFirstName(e.target.value)} />
                   </div>
-
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Traveller Visitor Limit
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="52"
-                      value={visitorConfig.travellerVisitorServiceLimit}
-                      onChange={(e) => setVisitorConfig(prev => ({
-                        ...prev,
-                        travellerVisitorServiceLimit: parseInt(e.target.value) || 1
-                      }))}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Number of consecutive absences before a traveller visitor is hidden from recent lists.
-                    </p>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
+                    <input className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={profileLastName} onChange={e => setProfileLastName(e.target.value)} />
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end mt-6 space-x-3">
-                  {visitorConfigSuccess && (
-                    <span className="text-sm text-green-600 flex items-center">
-                      <CheckCircleIcon className="h-4 w-4 mr-1" />
-                      Saved
-                    </span>
-                  )}
-                  <button
-                    onClick={saveVisitorConfig}
-                    disabled={visitorConfigLoading}
-                    className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                  >
-                    {visitorConfigLoading ? 'Saving...' : 'Save'}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Primary Contact Method</label>
+                  <select className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={profilePrimaryContactMethod} onChange={e => setProfilePrimaryContactMethod(e.target.value as 'email' | 'sms')}>
+                    <option value="email">Email</option>
+                    <option value="sms">SMS</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email (optional)</label>
+                  <input type="email" className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={profileEmail} onChange={e => setProfileEmail(e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Mobile Number (optional)</label>
+                  <input type="tel" className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={profileMobileNumber} onChange={e => setProfileMobileNumber(e.target.value)} />
+                </div>
+
+                <div className="flex justify-end">
+                  <button disabled={profileSaving} onClick={handleProfileSave} className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-60">
+                    {profileSaving ? 'Saving...' : 'Save Changes'}
                   </button>
                 </div>
+              </div>
+
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                <dl className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
+                  <div>
+                    <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Role</dt>
+                    <dd className="mt-1 text-sm text-gray-900 dark:text-gray-100 capitalize">
+                      {user?.role?.replace('_', ' ')}
+                    </dd>
+                  </div>
+                </dl>
               </div>
             </div>
           )}
@@ -1196,31 +1227,31 @@ const SettingsPage: React.FC = () => {
           {activeTab === 'integrations' && user?.role === 'admin' && (
             <div className="space-y-6">
               <div>
-                <h3 className="text-lg font-medium text-gray-900">External Integrations</h3>
-                <p className="mt-1 text-sm text-gray-600">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">External Integrations</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                   Connect your account with external services to enhance your church management experience.
                 </p>
 
                 <div className="mt-6 space-y-6">
                   {/* Elvanto Integration */}
-                  <div className="border border-gray-200 rounded-lg p-6">
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                     {/* Connection Status Header */}
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
                         <div className="flex-shrink-0">
-                          <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                          <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                             </svg>
                           </div>
                         </div>
                         <div>
-                          <h4 className="text-lg font-medium text-gray-900">Elvanto</h4>
-                          <p className="text-sm text-gray-600">
+                          <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100">Elvanto</h4>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
                             Import people and families from your Elvanto account.
                           </p>
                           {elvantoStatus.connected && (
-                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center">
                               <CheckCircleIcon className="w-3 h-3 mr-1" />
                               {elvantoStatus.elvantoAccount || 'Connected'}
                             </p>
@@ -1232,19 +1263,19 @@ const SettingsPage: React.FC = () => {
                           <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
                         ) : elvantoStatus.connected ? (
                               <>
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
                                   <ShieldCheckIcon className="w-3 h-3 mr-1" />
                                   Connected
                                 </span>
                                 <button
                                   onClick={handleElvantoDisconnect}
-                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                                 >
                                   Disconnect
                                 </button>
                               </>
                         ) : (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
                                 <ShieldExclamationIcon className="w-3 h-3 mr-1" />
                                 Not Connected
                               </span>
@@ -1254,12 +1285,12 @@ const SettingsPage: React.FC = () => {
 
                     {/* API Key Connection Form - Only show when not connected */}
                     {!elvantoStatus.connected && !elvantoStatus.loading && (
-                      <div className="border-t border-gray-200 pt-6">
+                      <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
                         <div className="flex items-center justify-between mb-4">
-                          <h5 className="text-md font-medium text-gray-900">Connect with API Key</h5>
+                          <h5 className="text-md font-medium text-gray-900 dark:text-gray-100">Connect with API Key</h5>
                           <button
                             onClick={() => setShowApiKeyGuide(true)}
-                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                           >
                             <InformationCircleIcon className="h-4 w-4 mr-1.5" />
                             How to get API Key
@@ -1268,7 +1299,7 @@ const SettingsPage: React.FC = () => {
                         
                         <div className="space-y-4">
                           <div>
-                            <label htmlFor="elvanto-api-key" className="block text-sm font-medium text-gray-700">
+                            <label htmlFor="elvanto-api-key" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                               Elvanto API Key
                             </label>
                             <input
@@ -1277,21 +1308,21 @@ const SettingsPage: React.FC = () => {
                               value={elvantoApiKey}
                               onChange={(e) => setElvantoApiKey(e.target.value)}
                               onKeyPress={(e) => e.key === 'Enter' && handleElvantoConnect()}
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                               placeholder="Paste your Elvanto API key here"
                             />
-                            <p className="mt-1 text-xs text-gray-500">
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                               Your API key is stored securely and only used to access your Elvanto data.
                             </p>
                           </div>
 
                           {/* Connection Error */}
                           {connectionError && (
-                            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                               <div className="flex">
                                 <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
                                 <div className="ml-2">
-                                  <p className="text-sm text-red-700">{connectionError}</p>
+                                  <p className="text-sm text-red-700 dark:text-red-400">{connectionError}</p>
                                 </div>
                               </div>
                             </div>
@@ -1320,14 +1351,14 @@ const SettingsPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="mt-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                       <div className="flex">
                         <div className="flex-shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-blue-400" />
                         </div>
                         <div className="ml-3">
-                          <h4 className="text-sm font-medium text-blue-800">What you'll get</h4>
-                          <div className="mt-2 text-sm text-blue-700">
+                          <h4 className="text-sm font-medium text-blue-800 dark:text-blue-300">What you'll get</h4>
+                          <div className="mt-2 text-sm text-blue-700 dark:text-blue-400">
                             <ul className="list-disc list-inside space-y-1">
                               <li>Sync people data between systems</li>
                               <li>Automated attendance tracking</li>
@@ -1340,24 +1371,24 @@ const SettingsPage: React.FC = () => {
                   </div>
 
                   {/* AI Insights Integration */}
-                  <div className="border border-gray-200 rounded-lg p-6">
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                     {/* AI Status Header */}
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
                         <div className="flex-shrink-0">
-                          <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                          <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                             </svg>
                           </div>
                         </div>
                         <div>
-                          <h4 className="text-lg font-medium text-gray-900">AI Insights</h4>
-                          <p className="text-sm text-gray-600">
+                          <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100">AI Insights</h4>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
                             Ask questions about your attendance data in plain language.
                           </p>
                           {aiStatus.configured && (
-                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center">
                               <CheckCircleIcon className="w-3 h-3 mr-1" />
                               Connected via {aiStatus.provider === 'openai' ? 'OpenAI' : 'Anthropic'}
                             </p>
@@ -1369,19 +1400,19 @@ const SettingsPage: React.FC = () => {
                           <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
                         ) : aiStatus.configured ? (
                           <>
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
                               <ShieldCheckIcon className="w-3 h-3 mr-1" />
                               Connected
                             </span>
                             <button
                               onClick={() => setShowAiDisconnectModal(true)}
-                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
                             >
                               Disconnect
                             </button>
                           </>
                         ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
                             <ShieldExclamationIcon className="w-3 h-3 mr-1" />
                             Not Connected
                           </span>
@@ -1391,25 +1422,25 @@ const SettingsPage: React.FC = () => {
 
                     {/* AI Config Form - Only show when not connected */}
                     {!aiStatus.configured && !aiStatus.loading && (
-                      <div className="border-t border-gray-200 pt-6">
-                        <h5 className="text-md font-medium text-gray-900 mb-4">Connect your AI provider</h5>
+                      <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                        <h5 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-4">Connect your AI provider</h5>
                         <div className="space-y-4">
                           <div>
-                            <label htmlFor="ai-provider" className="block text-sm font-medium text-gray-700">
+                            <label htmlFor="ai-provider" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                               AI Provider
                             </label>
                             <select
                               id="ai-provider"
                               value={aiProvider}
                               onChange={(e) => setAiProvider(e.target.value as 'openai' | 'anthropic')}
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
+                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
                             >
                               <option value="openai">OpenAI (ChatGPT)</option>
                               <option value="anthropic">Anthropic (Claude)</option>
                             </select>
                           </div>
                           <div>
-                            <label htmlFor="ai-api-key" className="block text-sm font-medium text-gray-700">
+                            <label htmlFor="ai-api-key" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                               API Key
                             </label>
                             <input
@@ -1418,10 +1449,10 @@ const SettingsPage: React.FC = () => {
                               value={aiApiKey}
                               onChange={(e) => setAiApiKey(e.target.value)}
                               onKeyPress={(e) => e.key === 'Enter' && handleAiConnect()}
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
+                              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
                               placeholder={aiProvider === 'openai' ? 'sk-...' : 'sk-ant-...'}
                             />
-                            <p className="mt-1 text-xs text-gray-500">
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                               {aiProvider === 'openai'
                                 ? 'Get your key from platform.openai.com/api-keys'
                                 : 'Get your key from console.anthropic.com/settings/keys'}
@@ -1429,11 +1460,11 @@ const SettingsPage: React.FC = () => {
                           </div>
 
                           {aiError && (
-                            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                               <div className="flex">
                                 <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
                                 <div className="ml-2">
-                                  <p className="text-sm text-red-700">{aiError}</p>
+                                  <p className="text-sm text-red-700 dark:text-red-400">{aiError}</p>
                                 </div>
                               </div>
                             </div>
@@ -1462,14 +1493,14 @@ const SettingsPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
+                    <div className="mt-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
                       <div className="flex">
                         <div className="flex-shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-purple-400" />
                         </div>
                         <div className="ml-3">
-                          <h4 className="text-sm font-medium text-purple-800">What you'll get</h4>
-                          <div className="mt-2 text-sm text-purple-700">
+                          <h4 className="text-sm font-medium text-purple-800 dark:text-purple-300">What you'll get</h4>
+                          <div className="mt-2 text-sm text-purple-700 dark:text-purple-400">
                             <ul className="list-disc list-inside space-y-1">
                               <li>Ask questions about attendance in plain English</li>
                               <li>Get insights on attendance trends and patterns</li>
@@ -1483,23 +1514,23 @@ const SettingsPage: React.FC = () => {
 
                   {/* Planning Center Integration - Only show in dev mode */}
                   {import.meta.env.DEV && planningCenterStatus.enabled && (
-                  <div className="border border-gray-200 rounded-lg p-6">
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
                         <div className="flex-shrink-0">
-                          <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                          <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                             </svg>
                           </div>
                         </div>
                         <div>
-                          <h4 className="text-lg font-medium text-gray-900">Planning Center</h4>
-                          <p className="text-sm text-gray-600">
+                          <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100">Planning Center</h4>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
                             Connect to Planning Center Online to import people and check-ins.
                           </p>
                           {planningCenterStatus.connected && (
-                            <p className="text-xs text-green-600 mt-1 flex items-center">
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center">
                               <CheckCircleIcon className="w-3 h-3 mr-1" />
                               Connected
                             </p>
@@ -1511,19 +1542,19 @@ const SettingsPage: React.FC = () => {
                           <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
                         ) : planningCenterStatus.connected ? (
                           <>
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
                               <ShieldCheckIcon className="w-3 h-3 mr-1" />
                               Connected
                             </span>
                             <button
                               onClick={() => setShowPlanningCenterDisconnectModal(true)}
-                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                             >
                               Disconnect
                             </button>
                           </>
                         ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
                             <ShieldExclamationIcon className="w-3 h-3 mr-1" />
                             Not Connected
                           </span>
@@ -1533,18 +1564,18 @@ const SettingsPage: React.FC = () => {
 
                     {/* Connection Form - Only show when not connected */}
                     {!planningCenterStatus.connected && !planningCenterStatus.loading && (
-                      <div className="border-t border-gray-200 pt-6">
-                        <h5 className="text-md font-medium text-gray-900 mb-4">Connect to Planning Center</h5>
-                        <p className="text-sm text-gray-600 mb-4">
+                      <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                        <h5 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-4">Connect to Planning Center</h5>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                           You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data.
                         </p>
 
                         {planningCenterError && (
-                          <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                          <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                             <div className="flex">
                               <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
                               <div className="ml-2">
-                                <p className="text-sm text-red-700">{planningCenterError}</p>
+                                <p className="text-sm text-red-700 dark:text-red-400">{planningCenterError}</p>
                               </div>
                             </div>
                           </div>
@@ -1572,14 +1603,14 @@ const SettingsPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="mt-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
                       <div className="flex">
                         <div className="flex-shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-green-400" />
                         </div>
                         <div className="ml-3">
-                          <h4 className="text-sm font-medium text-green-800">What you'll get</h4>
-                          <div className="mt-2 text-sm text-green-700">
+                          <h4 className="text-sm font-medium text-green-800 dark:text-green-300">What you'll get</h4>
+                          <div className="mt-2 text-sm text-green-700 dark:text-green-400">
                             <ul className="list-disc list-inside space-y-1">
                               <li>Import people with household grouping</li>
                               <li>Sync check-in data for attendance tracking</li>
@@ -1601,14 +1632,14 @@ const SettingsPage: React.FC = () => {
             <div className="space-y-6">
               {/* Export Section */}
               <div>
-                <h3 className="text-lg font-medium text-gray-900">Export All Data</h3>
-                <p className="mt-1 text-sm text-gray-600">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Export All Data</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                   Download all your church data as CSV files in a ZIP archive. This includes members, families, attendance records, gatherings, and all other church data.
                 </p>
               </div>
 
-              <div className="border border-gray-200 rounded-lg p-6">
-                <p className="text-sm text-gray-600 mb-4">
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                   The export includes all tables from your church database. Sensitive fields (API keys) are automatically redacted.
                 </p>
                 <button
@@ -1623,24 +1654,24 @@ const SettingsPage: React.FC = () => {
 
               {/* Delete Section */}
               <div className="mt-10">
-                <h3 className="text-lg font-medium text-red-900">Delete Church Account</h3>
-                <p className="mt-1 text-sm text-gray-600">
+                <h3 className="text-lg font-medium text-red-900 dark:text-red-300">Delete Church Account</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                   Permanently delete your church account and all associated data. This action cannot be undone.
                 </p>
               </div>
 
-              <div className="border border-red-200 rounded-lg p-6 bg-red-50">
-                <div className="bg-white border border-red-300 rounded-md p-4 mb-4">
-                  <p className="text-sm font-medium text-red-800 mb-2">This will permanently:</p>
-                  <ul className="text-sm text-red-700 list-disc list-inside space-y-1">
+              <div className="border border-red-200 dark:border-red-800 rounded-lg p-6 bg-red-50 dark:bg-red-900/20">
+                <div className="bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded-md p-4 mb-4">
+                  <p className="text-sm font-medium text-red-800 dark:text-red-300 mb-2">This will permanently:</p>
+                  <ul className="text-sm text-red-700 dark:text-red-400 list-disc list-inside space-y-1">
                     <li>Delete all church data (members, families, attendance, gatherings)</li>
                     <li>Remove all user accounts associated with this church</li>
                     <li>Log out all users immediately</li>
                   </ul>
-                  <p className="text-sm font-bold text-red-800 mt-2">This cannot be recovered. Please export your data first.</p>
+                  <p className="text-sm font-bold text-red-800 dark:text-red-300 mt-2">This cannot be recovered. Please export your data first.</p>
                 </div>
 
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Type <span className="font-bold">{churchName}</span> to confirm:
                 </label>
                 <input
@@ -1648,7 +1679,7 @@ const SettingsPage: React.FC = () => {
                   value={deleteConfirmName}
                   onChange={(e) => setDeleteConfirmName(e.target.value)}
                   placeholder="Type church name here"
-                  className="block w-full max-w-md rounded-md border-gray-300 shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm mb-4"
+                  className="block w-full max-w-md rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm mb-4"
                 />
                 <button
                   onClick={() => setShowDeleteConfirm(true)}
@@ -1671,21 +1702,21 @@ const SettingsPage: React.FC = () => {
       >
         <div className="p-6">
           <div className="flex justify-between items-start mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Are you absolutely sure?</h3>
-            <button onClick={() => setShowDeleteConfirm(false)} className="text-gray-400 hover:text-gray-500">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Are you absolutely sure?</h3>
+            <button onClick={() => setShowDeleteConfirm(false)} className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300">
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
-          <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-red-100 rounded-full">
+          <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
             <ExclamationTriangleIcon className="h-8 w-8 text-red-600" />
           </div>
 
           <div className="text-center mb-6">
-            <p className="text-sm text-gray-600 mb-2">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
               This will permanently delete <span className="font-bold">{churchName}</span> and all its data.
             </p>
-            <p className="text-sm text-red-600 font-medium">
+            <p className="text-sm text-red-600 dark:text-red-400 font-medium">
               This action cannot be undone.
             </p>
           </div>
@@ -1693,7 +1724,7 @@ const SettingsPage: React.FC = () => {
           <div className="flex space-x-3">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
             >
               Cancel
             </button>
@@ -1712,22 +1743,22 @@ const SettingsPage: React.FC = () => {
       <Modal
         isOpen={showApiKeyGuide}
         onClose={() => setShowApiKeyGuide(false)}
-        className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
       >
         <div className="p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-gray-900">How to Get Your Elvanto API Key</h2>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">How to Get Your Elvanto API Key</h2>
             <button
               onClick={() => setShowApiKeyGuide(false)}
-              className="text-gray-400 hover:text-gray-500 focus:outline-none"
+              className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 focus:outline-none"
             >
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
           <div className="space-y-6">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800">
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <p className="text-sm text-blue-800 dark:text-blue-300">
                 Follow these simple steps to get your API key from Elvanto. You'll need admin access to your Elvanto account.
               </p>
             </div>
@@ -1741,9 +1772,9 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="ml-4 flex-1">
-                  <h3 className="text-lg font-medium text-gray-900">Log in to Elvanto</h3>
-                  <p className="mt-2 text-sm text-gray-600">
-                    Go to <a href="https://www.elvanto.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline">elvanto.com</a> and log in with your admin account.
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Log in to Elvanto</h3>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    Go to <a href="https://www.elvanto.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 underline">elvanto.com</a> and log in with your admin account.
                   </p>
                 </div>
               </div>
@@ -1758,8 +1789,8 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="ml-4 flex-1">
-                  <h3 className="text-lg font-medium text-gray-900">Go to Settings → Integrations</h3>
-                  <p className="mt-2 text-sm text-gray-600">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Go to Settings → Integrations</h3>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                     Click on <strong>Settings</strong> in the top menu, then select <strong>Integrations</strong> from the sidebar.
                   </p>
                 </div>
@@ -1775,8 +1806,8 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="ml-4 flex-1">
-                  <h3 className="text-lg font-medium text-gray-900">Find API Access</h3>
-                  <p className="mt-2 text-sm text-gray-600">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Find API Access</h3>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                     Look for <strong>API Access</strong> or <strong>Developer</strong> section. Click on it to view your API keys.
                   </p>
                 </div>
@@ -1792,20 +1823,20 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="ml-4 flex-1">
-                  <h3 className="text-lg font-medium text-gray-900">Copy Your API Key</h3>
-                  <p className="mt-2 text-sm text-gray-600">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Copy Your API Key</h3>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                     Copy your API key and paste it into the field above. If you don't have one, you can generate a new key from this page.
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
               <div className="flex">
                 <InformationCircleIcon className="h-5 w-5 text-yellow-400 flex-shrink-0" />
                 <div className="ml-3">
-                  <h4 className="text-sm font-medium text-yellow-800">Keep Your API Key Secure</h4>
-                  <p className="mt-1 text-sm text-yellow-700">
+                  <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-300">Keep Your API Key Secure</h4>
+                  <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-400">
                     Your API key provides access to your Elvanto data. Keep it private and don't share it publicly.
                   </p>
                 </div>
@@ -1829,29 +1860,29 @@ const SettingsPage: React.FC = () => {
         isOpen={showDisconnectModal}
         onClose={() => setShowDisconnectModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                 Disconnect Elvanto
               </h3>
               <button
                 onClick={() => setShowDisconnectModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
             
-            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
               <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
             </div>
             
             <div className="text-center mb-6">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                 Are you sure you want to disconnect from Elvanto?
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-500 dark:text-gray-400">
                 This will stop syncing data between the services. You can reconnect at any time.
               </p>
             </div>
@@ -1859,7 +1890,7 @@ const SettingsPage: React.FC = () => {
             <div className="flex space-x-3">
               <button
                 onClick={() => setShowDisconnectModal(false)}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
               >
                 Cancel
               </button>
@@ -1880,29 +1911,29 @@ const SettingsPage: React.FC = () => {
         isOpen={showAiDisconnectModal}
         onClose={() => setShowAiDisconnectModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                 Disconnect AI
               </h3>
               <button
                 onClick={() => setShowAiDisconnectModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
               <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
             </div>
 
             <div className="text-center mb-6">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                 Are you sure you want to disconnect AI Insights?
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-500 dark:text-gray-400">
                 Your API key will be removed. You can reconnect at any time.
               </p>
             </div>
@@ -1910,7 +1941,7 @@ const SettingsPage: React.FC = () => {
             <div className="flex space-x-3">
               <button
                 onClick={() => setShowAiDisconnectModal(false)}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors"
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-colors"
               >
                 Cancel
               </button>
@@ -1931,29 +1962,29 @@ const SettingsPage: React.FC = () => {
         isOpen={showPlanningCenterDisconnectModal}
         onClose={() => setShowPlanningCenterDisconnectModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                 Disconnect Planning Center
               </h3>
               <button
                 onClick={() => setShowPlanningCenterDisconnectModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full">
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
               <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
             </div>
 
             <div className="text-center mb-6">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                 Are you sure you want to disconnect from Planning Center?
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-500 dark:text-gray-400">
                 Your OAuth tokens will be removed. You can reconnect at any time.
               </p>
             </div>
@@ -1961,7 +1992,7 @@ const SettingsPage: React.FC = () => {
             <div className="flex space-x-3">
               <button
                 onClick={() => setShowPlanningCenterDisconnectModal(false)}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
               >
                 Cancel
               </button>

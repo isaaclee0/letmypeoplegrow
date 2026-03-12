@@ -74,43 +74,43 @@ const ProfilePage: React.FC = () => {
 
   return (
     <div className="max-w-2xl">
-      <h1 className="text-2xl font-bold text-gray-900 mb-4">My Profile</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">My Profile</h1>
 
       {error && (
-        <div className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        <div className="mb-4 rounded-md bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-400">{error}</div>
       )}
       {success && (
-        <div className="mb-4 rounded-md bg-green-50 p-3 text-sm text-green-700">{success}</div>
+        <div className="mb-4 rounded-md bg-green-50 dark:bg-green-900/20 p-3 text-sm text-green-700 dark:text-green-400">{success}</div>
       )}
 
-      <div className="bg-white shadow rounded-lg p-4 space-y-4">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">First Name</label>
-            <input className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={firstName} onChange={e => setFirstName(e.target.value)} />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
+            <input className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={firstName} onChange={e => setFirstName(e.target.value)} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Last Name</label>
-            <input className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={lastName} onChange={e => setLastName(e.target.value)} />
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
+            <input className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={lastName} onChange={e => setLastName(e.target.value)} />
           </div>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">Primary Contact Method</label>
-          <select className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={primaryContactMethod} onChange={e => setPrimaryContactMethod(e.target.value as 'email' | 'sms')}>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Primary Contact Method</label>
+          <select className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={primaryContactMethod} onChange={e => setPrimaryContactMethod(e.target.value as 'email' | 'sms')}>
             <option value="email">Email</option>
             <option value="sms">SMS</option>
           </select>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">Email (optional)</label>
-          <input type="email" className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={email} onChange={e => setEmail(e.target.value)} />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email (optional)</label>
+          <input type="email" className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={email} onChange={e => setEmail(e.target.value)} />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700">Mobile Number (optional)</label>
-          <input type="tel" className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={mobileNumber} onChange={e => setMobileNumber(e.target.value)} />
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Mobile Number (optional)</label>
+          <input type="tel" className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" value={mobileNumber} onChange={e => setMobileNumber(e.target.value)} />
         </div>
 
         <div className="flex justify-end">

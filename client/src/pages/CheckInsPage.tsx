@@ -191,7 +191,7 @@ const CheckInsPage: React.FC = () => {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-3 text-gray-500">Loading check-ins...</p>
+          <p className="mt-3 text-gray-500 dark:text-gray-400">Loading check-ins...</p>
         </div>
       </div>
     );
@@ -202,8 +202,8 @@ const CheckInsPage: React.FC = () => {
     return (
       <div className="max-w-lg mx-auto mt-12 text-center">
         <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h2 className="mt-4 text-lg font-medium text-gray-900">No Check-in Gatherings</h2>
-        <p className="mt-2 text-sm text-gray-600">
+        <h2 className="mt-4 text-lg font-medium text-gray-900 dark:text-gray-100">No Check-in Gatherings</h2>
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
           No gatherings have check-ins enabled. An admin can enable this in Gatherings settings.
         </p>
       </div>
@@ -234,14 +234,14 @@ const CheckInsPage: React.FC = () => {
   return (
     <div className="max-w-2xl mx-auto mt-4">
       <div className="text-center mb-6">
-        <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 mb-3">
+        <div className="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-primary-100 dark:bg-primary-900/30 mb-3">
           <ClipboardDocumentCheckIcon className="h-7 w-7 text-primary-600" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">Check-ins</h1>
-        <p className="text-sm text-gray-500 mt-1">Select a gathering and check-in mode</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Check-ins</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Select a gathering and check-in mode</p>
       </div>
 
-      <div className="bg-white shadow rounded-lg p-6 space-y-5">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 space-y-5">
         {/* Gathering selection */}
         <GatheringDateSelector
           kioskGatherings={kioskGatherings}
@@ -254,7 +254,7 @@ const CheckInsPage: React.FC = () => {
         {/* Mode selection buttons */}
         {selectedGathering && (!!selectedGathering.kioskEnabled || !!selectedGathering.leaderCheckinEnabled) && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Mode</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Mode</label>
             <div className={`grid gap-3 ${selectedGathering.kioskEnabled && selectedGathering.leaderCheckinEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
               {!!selectedGathering.leaderCheckinEnabled && (
                 <button
@@ -264,11 +264,11 @@ const CheckInsPage: React.FC = () => {
                     }
                     setActiveMode('leader');
                   }}
-                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
+                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
                 >
                   <UsersIcon className="h-8 w-8 text-primary-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-900">Leader Check-in</span>
-                  <span className="text-xs text-gray-500 mt-1 text-center">
+                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Leader Check-in</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">
                     Check in/out by a leader
                   </span>
                 </button>
@@ -279,11 +279,11 @@ const CheckInsPage: React.FC = () => {
                     checkIns.setMode('self');
                     setActiveMode('self');
                   }}
-                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
+                  className="flex flex-col items-center p-4 rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
                 >
                   <UserIcon className="h-8 w-8 text-primary-600 mb-2" />
-                  <span className="text-sm font-medium text-gray-900">Self Check-in</span>
-                  <span className="text-xs text-gray-500 mt-1 text-center">
+                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Self Check-in</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">
                     Self-service or 'Kiosk' mode
                   </span>
                 </button>

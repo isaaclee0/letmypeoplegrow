@@ -614,7 +614,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       <div className="flex items-center justify-center min-h-[40vh]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-3 text-gray-500">Loading attendance data...</p>
+          <p className="mt-3 text-gray-500 dark:text-gray-400">Loading attendance data...</p>
         </div>
       </div>
     );
@@ -631,15 +631,15 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         {user?.role !== 'attendance_taker' ? (
           <button
             onClick={onBack}
-            className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900"
+            className="inline-flex items-center text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" />
             Back
           </button>
         ) : <div />}
         <div className="text-center flex-1">
-          <h1 className="text-lg font-bold text-gray-900">Leader Check-in</h1>
-          <p className="text-xs text-gray-500">
+          <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100">Leader Check-in</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             {selectedGathering.name} &middot;{' '}
             {new Date(gatheringDate + 'T00:00:00').toLocaleDateString('en-US', {
               weekday: 'short', month: 'short', day: 'numeric',
@@ -651,13 +651,13 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
       {/* Mode Tabs */}
       <div className="flex items-center justify-center mb-4">
-        <div className="bg-gray-100 rounded-full p-1 flex">
+        <div className="bg-gray-100 dark:bg-gray-700 rounded-full p-1 flex">
           <button
             onClick={() => { setMode('checkin'); setCheckedMembers(new Set()); clearKioskSelection(selectedGathering.id, gatheringDate); }}
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkin'
                 ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Check In{notCheckedInCount > 0 ? ` (${notCheckedInCount})` : ''}
@@ -667,7 +667,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'present'
                 ? 'bg-green-600 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Present{presentCount > 0 ? ` (${presentCount})` : ''}
@@ -677,7 +677,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkout'
                 ? 'bg-orange-500 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Check Out
@@ -687,7 +687,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             className={`px-3 sm:px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
               mode === 'checkedout'
                 ? 'bg-gray-600 text-white shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
             }`}
           >
             Left{checkedOutCount > 0 ? ` (${checkedOutCount})` : ''}
@@ -706,12 +706,12 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
       {/* Success */}
       {successMessage && (
-        <div className="mb-4 bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700 flex items-center justify-between">
+        <div className="mb-4 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-3 text-sm text-green-700 dark:text-green-300 flex items-center justify-between">
           <div className="flex items-center">
             <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2 flex-shrink-0" />
             <span>{successMessage}</span>
           </div>
-          <button onClick={() => setSuccessMessage(null)} className="text-green-400 hover:text-green-600">
+          <button onClick={() => setSuccessMessage(null)} className="text-green-400 hover:text-green-600 dark:hover:text-green-300">
             <XMarkIcon className="h-4 w-4" />
           </button>
         </div>
@@ -719,9 +719,9 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
       {/* Error */}
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 flex items-center justify-between">
+        <div className="mb-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-400 flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">
+          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600 dark:hover:text-red-300">
             <XMarkIcon className="h-4 w-4" />
           </button>
         </div>
@@ -737,7 +737,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
+            className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md"
             placeholder="Search by name or family..."
             autoComplete="off"
           />
@@ -751,16 +751,16 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             type="checkbox"
             checked={groupByFamily}
             onChange={(e) => setGroupByFamily(e.target.checked)}
-            className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
           />
-          <span className="ml-2 text-sm text-gray-700">Group people by family</span>
+          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">Group people by family</span>
         </label>
       </div>
 
       {/* Family list / Individual grid */}
       <div className="space-y-4">
         {(groupByFamily ? filteredFamilies.length === 0 : filteredIndividuals.length === 0) ? (
-          <p className="text-sm text-gray-500 text-center py-8">
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
             {searchTerm.trim()
               ? 'No matching people found.'
               : mode === 'checkin'
@@ -795,7 +795,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             if (isRealFamily) {
               familyCardClasses = isFamilySelectedByOther
                 ? 'relative rounded-lg p-4 pb-5 mb-1'
-                : 'bg-white border border-gray-200 rounded-lg p-4';
+                : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4';
             }
 
             return (
@@ -820,7 +820,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                 )}
                 {isRealFamily && (
                   <div className="flex justify-between items-center mb-3">
-                    <h4 className="text-md font-medium text-gray-900">{familyDisplayName}</h4>
+                    <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">{familyDisplayName}</h4>
                     {group.members.length > 1 && (
                       <button
                         onClick={() => {
@@ -851,21 +851,21 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                     const isSelectedByOther = otherLeaderNames && otherLeaderNames.length > 0;
 
                     // Card styling matching AttendancePage
-                    let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white cursor-pointer';
+                    let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 cursor-pointer';
                     if (mode === 'present' && isChecked) {
-                      cardClasses += ' border-red-400 bg-red-50';
+                      cardClasses += ' border-red-400 bg-red-50 dark:bg-red-900/30';
                     } else if (mode === 'present') {
-                      cardClasses += ' border-primary-500 bg-primary-50';
+                      cardClasses += ' border-primary-500 bg-primary-50 dark:bg-primary-900/20';
                     } else if (mode === 'checkedout' && isChecked) {
-                      cardClasses += ' border-red-400 bg-red-50';
+                      cardClasses += ' border-red-400 bg-red-50 dark:bg-red-900/30';
                     } else if (mode === 'checkedout') {
-                      cardClasses += ' border-gray-200';
+                      cardClasses += ' border-gray-200 dark:border-gray-700';
                     } else if (isChecked) {
                       cardClasses += mode === 'checkin'
-                        ? ' border-primary-500 bg-primary-50 cursor-pointer'
-                        : ' border-orange-500 bg-orange-50 cursor-pointer';
+                        ? ' border-primary-500 bg-primary-50 dark:bg-primary-900/20 cursor-pointer'
+                        : ' border-orange-500 bg-orange-50 dark:bg-orange-900/30 cursor-pointer';
                     } else {
-                      cardClasses += ' border-gray-200 hover:border-gray-300 cursor-pointer';
+                      cardClasses += ' border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer';
                     }
 
                     // All tabs are selectable
@@ -886,7 +886,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                               : isChecked
                                 ? (mode === 'checkin' ? 'bg-primary-600 border-primary-600' : 'bg-orange-500 border-orange-500')
                                 : !isSelectedByOther
-                                  ? 'border-gray-300'
+                                  ? 'border-gray-300 dark:border-gray-500'
                                   : ''
                           }`}
                           style={!isChecked && isSelectedByOther && !isUndoTab ? { backgroundColor: '#f8c8da', borderColor: '#ec75a6' } : undefined}
@@ -904,7 +904,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                             <CheckIcon className="h-3 w-3 opacity-50" style={{ color: '#ec75a6' }} />
                           )}
                         </div>
-                        <span className="ml-3 text-sm font-medium text-gray-900">
+                        <span className="ml-3 text-sm font-medium text-gray-900 dark:text-gray-100">
                           {displayName}
                         </span>
                         {badgeInfo && (
@@ -939,21 +939,21 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               const isSelectedByOther = otherLeaderNames && otherLeaderNames.length > 0;
               const isUndoTab = mode === 'present' || mode === 'checkedout';
 
-              let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white cursor-pointer';
+              let cardClasses = 'relative flex items-center transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 cursor-pointer';
               if (mode === 'present' && isChecked) {
-                cardClasses += ' border-red-400 bg-red-50';
+                cardClasses += ' border-red-400 bg-red-50 dark:bg-red-900/30';
               } else if (mode === 'present') {
-                cardClasses += ' border-primary-500 bg-primary-50';
+                cardClasses += ' border-primary-500 bg-primary-50 dark:bg-primary-900/20';
               } else if (mode === 'checkedout' && isChecked) {
-                cardClasses += ' border-red-400 bg-red-50';
+                cardClasses += ' border-red-400 bg-red-50 dark:bg-red-900/30';
               } else if (mode === 'checkedout') {
-                cardClasses += ' border-gray-200';
+                cardClasses += ' border-gray-200 dark:border-gray-700';
               } else if (isChecked) {
                 cardClasses += mode === 'checkin'
-                  ? ' border-primary-500 bg-primary-50 cursor-pointer'
-                  : ' border-orange-500 bg-orange-50 cursor-pointer';
+                  ? ' border-primary-500 bg-primary-50 dark:bg-primary-900/20 cursor-pointer'
+                  : ' border-orange-500 bg-orange-50 dark:bg-orange-900/30 cursor-pointer';
               } else {
-                cardClasses += ' border-gray-200 hover:border-gray-300 cursor-pointer';
+                cardClasses += ' border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer';
               }
 
               return (
@@ -973,7 +973,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                         : isChecked
                           ? (mode === 'checkin' ? 'bg-primary-600 border-primary-600' : 'bg-orange-500 border-orange-500')
                           : !isSelectedByOther
-                            ? 'border-gray-300'
+                            ? 'border-gray-300 dark:border-gray-500'
                             : ''
                     }`}
                     style={!isChecked && isSelectedByOther && !isUndoTab ? { backgroundColor: '#f8c8da', borderColor: '#ec75a6' } : undefined}
@@ -991,7 +991,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                       <CheckIcon className="h-3 w-3 opacity-50" style={{ color: '#ec75a6' }} />
                     )}
                   </div>
-                  <span className="ml-3 text-sm font-medium text-gray-900">
+                  <span className="ml-3 text-sm font-medium text-gray-900 dark:text-gray-100">
                     {displayName}
                   </span>
                   {badgeInfo && (
@@ -1027,7 +1027,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
               setGuardianContact('');
               setError('');
             }}
-            className="w-full flex items-center justify-center px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-600 hover:border-primary-300 hover:text-primary-600 transition-colors"
+            className="w-full flex items-center justify-center px-4 py-2.5 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:border-primary-300 hover:text-primary-600 transition-colors"
           >
             <PlusIcon className="h-4 w-4 mr-1.5" />
             Add Visitor
@@ -1071,28 +1071,28 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
 
       {/* Undo confirmation modal */}
       <Modal isOpen={showUndoModal} onClose={() => setShowUndoModal(false)}>
-        <div className="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full mx-4">
           <div className="p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-2">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
               {mode === 'present' ? 'Undo Check In?' : 'Undo Check Out?'}
             </h3>
-            <p className="text-sm text-gray-600 mb-1">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
               {mode === 'present'
                 ? `This will mark ${checkedMembers.size === 1 ? 'this person' : `these ${checkedMembers.size} people`} as not checked in.`
                 : `This will move ${checkedMembers.size === 1 ? 'this person' : `these ${checkedMembers.size} people`} back to Present.`}
             </p>
-            <div className="mb-4 text-sm text-gray-500">
+            <div className="mb-4 text-sm text-gray-500 dark:text-gray-400">
               {selectedPeople.map(p => (
                 <span key={p.id} className="inline-block mr-2">
                   &bull; {p.firstName} {p.lastName}
                 </span>
               ))}
             </div>
-            {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+            {error && <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>}
             <div className="flex space-x-3">
               <button
                 onClick={() => { setShowUndoModal(false); setError(''); }}
-                className="flex-1 px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>
@@ -1113,27 +1113,27 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         isOpen={showAddVisitorModal}
         onClose={() => setShowAddVisitorModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Add New Visitor Child</h3>
-              <button onClick={() => setShowAddVisitorModal(false)} className="text-gray-400 hover:text-gray-600">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Add New Visitor Child</h3>
+              <button onClick={() => setShowAddVisitorModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
             <div className="space-y-5">
               <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Visitor Child Details</h4>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3 uppercase tracking-wide">Visitor Child Details</h4>
                 <div className="space-y-3">
                   {visitorPersons.map((person, idx) => (
                     <div key={idx} className="space-y-2">
                       {visitorPersons.length > 1 && (
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium text-gray-700">Child {idx + 1}</span>
+                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Child {idx + 1}</span>
                           <button
                             onClick={() => setVisitorPersons(prev => prev.filter((_, i) => i !== idx))}
-                            className="text-xs text-red-500 hover:text-red-700"
+                            className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                           >
                             Remove
                           </button>
@@ -1141,7 +1141,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                       )}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700">First Name</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
                           <input
                             type="text"
                             value={person.firstName}
@@ -1150,12 +1150,12 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                               updated[idx] = { ...updated[idx], firstName: e.target.value };
                               setVisitorPersons(updated);
                             }}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="First name"
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
                           <input
                             type="text"
                             value={person.lastName}
@@ -1164,7 +1164,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                               updated[idx] = { ...updated[idx], lastName: e.target.value };
                               setVisitorPersons(updated);
                             }}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="Last name"
                           />
                         </div>
@@ -1181,33 +1181,33 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                 </div>
               </div>
 
-              <div className="border-t border-gray-200" />
+              <div className="border-t border-gray-200 dark:border-gray-700" />
 
               <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Parent / Guardian Details</h4>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3 uppercase tracking-wide">Parent / Guardian Details</h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Parent/Guardian Name <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={guardianName}
                       onChange={(e) => setGuardianName(e.target.value)}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                       placeholder="Full name of parent or guardian"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Contact Number</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Contact Number</label>
                     <input
                       type="tel"
                       value={guardianContact}
                       onChange={(e) => setGuardianContact(e.target.value)}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                       placeholder="Phone number"
                     />
-                    <p className="mt-1 text-xs text-gray-500">For emergency contact purposes.</p>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">For emergency contact purposes.</p>
                   </div>
                 </div>
               </div>
@@ -1216,7 +1216,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             <div className="mt-6 flex space-x-3">
               <button
                 onClick={() => setShowAddVisitorModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>

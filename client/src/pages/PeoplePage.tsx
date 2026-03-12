@@ -153,7 +153,7 @@ const AttendanceInfoButton: React.FC<{
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Attendance Information</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Attendance Information</h3>
               <button
                 onClick={() => setShowModal(false)}
                 className="text-gray-400 hover:text-gray-600"
@@ -170,21 +170,21 @@ const AttendanceInfoButton: React.FC<{
               <div className="space-y-4">
                 {attendanceData.lastAttendance ? (
                   <div>
-                    <div className="text-sm font-medium text-gray-700 mb-1">Last Attendance</div>
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Attendance</div>
                     <div className="text-lg text-gray-900">
                       {formatDate(attendanceData.lastAttendance.date)} at {attendanceData.lastAttendance.gatheringName}
                     </div>
                   </div>
                 ) : (
                   <div>
-                    <div className="text-sm font-medium text-gray-700 mb-1">Last Attendance</div>
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Attendance</div>
                     <div className="text-lg text-gray-900 text-gray-500">No attendance records</div>
                   </div>
                 )}
                 
                 {attendanceData.gatheringRegularity.length > 0 ? (
                   <div>
-                    <div className="text-sm font-medium text-gray-700 mb-2">Regularity by Gathering</div>
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Regularity by Gathering</div>
                     <div className="space-y-3">
                       {attendanceData.gatheringRegularity.map((gathering, index) => (
                                                              <div key={index} className="bg-gray-50 rounded-lg p-3">
@@ -192,8 +192,8 @@ const AttendanceInfoButton: React.FC<{
                                          <span className="font-medium text-gray-900">{gathering.name}</span>
                                        </div>
                                        <div className="flex items-center justify-between">
-                                         <span className="text-sm text-gray-600 capitalize">{gathering.regularity}</span>
-                                         <span className="text-sm text-gray-600">{gathering.attendanceCount} times</span>
+                                         <span className="text-sm text-gray-600 dark:text-gray-400 capitalize">{gathering.regularity}</span>
+                                         <span className="text-sm text-gray-600 dark:text-gray-400">{gathering.attendanceCount} times</span>
                                        </div>
                                      </div>
                       ))}
@@ -201,14 +201,14 @@ const AttendanceInfoButton: React.FC<{
                   </div>
                 ) : (
                   <div>
-                    <div className="text-sm font-medium text-gray-700 mb-1">Regularity</div>
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Regularity</div>
                     <div className="text-lg text-gray-900 text-gray-500">No attendance data available</div>
                   </div>
                 )}
                 
                                            {createdAt && (
                              <div>
-                               <div className="text-sm font-medium text-gray-700 mb-1">Added to System</div>
+                               <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Added to System</div>
                                <div className="text-lg text-gray-900">{formatDate(createdAt)}</div>
                              </div>
                            )}
@@ -1249,21 +1249,21 @@ const PeoplePage: React.FC = () => {
   return (
     <div className="space-y-6 pb-32">
       {/* Header */}
-      <div className="bg-white overflow-hidden shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                 Manage People
               </h1>
-              <p className="mt-1 text-sm text-gray-500">
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Manage all people and families in your church
               </p>
             </div>
             {people.length > 0 && (
               <button
                 onClick={downloadPeopleTSV}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
               >
                 <DocumentTextIcon className="h-4 w-4 mr-2" />
                 Export People
@@ -1278,16 +1278,16 @@ const PeoplePage: React.FC = () => {
 
       {/* Gathering Legend */}
       {gatheringTypes.length > 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-3 sm:px-6">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">Gathering Assignments</h3>
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Gathering Assignments</h3>
             <div className="flex flex-wrap gap-x-3 gap-y-6">
               {gatheringTypes
                 .filter(gathering => gathering.attendanceType !== 'headcount')
                 .map((gathering) => (
                   <div key={gathering.id} className="flex items-center space-x-2">
                     <div className={`w-3 h-3 rounded-full ${getGatheringColor(gathering.id)}`}></div>
-                    <span className="text-sm text-gray-600">{gathering.name}</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-400">{gathering.name}</span>
                   </div>
                 ))}
             </div>
@@ -1492,20 +1492,20 @@ const PeoplePage: React.FC = () => {
         document.body
       ) : null}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4">
           <div className="flex">
-            <div className="text-sm text-red-700">{error}</div>
+            <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
           </div>
         </div>
       )}
 
       {/* Filters */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Search */}
             <div>
-              <label htmlFor="search" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Search People
               </label>
               <div className="mt-1 relative">
@@ -1514,7 +1514,7 @@ const PeoplePage: React.FC = () => {
                   id="search"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md leading-5 bg-white dark:bg-gray-700 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
                   placeholder="Search by name, email, or family..."
                 />
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -1525,14 +1525,14 @@ const PeoplePage: React.FC = () => {
 
             {/* Family Filter */}
             <div>
-              <label htmlFor="gatheringFilter" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="gatheringFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Filter by Gathering
               </label>
               <select
                 id="gatheringFilter"
                 value={selectedGathering || ''}
                 onChange={(e) => setSelectedGathering(e.target.value ? parseInt(e.target.value) : null)}
-                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
               >
                 <option value="">All Gatherings</option>
                 {gatheringTypes
@@ -1547,7 +1547,7 @@ const PeoplePage: React.FC = () => {
           </div>
           
           {/* Grouping Toggle & Age Filter */}
-          <div className="mt-4 pt-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-6">
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-6">
             <div className="flex items-center space-x-3">
               <input
                 type="checkbox"
@@ -1559,22 +1559,22 @@ const PeoplePage: React.FC = () => {
                 }}
                 className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               />
-              <label htmlFor="groupByFamily" className="text-sm font-medium text-gray-700">
+              <label htmlFor="groupByFamily" className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Group people by families
               </label>
               <span className="text-xs text-gray-500">
                 (Uncheck for individual view with easier multi-select)
               </span>
             </div>
-            <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-0.5">
+            <div className="flex items-center space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
               {(['all', 'adult', 'child'] as const).map((value) => (
                 <button
                   key={value}
                   onClick={() => setAgeFilter(value)}
                   className={`flex items-center space-x-1.5 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                     ageFilter === value
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-700'
+                      ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-gray-100 shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
                   }`}
                 >
                   {value === 'child' && badgeConfig.child.defaultIcon && (
@@ -1589,19 +1589,19 @@ const PeoplePage: React.FC = () => {
       </div>
 
       {/* People List - Grouped by Family */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
+            <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
               People ({peopleCount}) {groupByFamily ? '(Grouped by Family)' : '(Individual View)'}
             </h3>
             <div className="flex space-x-3">
               {selectedPeople.length > 0 ? (
-                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                   <span>{selectedPeople.length} selected</span>
                   <button
                     onClick={clearSelection}
-                    className="text-primary-600 hover:text-primary-700"
+                    className="text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white"
                   >
                     Clear
                   </button>
@@ -1620,19 +1620,19 @@ const PeoplePage: React.FC = () => {
           {(groupByFamily ? filteredGroupedPeople.length === 0 : filteredIndividualPeople.length === 0) ? (
             <div className="text-center py-8">
               <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No people found</h3>
-              <p className="mt-1 text-sm text-gray-500">
+              <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No people found</h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 {searchTerm || selectedGathering ? 'Try adjusting your search or filters.' : 'Get started by adding your first person.'}
               </p>
             </div>
           ) : groupByFamily ? (
             <div className="space-y-4">
               {filteredGroupedPeople.map((group: any) => (
-                <div key={group.familyId || 'individuals'} data-family-id={group.familyId} className="border border-gray-200 rounded-lg p-4">
+                <div key={group.familyId || 'individuals'} data-family-id={group.familyId} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                   {group.familyName && (
                     <div className="flex justify-between items-center mb-3">
                       <div className="flex items-center space-x-2">
-                        <h4 className="text-md font-medium text-gray-900">
+                        <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                           {(() => {
                             // Convert surname to uppercase: "SURNAME, firstname and firstname"
                             const parts = group.familyName.split(', ');
@@ -1692,7 +1692,7 @@ const PeoplePage: React.FC = () => {
                         </button>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="hidden sm:inline text-sm text-gray-500">
+                        <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
                           {group.members.length} member{group.members.length !== 1 ? 's' : ''}
                         </span>
                         <input
@@ -1796,10 +1796,10 @@ const PeoplePage: React.FC = () => {
 
       {/* Visitors Section */}
       {people.filter(p => p.peopleType === 'local_visitor' || p.peopleType === 'traveller_visitor').length > 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg leading-6 font-medium text-gray-900">
+              <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
                 Visitors ({recentVisitorGroups.flatMap(g => g.members).length + olderVisitorGroups.flatMap(g => g.members).length})
               </h3>
             </div>
@@ -1813,11 +1813,11 @@ const PeoplePage: React.FC = () => {
                     // Grouped by family view
                     <div className="space-y-4">
                       {recentVisitorGroups.map((group: any) => (
-                        <div key={`recent-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
+                        <div key={`recent-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                           {group.familyName && (
                             <div className="flex justify-between items-center mb-3">
                               <div className="flex items-center space-x-2">
-                                <h4 className="text-md font-medium text-gray-900">
+                                <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                                   {(() => {
                                     const parts = group.familyName.split(', ');
                                     if (parts.length >= 2) {
@@ -1873,7 +1873,7 @@ const PeoplePage: React.FC = () => {
                                 </button>
                               </div>
                               <div className="flex items-center space-x-2">
-                                <span className="hidden sm:inline text-sm text-gray-500">
+                                <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
                                   {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
                                 </span>
                                 <input
@@ -1943,10 +1943,10 @@ const PeoplePage: React.FC = () => {
                           return (
                             <div
                               key={person.id}
-                              className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                              className={`p-2 rounded-md border border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
                                 selectedPeople.includes(person.id)
-                                  ? 'border-primary-500 bg-primary-50'
-                                  : 'hover:bg-gray-50'
+                                  ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                                  : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                               } ${needsWideLayout ? 'col-span-2' : ''}`}
                               onClick={() => togglePersonSelection(person.id)}
                             >
@@ -1959,7 +1959,7 @@ const PeoplePage: React.FC = () => {
                                   onClick={(e) => e.stopPropagation()}
                                 />
                                 <div className="flex items-center space-x-2">
-                                  <span className="text-sm font-medium text-gray-900">{displayName}</span>
+                                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
                                   {(() => {
                                     const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
                                     return standardGatherings.length > 0 && (
@@ -1993,7 +1993,7 @@ const PeoplePage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowArchivedVisitors(v => !v)}
-                      className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                      className="text-sm font-medium text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white"
                     >
                       {showArchivedVisitors ? 'Hide' : `Show (${olderVisitorGroups.reduce((acc, g) => acc + g.members.length, 0)})`}
                     </button>
@@ -2003,11 +2003,11 @@ const PeoplePage: React.FC = () => {
                       // Grouped by family view
                       <div className="space-y-4 mt-3">
                         {olderVisitorGroups.map((group: any) => (
-                          <div key={`older-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 rounded-lg p-4">
+                          <div key={`older-visitor-${group.familyId || 'individuals'}`} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                             {group.familyName && (
                               <div className="flex justify-between items-center mb-3">
                                 <div className="flex items-center space-x-2">
-                                  <h4 className="text-md font-medium text-gray-900">
+                                  <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                                     {(() => {
                                       const parts = group.familyName.split(', ');
                                       if (parts.length >= 2) {
@@ -2045,7 +2045,7 @@ const PeoplePage: React.FC = () => {
                                   </button>
                                 </div>
                                 <div className="flex items-center space-x-2">
-                                  <span className="hidden sm:inline text-sm text-gray-500">
+                                  <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
                                     {group.members.length} visitor{group.members.length !== 1 ? 's' : ''}
                                   </span>
                                   <input
@@ -2115,7 +2115,7 @@ const PeoplePage: React.FC = () => {
                             return (
                               <div
                                 key={person.id}
-                                className={`p-2 rounded-md border border-gray-200 cursor-pointer transition-colors ${
+                                className={`p-2 rounded-md border border-gray-200 dark:border-gray-600 cursor-pointer transition-colors ${
                                   selectedPeople.includes(person.id)
                                     ? 'border-primary-500 bg-primary-50'
                                     : 'hover:bg-gray-50'
@@ -2131,7 +2131,7 @@ const PeoplePage: React.FC = () => {
                                     onClick={(e) => e.stopPropagation()}
                                   />
                                   <div className="flex items-center space-x-2">
-                                    <span className="text-sm font-medium text-gray-900">{displayName}</span>
+                                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
                                     {(() => {
                                       const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
                                       return standardGatherings.length > 0 && (
@@ -2164,14 +2164,14 @@ const PeoplePage: React.FC = () => {
 
       {/* Archived People Section */}
       {archivedPeople && archivedPeople.length > 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg leading-6 font-medium text-gray-900">Archived People ({archivedPeople.length})</h3>
+              <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Archived People ({archivedPeople.length})</h3>
               <button
                 type="button"
                 onClick={() => setShowArchivedPeople(v => !v)}
-                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                className="text-sm font-medium text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white"
               >
                 {showArchivedPeople ? 'Hide' : `Show (${archivedPeople.length})`}
               </button>
@@ -2185,10 +2185,10 @@ const PeoplePage: React.FC = () => {
                   return (
                     <div 
                       key={`arch-${person.id}`} 
-                      className={`flex items-center justify-between p-3 rounded-md border-2 border-gray-200 hover:border-gray-300 ${needsWideLayout ? 'col-span-2' : ''}`}
+                      className={`flex items-center justify-between p-3 rounded-md border-2 border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 ${needsWideLayout ? 'col-span-2' : ''}`}
                     >
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                         {displayName}
                       </div>
                       <div className="text-xs text-gray-500">
@@ -2237,10 +2237,10 @@ const PeoplePage: React.FC = () => {
       {/* Delete Person Confirmation Modal */}
       {showDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Deletion
                 </h3>
                 <button
@@ -2251,12 +2251,12 @@ const PeoplePage: React.FC = () => {
                 </button>
               </div>
               
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
               
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to delete <strong>{deleteConfirmation.personName}</strong>? This action cannot be undone.
                 </p>
               </div>
@@ -2264,7 +2264,7 @@ const PeoplePage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -2288,10 +2288,10 @@ const PeoplePage: React.FC = () => {
       {/* Remove People Confirmation Modal */}
       {showRemoveModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Removal
                 </h3>
                 <button
@@ -2302,12 +2302,12 @@ const PeoplePage: React.FC = () => {
                 </button>
               </div>
               
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
               
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to remove <strong>{removeConfirmation.peopleCount} people</strong> from this service? This action cannot be undone.
                 </p>
               </div>
@@ -2315,7 +2315,7 @@ const PeoplePage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowRemoveModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -2338,10 +2338,10 @@ const PeoplePage: React.FC = () => {
 
       {showPermanentDeleteModal ? createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Permanently Delete</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Permanently Delete</h3>
                 <button
                   onClick={() => setShowPermanentDeleteModal(false)}
                   className="text-gray-400 hover:text-gray-600"
@@ -2350,12 +2350,12 @@ const PeoplePage: React.FC = () => {
                 </button>
               </div>
 
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
 
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   This will permanently delete <strong>{permanentDeleteTarget.personName}</strong> and related attendance records. This action cannot be undone.
                 </p>
               </div>
@@ -2363,7 +2363,7 @@ const PeoplePage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowPermanentDeleteModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -2397,10 +2397,10 @@ const PeoplePage: React.FC = () => {
        {/* Delete Person Confirmation Modal */}
        {showDeleteModal && (
          <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
              <div className="mt-3">
                <div className="flex items-center justify-between mb-4">
-                 <h3 className="text-lg font-medium text-gray-900">
+                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                    Confirm Deletion
                  </h3>
                  <button
@@ -2411,12 +2411,12 @@ const PeoplePage: React.FC = () => {
                  </button>
                </div>
                
-               <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+               <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                  <TrashIcon className="h-6 w-6 text-red-600" />
                </div>
                
                <div className="text-center mb-6">
-                 <p className="text-sm text-gray-500">
+                 <p className="text-sm text-gray-500 dark:text-gray-400">
                    Are you sure you want to delete <strong>{deleteConfirmation.personName}</strong>? This action cannot be undone.
                  </p>
                </div>
@@ -2424,7 +2424,7 @@ const PeoplePage: React.FC = () => {
                <div className="flex space-x-3">
                  <button
                    onClick={() => setShowDeleteModal(false)}
-                   className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                   className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                  >
                    Cancel
                  </button>
@@ -2447,10 +2447,10 @@ const PeoplePage: React.FC = () => {
        {/* Remove People Confirmation Modal */}
        {showRemoveModal && (
          <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
              <div className="mt-3">
                <div className="flex items-center justify-between mb-4">
-                 <h3 className="text-lg font-medium text-gray-900">
+                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                    Confirm Removal
                  </h3>
                  <button
@@ -2461,12 +2461,12 @@ const PeoplePage: React.FC = () => {
                  </button>
                </div>
                
-               <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+               <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                  <TrashIcon className="h-6 w-6 text-red-600" />
                </div>
                
                <div className="text-center mb-6">
-                 <p className="text-sm text-gray-500">
+                 <p className="text-sm text-gray-500 dark:text-gray-400">
                    Are you sure you want to remove <strong>{removeConfirmation.peopleCount} people</strong> from this service? This action cannot be undone.
                  </p>
                </div>
@@ -2474,7 +2474,7 @@ const PeoplePage: React.FC = () => {
                <div className="flex space-x-3">
                  <button
                    onClick={() => setShowRemoveModal(false)}
-                   className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                   className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                  >
                    Cancel
                  </button>
@@ -2503,7 +2503,7 @@ const PeoplePage: React.FC = () => {
        {selectedPeople.length > 0 ? (
          <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
            <div className="flex items-center justify-end space-x-3">
-             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Edit Selected
              </div>
              <button
@@ -2621,7 +2621,7 @@ const PeoplePage: React.FC = () => {
            </div>
            {/* Archive Button - Always shown when people are selected */}
            <div className="flex items-center justify-end space-x-3">
-             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
              </div>
              <button
@@ -2641,7 +2641,7 @@ const PeoplePage: React.FC = () => {
            {/* Merge Button - Only shown for 2+ people and admin users */}
            {isAdmin && selectedPeople.length >= 2 && (
                <div className="flex items-center justify-end space-x-3">
-                 <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 whitespace-nowrap">
+                 <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge
                  </div>
                  <button

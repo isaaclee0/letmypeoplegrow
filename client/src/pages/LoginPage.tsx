@@ -144,7 +144,7 @@ const LoginPage: React.FC = () => {
   if (hasUsers === null || hasExpiredToken === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-500 via-primary-600 to-secondary-500 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8 bg-white rounded-xl shadow-2xl p-8">
+        <div className="max-w-md w-full space-y-8 bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8">
           <div className="text-center">
             <div className="mx-auto h-20 w-20 flex items-center justify-center">
               <img
@@ -154,10 +154,10 @@ const LoginPage: React.FC = () => {
               />
             </div>
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mt-6"></div>
-            <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 font-title">
+            <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 dark:text-gray-100 font-title">
               Loading...
             </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
+            <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
               Checking system status...
             </p>
           </div>
@@ -168,7 +168,7 @@ const LoginPage: React.FC = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-500 via-primary-600 to-secondary-500 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-white rounded-xl shadow-2xl p-8">
+      <div className="max-w-md w-full space-y-8 bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8">
         <div>
           <div className="mx-auto h-20 w-20 flex items-center justify-center">
             <img
@@ -177,10 +177,10 @@ const LoginPage: React.FC = () => {
               alt="Let My People Grow"
             />
           </div>
-          <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 font-title">
+          <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 dark:text-gray-100 font-title">
             {hasExpiredToken ? 'Welcome Back to Let My People Grow' : 'Welcome to Let My People Grow'}
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
+          <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
             {hasExpiredToken 
               ? 'Sign in again to continue with your church attendance tracking system'
               : hasNonAdminUsers 
@@ -192,15 +192,15 @@ const LoginPage: React.FC = () => {
 
         {/* Error Display */}
         {error && (
-          <div className="rounded-md bg-red-50 p-4">
-            <div className="text-sm text-red-700">{error}</div>
+          <div className="rounded-md bg-red-50 dark:bg-red-900/30 p-4">
+            <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
           </div>
         )}
 
         {step === 'contact' ? (
           <form className="mt-8 space-y-6" onSubmit={contactForm.handleSubmit(handleContactSubmit)}>
             <div>
-              <label htmlFor="contact" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="contact" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Email or Phone Number *
               </label>
               <input
@@ -212,7 +212,7 @@ const LoginPage: React.FC = () => {
                   }
                 })}
                 type="text"
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
                 placeholder="your@email.com or +1234567890"
               />
               {contactForm.formState.errors.contact && (
@@ -248,13 +248,13 @@ const LoginPage: React.FC = () => {
                 inputMode="numeric"
                 maxLength={6}
                 autoComplete="one-time-code"
-                className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 text-center text-lg tracking-widest focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10"
+                className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 text-center text-lg tracking-widest focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10"
                 placeholder="000000"
               />
               {codeForm.formState.errors.code && (
                 <p className="mt-1 text-sm text-red-600">{codeForm.formState.errors.code.message}</p>
               )}
-              <p className="mt-1 text-xs text-gray-500 text-center">
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-center">
                 Code sent to: <span className="font-medium">{contact}</span>
               </p>
             </div>
@@ -291,11 +291,11 @@ const LoginPage: React.FC = () => {
 
         {/* Development Mode Instructions */}
         {process.env.NODE_ENV === 'development' && (
-          <div className="mt-6 pt-6 border-t border-gray-200">
+          <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
             <div className="text-center">
-              <p className="text-sm text-gray-500 mb-3">Development Mode</p>
-              <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-                <div className="text-sm text-blue-800">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Development Mode</p>
+              <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-4">
+                <div className="text-sm text-blue-800 dark:text-blue-300">
                   <p className="font-medium mb-1">Quick Development Login:</p>
                   <p>Email: <code className="bg-blue-100 px-1 rounded">dev@church.local</code></p>
                   <p>Code: <code className="bg-blue-100 px-1 rounded">000000</code></p>
@@ -308,7 +308,7 @@ const LoginPage: React.FC = () => {
         {/* Signup Link - Show different messaging based on user existence */}
         <div className="text-center">
           {hasNonAdminUsers ? (
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
               New to Let My People Grow?{' '}
               <Link to="/signup" className="font-medium text-primary-600 hover:text-primary-500">
                 Create your church account
@@ -316,7 +316,7 @@ const LoginPage: React.FC = () => {
             </p>
           ) : (
             <div className="space-y-3">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
                 No users found. Get started by creating your church account.
               </p>
               <Link 

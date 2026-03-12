@@ -145,23 +145,23 @@ const MergeModal: React.FC<MergeModalProps> = ({
   return createPortal(
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
+        <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               {mergeMode === 'individuals' ? 'Merge Individuals into Family' :
                mergeMode === 'families' ? 'Merge Families' : 'Deduplicate Individuals'}
             </h3>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-              <div className="text-sm text-red-700">{error}</div>
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+              <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
             </div>
           )}
 
@@ -169,33 +169,33 @@ const MergeModal: React.FC<MergeModalProps> = ({
             {mergeMode === 'individuals' ? (
               <>
                 <div>
-                  <p className="text-sm text-gray-600 mb-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                     Merge {selectedPeople.length} selected individuals into a new family. This is useful when people get married or need to be grouped together.
                   </p>
 
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Family Name *
                       </label>
                       <input
                         type="text"
                         value={mergeData.familyName}
                         onChange={(e) => setMergeData({...mergeData, familyName: e.target.value})}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         placeholder="Enter family name"
                         required
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Family Type
                       </label>
                       <select
                         value={mergeData.familyType}
                         onChange={(e) => setMergeData({...mergeData, familyType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor'})}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       >
                         <option value="regular">Regular Family</option>
                         <option value="local_visitor">Local Visitor Family</option>
@@ -208,9 +208,9 @@ const MergeModal: React.FC<MergeModalProps> = ({
                         type="checkbox"
                         checked={mergeData.mergeAssignments}
                         onChange={(e) => setMergeData({...mergeData, mergeAssignments: e.target.checked})}
-                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                       />
-                      <span className="text-sm text-gray-700">
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
                         Merge gathering assignments from all individuals
                       </span>
                     </div>
@@ -220,19 +220,19 @@ const MergeModal: React.FC<MergeModalProps> = ({
             ) : mergeMode === 'families' ? (
               <>
                 <div>
-                  <p className="text-sm text-gray-600 mb-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                     Merge families. Select which family to keep and which families to merge into it.
                   </p>
 
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Keep Family
                       </label>
                       <select
                         value={mergeData.keepFamilyId || ''}
                         onChange={(e) => setMergeData({...mergeData, keepFamilyId: e.target.value ? parseInt(e.target.value) : null})}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       >
                         <option value="">Select family to keep</option>
                         {families.map(family => (
@@ -244,26 +244,26 @@ const MergeModal: React.FC<MergeModalProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         New Family Name (Optional)
                       </label>
                       <input
                         type="text"
                         value={mergeData.familyName}
                         onChange={(e) => setMergeData({...mergeData, familyName: e.target.value})}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         placeholder="Leave blank to keep current name"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         New Family Type (Optional)
                       </label>
                       <select
                         value={mergeData.familyType}
                         onChange={(e) => setMergeData({...mergeData, familyType: e.target.value as 'regular' | 'local_visitor' | 'traveller_visitor'})}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       >
                         <option value="regular">Regular Family</option>
                         <option value="local_visitor">Local Visitor Family</option>
@@ -276,17 +276,17 @@ const MergeModal: React.FC<MergeModalProps> = ({
             ) : (
               <>
                 <div>
-                  <p className="text-sm text-gray-600 mb-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                     Deduplicate {selectedPeople.length} selected individuals. Choose which record to keep as the master. The rest will be removed. Use this only for true duplicates, not different people.
                   </p>
 
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700">Master record to keep</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Master record to keep</label>
                       <select
                         value={dedupeKeepId || ''}
                         onChange={(e) => setDedupeKeepId(e.target.value ? parseInt(e.target.value) : null)}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       >
                         <option value="">Select record to keep</option>
                         {people.filter(p => selectedPeople.includes(p.id)).map(p => (
@@ -297,9 +297,9 @@ const MergeModal: React.FC<MergeModalProps> = ({
                       </select>
                     </div>
 
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                    <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-4">
                       <div className="flex">
-                        <div className="text-sm text-yellow-700">
+                        <div className="text-sm text-yellow-700 dark:text-yellow-300">
                           <strong>Warning:</strong> This will permanently delete {selectedPeople.length - 1} individual(s). Ensure you selected the correct master record above.
                         </div>
                       </div>
@@ -310,9 +310,9 @@ const MergeModal: React.FC<MergeModalProps> = ({
                         type="checkbox"
                         checked={mergeData.mergeAssignments}
                         onChange={(e) => setMergeData({...mergeData, mergeAssignments: e.target.checked})}
-                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500"
                       />
-                      <span className="text-sm text-gray-700">
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
                         Merge gathering assignments from deleted individuals to the kept individual
                       </span>
                     </div>
@@ -325,7 +325,7 @@ const MergeModal: React.FC<MergeModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 disabled={isLoading}
               >
                 Cancel

@@ -62,34 +62,34 @@ const NotesModal: React.FC<NotesModalProps> = ({
 
   return createPortal(
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-      <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+      <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white dark:bg-gray-800">
         <div className="mt-3">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
               Family Notes: {family.familyName}
             </h3>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               <XMarkIcon className="h-6 w-6" />
             </button>
           </div>
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
-              <div className="text-sm text-red-700">{error}</div>
+            <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 mb-4">
+              <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
             </div>
           )}
 
           <div className="mb-4">
-            <label htmlFor="familyNotes" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="familyNotes" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Notes
             </label>
             <textarea
               id="familyNotes"
               rows={6}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
               placeholder="Add notes about this family..."
               value={currentNotes}
               onChange={(e) => setCurrentNotes(e.target.value)}
@@ -100,7 +100,7 @@ const NotesModal: React.FC<NotesModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
               disabled={isLoading}
             >
               Cancel

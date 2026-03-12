@@ -20,7 +20,7 @@ import SettingsPage from './pages/SettingsPage';
 import NotificationRulesPage from './pages/NotificationRulesPage';
 import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
-import ProfilePage from './pages/ProfilePage';
+// ProfilePage retired: content moved to Settings > My Info tab
 import WebSocketTestPage from './pages/WebSocketTestPage';
 import ImportPage from './pages/ImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
@@ -126,7 +126,7 @@ function App() {
             <PWAUpdateProvider>
               <ToastContainer>
               <Router>
-            <div className="min-h-screen bg-gray-50">
+            <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
               <Routes>
                 <Route
                   path="/signup"
@@ -192,7 +192,7 @@ function App() {
                     } 
                   />
                   <Route path="settings" element={<SettingsPage />} />
-                  <Route path="profile" element={<ProfilePage />} />
+                  <Route path="profile" element={<Navigate to="/app/settings?tab=myinfo" replace />} />
                   <Route
                     path="import"
                     element={

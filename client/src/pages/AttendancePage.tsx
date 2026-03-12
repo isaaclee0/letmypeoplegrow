@@ -3,18 +3,20 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { format, addWeeks, startOfWeek, addDays, isBefore, startOfDay, parseISO } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
-import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, individualsAPI, visitorConfigAPI, GatheringType, Individual, Visitor } from '../services/api';
+import { gatheringsAPI, attendanceAPI, authAPI, familiesAPI, individualsAPI, GatheringType, Individual, Visitor } from '../services/api';
 import AttendanceDatePicker from '../components/AttendanceDatePicker';
 import { useToast } from '../components/ToastContainer';
 import ActiveUsersIndicator from '../components/ActiveUsersIndicator';
 import { generateFamilyName } from '../utils/familyNameUtils';
-import { validatePerson, validateMultiplePeople } from '../utils/validationUtils';
 import { getWebSocketMode } from '../utils/constants';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import logger from '../utils/logger';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
+import { useTabSlider } from '../hooks/useTabSlider';
+import { useGatheringReorder } from '../hooks/useGatheringReorder';
+import { useOfflineAttendance } from '../hooks/useOfflineAttendance';
 import { 
   CalendarIcon, 
   PlusIcon, 
@@ -28,7 +30,6 @@ import {
   ChevronUpIcon,
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
-import { Bars3Icon } from '@heroicons/react/24/outline';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
 
 interface PersonForm {
@@ -65,7 +66,6 @@ const AttendancePage: React.FC = () => {
   const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
   // Refs to avoid stale closures and reduce heavy deps in effects
@@ -76,17 +76,6 @@ const AttendancePage: React.FC = () => {
   const [presentById, setPresentById] = useState<Record<number, boolean>>({});
   const [savingById, setSavingById] = useState<Record<number, boolean>>({});
   const presentByIdRef = useRef<Record<number, boolean>>({});
-  
-  // Offline storage for pending attendance changes - declared early to avoid initialization order issues
-  const [pendingChanges, setPendingChanges] = useState<Array<{
-    individualId: number;
-    present: boolean;
-    timestamp: number;
-    gatheringId: number;
-    date: string;
-  }>>([]);
-  
-  const [isSyncing, setIsSyncing] = useState(false);
   
   // Trigger for refreshing regular attendance data (similar to how visitors work)
   const [attendanceRefreshTrigger, setAttendanceRefreshTrigger] = useState(0);
@@ -134,13 +123,6 @@ const AttendancePage: React.FC = () => {
     return newPresentById;
   }, []);
 
-  // REMOVED: This useEffect was causing the first-load issue by overwriting server data
-  // with potentially stale attendanceList data. Regular attenders now work like visitors
-  // with direct server data initialization in loadAttendanceData().
-  // 
-  // The visitor system works correctly because it doesn't have this conflicting useEffect.
-  // We should rely on direct server data initialization for both types.
-
   // Critical: Clear presentById when date or gathering changes to prevent cross-date contamination
   const prevDateRef = useRef<string | null>(null);
   const prevGatheringRef = useRef<number | null>(null);
@@ -169,35 +151,6 @@ const AttendancePage: React.FC = () => {
     prevGatheringRef.current = selectedGathering?.id || null;
   }, [selectedDate, selectedGathering?.id]); // Removed presentById - only react to date/gathering changes
 
-  // Load cached data immediately on component mount for better UX during navigation
-  useEffect(() => {
-    // Check for cached data on mount
-    
-    const cachedData = localStorage.getItem('attendance_cached_data');
-    
-    if (!cachedData) {
-      logger.log('❌ No cached attendance data found in localStorage');
-      return;
-    }
-    
-    try {
-      const parsed = JSON.parse(cachedData);
-      const cacheAge = Date.now() - (parsed.timestamp || 0);
-      const isStale = cacheAge > 120000; // 2 minutes - more conservative for PWA reliability
-      
-      // Found cached data
-      
-      // Note: Cached attendance data is now loaded by dedicated effects
-      if (isStale) {
-        // Cache is stale, will load fresh data
-      } else if (!parsed.attendanceList?.length) {
-        // Cache exists but no attendance data
-      }
-    } catch (err) {
-      console.error('❌ Failed to parse cached attendance data on mount:', err);
-    }
-  }, []); // Run only once on mount
-  
   const getLastViewed = async () => {
     try {
       // First try the new user preferences system
@@ -248,7 +201,6 @@ const AttendancePage: React.FC = () => {
     return status.type === 'past' && status.daysDiff >= 14;
   }, [user?.role, selectedDate]);
 
-
   const handleGroupByFamilyChange = useCallback((checked: boolean) => {
     setGroupByFamily(checked);
     // Save the setting for this gathering with improved localStorage handling
@@ -297,61 +249,9 @@ const AttendancePage: React.FC = () => {
   } | null>(null);
   const [lastUserModification, setLastUserModification] = useState<{ [key: number]: number }>({});
   
-  // Tab slider drag state
-  const [isDragging, setIsDragging] = useState(false);
-  const [startX, setStartX] = useState(0);
-  const [scrollLeft, setScrollLeft] = useState(0);
-  const [showRightFade, setShowRightFade] = useState(true);
-  const [showDesktopRightFade, setShowDesktopRightFade] = useState(true);
-  const [showLeftFade, setShowLeftFade] = useState(false);
-  const [showDesktopLeftFade, setShowDesktopLeftFade] = useState(false);
-  const tabSliderRef = useRef<HTMLDivElement>(null);
-  const desktopTabSliderRef = useRef<HTMLDivElement>(null);
-  
-  // Performance optimization refs
-  const animationFrameRef = useRef<number | null>(null);
-  const lastTouchTimeRef = useRef<number>(0);
-  const touchThrottleDelay = 16; // ~60fps
-
   const [visitorAttendance, setVisitorAttendance] = useState<{ [key: number]: boolean }>({});
   const [isSubmittingVisitor, setIsSubmittingVisitor] = useState(false);
   const [activeStatBubble, setActiveStatBubble] = useState<string | null>(null);
-  
-  // Smart truncation function for gathering names
-  const getSmartTruncatedName = useCallback((name: string, allNames: string[], maxLength: number = 17) => {
-    if (name.length <= maxLength) return name;
-    
-    // Find other names that start similarly
-    const similarNames = allNames.filter(n => n !== name && n.toLowerCase().startsWith(name.toLowerCase().substring(0, Math.min(10, name.length))));
-    
-    if (similarNames.length === 0) {
-      // No similar names, use simple truncation
-      return `${name.substring(0, maxLength - 3)}...`;
-    }
-    
-    // Find the shortest common prefix
-    let commonPrefix = '';
-    const shortestSimilar = similarNames.reduce((shortest, current) => 
-      current.length < shortest.length ? current : shortest
-    );
-    
-    for (let i = 0; i < Math.min(name.length, shortestSimilar.length); i++) {
-      if (name[i].toLowerCase() === shortestSimilar[i].toLowerCase()) {
-        commonPrefix += name[i];
-      } else {
-        break;
-      }
-    }
-    
-    // If common prefix is long, show the end part instead
-    if (commonPrefix.length > 8) {
-      const endPart = name.substring(name.length - (maxLength - 3));
-      return `...${endPart}`;
-    }
-    
-    // Otherwise, show the beginning with ellipsis
-    return `${name.substring(0, maxLength - 3)}...`;
-  }, []);
   
   // WebSocket integration with environment-based configuration
   // Use global WebSocket context for attendance updates
@@ -450,7 +350,6 @@ const AttendancePage: React.FC = () => {
     }
   };
 
-
   // Add state for recent visitors
   const [recentVisitors, setRecentVisitors] = useState<Visitor[]>([]);
   const [showRecentVisitors, setShowRecentVisitors] = useState(false);
@@ -502,112 +401,6 @@ const AttendancePage: React.FC = () => {
     const id = setTimeout(() => document.addEventListener('click', handler), 0);
     return () => { clearTimeout(id); document.removeEventListener('click', handler); };
   }, [activeStatBubble]);
-
-
-  // Tab slider drag handlers
-  const handleMouseDown = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!sliderRef.current) return;
-    setIsDragging(true);
-    setStartX(e.pageX - sliderRef.current.offsetLeft);
-    setScrollLeft(sliderRef.current.scrollLeft);
-    sliderRef.current.style.cursor = 'grabbing';
-  };
-
-  const handleMouseLeave = (sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!sliderRef.current) return;
-    setIsDragging(false);
-    sliderRef.current.style.cursor = 'grab';
-  };
-
-  const handleMouseUp = (sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!sliderRef.current) return;
-    setIsDragging(false);
-    sliderRef.current.style.cursor = 'grab';
-  };
-
-  const handleMouseMove = (e: React.MouseEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!isDragging || !sliderRef.current) return;
-    e.preventDefault();
-    const x = e.pageX - sliderRef.current.offsetLeft;
-    const walk = (x - startX) * 2; // Scroll speed multiplier
-    sliderRef.current.scrollLeft = scrollLeft - walk;
-  };
-
-  // Optimized touch handlers for mobile with better performance
-  const handleTouchStart = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!sliderRef.current) return;
-    
-    // Cancel any pending animation frame
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-    
-    setIsDragging(true);
-    setStartX(e.touches[0].pageX - sliderRef.current.offsetLeft);
-    setScrollLeft(sliderRef.current.scrollLeft);
-    lastTouchTimeRef.current = Date.now();
-  };
-
-  const handleTouchMove = (e: React.TouchEvent, sliderRef: React.RefObject<HTMLDivElement>) => {
-    if (!isDragging || !sliderRef.current) return;
-    
-    // Throttle touch events for better performance
-    const now = Date.now();
-    if (now - lastTouchTimeRef.current < touchThrottleDelay) {
-      return;
-    }
-    lastTouchTimeRef.current = now;
-    
-    e.preventDefault();
-    
-    // Use requestAnimationFrame for smooth scrolling
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    
-    animationFrameRef.current = requestAnimationFrame(() => {
-      if (!sliderRef.current) return;
-      const x = e.touches[0].pageX - sliderRef.current.offsetLeft;
-      const walk = (x - startX) * 2;
-      sliderRef.current.scrollLeft = scrollLeft - walk;
-    });
-  };
-
-  const handleTouchEnd = () => {
-    setIsDragging(false);
-    
-    // Clean up animation frame
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-  };
-
-  // Cleanup animation frames on unmount
-  useEffect(() => {
-    return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-  }, []);
-
-  // Check scroll position and update fade indicators
-  const checkScrollPosition = (sliderRef: React.RefObject<HTMLDivElement>, isMobile: boolean) => {
-    if (!sliderRef.current) return;
-    const { scrollLeft, scrollWidth, clientWidth } = sliderRef.current;
-    const isAtEnd = scrollLeft + clientWidth >= scrollWidth - 5; // 5px tolerance
-    const isAtStart = scrollLeft <= 5; // 5px tolerance
-    
-    if (isMobile) {
-      setShowRightFade(!isAtEnd);
-      setShowLeftFade(!isAtStart);
-    } else {
-      setShowDesktopRightFade(!isAtEnd);
-      setShowDesktopLeftFade(!isAtStart);
-    }
-  };
 
   // Compute valid dates for any gathering (pure function, no state dependency)
   const computeValidDatesForGathering = useCallback((gathering: GatheringType): string[] => {
@@ -1090,43 +883,6 @@ const AttendancePage: React.FC = () => {
 
   // WebSocket real-time updates handle all data synchronization now
   // No need for visibility-based refreshes that cause issues on mobile PWA
-
-  // Load recent visitors when gathering changes
-  // REMOVED: This is now loaded by the combined /full endpoint
-  // useEffect(() => {
-  //   const loadRecentVisitors = async () => {
-  //     if (!selectedGathering) return;
-  //
-  //     try {
-  //       const response = await attendanceAPI.getRecentVisitors(selectedGathering.id);
-  //       setRecentVisitors(response.data.visitors || []);
-  //       setAllRecentVisitorsPool(response.data.visitors || []);
-  //     } catch (err) {
-  //       console.error('Failed to load recent visitors:', err);
-  //     }
-  //   };
-  //
-  //   loadRecentVisitors();
-  // }, [selectedGathering]);
-
-  // REMOVED: This is now loaded by the combined /full endpoint
-  // useEffect(() => {
-  //   const loadAllChurchPeople = async () => {
-  //     try {
-  //       setIsLoadingAllVisitors(true);
-  //       const response = await attendanceAPI.getAllPeople();
-  //       setAllChurchVisitors(response.data.visitors || []); // Keep using same state var for compatibility
-  //     } catch (err) {
-  //       console.error('Failed to load all church people:', err);
-  //     } finally {
-  //       setIsLoadingAllVisitors(false);
-  //     }
-  //   };
-  //   loadAllChurchPeople();
-  // }, []);
-
-  // REMOVED: This is now loaded by the combined /full endpoint
-  // The /full endpoint provides visitors, recentVisitors, and allChurchPeople in one call
 
   // Load regular attendance data when gathering or date changes (CACHE-FIRST approach)
   useEffect(() => {
@@ -1736,39 +1492,6 @@ const AttendancePage: React.FC = () => {
     }
   }, [isWebSocketConnected, user?.id, refreshGatherings, syncTimeWithServer]);
 
-  // WebSocket attendance updates using global context
-  const attendanceWebSocket = {
-    isConnected: isWebSocketConnected,
-    isInRoom: false, // Room system is disabled, using church-based broadcasting
-    connectionStatus: connectionStatus,
-    roomName: null,
-    lastUpdate: null,
-    userActivity: [], // No active users tracking in simplified WebSocket
-    joinRoom: () => {}, // Room system disabled
-    leaveRoom: () => {}, // Room system disabled
-    forceReconnect: () => {
-      if (socket) {
-        socket.disconnect();
-        socket.connect();
-      }
-    }
-  };
-
-  // Polling is permanently disabled in favor of WebSocket real-time updates
-  useEffect(() => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-    
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, []);
-
   // Clean up old modification timestamps (older than 60 seconds)
   useEffect(() => {
     const cleanupInterval = setInterval(() => {
@@ -1788,15 +1511,11 @@ const AttendancePage: React.FC = () => {
     return () => clearInterval(cleanupInterval);
   }, []);
 
-
-
   // Handle add visitor
   const handleAddVisitor = async () => {
     if (isAttendanceLocked) { setError('Editing locked for attendance takers for services older than 2 weeks'); return; }
-    // Set default person type based on user role
-    const defaultPersonType = user?.role === 'admin' || user?.role === 'coordinator' ? 'local_visitor' : 'local_visitor';
     setVisitorForm({
-      personType: defaultPersonType,
+      personType: 'local_visitor',
       notes: '',
       persons: [{
         firstName: '',
@@ -1860,8 +1579,6 @@ const AttendancePage: React.FC = () => {
     });
     setShowAddVisitorModal(true);
   };
-
-
 
   // Add functions to manage persons array
   const addPerson = () => {
@@ -2111,8 +1828,6 @@ const AttendancePage: React.FC = () => {
       setIsSubmittingVisitor(false);
     }
   };
-
-
 
   // Group attendees by family and filter based on search term (memoized)
   const groupedAttendees = useMemo(() => {
@@ -2609,45 +2324,36 @@ const AttendancePage: React.FC = () => {
     }));
   };
 
+  // Gathering reorder hook
+  const {
+    orderedGatherings,
+    showReorderModal,
+    reorderList,
+    openReorderModal,
+    closeReorderModal,
+    onReorderDragStart,
+    onReorderDragOver,
+    onReorderDrop,
+    moveItemUp,
+    saveReorder,
+  } = useGatheringReorder({ gatherings, userId: user?.id });
 
-
-  // Gatherings order management (drag & drop) with localStorage persistence
-  const [isReorderMode, setIsReorderMode] = useState(false);
-  const [orderedGatherings, setOrderedGatherings] = useState<GatheringType[]>([]);
-  const draggingGatheringId = useRef<number | null>(null);
-  const [showReorderModal, setShowReorderModal] = useState(false);
-  const [reorderList, setReorderList] = useState<GatheringType[]>([]);
-  const dragIndexRef = useRef<number | null>(null);
-
-  // Add scroll event listeners for fade indicators
-  useEffect(() => {
-    const handleScroll = () => {
-      checkScrollPosition(tabSliderRef, true);
-      checkScrollPosition(desktopTabSliderRef, false);
-    };
-
-    const mobileSlider = tabSliderRef.current;
-    const desktopSlider = desktopTabSliderRef.current;
-
-    if (mobileSlider) {
-      mobileSlider.addEventListener('scroll', handleScroll);
-    }
-    if (desktopSlider) {
-      desktopSlider.addEventListener('scroll', handleScroll);
-    }
-
-    // Initial check
-    handleScroll();
-
-    return () => {
-      if (mobileSlider) {
-        mobileSlider.removeEventListener('scroll', handleScroll);
-      }
-      if (desktopSlider) {
-        desktopSlider.removeEventListener('scroll', handleScroll);
-      }
-    };
-  }, [gatherings, orderedGatherings]);
+  // Tab slider hook
+  const {
+    tabSliderRef,
+    desktopTabSliderRef,
+    showRightFade,
+    showDesktopRightFade,
+    showLeftFade,
+    showDesktopLeftFade,
+    handleMouseDown,
+    handleMouseLeave,
+    handleMouseUp,
+    handleMouseMove,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
+  } = useTabSlider([gatherings, orderedGatherings]);
 
   // Helper functions for responsive grid layout
   const getPersonDisplayName = (person: any, familyName?: string) => {
@@ -2716,282 +2422,42 @@ const AttendancePage: React.FC = () => {
     return name.length > 20 || name.split(' ').some(word => word.length > 15);
   };
 
-  // Offline storage functions
-  const saveToOfflineStorage = useCallback((change: {
-    individualId: number;
-    present: boolean;
-    gatheringId: number;
-    date: string;
-  }) => {
-    const offlineChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-    const newChange = {
-      ...change,
-      timestamp: Date.now()
-    };
-    
-    // Remove any existing change for this individual in this gathering/date
-    const filteredChanges = offlineChanges.filter((c: any) => 
-      !(c.individualId === change.individualId && 
-        c.gatheringId === change.gatheringId && 
-        c.date === change.date)
-    );
-    
-    const updatedChanges = [...filteredChanges, newChange];
-    localStorage.setItem('attendance_offline_changes', JSON.stringify(updatedChanges));
-    setPendingChanges(updatedChanges);
-    
-    logger.log('💾 Saved to offline storage:', newChange);
-  }, []);
-
-  const syncOfflineChanges = useCallback(async () => {
-    if (!isWebSocketConnected || pendingChanges.length === 0) return;
-    
-    setIsSyncing(true);
-    logger.log('🔄 Syncing offline changes:', pendingChanges.length, 'changes');
-    
-    try {
-      // Group changes by gathering and date
-      const changesByGathering: { [key: string]: Array<{ individualId: number; present: boolean }> } = {};
-      
-      pendingChanges.forEach(change => {
-        const key = `${change.gatheringId}|${change.date}`;
-        if (!changesByGathering[key]) {
-          changesByGathering[key] = [];
-        }
-        changesByGathering[key].push({
-          individualId: change.individualId,
-          present: change.present
-        });
-      });
-
-      // Sync each group of changes
-      for (const [key, changes] of Object.entries(changesByGathering)) {
-        const [gatheringId, date] = key.split('|');
-        
-        logger.log(`🔄 Syncing ${changes.length} changes for gathering ${gatheringId} on ${date}:`, changes);
-        
-        try {
-          await sendAttendanceChange(parseInt(gatheringId), date, changes);
-          logger.log(`✅ Successfully synced ${changes.length} changes for gathering ${gatheringId} on ${date}`);
-        } catch (syncError) {
-          console.error(`❌ Failed to sync changes for gathering ${gatheringId} on ${date}:`, syncError);
-          throw syncError; // Re-throw to trigger the outer catch block
-        }
-      }
-
-      // Clear offline storage only if all syncs succeeded
-      localStorage.removeItem('attendance_offline_changes');
-      setPendingChanges([]);
-      setError(''); // Clear any lingering error messages
-      logger.log('✅ All offline changes synced successfully');
-      
-    } catch (error) {
-      console.error('❌ Failed to sync offline changes:', error);
-      
-      // If changes are old (more than 1 hour), clear them instead of retrying
-      const now = Date.now();
-      const oldChanges = pendingChanges.filter(change => {
-        const ageInMinutes = (now - change.timestamp) / (1000 * 60);
-        return ageInMinutes > 60; // Changes older than 1 hour
-      });
-      
-      if (oldChanges.length > 0) {
-        logger.log('🧹 Clearing old failed changes:', oldChanges.length);
-        localStorage.removeItem('attendance_offline_changes');
-        setPendingChanges([]);
-        setError(''); // Clear error since we're giving up on old changes
-      } else {
-        setError('Failed to sync offline changes. They will be retried when connection is restored.');
-        // Don't clear pending changes on error - they'll be retried
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [isWebSocketConnected, pendingChanges]);
-
-  // Load offline changes and cached attendance data on component mount
-  useEffect(() => {
-    // Clear any lingering error messages on component mount
-    setError('');
-    
-    const offlineChanges = JSON.parse(localStorage.getItem('attendance_offline_changes') || '[]');
-    
-    // Clear any old offline changes that might have invalid date formats or are too old
-    const now = Date.now();
-    const validChanges = offlineChanges.filter((change: any) => {
-      // Check if the date format is valid (should be YYYY-MM-DD)
-      if (!change.date || !/^\d{4}-\d{2}-\d{2}$/.test(change.date)) {
-        logger.log('🧹 Clearing invalid date format:', change.date);
-        return false;
-      }
-      
-      // Check age (keep changes less than 24 hours old)
-      const ageInHours = (now - change.timestamp) / (1000 * 60 * 60);
-      if (ageInHours >= 24) {
-        logger.log('🧹 Clearing old change:', change);
-        return false;
-      }
-      
-      return true;
-    });
-    
-    if (validChanges.length !== offlineChanges.length) {
-      logger.log('🧹 Cleared stale offline changes:', offlineChanges.length - validChanges.length);
-      localStorage.setItem('attendance_offline_changes', JSON.stringify(validChanges));
-    }
-    
-    setPendingChanges(validChanges);
-    // Loaded offline changes
-    
-    // Note: Cached attendance data is now loaded by dedicated effects
-  }, [selectedGathering?.id, selectedDate]);
-
-  // Clear error on component unmount to prevent stale state
-  useEffect(() => {
-    return () => {
-      setError('');
-    };
-  }, []);
-
-  // Sync offline changes when connection is restored
-  useEffect(() => {
-    if (isWebSocketConnected) {
-      if (pendingChanges.length > 0) {
-        syncOfflineChanges();
-      } else {
-        // Clear any lingering error messages when connection is restored
-        setError('');
-      }
-    }
-  }, [isWebSocketConnected, pendingChanges.length, syncOfflineChanges]);
-
-  const loadSavedOrder = useCallback(async (items: GatheringType[]) => {
-    if (!user?.id) return items;
-    try {
-      const savedOrder = await userPreferences.getGatheringOrder();
-      if (!savedOrder?.order) return items;
-      
-      const orderIds: number[] = savedOrder.order;
-      const idToItem = new Map(items.map(i => [i.id, i]));
-      const ordered: GatheringType[] = [];
-      orderIds.forEach(id => {
-        const item = idToItem.get(id);
-        if (item) ordered.push(item);
-      });
-      items.forEach(i => { if (!orderIds.includes(i.id)) ordered.push(i); });
-      return ordered;
-    } catch (e) {
-      logger.warn('Failed to load saved gathering order', e);
-      return items;
-    }
-  }, [user?.id]);
-
-  useEffect(() => {
-    const loadOrder = async () => {
-      const ordered = await loadSavedOrder(gatherings);
-      setOrderedGatherings(ordered);
-    };
-    loadOrder();
-  }, [gatherings, loadSavedOrder]);
-
-  const saveOrder = useCallback(async (items: GatheringType[]) => {
-    if (!user?.id) return;
-    const ids = items.map(i => i.id);
-    try {
-      await userPreferences.setGatheringOrder(ids);
-    } catch (e) {
-      logger.warn('Failed to save gathering order', e);
-    }
-  }, [user?.id]);
-
-  const onDragStart = (id: number) => { draggingGatheringId.current = id; };
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); };
-  const onDrop = (targetId: number) => {
-    // No-op for tab strip; reordering handled in modal now
-    draggingGatheringId.current = null;
-  };
-
-  // Reorder modal helpers
-  const openReorderModal = () => {
-    const items = (orderedGatherings.length ? orderedGatherings : gatherings).slice();
-    setReorderList(items);
-    setShowReorderModal(true);
-  };
-  const closeReorderModal = () => setShowReorderModal(false);
-  const onReorderDragStart = (index: number) => { dragIndexRef.current = index; };
-  const onReorderDragOver = (e: React.DragEvent<HTMLDivElement>) => { e.preventDefault(); };
-  const onReorderDrop = (index: number) => {
-    const fromIndex = dragIndexRef.current;
-    dragIndexRef.current = null;
-    if (fromIndex == null || fromIndex === index) return;
-    setReorderList(prev => {
-      const next = prev.slice();
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(index, 0, moved);
-      return next;
-    });
-  };
-  
-  // Mobile reorder helper - move item up one position
-  const moveItemUp = (index: number) => {
-    if (index <= 0) return; // Can't move first item up
-    setReorderList(prev => {
-      const next = prev.slice();
-      const [moved] = next.splice(index, 1);
-      next.splice(index - 1, 0, moved);
-      return next;
-    });
-  };
-  
-  const saveReorder = async () => {
-    setOrderedGatherings(reorderList);
-    await saveOrder(reorderList);
-    // Persist default gathering as first item for cross-page defaults
-    if (user?.id && reorderList.length > 0) {
-      localStorage.setItem(`user_${user.id}_default_gathering_id`, String(reorderList[0].id));
-    }
-    setShowReorderModal(false);
-  };
+  // Offline attendance hook - must come after sendAttendanceChange definition
+  const {
+    pendingChanges,
+    isSyncing,
+    saveToOfflineStorage,
+    syncOfflineChanges,
+  } = useOfflineAttendance({
+    isConnected: isWebSocketConnected,
+    selectedGatheringId: selectedGathering?.id,
+    selectedDate,
+    sendAttendanceChange,
+    setError,
+  });
 
   return (
     <div className="space-y-6 pb-32">
       {/* Header */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Take Attendance</h1>
-              <p className="mt-1 text-sm text-gray-500">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Take Attendance</h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Record attendance for your gathering
               </p>
             </div>
             <div className="flex items-center space-x-3">
-              {/* isSaving && (
-                <div className="flex items-center text-sm text-gray-500">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-600 mr-2"></div>
-                  Saving...
-                </div>
-              ) */}
-              {/* <button
-                onClick={saveAttendance}
-                disabled={isSaving}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
-              >
-                <CheckIcon className="h-4 w-4 mr-2" />
-                Save Now
-              </button> */}
             </div>
           </div>
         </div>
       </div>
 
-
-
-
       {/* Gathering Type Tabs and Controls */}
-      <div className="bg-white shadow rounded-lg">
+      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
-          <div className="border-b border-gray-200 mb-6">
+          <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
             {/* Mobile: Horizontal scrollable tabs with fade indicators */}
             <div className="block md:hidden">
               <div className="relative w-full overflow-hidden">
@@ -3011,15 +2477,11 @@ const AttendancePage: React.FC = () => {
                     <div key={gathering.id} className="flex-shrink-0 min-w-0">
                       <button
                         draggable={false}
-                        onClick={(e) => {
-                          if (!isDragging) {
-                            handleGatheringChange(gathering);
-                          }
-                        }}
+                        onClick={() => handleGatheringChange(gathering)}
                         className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                           selectedGathering?.id === gathering.id
                             ? 'bg-primary-500 text-white'
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                         }`}
                         title={gathering.name}
                       >
@@ -3037,11 +2499,7 @@ const AttendancePage: React.FC = () => {
                     <div className="flex-shrink-0 min-w-0">
                       <button
                         draggable={false}
-                        onClick={(e) => {
-                          if (!isDragging) {
-                            openReorderModal();
-                          }
-                        }}
+                        onClick={() => openReorderModal()}
                         className="h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
                         title="Edit gathering order"
                       >
@@ -3059,7 +2517,7 @@ const AttendancePage: React.FC = () => {
                 
                 {/* Fade indicators */}
                 {showLeftFade && (
-                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
+                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
                     <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 16 16" fill="currentColor">
                         <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3068,7 +2526,7 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
                 {showRightFade && (
-                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
+                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
                     <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 16 16" fill="currentColor">
                         <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3095,15 +2553,11 @@ const AttendancePage: React.FC = () => {
                     <div key={gathering.id} className="flex-shrink-0">
                       <button
                         draggable={false}
-                        onClick={(e) => {
-                          if (!isDragging) {
-                            handleGatheringChange(gathering);
-                          }
-                        }}
+                        onClick={() => handleGatheringChange(gathering)}
                         className={`h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
                           selectedGathering?.id === gathering.id
                             ? 'bg-primary-500 text-white'
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                         }`}
                         title={gathering.name}
                       >
@@ -3121,11 +2575,7 @@ const AttendancePage: React.FC = () => {
                     <div className="flex-shrink-0">
                       <button
                         draggable={false}
-                        onClick={(e) => {
-                          if (!isDragging) {
-                            openReorderModal();
-                          }
-                        }}
+                        onClick={() => openReorderModal()}
                         className="h-12 py-2 px-4 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
                         title="Edit gathering order"
                       >
@@ -3143,7 +2593,7 @@ const AttendancePage: React.FC = () => {
                 
                 {/* Fade indicators */}
                 {showDesktopLeftFade && (
-                  <div className="absolute top-0 left-0 w-10 h-12 bg-gradient-to-r from-white via-white/90 to-transparent pointer-events-none z-10">
+                  <div className="absolute top-0 left-0 w-10 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
                     <div className="absolute top-1/2 left-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 20 20" fill="currentColor">
                         <path d="M12.5 5L7.5 10L12.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3152,7 +2602,7 @@ const AttendancePage: React.FC = () => {
                   </div>
                 )}
                 {showDesktopRightFade && (
-                  <div className="absolute top-0 right-0 w-10 h-12 bg-gradient-to-l from-white via-white/90 to-transparent pointer-events-none z-10">
+                  <div className="absolute top-0 right-0 w-10 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
                     <div className="absolute top-1/2 right-3 -translate-y-1/2 w-5 h-5 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
                       <svg viewBox="0 0 20 20" fill="currentColor">
                         <path d="M7.5 5L12.5 10L7.5 15" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3167,7 +2617,7 @@ const AttendancePage: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Date Selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Meeting Date
                 {selectedDate && (() => {
                   const status = getDateStatus(selectedDate);
@@ -3193,10 +2643,10 @@ const AttendancePage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setShowDatePicker(!showDatePicker)}
-                      className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full px-3 py-2 sm:text-sm border border-gray-300 rounded-md bg-white text-left hover:bg-gray-50 transition-colors"
+                      className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full px-3 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-left hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-gray-900">
+                        <span className="text-gray-900 dark:text-gray-100">
                           {selectedDate ? (
                             (() => {
                               const dateObj = new Date(selectedDate);
@@ -3229,7 +2679,7 @@ const AttendancePage: React.FC = () => {
                     )}
                   </>
                 ) : (
-                  <div className="text-sm text-gray-500 py-2 px-3 border border-gray-300 rounded-md bg-gray-50">
+                  <div className="text-sm text-gray-500 dark:text-gray-400 py-2 px-3 border border-gray-300 rounded-md bg-gray-50">
                     No valid dates available for this gathering schedule
                   </div>
                 )}
@@ -3239,7 +2689,7 @@ const AttendancePage: React.FC = () => {
             {/* Search/Filter Bar - Only show for standard gatherings */}
             {selectedGathering?.attendanceType === 'standard' && (
               <div>
-                <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Filter Families & Visitors
                 </label>
                 <div className="relative">
@@ -3252,7 +2702,7 @@ const AttendancePage: React.FC = () => {
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Search by family member or visitor name..."
-                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 rounded-md"
+                    className="shadow-sm focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 pr-3 py-2 sm:text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md"
                   />
                 </div>
               </div>
@@ -3269,11 +2719,11 @@ const AttendancePage: React.FC = () => {
                     onChange={(e) => handleGroupByFamilyChange(e.target.checked)}
                     className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                   />
-                  <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900">
+                  <label htmlFor="groupByFamily" className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
                     Group people by family
                   </label>
                 </div>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
                   {groupByFamily ? 'Families grouped together' : 'Individuals listed separately'}
                 </div>
               </div>
@@ -3284,7 +2734,7 @@ const AttendancePage: React.FC = () => {
 
       {/* Attendance Summary Bar - Show only for standard gatherings */}
       {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             {isAttendanceLocked && selectedGathering.attendanceType === 'standard' && (
               <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
@@ -3298,10 +2748,10 @@ const AttendancePage: React.FC = () => {
                   onClick={() => setActiveStatBubble(activeStatBubble === 'total' ? null : 'total')}
                   className="w-full focus:outline-none active:scale-95 transition-transform"
                 >
-                  <div className="text-2xl font-bold text-gray-900">
+                  <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                     {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0) + getVisitorPeopleCount}
                   </div>
-                  <div className="text-sm text-gray-500">Total Present</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Total Present</div>
                 </button>
                 {activeStatBubble === 'total' && (
                   <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
@@ -3322,7 +2772,7 @@ const AttendancePage: React.FC = () => {
                   <div className="text-2xl font-bold text-primary-600">
                     {attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                   </div>
-                  <div className="text-sm text-gray-500">Regular Attendees</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Regular Attendees</div>
                 </button>
                 {activeStatBubble === 'regular' && (
                   <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
@@ -3343,7 +2793,7 @@ const AttendancePage: React.FC = () => {
                   <div className="text-2xl font-bold text-green-600">
                     {getVisitorPeopleCount}
                   </div>
-                  <div className="text-sm text-gray-500">Visitors</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Visitors</div>
                 </button>
                 {activeStatBubble === 'visitors' && (
                   <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
@@ -3361,10 +2811,10 @@ const AttendancePage: React.FC = () => {
                   onClick={() => setActiveStatBubble(activeStatBubble === 'absent' ? null : 'absent')}
                   className="w-full focus:outline-none active:scale-95 transition-transform"
                 >
-                  <div className="text-2xl font-bold text-gray-400">
+                  <div className="text-2xl font-bold text-gray-400 dark:text-gray-500">
                     {attendanceList.length - attendanceList.reduce((acc, p) => acc + ((presentById[p.id] ?? p.present) ? 1 : 0), 0)}
                   </div>
-                  <div className="text-sm text-gray-500">Absent</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Absent</div>
                 </button>
                 {activeStatBubble === 'absent' && (
                   <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
@@ -3382,18 +2832,18 @@ const AttendancePage: React.FC = () => {
       )}
 
       {error && (
-        <div className="rounded-md bg-red-50 p-4">
-          <div className="text-sm text-red-700">{error}</div>
+        <div className="rounded-md bg-red-50 dark:bg-red-900/30 p-4">
+          <div className="text-sm text-red-700 dark:text-red-400">{error}</div>
         </div>
       )}
 
       {/* Loading gatherings (prevents layout shift on initial load) */}
       {user && isLoadingGatherings && gatherings.length === 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex flex-col items-center justify-center py-16">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mb-3" />
-              <p className="text-sm text-gray-500">Loading gatherings...</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Loading gatherings...</p>
             </div>
           </div>
         </div>
@@ -3401,12 +2851,12 @@ const AttendancePage: React.FC = () => {
 
       {/* No gatherings available message */}
       {!isLoadingGatherings && gatherings.length === 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="text-center py-8">
               <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No gatherings available</h3>
-              <p className="mt-1 text-sm text-gray-500 mb-4">
+              <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No gatherings available</h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 mb-4">
                 You haven't created any gatherings yet. Create a gathering to start taking attendance.
               </p>
               <div className="bg-blue-50 border border-blue-200 rounded-md p-4 max-w-md mx-auto">
@@ -3425,12 +2875,12 @@ const AttendancePage: React.FC = () => {
 
       {/* No gathering or no valid dates message */}
       {selectedGathering && validDates.length === 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="text-center py-8">
               <CalendarIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No valid dates available</h3>
-              <p className="mt-1 text-sm text-gray-500">
+              <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No valid dates available</h3>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 This gathering ({selectedGathering.name}) doesn't have any valid dates in the current range.
               </p>
             </div>
@@ -3442,7 +2892,7 @@ const AttendancePage: React.FC = () => {
       {selectedGathering && validDates.length > 0 && (
         <>
           {selectedGathering.attendanceType === 'headcount' ? (
-            <div className="bg-white shadow rounded-lg overflow-visible">
+            <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-visible">
               <div className="px-4 py-5 sm:p-6">
                 {/* Navigation Section */}
                 <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100">
@@ -3450,16 +2900,16 @@ const AttendancePage: React.FC = () => {
                     <button
                       onClick={navigateToPreviousDate}
                       disabled={!canNavigatePrevious}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                       title="Previous gathering"
                     >
-                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                       </svg>
-                      <span className="text-sm text-gray-600">Previous</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-300">Previous</span>
                     </button>
                     
-                    <div className="text-sm font-medium text-gray-700 px-4">
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
                       {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
                         weekday: 'long',
                         year: 'numeric',
@@ -3471,11 +2921,11 @@ const AttendancePage: React.FC = () => {
                     <button
                       onClick={navigateToNextDate}
                       disabled={!canNavigateNext}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                       title="Next gathering"
                     >
-                      <span className="text-sm text-gray-600">Next</span>
-                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <span className="text-sm text-gray-600 dark:text-gray-300">Next</span>
+                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </button>
@@ -3483,7 +2933,7 @@ const AttendancePage: React.FC = () => {
                 </div>
 
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                     Headcount - {selectedGathering.name}
                   </h3>
                   
@@ -3512,7 +2962,7 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="bg-white shadow rounded-lg">
+            <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
                 {/* Navigation Section - At the very top */}
                 <div className="flex justify-center items-center mb-6 py-3 border-b border-gray-100 -mt-6 -mx-6 px-6 rounded-t-lg">
@@ -3520,16 +2970,16 @@ const AttendancePage: React.FC = () => {
                     <button
                       onClick={navigateToPreviousDate}
                       disabled={!canNavigatePrevious}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                       title="Previous gathering"
                     >
-                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                       </svg>
-                      <span className="text-sm text-gray-600">Previous</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-300">Previous</span>
                     </button>
                     
-                    <div className="text-sm font-medium text-gray-700 px-4">
+                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 px-4">
                       {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', {
                         weekday: 'long',
                         year: 'numeric',
@@ -3541,11 +2991,11 @@ const AttendancePage: React.FC = () => {
                     <button
                       onClick={navigateToNextDate}
                       disabled={!canNavigateNext}
-                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 hover:bg-gray-100 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                      className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:bg-gray-25 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
                       title="Next gathering"
                     >
-                      <span className="text-sm text-gray-600">Next</span>
-                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <span className="text-sm text-gray-600 dark:text-gray-300">Next</span>
+                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </button>
@@ -3553,7 +3003,7 @@ const AttendancePage: React.FC = () => {
                 </div>
 
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium text-gray-900">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                     Attendance List - {selectedGathering.name}
                   </h3>
               <div className="flex items-center space-x-2">
@@ -3579,18 +3029,18 @@ const AttendancePage: React.FC = () => {
             ) : attendanceList.length === 0 ? (
               <div className="text-center py-8">
                 <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No attendees</h3>
-                <p className="mt-1 text-sm text-gray-500">
+                <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">No attendees</h3>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                   No regular attendees found for this gathering type.
                 </p>
               </div>
             ) : (
               <div className="space-y-4">
                 {filteredGroupedAttendees.map((group: any) => (
-                  <div key={group.family_id || group.members[0].id} className={groupByFamily ? "border border-gray-200 rounded-lg p-4" : ""}>
+                  <div key={group.family_id || group.members[0].id} className={groupByFamily ? "border border-gray-200 dark:border-gray-700 rounded-lg p-4" : ""}>
                     {groupByFamily && group.familyName && (
                       <div className="flex justify-between items-center mb-3">
-                        <h4 className="text-md font-medium text-gray-900">
+                        <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                           {(() => {
                             // Convert surname to uppercase: "SURNAME, firstname and firstname"
                             const parts = group.familyName.split(', ');
@@ -3629,10 +3079,10 @@ const AttendancePage: React.FC = () => {
                         return (
                           <label
                             key={person.id}
-                            className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white ${
+                            className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 ${
                               isPresent
-                                ? 'border-primary-500 bg-primary-50'
-                                : 'border-gray-200 hover:border-gray-300'
+                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                             } ${isSaving ? 'opacity-75' : ''} ${needsWideLayout ? 'col-span-2' : ''}`}
                           >
                             <input
@@ -3643,13 +3093,13 @@ const AttendancePage: React.FC = () => {
                               disabled={isSaving || isAttendanceLocked}
                             />
                             <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                              isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
+                              isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
                             } ${isSaving ? 'animate-pulse' : ''}`}>
                               {isPresent && (
                                 <CheckIcon className="h-3 w-3 text-white" />
                               )}
                             </div>
-                            <span className="ml-3 text-sm font-medium text-gray-900">
+                            <span className="ml-3 text-sm font-medium text-gray-900 dark:text-gray-100">
                               {displayName}
                               {isSaving && (
                                 <span className="ml-2 text-xs text-gray-500">Saving...</span>
@@ -3686,25 +3136,23 @@ const AttendancePage: React.FC = () => {
         </>
       )}
 
-
-
       {/* Recent Visitors Section - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && filteredGroupedVisitors.length > 0 && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
               Recent Visitors
             </h3>
             <div className="space-y-4">
               {filteredGroupedVisitors.map((group: any) => (
                 <div 
                   key={group.groupKey || `visitor-group-${group.members[0]?.id || 'unknown'}`} 
-                  className={groupByFamily && group.familyName ? "border border-gray-200 rounded-lg p-4" : ""}
+                  className={groupByFamily && group.familyName ? "border border-gray-200 dark:border-gray-700 rounded-lg p-4" : ""}
                 >
                   {groupByFamily && group.familyName && (
                     <div className="flex justify-between items-center mb-3">
                       <div className="flex items-center space-x-3">
-                        <h4 className="text-md font-medium text-gray-900">
+                        <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                           {(() => {
                             // Convert surname to uppercase: "SURNAME, firstname and firstname"
                             const parts = group.familyName.split(', ');
@@ -3777,12 +3225,12 @@ const AttendancePage: React.FC = () => {
                       return (
                         <label
                           key={person.id || `visitor_${index}`}
-                          className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white ${
+                          className={`relative flex items-center cursor-pointer transition-colors p-3 rounded-md border-2 bg-white dark:bg-gray-800 ${
                             isPresent
-                              ? 'border-primary-500 bg-primary-50'
+                              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                               : isHighlighted
-                              ? 'border-blue-400 bg-blue-50 shadow-md'
-                              : 'border-gray-200 hover:border-gray-300'
+                              ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 shadow-md'
+                              : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                           } ${needsWideLayout ? 'col-span-2' : ''}`}
                         >
                           <input
@@ -3793,14 +3241,14 @@ const AttendancePage: React.FC = () => {
                             disabled={isAttendanceLocked}
                           />
                           <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
-                            isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300'
+                            isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
                           }`}>
                             {isPresent && (
                               <CheckIcon className="h-3 w-3 text-white" />
                             )}
                           </div>
                           <div className="ml-3 flex-1 min-w-0">
-                            <span className="text-sm font-medium text-gray-900">
+                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                               {displayName}
                             </span>
                             {/* Show visitor type and edit for groups without header */}
@@ -3862,14 +3310,14 @@ const AttendancePage: React.FC = () => {
 
       {/* All People (people not currently visible in this gathering) - Only show for standard gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
-        <div className="bg-white shadow rounded-lg">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-gray-900">All People</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">All People</h3>
               <button
                 type="button"
                 onClick={() => setShowAllVisitorsSection(v => !v)}
-                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                className="text-sm font-medium text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white"
               >
                 {showAllVisitorsSection ? 'Hide' : 'Show'}
               </button>
@@ -3879,15 +3327,15 @@ const AttendancePage: React.FC = () => {
                 {isLoadingAllVisitors ? (
                   <div className="text-center py-6 text-gray-500">Loading church people…</div>
                 ) : groupedAllChurchVisitors.length === 0 ? (
-                  <div className="text-sm text-gray-500">No additional people available to add.</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">No additional people available to add.</div>
                 ) : (
                   <div className="space-y-4">
                     {groupedAllChurchVisitors.map((group: any) => (
-                      <div key={group.groupKey} className={groupByFamily && group.familyName ? 'border border-gray-200 rounded-lg p-4' : ''}>
+                      <div key={group.groupKey} className={groupByFamily && group.familyName ? 'border border-gray-200 dark:border-gray-700 rounded-lg p-4' : ''}>
                         {groupByFamily && group.familyName && (
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center space-x-3">
-                              <h4 className="text-md font-medium text-gray-900">
+                              <h4 className="text-md font-medium text-gray-900 dark:text-gray-100">
                                 {(() => {
                                   const parts = group.familyName.split(', ');
                                   if (parts.length >= 2) { return `${parts[0].toUpperCase()}, ${parts.slice(1).join(', ')}`; }
@@ -3905,7 +3353,7 @@ const AttendancePage: React.FC = () => {
                                 type="button"
                                 disabled={isAttendanceLocked}
                                 onClick={() => addVisitorFamilyFromAll(group.familyId)}
-                                className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                                className={`text-sm ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white'}`}
                               >
                                 Add family to this service
                               </button>
@@ -3926,15 +3374,15 @@ const AttendancePage: React.FC = () => {
                               <div
                                 key={person.id || `all_${idx}`}
                                 onClick={() => !isAttendanceLocked && person.id && addIndividualFromAll(person.id, displayName)}
-                                className={`relative p-3 rounded-md border-2 bg-white ${
+                                className={`relative p-3 rounded-md border-2 bg-white dark:bg-gray-800 ${
                                   isAttendanceLocked
-                                    ? 'border-gray-200 cursor-not-allowed opacity-50'
-                                    : 'border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer transition-all'
+                                    ? 'border-gray-200 dark:border-gray-600 cursor-not-allowed opacity-50'
+                                    : 'border-gray-200 dark:border-gray-600 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 cursor-pointer transition-all'
                                 } ${needsWideLayout ? 'col-span-2' : ''}`}
                                 title={isAttendanceLocked ? 'Editing locked' : `Click to add ${displayName} to this service`}
                               >
                                 <div className="flex items-center justify-between">
-                                  <div className="text-sm font-medium text-gray-900">
+                                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                     {displayName}
                                   </div>
                                   <PlusIcon className={`h-4 w-4 flex-shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
@@ -3957,7 +3405,7 @@ const AttendancePage: React.FC = () => {
                                   </span>
                                 )}
                                 {!groupByFamily && group.familyId && (
-                                  <div className="mt-2 pt-2 border-t border-gray-200">
+                                  <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
                                     <button
                                       type="button"
                                       disabled={isAttendanceLocked}
@@ -3965,7 +3413,7 @@ const AttendancePage: React.FC = () => {
                                         e.stopPropagation();
                                         addVisitorFamilyFromAll(group.familyId);
                                       }}
-                                      className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 hover:text-primary-700'}`}
+                                      className={`text-xs ${isAttendanceLocked ? 'text-gray-300 cursor-not-allowed' : 'text-primary-600 dark:text-gray-300 hover:text-primary-700 dark:hover:text-white'}`}
                                     >
                                       Add entire family instead
                                     </button>
@@ -3985,8 +3433,6 @@ const AttendancePage: React.FC = () => {
         </div>
       )}
 
-
-
       {/* Floating Add Visitor Button - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
         <button
@@ -4002,9 +3448,9 @@ const AttendancePage: React.FC = () => {
       {selectedGathering?.attendanceType === 'standard' && showAddVisitorModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white">
+            <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   {getAddModalTitle()}
                 </h3>
                 <button
@@ -4025,7 +3471,7 @@ const AttendancePage: React.FC = () => {
                 {/* Person Type Selection */}
                 {(user?.role === 'admin' || user?.role === 'coordinator') && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Person Type
                     </label>
                     <div className="flex space-x-4">
@@ -4036,9 +3482,9 @@ const AttendancePage: React.FC = () => {
                           value="local_visitor"
                           checked={visitorForm.personType === 'local_visitor'}
                           onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'local_visitor' | 'traveller_visitor' })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                         />
-                        <span className="ml-2 text-sm text-gray-900">Local Visitor</span>
+                        <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Local Visitor</span>
                       </label>
                       <label className="flex items-center">
                         <input
@@ -4047,9 +3493,9 @@ const AttendancePage: React.FC = () => {
                           value="traveller_visitor"
                           checked={visitorForm.personType === 'traveller_visitor'}
                           onChange={(e) => setVisitorForm({ ...visitorForm, personType: e.target.value as 'local_visitor' | 'traveller_visitor' })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
+                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
                         />
-                        <span className="ml-2 text-sm text-gray-900">Traveller Visitor</span>
+                        <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">Traveller Visitor</span>
                       </label>
                     </div>
                   </div>
@@ -4058,14 +3504,14 @@ const AttendancePage: React.FC = () => {
                 {/* Persons List */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Family Members (up to 10)
                     </label>
                   </div>
                   {visitorForm.persons.map((person, index) => (
-                    <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200' : ''}`}>
+                    <div key={index} className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${index > 0 ? 'mt-4 pt-4 border-t border-gray-200 dark:border-gray-700' : ''}`}>
                       <div>
-                        <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700">
+                        <label htmlFor={`personFirstName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           First Name {index + 1}
                         </label>
                         <input
@@ -4073,7 +3519,7 @@ const AttendancePage: React.FC = () => {
                           type="text"
                           value={person.firstName}
                           onChange={(e) => updatePerson(index, { firstName: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                           placeholder="First name"
                           required
                         />
@@ -4084,15 +3530,15 @@ const AttendancePage: React.FC = () => {
                             type="checkbox"
                             checked={person.isChild || false}
                             onChange={(e) => updatePerson(index, { isChild: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                           />
-                          <label htmlFor={`inlineVisitorIsChild-${index}`} className="ml-2 block text-sm text-gray-900">
+                          <label htmlFor={`inlineVisitorIsChild-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
                             Child
                           </label>
                         </div>
                       </div>
                       <div className="relative">
-                        <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700">
+                        <label htmlFor={`personLastName-${index}`} className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                           Last Name {index + 1}
                         </label>
                         <input
@@ -4101,7 +3547,7 @@ const AttendancePage: React.FC = () => {
                           value={person.lastName}
                           onChange={(e) => updatePerson(index, { lastName: e.target.value })}
                           disabled={index > 0 && person.fillLastNameFromAbove}
-                          className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100"
+                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 dark:disabled:bg-gray-600"
                           placeholder="Last name (optional)"
                         />
                         {/* For person 2+: Fill from above checkbox */}
@@ -4112,9 +3558,9 @@ const AttendancePage: React.FC = () => {
                               type="checkbox"
                               checked={person.fillLastNameFromAbove}
                               onChange={(e) => updatePerson(index, { fillLastNameFromAbove: e.target.checked })}
-                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
                             />
-                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900">
+                            <label htmlFor={`personFillLastName-${index}`} className="ml-2 block text-sm text-gray-900 dark:text-gray-100">
                               Fill from above
                             </label>
                           </div>
@@ -4139,7 +3585,7 @@ const AttendancePage: React.FC = () => {
                             <button
                               type="button"
                               onClick={addPerson}
-                              className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 bg-primary-100 hover:bg-primary-200"
+                              className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-primary-700 dark:text-primary-300 bg-primary-100 dark:bg-primary-900/30 hover:bg-primary-200 dark:hover:bg-primary-900/50"
                             >
                               <PlusIcon className="h-4 w-4 mr-2" />
                               Add Another Person
@@ -4147,18 +3593,17 @@ const AttendancePage: React.FC = () => {
                         </div>
                       )}
 
-
                 {/* Notes field - only for visitors */}
                 {(visitorForm.personType === 'local_visitor' || visitorForm.personType === 'traveller_visitor') && (
                   <div>
-                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="notes" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Notes
                     </label>
                     <textarea
                       id="notes"
                       value={visitorForm.notes}
                       onChange={(e) => setVisitorForm({ ...visitorForm, notes: e.target.value })}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                       placeholder="Any additional notes (optional)"
                       rows={3}
                     />
@@ -4167,7 +3612,7 @@ const AttendancePage: React.FC = () => {
 
                 {/* Family Name Display/Edit */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Family Name
                   </label>
                   {isEditingVisitor ? (
@@ -4176,28 +3621,28 @@ const AttendancePage: React.FC = () => {
                         type="text"
                         value={visitorForm.familyName}
                         onChange={(e) => setVisitorForm({ ...visitorForm, familyName: e.target.value })}
-                        className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                         placeholder="Family name"
                       />
-                      <p className="mt-1 text-sm text-gray-500">
+                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                         Edit the family name if needed, or leave as is.
                       </p>
                     </>
                   ) : (
                     <>
-                      <div className="mt-1 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                      <div className="mt-1 p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-900 font-medium">
+                          <span className="text-sm text-gray-900 dark:text-gray-100 font-medium">
                             {computedVisitorFamilyName || 'Enter family member names above'}
                           </span>
                           {computedVisitorFamilyName && (
-                            <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">
+                            <span className="text-xs text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded">
                               Auto-generated
                             </span>
                           )}
                         </div>
                       </div>
-                      <p className="mt-1 text-sm text-gray-500">
+                      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                         Family name is automatically generated from the member names above.
                       </p>
                     </>
@@ -4214,7 +3659,7 @@ const AttendancePage: React.FC = () => {
                       setEditingVisitorData(null);
                       setError('');
                     }}
-                    className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancel
                   </button>
@@ -4243,19 +3688,18 @@ const AttendancePage: React.FC = () => {
         document.body
       )}
 
-
       {/* Reorder Modal */}
       {showReorderModal && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
           <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white" onClick={(e) => e.stopPropagation()}>
+            <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Edit gathering order</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Edit gathering order</h3>
                 <button onClick={closeReorderModal} className="text-gray-400 hover:text-gray-600">
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
-              <p className="text-sm text-gray-500 mb-4">Drag to reorder. The top gathering becomes your default across the app, including reports.</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Drag to reorder. The top gathering becomes your default across the app, including reports.</p>
               <div className="space-y-2">
                 {reorderList.map((g, index) => (
                   <div
@@ -4264,12 +3708,12 @@ const AttendancePage: React.FC = () => {
                     onDragStart={() => onReorderDragStart(index)}
                     onDragOver={onReorderDragOver}
                     onDrop={() => onReorderDrop(index)}
-                    className="flex items-center justify-between px-3 py-2 border rounded-md bg-white hover:bg-gray-50 cursor-move"
+                    className="flex items-center justify-between px-3 py-2 border dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-move"
                     title="Drag to move"
                   >
                     <div className="flex items-center space-x-3">
-                      <span className="text-sm text-gray-500 w-6 text-center">{index + 1}</span>
-                      <span className="text-sm font-medium text-gray-900">{g.name}</span>
+                      <span className="text-sm text-gray-500 dark:text-gray-400 w-6 text-center">{index + 1}</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{g.name}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       {index === 0 && (
@@ -4293,7 +3737,7 @@ const AttendancePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={closeReorderModal}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
@@ -4310,8 +3754,6 @@ const AttendancePage: React.FC = () => {
         </div>,
         document.body
       )}
-
-
 
     </div>
   );

@@ -250,7 +250,7 @@ const AiInsightsPage: React.FC = () => {
       // Italic
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
       // Inline code
-      .replace(/`(.*?)`/g, '<code class="bg-gray-100 text-purple-700 px-1 py-0.5 rounded text-sm">$1</code>')
+      .replace(/`(.*?)`/g, '<code class="bg-gray-100 dark:bg-gray-700 text-purple-700 dark:text-purple-300 px-1 py-0.5 rounded text-sm">$1</code>')
       // Line breaks
       .replace(/\n/g, '<br/>');
 
@@ -281,12 +281,12 @@ const AiInsightsPage: React.FC = () => {
   if (aiConfigured === false) {
     return (
       <div className="max-w-2xl mx-auto">
-        <div className="bg-white shadow rounded-lg p-8 text-center">
-          <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-8 text-center">
+          <div className="w-16 h-16 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
             <SparklesIcon className="w-8 h-8 text-purple-600" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">AI Insights</h2>
-          <p className="text-gray-600 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">AI Insights</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
             Ask questions about your church's attendance data in plain language. To get started, an admin needs to connect an AI provider.
           </p>
           <Link
@@ -314,9 +314,9 @@ const AiInsightsPage: React.FC = () => {
     <div className="flex flex-col lg:flex-row h-full" style={{ height: 'calc(100vh - 10rem)' }}>
       {/* Sidebar - Desktop only */}
       {showSidebar && (
-        <div className="hidden lg:flex w-64 bg-white border-r border-gray-200 flex-col">
+        <div className="hidden lg:flex w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex-col">
           {/* Sidebar Header */}
-          <div className="p-4 border-b border-gray-200">
+          <div className="p-4 border-b border-gray-200 dark:border-gray-700">
             <button
               onClick={createNewChat}
               className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
@@ -329,8 +329,8 @@ const AiInsightsPage: React.FC = () => {
           {/* Conversations List */}
           <div className="flex-1 overflow-y-auto p-2">
             {conversations.length === 0 ? (
-              <div className="text-center py-8 text-sm text-gray-500">
-                <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+              <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
+                <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
                 No conversations yet
               </div>
             ) : (
@@ -340,16 +340,16 @@ const AiInsightsPage: React.FC = () => {
                   onClick={() => loadConversation(conv.id)}
                   className={`group relative p-3 mb-1 rounded-md cursor-pointer transition-colors ${
                     currentConversationId === conv.id
-                      ? 'bg-purple-50 border border-purple-200'
-                      : 'hover:bg-gray-50 border border-transparent'
+                      ? 'bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700 border border-transparent'
                   }`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                         {conv.title}
                       </p>
-                      <p className="text-xs text-gray-500 mt-1">
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                         {conv.message_count} messages
                       </p>
                     </div>
@@ -370,31 +370,31 @@ const AiInsightsPage: React.FC = () => {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Header */}
-        <div className="bg-white shadow rounded-t-lg px-4 lg:px-6 py-4 border-b border-gray-200 flex-shrink-0">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-t-lg px-4 lg:px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2 lg:space-x-3">
               {/* Desktop: Toggle sidebar button */}
               <button
                 onClick={() => setShowSidebar(!showSidebar)}
-                className="hidden lg:block p-2 hover:bg-gray-100 rounded-md"
+                className="hidden lg:block p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
                 title="Toggle history sidebar"
               >
-                <Bars3Icon className="w-5 h-5 text-gray-600" />
+                <Bars3Icon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
               </button>
               {/* Mobile: New chat button */}
               <button
                 onClick={createNewChat}
-                className="lg:hidden p-2 hover:bg-gray-100 rounded-md"
+                className="lg:hidden p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
                 title="New chat"
               >
-                <PlusIcon className="w-5 h-5 text-gray-600" />
+                <PlusIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
               </button>
-              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
                 <SparklesIcon className="w-5 h-5 text-purple-600" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">AI Insights</h1>
-                <p className="text-xs text-gray-500">
+                <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">AI Insights</h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
                   Powered by {provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'AI'}
                 </p>
               </div>
@@ -403,14 +403,14 @@ const AiInsightsPage: React.FC = () => {
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto bg-gray-50 px-4 py-6 space-y-4">
+        <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900 px-4 py-6 space-y-4">
           {messages.length === 0 ? (
             <div className="text-center py-8">
               <SparklesIcon className="w-12 h-12 text-purple-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-700 mb-2">
+              <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Ask me anything about your church data
               </h3>
-              <p className="text-sm text-gray-500 mb-6 max-w-md mx-auto">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-md mx-auto">
                 I can help you understand attendance patterns, identify trends, and spot people who may need follow-up.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg mx-auto">
@@ -418,7 +418,7 @@ const AiInsightsPage: React.FC = () => {
                   <button
                     key={i}
                     onClick={() => sendMessage(q)}
-                    className="text-left text-sm px-3 py-2 rounded-lg border border-purple-200 bg-white text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-colors"
+                    className="text-left text-sm px-3 py-2 rounded-lg border border-purple-200 dark:border-purple-700 bg-white dark:bg-gray-800 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:border-purple-300 dark:hover:border-purple-600 transition-colors"
                   >
                     {q}
                   </button>
@@ -437,9 +437,9 @@ const AiInsightsPage: React.FC = () => {
                       ? 'bg-purple-600 text-white'
                       : msg.role === 'error'
                       ? msg.errorType === 'quota_exceeded' || msg.errorType === 'rate_limited'
-                        ? 'bg-amber-50 border border-amber-200 text-amber-800'
-                        : 'bg-red-50 border border-red-200 text-red-700'
-                      : 'bg-white border border-gray-200 text-gray-800 shadow-sm'
+                        ? 'bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 text-amber-800 dark:text-amber-300'
+                        : 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400'
+                      : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-200 shadow-sm'
                   }`}
                 >
                   {msg.role === 'error' && (
@@ -463,10 +463,10 @@ const AiInsightsPage: React.FC = () => {
           )}
           {isLoading && (
             <div className="flex justify-start">
-              <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm">
+              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-sm">
                 <div className="flex items-center space-x-2">
                   <ArrowPathIcon className="w-4 h-4 animate-spin text-purple-500" />
-                  <span className="text-sm text-gray-600">Thinking...</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">Thinking...</span>
                 </div>
               </div>
             </div>
@@ -475,7 +475,7 @@ const AiInsightsPage: React.FC = () => {
         </div>
 
         {/* Input Area */}
-        <div className="bg-white border-t border-gray-200 px-4 py-4 flex-shrink-0">
+        <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-4 flex-shrink-0">
           <div className="flex items-end space-x-2">
             <div className="flex-1">
               <textarea
@@ -484,7 +484,7 @@ const AiInsightsPage: React.FC = () => {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask a question about your church data..."
-                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="w-full px-4 py-3 text-base border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 rows={2}
                 style={{ minHeight: '80px', maxHeight: '200px' }}
               />
@@ -497,16 +497,16 @@ const AiInsightsPage: React.FC = () => {
               <PaperAirplaneIcon className="w-5 h-5" />
             </button>
           </div>
-          <p className="text-xs text-gray-500 mt-2 text-center">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
             Press Enter to send, Shift+Enter for new line
           </p>
         </div>
 
         {/* Mobile Chat History - Collapsible section at bottom */}
-        <div className="lg:hidden bg-white border-t border-gray-200 flex-shrink-0">
+        <div className="lg:hidden bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
           <button
             onClick={() => setShowHistoryMobile(!showHistoryMobile)}
-            className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50"
+            className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
           >
             <span>Chat History ({conversations.length})</span>
             <svg
@@ -519,9 +519,9 @@ const AiInsightsPage: React.FC = () => {
             </svg>
           </button>
           {showHistoryMobile && (
-            <div className="max-h-64 overflow-y-auto p-2 border-t border-gray-200">
+            <div className="max-h-64 overflow-y-auto p-2 border-t border-gray-200 dark:border-gray-700">
               {conversations.length === 0 ? (
-                <div className="text-center py-4 text-sm text-gray-500">
+                <div className="text-center py-4 text-sm text-gray-500 dark:text-gray-400">
                   No conversations yet
                 </div>
               ) : (
@@ -540,10 +540,10 @@ const AiInsightsPage: React.FC = () => {
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                           {conv.title}
                         </p>
-                        <p className="text-xs text-gray-500 mt-1">
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                           {conv.message_count} messages
                         </p>
                       </div>
@@ -565,26 +565,26 @@ const AiInsightsPage: React.FC = () => {
       {/* Delete Confirmation Modal */}
       {showDeleteModal && deleteTarget && createPortal(
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                   Confirm Deletion
                 </h3>
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <XMarkIcon className="h-6 w-6" />
                 </button>
               </div>
 
-              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
                 <TrashIcon className="h-6 w-6 text-red-600" />
               </div>
 
               <div className="text-center mb-6">
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   Are you sure you want to delete <strong>{deleteTarget.title}</strong>? This action cannot be undone.
                 </p>
               </div>
@@ -592,7 +592,7 @@ const AiInsightsPage: React.FC = () => {
               <div className="flex space-x-3">
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
