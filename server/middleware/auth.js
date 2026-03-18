@@ -42,6 +42,17 @@ const verifyToken = async (req, res, next) => {
         const user = users[0];
         user.church_id = decoded.churchId || user.church_id;
         req.user = user;
+
+        // Check if church is approved; allow auth endpoints for unapproved churches
+        const churchApproved = Database.isChurchApproved(user.church_id);
+        req.churchApproved = churchApproved;
+        if (!churchApproved) {
+          const allowedPaths = ['/api/auth/me', '/api/auth/refresh', '/api/auth/logout'];
+          if (!allowedPaths.some(p => req.originalUrl.startsWith(p))) {
+            return res.status(403).json({ error: 'Your church is pending approval.', code: 'CHURCH_PENDING_APPROVAL' });
+          }
+        }
+
         next();
       } catch (error) {
         console.error('Auth middleware error (inner):', error);

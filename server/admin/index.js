@@ -30,6 +30,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize database on startup
 Database.initialize();
+Database.migrateRegistry();
 
 // Initialize backup service from env vars
 if (BackupService.loadConfigFromEnv()) {
@@ -95,6 +96,7 @@ app.get('/api/churches', async (req, res) => {
         created_by_email: firstUser[0]?.email || '',
         last_activity: lastActivity[0]?.last_activity,
         church_name: church.church_name || null,
+        is_approved: !!church.is_approved,
         people_count: peopleResult[0]?.count || 0,
         gathering_count: gatheringsResult[0]?.count || 0
       };
@@ -282,6 +284,19 @@ app.get('/api/users/:userId', async (req, res) => {
     });
   } catch (error) {
     console.error('User details error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Approve or unapprove a church
+app.post('/api/churches/:churchId/approve', async (req, res) => {
+  try {
+    const { churchId } = req.params;
+    const { approved } = req.body;
+    Database.approveChurch(churchId, !!approved);
+    res.json({ message: `Church ${churchId} has been ${approved ? 'approved' : 'unapproved'}.` });
+  } catch (error) {
+    console.error('Approve church error:', error);
     res.status(500).json({ error: error.message });
   }
 });

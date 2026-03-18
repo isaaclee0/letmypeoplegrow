@@ -270,6 +270,28 @@ class Database {
     return registryDb.prepare('SELECT * FROM churches ORDER BY church_name').all();
   }
 
+  static isChurchApproved(churchId) {
+    if (!registryDb) return false;
+    const row = registryDb.prepare('SELECT is_approved FROM churches WHERE church_id = ?').get(churchId);
+    return row ? !!row.is_approved : false;
+  }
+
+  static approveChurch(churchId, approved) {
+    if (!registryDb) throw new Error('Registry not initialized');
+    registryDb.prepare('UPDATE churches SET is_approved = ? WHERE church_id = ?').run(approved ? 1 : 0, churchId);
+  }
+
+  static migrateRegistry() {
+    if (!registryDb) return;
+    const cols = registryDb.prepare('PRAGMA table_info(churches)').all();
+    if (!cols.some(c => c.name === 'is_approved')) {
+      registryDb.exec('ALTER TABLE churches ADD COLUMN is_approved INTEGER DEFAULT 0');
+      // Approve all existing churches so they aren't locked out
+      registryDb.exec('UPDATE churches SET is_approved = 1');
+      console.log('✅ Registry migration: added is_approved column, approved all existing churches');
+    }
+  }
+
   static getRegistryDb() {
     return registryDb;
   }

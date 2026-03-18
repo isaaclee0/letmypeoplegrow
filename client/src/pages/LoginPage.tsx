@@ -99,12 +99,18 @@ const LoginPage: React.FC = () => {
       const response = await authAPI.verifyCode(contact, data.code);
       // Token is now handled by cookies, pass empty string for backward compatibility
       await login('', response.data.user);
-      
+
       // Add a small delay for iOS Safari to ensure cookies are properly set
       if (navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')) {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
-      
+
+      // Redirect users in unapproved churches to pending approval page
+      if (response.data.user.isChurchApproved === false) {
+        navigate('/pending-approval');
+        return;
+      }
+
       // Check if user has any gathering assignments and redirect accordingly
       const hasGatherings = response.data.user.gatheringAssignments && response.data.user.gatheringAssignments.length > 0;
       const defaultRoute = hasGatherings ? '/app/attendance' : '/app/gatherings';

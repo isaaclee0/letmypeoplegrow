@@ -150,6 +150,7 @@ export interface User {
   role: 'admin' | 'coordinator' | 'attendance_taker';
   firstName: string;
   lastName: string;
+  isChurchApproved?: boolean;
   isFirstLogin?: boolean;
   defaultGatheringId?: number;
   church_id?: string;
@@ -457,10 +458,10 @@ export const usersAPI = {
   update: (id: number, data: any) => 
     api.put(`/users/${id}`, data),
     
-  delete: (id: number) => 
+  delete: (id: number) =>
     api.delete(`/users/${id}`),
-    
-  getGatheringAssignments: (userId: number) => 
+
+  getGatheringAssignments: (userId: number) =>
     api.get(`/users/${userId}/gatherings`),
     
   assignGatherings: (userId: number, gatheringIds: number[]) => 

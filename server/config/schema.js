@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS churches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT NOT NULL UNIQUE,
   church_name TEXT NOT NULL,
+  is_approved INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

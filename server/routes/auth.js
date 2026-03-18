@@ -6,7 +6,7 @@ const moment = require('moment');
 const crypto = require('crypto');
 
 const Database = require('../config/database');
-const { sendOTCEmail } = require('../utils/email');
+const { sendOTCEmail, sendNewChurchApprovalEmail } = require('../utils/email');
 const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
 
@@ -147,6 +147,7 @@ router.post('/request-code',
               console.log('✅ Using existing church:', devChurchId);
             } else {
               Database.ensureChurch(devChurchId, 'Development Church');
+              Database.approveChurch(devChurchId, true);
               await Database.setChurchContext(devChurchId, async () => {
                 await Database.query(
                   `INSERT OR IGNORE INTO church_settings (church_name, country_code, timezone, email_from_name, email_from_address, onboarding_completed, church_id)
@@ -450,6 +451,7 @@ router.post('/verify-code',
           firstName: fullUser.first_name,
           lastName: fullUser.last_name,
           church_id: fullUser.church_id,
+          isChurchApproved: Database.isChurchApproved(fullUser.church_id),
           isFirstLogin,
           defaultGatheringId: fullUser.default_gathering_id,
           gatheringAssignments: assignmentsWithNumbers
@@ -492,6 +494,7 @@ router.get('/me', verifyToken, async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         church_id: user.church_id,
+        isChurchApproved: Database.isChurchApproved(user.church_id),
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
         gatheringAssignments: assignmentsWithNumbers,
@@ -619,6 +622,18 @@ router.post('/register',
       setImmediate(async () => {
         try { await sendOTCEmail(email, code); }
         catch (error) { console.error('Failed to send welcome email:', error); }
+
+        // Notify app admin that a new church needs approval
+        try {
+          await sendNewChurchApprovalEmail(
+            churchName || 'New Church',
+            churchId,
+            `${firstName} ${lastName}`,
+            email
+          );
+        } catch (error) {
+          console.error('Failed to send church approval notification:', error);
+        }
       });
 
       res.status(201).json({

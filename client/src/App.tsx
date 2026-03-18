@@ -25,6 +25,7 @@ import WebSocketTestPage from './pages/WebSocketTestPage';
 import ImportPage from './pages/ImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import CheckInsPage from './pages/CheckInsPage';
+import PendingApprovalPage from './pages/PendingApprovalPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
 import PWAUpdateNotification from './components/PWAUpdateNotification';
@@ -32,7 +33,7 @@ import PWAUpdateNotification from './components/PWAUpdateNotification';
 
 // Protected Route component
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading, /* needsOnboarding, */ user } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return <LoadingSpinner />;
@@ -42,11 +43,9 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Navigate to="/login" replace />;
   }
 
-  // Onboarding retired: no redirect
-
-  // First-login setup retired; users can go directly to app
-
-  // No dashboard page; attendance takers and others can navigate within app
+  if (user && user.isChurchApproved === false) {
+    return <Navigate to="/pending-approval" replace />;
+  }
 
   return <>{children}</>;
 };
@@ -82,10 +81,11 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
 
   if (isAuthenticated && user) {
-    // Check if user has any gathering assignments
+    if (user.isChurchApproved === false) {
+      return <Navigate to="/pending-approval" replace />;
+    }
+
     const hasGatherings = user.gatheringAssignments && user.gatheringAssignments.length > 0;
-    
-    // Redirect to gatherings page if no gatherings, otherwise attendance
     const defaultRoute = hasGatherings ? '/app/attendance' : '/app/gatherings';
     return <Navigate to={defaultRoute} replace />;
   }
@@ -146,6 +146,10 @@ function App() {
                 />
                 {/* Onboarding route retired */}
                 {/* Retired routes: first-login-setup, non-admin-setup, accept-invitation */}
+                <Route
+                  path="/pending-approval"
+                  element={<PendingApprovalPage />}
+                />
                 <Route
                   path="/clear-token"
                   element={<TokenClearPage />}

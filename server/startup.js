@@ -13,7 +13,8 @@ async function runMigrations() {
     // existing databases.
     const migrationFiles = [
       { version: 'v1.8.6_add_leader_checkin_enabled', name: 'add_leader_checkin_enabled', description: 'Add leader_checkin_enabled column to gathering_types' },
-      { version: 'v1.8.6_backfill_leader_checkin', name: 'backfill_leader_checkin', description: 'Enable leader check-in for gatherings that had self check-in enabled' }
+      { version: 'v1.8.6_backfill_leader_checkin', name: 'backfill_leader_checkin', description: 'Enable leader check-in for gatherings that had self check-in enabled' },
+      { version: 'v1.9.0_add_church_approval', name: 'add_church_approval', description: 'Add is_approved column to churches registry table and approve all existing churches' }
     ];
 
     const executedMigrations = await Database.query(
@@ -44,6 +45,13 @@ async function runMigrations() {
           console.log(`  ✅ Enabled leader check-in for existing self-checkin gatherings`);
         }
 
+        if (migration.version === 'v1.9.0_add_church_approval') {
+          // This migration runs per-church but the actual schema change is on the registry.
+          // We handle it here so it's tracked, but the ALTER TABLE runs on the registry DB.
+          // The registry migration is done in initializeDatabase() instead.
+          console.log(`  ✅ Church approval migration tracked for ${churchId}`);
+        }
+
         await Database.query(
           `INSERT OR IGNORE INTO migrations (version, name, description, execution_time_ms, status, executed_at)
            VALUES (?, ?, ?, ?, 'success', datetime('now'))`,
@@ -63,6 +71,9 @@ async function initializeDatabase() {
     console.log('🔍 Initializing SQLite databases...');
 
     Database.initialize();
+
+    // Migrate registry: add is_approved column to churches table if missing
+    Database.migrateRegistry();
 
     const churches = Database.listChurches();
 

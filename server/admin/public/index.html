@@ -439,9 +439,15 @@
     .transfer-btn:hover {
       background: #2563eb;
     }
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 10000; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); animation: toast-in 0.3s ease; max-width: 400px; }
+    .toast.success { background: #16a34a; }
+    .toast.error { background: #dc2626; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
+  <div class="toast-container" id="toast-container"></div>
   <div class="header">
     <h1>Let My People Grow - Admin Panel</h1>
     <div style="display: flex; align-items: center; gap: 1rem;">
@@ -700,6 +706,7 @@
             <thead>
               <tr>
                 <th>Church</th>
+                <th>Status</th>
                 <th>Users</th>
                 <th>People</th>
                 <th>Gatherings</th>
@@ -724,12 +731,22 @@
                     </div>
                     <div class="created-by">by ${(c.created_by_name || '').trim() || 'Unknown'}${c.created_by_email ? ` (${c.created_by_email})` : ''}</div>
                   </td>
+                  <td>
+                    ${c.is_approved
+                      ? '<span style="color:#4ade80;font-weight:600;">Approved</span>'
+                      : '<span style="color:#fbbf24;font-weight:600;">Pending</span>'
+                    }
+                  </td>
                   <td>${c.user_count}</td>
                   <td>${c.people_count}</td>
                   <td>${c.gathering_count || 0}</td>
                   <td class="timestamp">${formatRelative(c.created_at)}</td>
                   <td class="timestamp">${formatRelative(c.last_activity)}</td>
                   <td class="actions">
+                    ${!c.is_approved
+                      ? `<button class="action-btn" onclick="approveChurch('${c.church_id}', true)" title="Approve Church" style="background:#166534;">✓</button>`
+                      : `<button class="action-btn" onclick="approveChurch('${c.church_id}', false)" title="Revoke Approval" style="background:#92400e;">✗</button>`
+                    }
                     <button class="action-btn" onclick="viewChurchDetails('${c.church_id}')" title="View Details">👁</button>
                     <button class="action-btn" onclick="exportChurch('${c.church_id}')" title="Export Data">📥</button>
                     <button class="action-btn danger" onclick="archiveChurch('${c.church_id}', true)" title="Archive Church">📦</button>
@@ -971,6 +988,31 @@
     }
 
     // Archive/unarchive church
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+    }
+
+    async function approveChurch(churchId, approved) {
+      try {
+        const res = await fetch(`/api/churches/${churchId}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
+        showToast(result.message, 'success');
+        loadChurches();
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+      }
+    }
+
     async function archiveChurch(churchId, archive) {
       const action = archive ? 'archive' : 'unarchive';
       if (!confirm(`Are you sure you want to ${action} this church? This will ${archive ? 'deactivate' : 'reactivate'} all users.`)) return;

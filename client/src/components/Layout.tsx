@@ -5,7 +5,7 @@ import { useCheckIns } from '../contexts/CheckInsContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
-import { aiAPI, gatheringsAPI } from '../services/api';
+import { aiAPI, gatheringsAPI, integrationsAPI } from '../services/api';
 import logger from '../utils/logger';
 import {
   Bars3Icon,
@@ -29,6 +29,7 @@ const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
+  const [integrationsConfigured, setIntegrationsConfigured] = useState(false);
   const [checkInsAvailable, setCheckInsAvailable] = useState(false);
   const { user, logout } = useAuth();
   const checkInsCtx = useCheckIns();
@@ -62,6 +63,34 @@ const Layout: React.FC = () => {
 
     fetchAiStatus();
   }, []);
+
+  // Load integrations configuration status
+  useEffect(() => {
+    const cached = localStorage.getItem('integrations_configured');
+    if (cached !== null) {
+      setIntegrationsConfigured(cached === 'true');
+    }
+
+    const fetchIntegrationsStatus = async () => {
+      try {
+        const [elvantoRes, pcRes] = await Promise.allSettled([
+          integrationsAPI.getElvantoStatus(),
+          integrationsAPI.getPlanningCenterStatus(),
+        ]);
+        const elvantoConnected = elvantoRes.status === 'fulfilled' && elvantoRes.value.data.connected;
+        const pcConnected = pcRes.status === 'fulfilled' && pcRes.value.data.connected;
+        const configured = elvantoConnected || pcConnected;
+        setIntegrationsConfigured(configured);
+        localStorage.setItem('integrations_configured', configured.toString());
+      } catch (error) {
+        // Non-critical
+      }
+    };
+
+    if (user?.role === 'admin') {
+      fetchIntegrationsStatus();
+    }
+  }, [user?.role]);
 
   // Load check-ins availability (any gathering has kiosk_enabled)
   useEffect(() => {
@@ -118,7 +147,7 @@ const Layout: React.FC = () => {
     ...(checkInsAvailable ? [
       { name: 'Check-ins', href: '/app/checkins', icon: ClipboardDocumentCheckIcon }
     ] : []),
-    ...(user?.role === 'admin' ? [
+    ...(integrationsConfigured && user?.role === 'admin' ? [
       { name: 'Import', href: '/app/import', icon: ArrowDownTrayIcon }
     ] : []),
     { name: 'Settings', href: '/app/settings', icon: PencilIcon },

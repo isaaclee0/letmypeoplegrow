@@ -260,8 +260,72 @@ To unsubscribe, reply to this email with "unsubscribe" in the subject line.
   });
 };
 
+const sendNewChurchApprovalEmail = async (churchName, churchId, adminName, adminEmail) => {
+  const adminPanelUrl = process.env.ADMIN_PANEL_URL || 'http://localhost:7777';
+  const subject = `New church pending approval: ${churchName}`;
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${subject}</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #fef3c7; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background-color: #ffffff; padding: 30px; border: 1px solid #e9ecef; }
+        .footer { background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; color: #6c757d; }
+        .detail-row { padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+        .detail-label { font-weight: 600; color: #555; }
+        .button { background-color: #16a34a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block; margin: 20px 0; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 style="margin: 0; color: #92400e;">New Church Pending Approval</h1>
+        </div>
+        <div class="content">
+          <p>A new church has been registered and is waiting for your approval.</p>
+          <div class="detail-row"><span class="detail-label">Church Name:</span> ${churchName}</div>
+          <div class="detail-row"><span class="detail-label">Church ID:</span> <code>${churchId}</code></div>
+          <div class="detail-row"><span class="detail-label">Admin:</span> ${adminName}</div>
+          <div class="detail-row"><span class="detail-label">Admin Email:</span> ${adminEmail}</div>
+          <div style="text-align: center;">
+            <a href="${adminPanelUrl}" class="button">Open Admin Panel</a>
+          </div>
+          <p>Log in to the admin panel to approve or reject this church.</p>
+        </div>
+        <div class="footer">
+          <p>Let My People Grow - Admin Notification</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const textContent = `New Church Pending Approval
+
+A new church has been registered and is waiting for your approval.
+
+Church Name: ${churchName}
+Church ID: ${churchId}
+Admin: ${adminName}
+Admin Email: ${adminEmail}
+
+Log in to the admin panel to approve or reject this church: ${adminPanelUrl}
+  `;
+
+  return sendEmail('hello@letmypeoplegrow.app', subject, htmlContent, textContent, {
+    messageId: `church-approval-${churchId}-${Date.now()}@${process.env.EMAIL_DOMAIN || 'letmypeoplegrow.com.au'}`
+  });
+};
+
 module.exports = {
   sendEmail,
   sendInvitationEmail,
-  sendOTCEmail
+  sendOTCEmail,
+  sendNewChurchApprovalEmail
 }; 
