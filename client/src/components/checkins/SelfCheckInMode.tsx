@@ -1290,18 +1290,18 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
         isOpen={showUnlockModal}
         onClose={() => setShowUnlockModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-sm w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Unlock</h3>
-              <button onClick={() => setShowUnlockModal(false)} className="text-gray-400 hover:text-gray-600">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Unlock</h3>
+              <button onClick={() => setShowUnlockModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label htmlFor="unlock-pin" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="unlock-pin" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Enter PIN
                 </label>
                 <input
@@ -1312,14 +1312,14 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                   value={unlockPinInput}
                   onChange={(e) => { setUnlockPinInput(e.target.value.replace(/\D/g, '')); setUnlockError(''); }}
                   onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
-                  className="block w-full border-gray-300 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
+                  className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg shadow-sm focus:ring-primary-500 focus:border-primary-500 text-center text-2xl tracking-[0.5em] py-3"
                   placeholder="----"
                   autoFocus
                 />
               </div>
 
               {unlockError && (
-                <p className="text-sm text-red-600 text-center">{unlockError}</p>
+                <p className="text-sm text-red-600 dark:text-red-400 text-center">{unlockError}</p>
               )}
 
               <button
@@ -1329,11 +1329,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                 Unlock
               </button>
 
-              <div className="border-t border-gray-200 pt-3">
-                <p className="text-xs text-gray-500 text-center mb-2">Forgot your PIN?</p>
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center mb-2">Forgot your PIN?</p>
                 <button
                   onClick={handleForceUnlockAndLogout}
-                  className="w-full py-2 px-4 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 flex items-center justify-center"
+                  className="w-full py-2 px-4 text-sm font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 flex items-center justify-center"
                 >
                   <ArrowRightOnRectangleIcon className="h-4 w-4 mr-2" />
                   Unlock & Log Out
@@ -1349,11 +1349,11 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
         isOpen={showAddVisitorModal}
         onClose={() => setShowAddVisitorModal(false)}
       >
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Check In a New Child</h3>
-              <button onClick={() => setShowAddVisitorModal(false)} className="text-gray-400 hover:text-gray-600">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Check In a New Child</h3>
+              <button onClick={() => setShowAddVisitorModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
@@ -1361,21 +1361,21 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
             <div className="space-y-5">
               {/* Child details section */}
               <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Child Details</h4>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3 uppercase tracking-wide">Child Details</h4>
                 <div className="space-y-3">
                   {visitorPersons.map((person, idx) => (
                     <div key={idx} className="space-y-2">
                       {visitorPersons.length > 1 && (
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium text-gray-700">Child {idx + 1}</span>
-                          <button onClick={() => removeVisitorPerson(idx)} className="text-xs text-red-500 hover:text-red-700">
+                          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Child {idx + 1}</span>
+                          <button onClick={() => removeVisitorPerson(idx)} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">
                             Remove
                           </button>
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700">First Name</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
                           <input
                             type="text"
                             value={person.firstName}
@@ -1384,12 +1384,12 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                               updated[idx] = { ...updated[idx], firstName: e.target.value };
                               setVisitorPersons(updated);
                             }}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="Child's first name"
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
                           <input
                             type="text"
                             value={person.lastName}
@@ -1398,7 +1398,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                               updated[idx] = { ...updated[idx], lastName: e.target.value };
                               setVisitorPersons(updated);
                             }}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="Child's last name"
                           />
                         </div>
@@ -1412,14 +1412,14 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
               </div>
 
               {/* Divider */}
-              <div className="border-t border-gray-200" />
+              <div className="border-t border-gray-200 dark:border-gray-700" />
 
               {/* Parent/Guardian section */}
               <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase tracking-wide">Parent / Guardian</h4>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3 uppercase tracking-wide">Parent / Guardian</h4>
                 <div className="space-y-3">
                   <div>
-                    <label htmlFor="guardian-name" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="guardian-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Name <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -1427,12 +1427,12 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                       type="text"
                       value={guardianName}
                       onChange={(e) => setGuardianName(e.target.value)}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                       placeholder="Parent or guardian's full name"
                     />
                   </div>
                   <div>
-                    <label htmlFor="guardian-contact" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="guardian-contact" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Contact Number
                     </label>
                     <input
@@ -1440,10 +1440,10 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
                       type="tel"
                       value={guardianContact}
                       onChange={(e) => setGuardianContact(e.target.value)}
-                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                       placeholder="Phone number"
                     />
-                    <p className="mt-1 text-xs text-gray-500">
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       In case we need to contact you.
                     </p>
                   </div>
@@ -1454,7 +1454,7 @@ const SelfCheckInMode: React.FC<SelfCheckInModeProps> = ({
             <div className="mt-6 flex space-x-3">
               <button
                 onClick={() => setShowAddVisitorModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>

@@ -150,7 +150,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
                   <div className="mt-2 p-3 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm">
                     {uniqueFamilyNotes.map((note, idx) => (
                       <div key={idx} className={idx > 0 ? 'mt-2 pt-2 border-t border-gray-200 dark:border-gray-700' : ''}>
-                        <span className="text-gray-800 whitespace-pre-wrap">{note.notes}</span>
+                        <span className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{note.notes}</span>
                         <p className="text-xs text-gray-400 mt-0.5">{note.familyName}</p>
                       </div>
                     ))}
