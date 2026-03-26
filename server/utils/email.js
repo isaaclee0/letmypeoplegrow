@@ -370,6 +370,32 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
       </tr>
     </table>` : '';
 
+  // Follow-up section
+  const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+  let followUpHtml = '';
+  if (!reviewData.gettingStarted && reviewData.followUpPeople && reviewData.followUpPeople.length > 0) {
+    const peopleRows = reviewData.followUpPeople.map(p => {
+      const gatheringText = p.gatherings.length > 0 ? p.gatherings.join(', ') : 'gatherings';
+      return `<tr><td style="padding: 6px 0; color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; border-bottom: 1px solid #f3f4f6;">${p.firstName} ${p.lastName} <span style="color: #9ca3af;">&mdash; used to attend ${gatheringText}</span></td></tr>`;
+    }).join('');
+    const moreText = reviewData.followUpTotal > reviewData.followUpPeople.length
+      ? `<tr><td style="padding: 6px 0; color: #9ca3af; font-size: 13px; font-style: italic;">and ${reviewData.followUpTotal - reviewData.followUpPeople.length} more</td></tr>`
+      : '';
+    followUpHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
+        <tr>
+          <td style="background-color: #ffffff; border-radius: 8px; padding: 20px; border: 1px solid #e5e7eb; border-left: 4px solid #9B51E0;">
+            <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 12px; font-size: 15px;">&#128276; People to Follow Up With</div>
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              ${peopleRows}
+              ${moreText}
+            </table>
+            <div style="margin-top: 12px;"><a href="${appUrl}/app/reports" style="color: #7c3aed; font-weight: 600; font-size: 13px; text-decoration: underline;">View all in Reports &rarr;</a></div>
+          </td>
+        </tr>
+      </table>`;
+  }
+
   const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
@@ -413,6 +439,8 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
                     </tr>
                   </table>
 
+                  ${followUpHtml}
+
                   ${insightHtml}
 
                   <p style="margin-top: 28px; color: #6b7280; font-size: 14px;">Blessings,<br><strong style="color: #374151;">${churchName}</strong></p>
@@ -447,6 +475,16 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
     return line;
   }).join('\n');
 
+  // Follow-up plain text
+  let followUpText = '';
+  if (!reviewData.gettingStarted && reviewData.followUpPeople && reviewData.followUpPeople.length > 0) {
+    const lines = reviewData.followUpPeople.map(p => `- ${p.firstName} ${p.lastName} — used to attend ${p.gatherings.join(', ')}`);
+    if (reviewData.followUpTotal > reviewData.followUpPeople.length) {
+      lines.push(`  ...and ${reviewData.followUpTotal - reviewData.followUpPeople.length} more`);
+    }
+    followUpText = `\nPeople to Follow Up With:\n${lines.join('\n')}\nView all: ${appUrl}/app/reports\n`;
+  }
+
   const textContent = `
 ${churchName} Weekly Review
 ${reviewData.weekStartDate} to ${reviewData.weekEndDate}
@@ -458,7 +496,7 @@ Here's how your gatherings went this week:
 ${gatheringCardsText}
 
 Total attendance: ${reviewData.totalAttendance}${reviewData.totalVisitors > 0 ? ` | ${reviewData.totalVisitors} visitors` : ''}
-
+${followUpText}
 ${insight ? `Weekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : ''}
 Blessings,
 ${churchName}
