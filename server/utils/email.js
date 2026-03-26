@@ -428,6 +428,29 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
       </table>`;
   }
 
+  // Getting started section (new churches only)
+  let gettingStartedHtml = '';
+  if (reviewData.gettingStarted) {
+    const gs = reviewData.gettingStarted;
+    const gatheringWord = gs.gatheringCount === 1 ? 'gathering' : 'gatherings';
+    const personWord = gs.peopleCount === 1 ? 'person' : 'people';
+    const weekWord = gs.weeksTracked === 1 ? 'week' : 'weeks';
+    gettingStartedHtml = `
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
+        <tr>
+          <td style="background-color: #ffffff; border-radius: 8px; padding: 20px; border: 1px solid #e5e7eb; border-left: 4px solid #9B51E0;">
+            <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 12px; font-size: 15px;">&#127793; Your Church is Growing</div>
+            <div style="color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6;">
+              You've set up ${gs.gatheringCount} ${gatheringWord} and added ${gs.peopleCount} ${personWord} &mdash; great start! You've been tracking attendance for ${gs.weeksTracked} ${weekWord} so far.
+            </div>
+            <div style="color: #6b7280; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6; margin-top: 10px;">
+              Keep it up! As you record more weeks of attendance, this email will start including follow-up suggestions, visitor insights, and AI-powered trends to help your church grow.
+            </div>
+          </td>
+        </tr>
+      </table>`;
+  }
+
   const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
@@ -471,11 +494,7 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
                     </tr>
                   </table>
 
-                  ${followUpHtml}
-
-                  ${visitorBreakdownHtml}
-
-                  ${insightHtml}
+                  ${reviewData.gettingStarted ? gettingStartedHtml : `${followUpHtml}${visitorBreakdownHtml}${insightHtml}`}
 
                   <p style="margin-top: 28px; color: #6b7280; font-size: 14px;">Blessings,<br><strong style="color: #374151;">${churchName}</strong></p>
                 </td>
@@ -535,6 +554,15 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
     visitorBreakdownText = '\n' + lines.join('\n') + '\n';
   }
 
+  const insightText = insight ? `\nWeekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : '';
+
+  // Getting started plain text
+  let gettingStartedText = '';
+  if (reviewData.gettingStarted) {
+    const gs = reviewData.gettingStarted;
+    gettingStartedText = `\nYour Church is Growing!\nYou've set up ${gs.gatheringCount} gathering(s) and added ${gs.peopleCount} people — great start! You've been tracking attendance for ${gs.weeksTracked} week(s) so far.\n\nKeep it up! As you record more weeks, this email will include follow-up suggestions, visitor insights, and AI-powered trends.\n`;
+  }
+
   const textContent = `
 ${churchName} Weekly Review
 ${reviewData.weekStartDate} to ${reviewData.weekEndDate}
@@ -546,8 +574,7 @@ Here's how your gatherings went this week:
 ${gatheringCardsText}
 
 Total attendance: ${reviewData.totalAttendance}${reviewData.totalVisitors > 0 ? ` | ${reviewData.totalVisitors} visitors` : ''}
-${followUpText}${visitorBreakdownText}
-${insight ? `Weekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : ''}
+${reviewData.gettingStarted ? gettingStartedText : `${followUpText}${visitorBreakdownText}${insightText}`}
 Blessings,
 ${churchName}
 
