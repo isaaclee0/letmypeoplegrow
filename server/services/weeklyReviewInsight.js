@@ -26,6 +26,7 @@ function buildObfuscationMap(reviewData) {
   };
 
   const addPerson = (firstName, lastName) => {
+    if (!firstName || !lastName) return;
     const fullName = `${firstName} ${lastName}`;
     if (reverseMap[fullName]) return;
     personCounter++;
@@ -92,10 +93,18 @@ function meetsMinimumThresholds(reviewData) {
 }
 
 function buildContext(reviewData, reverseMap) {
-  const obfuscate = (name) => reverseMap[name] || name;
+  const obfuscate = (name) => {
+    if (!name) return name;
+    const id = reverseMap[name];
+    if (!id) {
+      console.warn('weeklyReviewInsight: unobfuscated name reached AI context:', name);
+      return '[unknown]';
+    }
+    return id;
+  };
 
   // Gathering summary (local visitors only)
-  const gatheringSummary = reviewData.gatherings.map(g => {
+  const gatheringSummary = (reviewData.gatherings || []).map(g => {
     let line = `${g.name}: ${g.count} attendees on ${g.date}`;
     if (g.deltaPercent !== null) {
       const dir = g.deltaPercent > 0 ? 'up' : g.deltaPercent < 0 ? 'down' : 'flat';
@@ -205,7 +214,10 @@ function rehydrateNames(text, nameMap) {
   if (!text || Object.keys(nameMap).length === 0) return text;
 
   // Build a regex matching all known identifiers in one pass
-  const escaped = Object.keys(nameMap).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // Sort by descending length so [Family-AB] is matched before [Family-A]
+  const escaped = Object.keys(nameMap)
+    .sort((a, b) => b.length - a.length)
+    .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const pattern = new RegExp(escaped.join('|'), 'g');
   let result = text.replace(pattern, match => nameMap[match] || match);
 
@@ -289,11 +301,10 @@ function callClaude(context) {
       });
     });
 
-    req.on('error', reject);
     req.setTimeout(10000, () => {
-      req.destroy();
-      reject(new Error('Claude API request timed out'));
+      req.destroy(new Error('Claude API request timed out'));
     });
+    req.on('error', reject);
     req.write(body);
     req.end();
   });
@@ -303,7 +314,7 @@ function callClaude(context) {
  * Fallback: generate a simple algorithmic insight based on trends.
  */
 function generateAlgorithmicInsight(reviewData) {
-  const totals = reviewData.weeklyTotals;
+  const totals = reviewData.weeklyTotals || [];
   if (totals.length < 2) {
     return 'Keep tracking attendance each week to unlock trend insights and growth patterns.';
   }
