@@ -323,9 +323,161 @@ Log in to the admin panel to approve or reject this church: ${adminPanelUrl}
   });
 };
 
+const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
+  const churchName = reviewData.churchName;
+  const subject = `${churchName} — Weekly Gathering Review`;
+
+  // Build gathering cards HTML
+  const gatheringCardsHtml = reviewData.gatherings.map(g => {
+    let trendHtml = '';
+    if (g.deltaPercent !== null) {
+      const arrow = g.deltaPercent > 0 ? '&#9650;' : g.deltaPercent < 0 ? '&#9660;' : '&#9654;';
+      const color = g.deltaPercent > 0 ? '#16a34a' : g.deltaPercent < 0 ? '#dc2626' : '#6b7280';
+      trendHtml = `<span style="color: ${color}; font-weight: 600;">${arrow} ${Math.abs(g.deltaPercent)}%</span> <span style="color: #6b7280; font-size: 12px;">vs 3-week avg (${g.avgPrevious})</span>`;
+    }
+    const visitorHtml = g.visitorCount > 0 ? `<div style="font-size: 13px; color: #9ca3af; margin-top: 4px;">${g.visitorCount} visitor${g.visitorCount !== 1 ? 's' : ''}</div>` : '';
+
+    return `
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 12px;">
+        <tr>
+          <td style="background-color: #f5f3ff; border-radius: 8px; padding: 16px; border-left: 4px solid #9B51E0;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td>
+                  <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #1f2937; font-size: 15px;">${g.name}</div>
+                  <div style="font-size: 13px; color: #9ca3af; margin-top: 2px;">${g.date}</div>
+                </td>
+                <td style="text-align: right; vertical-align: top;">
+                  <div style="font-size: 28px; font-weight: 700; color: #7c3aed;">${g.count}</div>
+                </td>
+              </tr>
+            </table>
+            ${trendHtml ? `<div style="margin-top: 8px;">${trendHtml}</div>` : ''}
+            ${visitorHtml}
+          </td>
+        </tr>
+      </table>`;
+  }).join('');
+
+  // Insight box
+  const insightHtml = insight ? `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
+      <tr>
+        <td style="background: linear-gradient(135deg, #f5f3ff 0%, #fdf2f8 100%); border: 1px solid #ddd6fe; padding: 20px; border-radius: 8px;">
+          <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 10px; font-size: 14px;">&#10024; Weekly Insight</div>
+          <div style="color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6;">${insight}</div>
+        </td>
+      </tr>
+    </table>` : '';
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${subject}</title>
+      <!--[if mso]>
+      <style>body { font-family: Arial, sans-serif !important; }</style>
+      <![endif]-->
+    </head>
+    <body style="font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #374151; margin: 0; padding: 0; background-color: #f3f4f6;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f3f4f6; padding: 20px 0;">
+        <tr>
+          <td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; width: 100%;">
+              <!-- Header -->
+              <tr>
+                <td style="background-color: #7c3aed; padding: 28px 30px; border-radius: 12px 12px 0 0; text-align: center;">
+                  <h1 style="margin: 0; color: #ffffff; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700;">${churchName}</h1>
+                  <p style="margin: 6px 0 0; color: #ddd6fe; font-size: 14px; font-weight: 400;">Weekly Review &middot; ${reviewData.weekStartDate} to ${reviewData.weekEndDate}</p>
+                </td>
+              </tr>
+
+              <!-- Content -->
+              <tr>
+                <td style="background-color: #ffffff; padding: 30px; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb;">
+                  <p style="margin: 0 0 16px; color: #374151; font-size: 15px;">Hi ${firstName},</p>
+                  <p style="margin: 0 0 20px; color: #6b7280; font-size: 14px;">Here's how your gatherings went this week:</p>
+
+                  ${gatheringCardsHtml}
+
+                  <!-- Totals -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 16px;">
+                    <tr>
+                      <td style="background-color: #f5f3ff; border-radius: 8px; padding: 20px; text-align: center; border: 1px solid #ede9fe;">
+                        <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #7c3aed; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Weekly Total</div>
+                        <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-size: 36px; font-weight: 700; color: #5b21b6; margin: 4px 0;">${reviewData.totalAttendance}</div>
+                        <div style="font-size: 13px; color: #7c3aed;">attendance${reviewData.totalVisitors > 0 ? ` &middot; ${reviewData.totalVisitors} visitor${reviewData.totalVisitors !== 1 ? 's' : ''}` : ''}</div>
+                      </td>
+                    </tr>
+                  </table>
+
+                  ${insightHtml}
+
+                  <p style="margin-top: 28px; color: #6b7280; font-size: 14px;">Blessings,<br><strong style="color: #374151;">${churchName}</strong></p>
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="background-color: #f9fafb; padding: 20px 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none; text-align: center;">
+                  <p style="margin: 0; font-size: 12px; color: #9ca3af;">Sent from <span style="color: #7c3aed;">Let My People Grow</span></p>
+                  <p style="margin: 8px 0 0; font-size: 11px; color: #9ca3af;">
+                    To stop receiving these emails, ask your admin to update your notification preferences.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  // Plain text version
+  const gatheringCardsText = reviewData.gatherings.map(g => {
+    let line = `${g.name} (${g.date}): ${g.count} attendees`;
+    if (g.deltaPercent !== null) {
+      const dir = g.deltaPercent > 0 ? 'up' : g.deltaPercent < 0 ? 'down' : 'flat';
+      line += ` (${dir} ${Math.abs(g.deltaPercent)}% vs 3-week avg of ${g.avgPrevious})`;
+    }
+    if (g.visitorCount > 0) line += `, ${g.visitorCount} visitors`;
+    return line;
+  }).join('\n');
+
+  const textContent = `
+${churchName} Weekly Review
+${reviewData.weekStartDate} to ${reviewData.weekEndDate}
+
+Hi ${firstName},
+
+Here's how your gatherings went this week:
+
+${gatheringCardsText}
+
+Total attendance: ${reviewData.totalAttendance}${reviewData.totalVisitors > 0 ? ` | ${reviewData.totalVisitors} visitors` : ''}
+
+${insight ? `Weekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : ''}
+Blessings,
+${churchName}
+
+---
+This email was sent from the Let My People Grow church management system.
+To stop receiving these emails, ask your admin to update your notification preferences.
+  `;
+
+  return sendEmail(email, subject, htmlContent, textContent, {
+    replyTo: process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au',
+    messageId: `weekly-review-${Date.now()}-${Math.random().toString(36).substr(2, 9)}@${process.env.EMAIL_DOMAIN || 'letmypeoplegrow.com.au'}`
+  });
+};
+
 module.exports = {
   sendEmail,
   sendInvitationEmail,
   sendOTCEmail,
-  sendNewChurchApprovalEmail
+  sendNewChurchApprovalEmail,
+  sendWeeklyReviewEmail
 }; 
