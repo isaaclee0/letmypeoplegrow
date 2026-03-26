@@ -192,6 +192,30 @@ async function generateWeeklyReviewData(churchId) {
   crossGatheringTrends = crossGatheringResult.trends || [];
   const crossGatheringShifts = crossGatheringResult.individualShifts || [];
 
+  // Follow-up and visitor data (only for standard gatherings)
+  let followUpData = { people: [], total: 0 };
+  let weeklyVisitors = null;
+  if (hasStandardGatherings) {
+    followUpData = await getNewlyDisengaged(churchId, endDate);
+    weeklyVisitors = await getWeeklyVisitorBreakdown(churchId, startDate, endDate);
+  }
+
+  // Getting started data for new churches
+  const isNewChurch = weeklyTotals.length < 3;
+  let gettingStarted = null;
+  if (isNewChurch) {
+    const gatheringCount = gatherings.length;
+    const peopleCountResult = await Database.query(
+      `SELECT COUNT(*) as cnt FROM individuals WHERE is_active = 1 AND church_id = ?`,
+      [churchId]
+    );
+    gettingStarted = {
+      gatheringCount,
+      peopleCount: peopleCountResult[0]?.cnt || 0,
+      weeksTracked: weeklyTotals.length
+    };
+  }
+
   return {
     churchName,
     timezone,
@@ -207,7 +231,11 @@ async function generateWeeklyReviewData(churchId) {
     visitorRetention,
     crossGatheringTrends,
     crossGatheringShifts,
-    familyPatterns
+    familyPatterns,
+    followUpPeople: followUpData.people,
+    followUpTotal: followUpData.total,
+    weeklyVisitors,
+    gettingStarted
   };
 }
 
@@ -829,6 +857,128 @@ async function getFamilyAttendancePatterns(churchId, endDate) {
 
   patterns.sort((a, b) => b.significance - a.significance);
   return patterns.slice(0, 5);
+}
+
+/**
+ * Get regulars who newly became disengaged: present in weeks 4-6 but absent in weeks 1-3.
+ * Returns up to 5 people with the gatherings they used to attend, plus total count.
+ */
+async function getNewlyDisengaged(churchId, endDate) {
+  const threeWeeksAgo = new Date(endDate);
+  threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
+  const sixWeeksAgo = new Date(endDate);
+  sixWeeksAgo.setDate(sixWeeksAgo.getDate() - 42);
+  const recentStart = threeWeeksAgo.toISOString().split('T')[0];
+  const olderStart = sixWeeksAgo.toISOString().split('T')[0];
+
+  // Find active regulars who were present in weeks 4-6 but NOT present in weeks 1-3
+  const disengaged = await Database.query(
+    `SELECT i.id, i.first_name, i.last_name
+     FROM individuals i
+     WHERE i.people_type = 'regular' AND i.is_active = 1 AND i.church_id = ?
+       AND EXISTS (
+         SELECT 1 FROM attendance_records ar
+         JOIN attendance_sessions s ON s.id = ar.session_id
+         JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
+         WHERE ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = ?
+           AND s.session_date >= ? AND s.session_date < ?
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM attendance_records ar
+         JOIN attendance_sessions s ON s.id = ar.session_id
+         JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
+         WHERE ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = ?
+           AND s.session_date >= ? AND s.session_date <= ?
+       )
+     ORDER BY i.last_name, i.first_name`,
+    [churchId, churchId, olderStart, recentStart, churchId, recentStart, endDate]
+  );
+
+  const total = disengaged.length;
+  const capped = disengaged.slice(0, 5);
+
+  // For each person, find which gatherings they attended in weeks 4-6
+  const result = [];
+  for (const person of capped) {
+    const gatheringRows = await Database.query(
+      `SELECT DISTINCT gt.name
+       FROM attendance_records ar
+       JOIN attendance_sessions s ON s.id = ar.session_id
+       JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
+       WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
+         AND s.session_date >= ? AND s.session_date < ?
+       ORDER BY gt.name`,
+      [person.id, churchId, olderStart, recentStart]
+    );
+    result.push({
+      firstName: person.first_name,
+      lastName: person.last_name,
+      gatherings: gatheringRows.map(g => g.name)
+    });
+  }
+
+  return { people: result, total };
+}
+
+/**
+ * Get this week's local visitors categorized as first-time or returning.
+ */
+async function getWeeklyVisitorBreakdown(churchId, startDate, endDate) {
+  // Get local visitors who attended this week
+  const visitors = await Database.query(
+    `SELECT DISTINCT i.id, i.first_name, i.last_name
+     FROM individuals i
+     JOIN attendance_records ar ON ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = i.church_id
+     JOIN attendance_sessions s ON s.id = ar.session_id
+     JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
+     WHERE i.people_type = 'local_visitor' AND i.is_active = 1 AND i.church_id = ?
+       AND s.session_date >= ? AND s.session_date <= ?`,
+    [churchId, startDate, endDate]
+  );
+
+  if (visitors.length === 0) return null;
+
+  const firstTime = [];
+  const returning = [];
+
+  for (const visitor of visitors) {
+    // Check if they have any attendance before this week
+    const prior = await Database.query(
+      `SELECT 1 FROM attendance_records ar
+       JOIN attendance_sessions s ON s.id = ar.session_id
+       WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
+         AND s.session_date < ?
+       LIMIT 1`,
+      [visitor.id, churchId, startDate]
+    );
+
+    // Get which gathering(s) they attended this week
+    const gatheringRows = await Database.query(
+      `SELECT DISTINCT gt.name
+       FROM attendance_records ar
+       JOIN attendance_sessions s ON s.id = ar.session_id
+       JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
+       WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
+         AND s.session_date >= ? AND s.session_date <= ?
+       ORDER BY gt.name`,
+      [visitor.id, churchId, startDate, endDate]
+    );
+    const gatheringNames = gatheringRows.map(g => g.name);
+
+    const entry = {
+      firstName: visitor.first_name,
+      lastName: visitor.last_name,
+      gatherings: gatheringNames
+    };
+
+    if (prior.length > 0) {
+      returning.push(entry);
+    } else {
+      firstTime.push(entry);
+    }
+  }
+
+  return { firstTime, returning };
 }
 
 /**
