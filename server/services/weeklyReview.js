@@ -480,9 +480,9 @@ async function getLocalVisitorRetention(churchId, endDate) {
   const start8 = eightWeeksAgo.toISOString().split('T')[0];
 
   // Find local visitors whose first attendance record falls in each window
-  const getWindowStats = async (windowStart, windowEnd) => {
+  const getWindowStats = async (windowStart, windowEnd, analysisEnd) => {
     // Local visitors whose earliest attendance is within the window
-    // total_visits is scoped to the analysis period (windowStart to outer endDate)
+    // total_visits is scoped up to analysisEnd so both windows are comparable
     const newVisitors = await Database.query(
       `SELECT i.id, i.first_name, i.last_name,
         MIN(s.session_date) as first_visit,
@@ -494,7 +494,7 @@ async function getLocalVisitorRetention(churchId, endDate) {
        WHERE i.people_type = 'local_visitor' AND i.church_id = ?
        GROUP BY i.id
        HAVING first_visit >= ? AND first_visit < ?`,
-      [windowEnd, churchId, windowStart, windowEnd]
+      [analysisEnd, churchId, windowStart, windowEnd]
     );
 
     const newCount = newVisitors.length;
@@ -509,8 +509,9 @@ async function getLocalVisitorRetention(churchId, endDate) {
   };
 
   // current window: [start4, endDate), prior window: [start8, start4)
-  const current = await getWindowStats(start4, endDate);
-  const prior = await getWindowStats(start8, start4);
+  // Both windows count total_visits up to endDate for apples-to-apples comparison
+  const current = await getWindowStats(start4, endDate, endDate);
+  const prior = await getWindowStats(start8, start4, endDate);
 
   return {
     current,
@@ -749,6 +750,7 @@ async function getFamilyAttendancePatterns(churchId, endDate) {
       [family.id, churchId]
     );
     const memberIds = new Set(members.map(m => m.id));
+    if (members.length === 0) continue;
 
     // Get attendance for all members
     const attendance = await Database.query(
