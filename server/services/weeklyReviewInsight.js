@@ -245,9 +245,15 @@ function rehydrateNames(text, nameMap) {
  * Uses the platform-level Anthropic API key (LMPG-owned), not the church's own config.
  *
  * @param {object} reviewData - The weekly review data from generateWeeklyReviewData
+ * @param {object} [options]
+ * @param {boolean} [options.forceAlgorithmic] - Skip AI and use algorithmic insight (e.g. to avoid spending credits on test emails)
  * @returns {string} The insight text (HTML-safe)
  */
-async function generateInsight(reviewData) {
+async function generateInsight(reviewData, options = {}) {
+  if (options.forceAlgorithmic) {
+    return generateAlgorithmicInsight(reviewData);
+  }
+
   if (!PLATFORM_API_KEY) {
     return generateAlgorithmicInsight(reviewData);
   }
@@ -265,8 +271,12 @@ async function generateInsight(reviewData) {
 
     const rehydrated = rehydrateNames(response, map);
 
-    // Append CTA
-    return rehydrated + '\n\n<em>Get deeper insights with <strong>AI Insights</strong> in your settings.</em>';
+    // Build "Find out more" link to AI insights page with pre-filled question
+    const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+    const question = encodeURIComponent('The weekly review said: "' + rehydrated.replace(/"/g, "'") + '" Can you tell me more about this? Who specifically should I follow up with and what do you suggest?');
+    const findOutMoreUrl = `${appUrl}/ai-insights?q=${question}`;
+
+    return rehydrated + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;
   } catch (err) {
     console.error('Weekly review AI insight failed, falling back to algorithmic:', err.message);
     return generateAlgorithmicInsight(reviewData);

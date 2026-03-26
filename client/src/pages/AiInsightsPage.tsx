@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { aiAPI } from '../services/api';
 import {
   PaperAirplaneIcon,
@@ -41,6 +41,7 @@ const SUGGESTED_QUESTIONS = [
 ];
 
 const AiInsightsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -48,6 +49,7 @@ const AiInsightsPage: React.FC = () => {
   const [provider, setProvider] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingQuestionRef = useRef<string | null>(searchParams.get('q'));
 
   // Chat history state
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -65,9 +67,19 @@ const AiInsightsPage: React.FC = () => {
         setAiConfigured(response.data.configured);
         setProvider(response.data.provider);
 
-        // Load conversations if AI is configured
         if (response.data.configured) {
-          loadConversations(true); // Auto-load latest conversation on page load
+          // If there's a ?q= param, start a new conversation with that question
+          if (pendingQuestionRef.current) {
+            const question = pendingQuestionRef.current;
+            pendingQuestionRef.current = null;
+            // Clear the query param from the URL
+            setSearchParams({}, { replace: true });
+            // Start fresh and send the question
+            await loadConversations(false);
+            sendMessage(question);
+          } else {
+            loadConversations(true); // Auto-load latest conversation on page load
+          }
         }
       } catch {
         setAiConfigured(false);

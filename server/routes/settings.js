@@ -416,4 +416,122 @@ router.put('/default-badge', requireRole(['admin']), async (req, res) => {
   }
 });
 
+// ===== Weekly Review Email endpoints =====
+
+// Get weekly review settings
+router.get('/weekly-review', requireRole(['admin']), async (req, res) => {
+  try {
+    const settings = await Database.query(`
+      SELECT weekly_review_email_enabled, weekly_review_email_day,
+             weekly_review_email_include_insight, weekly_review_email_last_sent
+      FROM church_settings WHERE church_id = ? LIMIT 1
+    `, [req.user.church_id]);
+
+    if (settings.length === 0) {
+      return res.status(404).json({ error: 'Church settings not found' });
+    }
+
+    // Detect send day if not manually set
+    const { detectSendDay } = require('../services/weeklyReview');
+    const detectedDay = await detectSendDay(req.user.church_id);
+
+    res.json({
+      enabled: !!settings[0].weekly_review_email_enabled,
+      day: settings[0].weekly_review_email_day,
+      detectedDay,
+      includeInsight: !!settings[0].weekly_review_email_include_insight,
+      lastSent: settings[0].weekly_review_email_last_sent
+    });
+  } catch (error) {
+    console.error('Get weekly review settings error:', error);
+    res.status(500).json({ error: 'Failed to retrieve weekly review settings.' });
+  }
+});
+
+// Update weekly review settings
+router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
+  try {
+    const { enabled, day, includeInsight } = req.body;
+
+    const updates = [];
+    const values = [];
+
+    if (typeof enabled === 'boolean') {
+      updates.push('weekly_review_email_enabled = ?');
+      values.push(enabled ? 1 : 0);
+    }
+    if (day !== undefined) {
+      const validDays = [null, 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      if (!validDays.includes(day)) {
+        return res.status(400).json({ error: 'Invalid day value' });
+      }
+      updates.push('weekly_review_email_day = ?');
+      values.push(day);
+    }
+    if (typeof includeInsight === 'boolean') {
+      updates.push('weekly_review_email_include_insight = ?');
+      values.push(includeInsight ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    values.push(req.user.church_id);
+    await Database.query(
+      `UPDATE church_settings SET ${updates.join(', ')} WHERE church_id = ?`,
+      values
+    );
+
+    res.json({ message: 'Weekly review settings updated successfully' });
+  } catch (error) {
+    console.error('Update weekly review settings error:', error);
+    res.status(500).json({ error: 'Failed to update weekly review settings.' });
+  }
+});
+
+// Send test weekly review email
+router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
+  try {
+    const { generateWeeklyReviewData } = require('../services/weeklyReview');
+    const { generateInsight } = require('../services/weeklyReviewInsight');
+    const { sendWeeklyReviewEmail } = require('../utils/email');
+
+    // Get requesting user's info
+    const users = await Database.query(
+      `SELECT first_name, email FROM users WHERE id = ? AND church_id = ? LIMIT 1`,
+      [req.user.id, req.user.church_id]
+    );
+
+    if (users.length === 0 || !users[0].email) {
+      return res.status(400).json({ error: 'Your account does not have an email address configured.' });
+    }
+
+    const reviewData = await generateWeeklyReviewData(req.user.church_id);
+    if (!reviewData) {
+      return res.status(400).json({ error: 'No attendance data found for the past week. Record some attendance first.' });
+    }
+
+    // Check if insight is enabled
+    const settings = await Database.query(
+      `SELECT weekly_review_email_include_insight FROM church_settings WHERE church_id = ? LIMIT 1`,
+      [req.user.church_id]
+    );
+    const includeInsight = settings.length > 0 && settings[0].weekly_review_email_include_insight;
+
+    let insight = null;
+    if (includeInsight) {
+      const isDev = process.env.NODE_ENV === 'development';
+      insight = await generateInsight(reviewData, { forceAlgorithmic: !isDev });
+    }
+
+    await sendWeeklyReviewEmail(users[0].email, users[0].first_name, reviewData, insight);
+
+    res.json({ message: `Test email sent to ${users[0].email}` });
+  } catch (error) {
+    console.error('Send test weekly review email error:', error);
+    res.status(500).json({ error: 'Failed to send test email.' });
+  }
+});
+
 module.exports = router; 
