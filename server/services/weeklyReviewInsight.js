@@ -273,7 +273,7 @@ async function generateInsight(reviewData, options = {}) {
 
     // Link to AI insights page for follow-up
     const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
-    const findOutMoreUrl = `${appUrl}/ai-insights`;
+    const findOutMoreUrl = `${appUrl}/app/ai-insights`;
 
     return rehydrated + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;
   } catch (err) {
@@ -367,8 +367,11 @@ async function saveInsightAsConversation(churchId, userId, insight, weekLabel) {
   try {
     const Database = require('../config/database');
 
-    // Strip HTML tags from insight for plain-text conversation
-    const plainInsight = insight.replace(/<[^>]*>/g, '').trim();
+    // Strip HTML tags and the "Find out more" link text from insight
+    const plainInsight = insight
+      .replace(/<a[^>]*>.*?<\/a>/g, '')  // remove entire anchor elements
+      .replace(/<[^>]*>/g, '')            // remove any remaining HTML tags
+      .trim();
     if (!plainInsight) return;
 
     const title = `Weekly Review — ${weekLabel}`;
