@@ -494,12 +494,12 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
   try {
     const { generateWeeklyReviewData } = require('../services/weeklyReview');
-    const { generateInsight } = require('../services/weeklyReviewInsight');
+    const { generateInsight, saveInsightAsConversation } = require('../services/weeklyReviewInsight');
     const { sendWeeklyReviewEmail } = require('../utils/email');
 
     // Get requesting user's info
     const users = await Database.query(
-      `SELECT first_name, email FROM users WHERE id = ? AND church_id = ? LIMIT 1`,
+      `SELECT id, first_name, email FROM users WHERE id = ? AND church_id = ? LIMIT 1`,
       [req.user.id, req.user.church_id]
     );
 
@@ -526,6 +526,12 @@ router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
     }
 
     await sendWeeklyReviewEmail(users[0].email, users[0].first_name, reviewData, insight);
+
+    // Save insight as AI conversation for follow-up
+    if (insight) {
+      const weekLabel = `${reviewData.weekStartDate} to ${reviewData.weekEndDate}`;
+      await saveInsightAsConversation(req.user.church_id, users[0].id, insight, weekLabel);
+    }
 
     res.json({ message: `Test email sent to ${users[0].email}` });
   } catch (error) {

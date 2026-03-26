@@ -271,10 +271,9 @@ async function generateInsight(reviewData, options = {}) {
 
     const rehydrated = rehydrateNames(response, map);
 
-    // Build "Find out more" link to AI insights page with pre-filled question
+    // Link to AI insights page for follow-up
     const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
-    const question = encodeURIComponent('The weekly review said: "' + rehydrated.replace(/"/g, "'") + '" Can you tell me more about this? Who specifically should I follow up with and what do you suggest?');
-    const findOutMoreUrl = `${appUrl}/ai-insights?q=${question}`;
+    const findOutMoreUrl = `${appUrl}/ai-insights`;
 
     return rehydrated + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;
   } catch (err) {
@@ -355,4 +354,50 @@ function generateAlgorithmicInsight(reviewData) {
   }
 }
 
-module.exports = { generateInsight };
+/**
+ * Save the weekly review insight as an AI chat conversation so users
+ * can see it and ask follow-up questions in the AI Insights page.
+ *
+ * @param {string} churchId
+ * @param {number} userId - The recipient user's ID
+ * @param {string} insight - The rehydrated insight text (without HTML link)
+ * @param {string} weekLabel - e.g. "2026-03-17 to 2026-03-23"
+ */
+async function saveInsightAsConversation(churchId, userId, insight, weekLabel) {
+  try {
+    const Database = require('../config/database');
+
+    // Strip HTML tags from insight for plain-text conversation
+    const plainInsight = insight.replace(/<[^>]*>/g, '').trim();
+    if (!plainInsight) return;
+
+    const title = `Weekly Review — ${weekLabel}`;
+    const userMessage = `Here is the weekly attendance review insight for ${weekLabel}. Can you tell me more about this and who I should follow up with?\n\n"${plainInsight}"`;
+
+    // Create conversation
+    const conv = await Database.query(
+      `INSERT INTO ai_chat_conversations (user_id, church_id, title) VALUES (?, ?, ?)`,
+      [userId, churchId, title]
+    );
+    const conversationId = conv.insertId || conv.lastInsertRowid;
+    if (!conversationId) return;
+
+    // Insert user message
+    await Database.query(
+      `INSERT INTO ai_chat_messages (conversation_id, role, content) VALUES (?, 'user', ?)`,
+      [conversationId, userMessage]
+    );
+
+    // Insert assistant response (the insight itself, elaborated)
+    const assistantMessage = plainInsight + '\n\nWould you like me to dig deeper into any of these patterns, or help you draft a message to reach out to specific people?';
+    await Database.query(
+      `INSERT INTO ai_chat_messages (conversation_id, role, content) VALUES (?, 'assistant', ?)`,
+      [conversationId, assistantMessage]
+    );
+  } catch (err) {
+    // Non-critical — don't fail the email send
+    console.error('Failed to save weekly review as conversation:', err.message);
+  }
+}
+
+module.exports = { generateInsight, saveInsightAsConversation };
