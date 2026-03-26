@@ -2,75 +2,7 @@ const https = require('https');
 
 const PLATFORM_API_KEY = process.env.PLATFORM_ANTHROPIC_API_KEY;
 
-const SYSTEM_PROMPT = 'You are an attendance analyst for a church. Given this week\'s data, provide ONE brief, actionable insight (2-3 sentences). Pick the single most noteworthy pattern from: engagement changes among regulars, local visitor retention, cross-gathering trends, or family attendance shifts. Be warm and pastoral in tone. Do not use markdown formatting. Local visitors are people the church hopes will return and integrate. Traveller visitors are passing through and not expected to return — do not flag their non-return as a problem.';
-
-/**
- * Build an obfuscation mapping: real names → delimited identifiers.
- * Returns { map: { '[Family-A]': 'Mackie', ... }, reverseMap: { 'Mackie': '[Family-A]', ... } }
- */
-function buildObfuscationMap(reviewData) {
-  const map = {};       // identifier → real name (for rehydration)
-  const reverseMap = {}; // real name → identifier (for obfuscation)
-  let familyCounter = 0;
-  let personCounter = 0;
-
-  const familyLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-
-  const addFamily = (familyName) => {
-    if (!familyName || reverseMap[familyName]) return;
-    const letter = familyCounter < 26 ? familyLetters[familyCounter] : `${familyLetters[Math.floor(familyCounter / 26) - 1]}${familyLetters[familyCounter % 26]}`;
-    const id = `[Family-${letter}]`;
-    map[id] = familyName;
-    reverseMap[familyName] = id;
-    familyCounter++;
-  };
-
-  const addPerson = (firstName, lastName) => {
-    if (!firstName || !lastName) return;
-    const fullName = `${firstName} ${lastName}`;
-    if (reverseMap[fullName]) return;
-    personCounter++;
-    const id = `[Person-${personCounter}]`;
-    map[id] = fullName;
-    reverseMap[fullName] = id;
-  };
-
-  // Process engagement changes
-  if (reviewData.engagementChanges) {
-    for (const c of reviewData.engagementChanges) {
-      if (c.isFamily && c.familyName) {
-        addFamily(c.familyName);
-      } else if (c.firstName && c.lastName) {
-        addPerson(c.firstName, c.lastName);
-        if (c.familyName) addFamily(c.familyName);
-      }
-    }
-  }
-
-  // Process visitor retention candidates
-  if (reviewData.visitorRetention?.current?.integrationCandidates) {
-    for (const v of reviewData.visitorRetention.current.integrationCandidates) {
-      addPerson(v.first_name, v.last_name);
-    }
-  }
-
-  // Process cross-gathering shifts
-  if (reviewData.crossGatheringShifts) {
-    for (const s of reviewData.crossGatheringShifts) {
-      addPerson(s.firstName, s.lastName);
-      if (s.familyName) addFamily(s.familyName);
-    }
-  }
-
-  // Process family patterns
-  if (reviewData.familyPatterns) {
-    for (const f of reviewData.familyPatterns) {
-      if (f.familyName) addFamily(f.familyName);
-    }
-  }
-
-  return { map, reverseMap };
-}
+const SYSTEM_PROMPT = 'You are an attendance analyst for a church. Given this week\'s data, provide ONE brief, actionable insight (2-3 sentences). Pick the single most noteworthy pattern from: engagement changes among regulars, local visitor retention, cross-gathering trends, or family attendance shifts. Be warm and pastoral in tone. Do not use markdown formatting. Use the real names provided — they will appear in an email to church leaders. Local visitors are people the church hopes will return and integrate. Traveller visitors are passing through and not expected to return — do not flag their non-return as a problem.';
 
 /**
  * Check minimum data thresholds for enriched insight.
@@ -92,17 +24,7 @@ function meetsMinimumThresholds(reviewData) {
   return dataPoints >= 3;
 }
 
-function buildContext(reviewData, reverseMap) {
-  const obfuscate = (name) => {
-    if (!name) return name;
-    const id = reverseMap[name];
-    if (!id) {
-      console.warn('weeklyReviewInsight: unobfuscated name reached AI context:', name);
-      return '[unknown]';
-    }
-    return id;
-  };
-
+function buildContext(reviewData) {
   // Gathering summary (local visitors only)
   const gatheringSummary = (reviewData.gatherings || []).map(g => {
     let line = `${g.name}: ${g.count} attendees on ${g.date}`;
@@ -119,15 +41,14 @@ function buildContext(reviewData, reverseMap) {
   if (reviewData.engagementChanges && reviewData.engagementChanges.length > 0) {
     const lines = reviewData.engagementChanges.map(c => {
       if (c.isFamily) {
-        const name = obfuscate(c.familyName);
         if (c.type === 'disengaging') {
-          return `- ${name} family (${c.memberCount} members): attended ${c.totalAttended}/${c.totalWeeks} weeks, missed last ${c.consecutiveMisses} weeks`;
+          return `- ${c.familyName} family (${c.memberCount} members): attended ${c.totalAttended}/${c.totalWeeks} weeks, missed last ${c.consecutiveMisses} weeks`;
         } else {
-          return `- ${name} family (${c.memberCount} members): newly consistent — ${c.consecutivePresent} straight weeks`;
+          return `- ${c.familyName} family (${c.memberCount} members): newly consistent — ${c.consecutivePresent} straight weeks`;
         }
       } else {
-        const name = obfuscate(`${c.firstName} ${c.lastName}`);
-        const familyNote = c.familyName ? ` (${obfuscate(c.familyName)} family)` : '';
+        const name = `${c.firstName} ${c.lastName}`;
+        const familyNote = c.familyName ? ` (${c.familyName} family)` : '';
         if (c.type === 'disengaging') {
           return `- ${name}${familyNote}: attended ${c.totalAttended}/${c.totalWeeks} weeks, missed last ${c.consecutiveMisses} weeks`;
         } else {
@@ -148,8 +69,7 @@ function buildContext(reviewData, reverseMap) {
       lines.push(`- Prior 4-week return rate was ${reviewData.visitorRetention.prior.returnRate}%`);
     }
     for (const v of cur.integrationCandidates) {
-      const name = obfuscate(`${v.first_name} ${v.last_name}`);
-      lines.push(`- ${name}: visited ${v.total_visits} times in last month (strong integration candidate)`);
+      lines.push(`- ${v.first_name} ${v.last_name}: visited ${v.total_visits} times in last month (strong integration candidate)`);
     }
     if (lines.length > 0) {
       visitorSection = `\nLocal visitor retention (last 4 weeks):\n${lines.join('\n')}`;
@@ -165,8 +85,7 @@ function buildContext(reviewData, reverseMap) {
     // Individual cross-gathering shifts
     if (reviewData.crossGatheringShifts && reviewData.crossGatheringShifts.length > 0) {
       for (const s of reviewData.crossGatheringShifts) {
-        const name = obfuscate(`${s.firstName} ${s.lastName}`);
-        lines.push(`- ${name}: stopped attending ${s.droppedGatherings.join(', ')} but still attends ${s.activeGatherings.join(', ')}`);
+        lines.push(`- ${s.firstName} ${s.lastName}: stopped attending ${s.droppedGatherings.join(', ')} but still attends ${s.activeGatherings.join(', ')}`);
       }
     }
     trendSection = `\nCross-gathering patterns:\n${lines.join('\n')}`;
@@ -176,13 +95,12 @@ function buildContext(reviewData, reverseMap) {
   let familySection = '';
   if (reviewData.familyPatterns && reviewData.familyPatterns.length > 0) {
     const lines = reviewData.familyPatterns.map(f => {
-      const name = obfuscate(f.familyName);
       if (f.pattern === 'whole-family-absent') {
-        return `- ${name} family (${f.memberCount} members): whole family absent ${f.fullAbsentWeeks} of last ${f.totalWeeks} weeks (was mostly present before)`;
+        return `- ${f.familyName} family (${f.memberCount} members): whole family absent ${f.fullAbsentWeeks} of last ${f.totalWeeks} weeks (was mostly present before)`;
       } else if (f.pattern === 'partial-attendance') {
-        return `- ${name} family (${f.memberCount} members): only some members attending ${f.partialWeeks} of ${f.totalWeeks} weeks`;
+        return `- ${f.familyName} family (${f.memberCount} members): only some members attending ${f.partialWeeks} of ${f.totalWeeks} weeks`;
       } else {
-        return `- ${name} family (${f.memberCount} members): newly consistent — full family present last ${f.fullPresentWeeks} weeks`;
+        return `- ${f.familyName} family (${f.memberCount} members): newly consistent — full family present last ${f.fullPresentWeeks} weeks`;
       }
     });
     familySection = `\nFamily attendance patterns:\n${lines.join('\n')}`;
@@ -204,40 +122,6 @@ ${engagementSection}${visitorSection}${trendSection}${familySection}
 
 Weekly totals (last 8 weeks):
 ${trendSummary}`;
-}
-
-/**
- * Replace anonymised identifiers with real names in a single pass.
- * Then strip any remaining unreplaced identifiers.
- */
-function rehydrateNames(text, nameMap) {
-  if (!text || Object.keys(nameMap).length === 0) return text;
-
-  // Build an expanded map that also matches bracket-less forms
-  // (the AI sometimes drops the [ ] delimiters)
-  const expandedMap = {};
-  for (const [id, realName] of Object.entries(nameMap)) {
-    expandedMap[id] = realName;
-    // Also map the bracket-less form, e.g. "Family-A" from "[Family-A]"
-    const bare = id.slice(1, -1);
-    if (!expandedMap[bare]) expandedMap[bare] = realName;
-  }
-
-  // Build a regex matching all known identifiers in one pass
-  // Sort by descending length so [Family-AB] is matched before [Family-A]
-  const escaped = Object.keys(expandedMap)
-    .sort((a, b) => b.length - a.length)
-    .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const pattern = new RegExp(escaped.join('|'), 'g');
-  let result = text.replace(pattern, match => expandedMap[match] || match);
-
-  // Strip any remaining un-rehydrated identifiers (bracketed or bare)
-  result = result.replace(/\[Family-[A-Z]+\]/g, 'a family');
-  result = result.replace(/\[Person-\d+\]/g, 'someone');
-  result = result.replace(/\bFamily-[A-Z]+\b/g, 'a family');
-  result = result.replace(/\bPerson-\d+\b/g, 'someone');
-
-  return result;
 }
 
 /**
@@ -264,18 +148,15 @@ async function generateInsight(reviewData, options = {}) {
   }
 
   try {
-    const { map, reverseMap } = buildObfuscationMap(reviewData);
-    const context = buildContext(reviewData, reverseMap);
+    const context = buildContext(reviewData);
     const response = await callClaude(context);
     if (!response) return generateAlgorithmicInsight(reviewData);
-
-    const rehydrated = rehydrateNames(response, map);
 
     // Link to AI insights page for follow-up
     const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
     const findOutMoreUrl = `${appUrl}/app/ai-insights`;
 
-    return rehydrated + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;
+    return response + `\n\n<a href="${findOutMoreUrl}" style="color: #1e40af; font-weight: 600; text-decoration: underline;">Find out more &rarr;</a>`;
   } catch (err) {
     console.error('Weekly review AI insight failed, falling back to algorithmic:', err.message);
     return generateAlgorithmicInsight(reviewData);
@@ -360,14 +241,14 @@ function generateAlgorithmicInsight(reviewData) {
  *
  * @param {string} churchId
  * @param {number} userId - The recipient user's ID
- * @param {string} insight - The rehydrated insight text (without HTML link)
+ * @param {string} insight - The insight text (may contain HTML link)
  * @param {string} weekLabel - e.g. "2026-03-17 to 2026-03-23"
  */
 async function saveInsightAsConversation(churchId, userId, insight, weekLabel) {
   try {
     const Database = require('../config/database');
 
-    // Strip HTML tags and the "Find out more" link text from insight
+    // Strip HTML tags and the "Find out more" link from insight
     const plainInsight = insight
       .replace(/<a[^>]*>.*?<\/a>/g, '')  // remove entire anchor elements
       .replace(/<[^>]*>/g, '')            // remove any remaining HTML tags
