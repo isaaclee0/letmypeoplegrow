@@ -213,17 +213,29 @@ ${trendSummary}`;
 function rehydrateNames(text, nameMap) {
   if (!text || Object.keys(nameMap).length === 0) return text;
 
+  // Build an expanded map that also matches bracket-less forms
+  // (the AI sometimes drops the [ ] delimiters)
+  const expandedMap = {};
+  for (const [id, realName] of Object.entries(nameMap)) {
+    expandedMap[id] = realName;
+    // Also map the bracket-less form, e.g. "Family-A" from "[Family-A]"
+    const bare = id.slice(1, -1);
+    if (!expandedMap[bare]) expandedMap[bare] = realName;
+  }
+
   // Build a regex matching all known identifiers in one pass
   // Sort by descending length so [Family-AB] is matched before [Family-A]
-  const escaped = Object.keys(nameMap)
+  const escaped = Object.keys(expandedMap)
     .sort((a, b) => b.length - a.length)
     .map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const pattern = new RegExp(escaped.join('|'), 'g');
-  let result = text.replace(pattern, match => nameMap[match] || match);
+  let result = text.replace(pattern, match => expandedMap[match] || match);
 
-  // Strip any remaining un-rehydrated identifiers
+  // Strip any remaining un-rehydrated identifiers (bracketed or bare)
   result = result.replace(/\[Family-[A-Z]+\]/g, 'a family');
   result = result.replace(/\[Person-\d+\]/g, 'someone');
+  result = result.replace(/\bFamily-[A-Z]+\b/g, 'a family');
+  result = result.replace(/\bPerson-\d+\b/g, 'someone');
 
   return result;
 }
