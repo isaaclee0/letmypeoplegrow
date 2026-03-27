@@ -156,6 +156,7 @@ export interface User {
   church_id?: string;
   gatheringAssignments: GatheringType[];
   unreadNotifications?: number;
+  hasSampleData?: boolean;
 }
 
 export interface GatheringType {
@@ -414,8 +415,11 @@ export const attendanceAPI = {
   updateHeadcountMode: (gatheringTypeId: number, date: string, mode: 'separate' | 'combined' | 'averaged') => 
     api.put(`/attendance/headcount/mode/${gatheringTypeId}/${date}`, { mode }),
     
-  updateUserHeadcount: (gatheringTypeId: number, date: string, targetUserId: number, headcount: number) => 
+  updateUserHeadcount: (gatheringTypeId: number, date: string, targetUserId: number, headcount: number) =>
     api.post(`/attendance/headcount/update-user/${gatheringTypeId}/${date}/${targetUserId}`, { headcount }),
+
+  toggleExcludeFromStats: (sessionId: number) =>
+    api.patch(`/attendance/sessions/${sessionId}/exclude`),
 };
 
 // Kiosk API
@@ -687,6 +691,12 @@ export const onboardingAPI = {
     
   saveProgress: (currentStep: number, data?: any) =>
     api.post('/onboarding/save-progress', { currentStep, data }),
+
+  loadSampleData: () =>
+    api.post('/onboarding/sample-data'),
+
+  clearSampleData: () =>
+    api.post('/onboarding/clear-sample-data'),
 };
 
 // CSV Import API
@@ -749,6 +759,11 @@ export const settingsAPI = {
   updateLocation: (data: { name: string; lat: number; lng: number }) => api.put('/settings/location', data),
   updateChildFlairColor: (color: string) => api.put('/settings/child-flair-color', { color }),
   updateDefaultBadge: (data: { text?: string; color?: string }) => api.put('/settings/default-badge', data),
+  // Weekly review
+  getWeeklyReview: () => api.get('/settings/weekly-review'),
+  updateWeeklyReview: (data: { enabled?: boolean; day?: string | null; includeInsight?: boolean }) =>
+    api.put('/settings/weekly-review', data),
+  sendTestWeeklyReview: () => api.post('/settings/weekly-review/test'),
 };
 
 // Integrations API

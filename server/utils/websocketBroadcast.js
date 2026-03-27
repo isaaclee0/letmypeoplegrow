@@ -161,6 +161,16 @@ function broadcastToChurch(churchId, event, data) {
   webSocketService.broadcastToChurch(churchId, event, data);
 }
 
+function broadcastSessionExcluded(gatheringId, date, churchId, data) {
+  if (!webSocketService) {
+    return;
+  }
+  webSocketService.broadcastAttendanceUpdate(gatheringId, date, churchId, {
+    type: 'session_excluded',
+    ...data
+  });
+}
+
 module.exports = {
   initialize,
   broadcastAttendanceRecords,
@@ -168,6 +178,7 @@ module.exports = {
   broadcastVisitorFamilyAdded,
   broadcastVisitorFamilyUpdated,
   broadcastFullRefresh,
+  broadcastSessionExcluded,
   broadcastToChurch,
   websocketBroadcast,
   isConnected

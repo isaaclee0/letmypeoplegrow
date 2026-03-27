@@ -1015,6 +1015,53 @@ router.get('/visitors/all', disableCache, async (req, res) => {
   }
 });
 
+// Toggle exclude from stats for a session (Admin and Coordinator only)
+router.patch('/sessions/:sessionId/exclude',
+  disableCache,
+  requireRole(['admin', 'coordinator']),
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+
+      // Find session with church isolation
+      const sessions = await Database.query(
+        'SELECT id, excluded_from_stats, gathering_type_id, session_date FROM attendance_sessions WHERE id = ? AND church_id = ?',
+        [sessionId, req.user.church_id]
+      );
+
+      if (sessions.length === 0) {
+        return res.status(404).json({ error: 'Session not found.' });
+      }
+
+      const session = sessions[0];
+      const newValue = session.excluded_from_stats ? 0 : 1;
+
+      await Database.query(
+        'UPDATE attendance_sessions SET excluded_from_stats = ? WHERE id = ? AND church_id = ?',
+        [newValue, sessionId, req.user.church_id]
+      );
+
+      // Broadcast to other connected clients
+      const { broadcastSessionExcluded } = require('../utils/websocketBroadcast');
+      broadcastSessionExcluded(
+        session.gathering_type_id,
+        session.session_date,
+        req.user.church_id,
+        { excludedFromStats: newValue === 1 }
+      );
+
+      res.json({
+        message: newValue ? 'Session excluded from stats.' : 'Session included in stats.',
+        excludedFromStats: newValue === 1,
+        sessionId: parseInt(sessionId)
+      });
+    } catch (error) {
+      console.error('Toggle exclude from stats error:', error);
+      res.status(500).json({ error: 'Failed to update session.' });
+    }
+  }
+);
+
 // COMBINED ENDPOINT: Get all attendance data in one call (attendance + visitors + recent + all people)
 // This optimizes page load by reducing 5 separate API calls to 1
 router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess, async (req, res) => {
@@ -1192,11 +1239,11 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
@@ -1463,6 +1510,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
     // Format and return combined response
     const responseData = processApiResponse({
+      sessionId: sessionId,
+      excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
@@ -1515,11 +1564,11 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
     const sessions = hasSessionsChurchId
       ? await Database.query(
-          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
+          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?',
           [gatheringTypeId, date, req.user.church_id]
         )
       : await Database.query(
-          'SELECT id, roster_snapshotted FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
+          'SELECT id, roster_snapshotted, excluded_from_stats FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ?',
           [gatheringTypeId, date]
         );
 
@@ -1668,6 +1717,8 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       });
 
       const responseData = processApiResponse({
+        sessionId: sessionId,
+        excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
         attendanceList: attendanceList.map(attendee => ({
           ...attendee,
           present: attendee.present === 1 || attendee.present === true,
