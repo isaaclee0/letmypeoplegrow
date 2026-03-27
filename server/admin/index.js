@@ -11,6 +11,7 @@
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 // Import database and backup service
@@ -49,7 +50,7 @@ app.get('/api/stats', async (req, res) => {
       const p = await Database.queryForChurch(cid, 'SELECT COUNT(*) as count FROM individuals WHERE is_active = 1');
       const f = await Database.queryForChurch(cid, 'SELECT COUNT(*) as count FROM families');
       const g = await Database.queryForChurch(cid, 'SELECT COUNT(*) as count FROM gathering_types WHERE is_active = 1');
-      const s = await Database.queryForChurch(cid, 'SELECT COUNT(*) as count FROM attendance_sessions');
+      const s = await Database.queryForChurch(cid, 'SELECT COUNT(*) as count FROM attendance_sessions WHERE excluded_from_stats = 0');
       totalUsers += Number(u[0]?.count || 0);
       totalPeople += Number(p[0]?.count || 0);
       totalFamilies += Number(f[0]?.count || 0);
@@ -172,7 +173,7 @@ app.get('/api/users/active', async (req, res) => {
           u.is_active,
           u.last_login_at,
           u.created_at,
-          (SELECT COUNT(*) FROM attendance_sessions as2 WHERE as2.created_by = u.id) as sessions_created,
+          (SELECT COUNT(*) FROM attendance_sessions as2 WHERE as2.created_by = u.id AND as2.excluded_from_stats = 0) as sessions_created,
           (SELECT COUNT(*) FROM audit_log al WHERE al.user_id = u.id) as actions_taken
         FROM users u
         WHERE u.is_active = 1
@@ -625,7 +626,6 @@ app.delete('/api/churches/:churchId', async (req, res) => {
     // Close and delete database files
     Database.closeChurchDb(churchId);
 
-    const fs = require('fs');
     const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR ||
       path.join(__dirname, '..', 'data');
     const dbPath = path.join(dataDir, 'churches', `${churchId}.sqlite`);
@@ -766,6 +766,321 @@ app.post('/api/backups/prune', async (req, res) => {
     res.status(500).json({ error: `Prune failed: ${error.message}` });
   }
 });
+
+// ============================================
+// Local Backup/Restore API Routes
+// ============================================
+
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, '..', '..', 'backups');
+
+function getBackupDir() {
+  // In Docker, use /app/backups (bind-mounted from host ./backups/)
+  if (process.env.DOCKER_ENV) return '/app/backups';
+  return BACKUP_DIR;
+}
+
+// List available local backup files
+app.get('/api/local-backups', async (req, res) => {
+  try {
+    const backupDir = getBackupDir();
+    if (!fs.existsSync(backupDir)) {
+      return res.json({ files: [], zips: [] });
+    }
+
+    const entries = fs.readdirSync(backupDir);
+    const files = [];
+    const zips = [];
+
+    for (const entry of entries) {
+      const fullPath = path.join(backupDir, entry);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) continue;
+
+      if (entry.endsWith('.zip')) {
+        // Peek inside zip to list contents
+        let contents = [];
+        try {
+          const AdmZip = require('adm-zip');
+          const zip = new AdmZip(fullPath);
+          contents = zip.getEntries()
+            .filter(e => e.entryName.endsWith('.sqlite') && !e.entryName.startsWith('__MACOSX'))
+            .map(e => ({
+              name: e.entryName,
+              size: e.header.size,
+              churchId: extractChurchId(e.entryName),
+              isRegistry: e.entryName.includes('registry'),
+            }));
+        } catch (err) {
+          console.warn(`Could not read zip ${entry}:`, err.message);
+        }
+
+        zips.push({
+          filename: entry,
+          size: stat.size,
+          modified: stat.mtime.toISOString(),
+          contents,
+        });
+      } else if (entry.endsWith('.sqlite')) {
+        const churchId = extractChurchId(entry);
+        const hasWal = fs.existsSync(fullPath + '-wal');
+        const hasShm = fs.existsSync(fullPath + '-shm');
+        const walSize = hasWal ? fs.statSync(fullPath + '-wal').size : 0;
+
+        files.push({
+          filename: entry,
+          churchId,
+          isRegistry: entry.includes('registry'),
+          size: stat.size,
+          walSize,
+          hasWal,
+          hasShm,
+          modified: stat.mtime.toISOString(),
+        });
+      }
+    }
+
+    // Also check for a churches/ subdirectory (from extracted zips)
+    const churchesSubDir = path.join(backupDir, 'churches');
+    if (fs.existsSync(churchesSubDir) && fs.statSync(churchesSubDir).isDirectory()) {
+      const churchEntries = fs.readdirSync(churchesSubDir);
+      for (const entry of churchEntries) {
+        if (!entry.endsWith('.sqlite')) continue;
+        const fullPath = path.join(churchesSubDir, entry);
+        const stat = fs.statSync(fullPath);
+        const churchId = extractChurchId(entry);
+        const hasWal = fs.existsSync(fullPath + '-wal');
+        const hasShm = fs.existsSync(fullPath + '-shm');
+        const walSize = hasWal ? fs.statSync(fullPath + '-wal').size : 0;
+
+        files.push({
+          filename: `churches/${entry}`,
+          churchId,
+          isRegistry: false,
+          size: stat.size,
+          walSize,
+          hasWal,
+          hasShm,
+          modified: stat.mtime.toISOString(),
+        });
+      }
+    }
+
+    // Check for registry.sqlite at top level of backups dir
+    const registryInBackups = path.join(backupDir, 'registry.sqlite');
+    if (fs.existsSync(registryInBackups) && !files.some(f => f.filename === 'registry.sqlite')) {
+      const stat = fs.statSync(registryInBackups);
+      const hasWal = fs.existsSync(registryInBackups + '-wal');
+      const walSize = hasWal ? fs.statSync(registryInBackups + '-wal').size : 0;
+      files.push({
+        filename: 'registry.sqlite',
+        churchId: null,
+        isRegistry: true,
+        size: stat.size,
+        walSize,
+        hasWal,
+        hasShm: fs.existsSync(registryInBackups + '-shm'),
+        modified: stat.mtime.toISOString(),
+      });
+    }
+
+    res.json({ files, zips });
+  } catch (error) {
+    console.error('Local backups scan error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+function extractChurchId(filename) {
+  // Extract church_id from filenames like "red_9f3a7c2e5b10.sqlite" or "churches/red_9f3a7c2e5b10.sqlite"
+  const base = path.basename(filename, '.sqlite');
+  if (base === 'registry') return null;
+  return base;
+}
+
+// Restore from a zip file (all churches + registry)
+app.post('/api/local-backups/restore-zip', async (req, res) => {
+  try {
+    const { filename } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename is required' });
+
+    const backupDir = getBackupDir();
+    const zipPath = path.join(backupDir, filename);
+    if (!fs.existsSync(zipPath)) {
+      return res.status(404).json({ error: 'Zip file not found' });
+    }
+
+    const AdmZip = require('adm-zip');
+    const BetterSqlite3 = require('better-sqlite3');
+    const zip = new AdmZip(zipPath);
+    const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+    const churchesDir = path.join(dataDir, 'churches');
+    const tmpDir = path.join(dataDir, '.restore-tmp');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.mkdirSync(churchesDir, { recursive: true });
+
+    const results = { churches: [], registry: false, errors: [] };
+
+    // Extract all entries to temp dir first
+    zip.extractAllTo(tmpDir, true);
+
+    // Find and process registry
+    const registryTmp = path.join(tmpDir, 'registry.sqlite');
+    if (fs.existsSync(registryTmp)) {
+      try {
+        // Checkpoint WAL if present
+        checkpointAndCopy(registryTmp, path.join(dataDir, 'registry.sqlite'));
+        results.registry = true;
+        // Re-initialize registry
+        Database.closeAll();
+        Database.initialize();
+        Database.migrateRegistry();
+      } catch (err) {
+        results.errors.push({ target: 'registry', error: err.message });
+      }
+    }
+
+    // Find and process churches
+    const tmpChurchesDir = path.join(tmpDir, 'churches');
+    if (fs.existsSync(tmpChurchesDir)) {
+      const churchFiles = fs.readdirSync(tmpChurchesDir).filter(f => f.endsWith('.sqlite'));
+      for (const file of churchFiles) {
+        const churchId = file.replace('.sqlite', '');
+        try {
+          Database.closeChurchDb(churchId);
+
+          const srcPath = path.join(tmpChurchesDir, file);
+          const destPath = path.join(churchesDir, file);
+
+          checkpointAndCopy(srcPath, destPath);
+
+          // Re-open and verify
+          const db = Database.getChurchDb(churchId);
+          db.prepare('SELECT 1').get();
+
+          results.churches.push(churchId);
+        } catch (err) {
+          results.errors.push({ target: churchId, error: err.message });
+        }
+      }
+    }
+
+    // Clean up temp dir
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    res.json({
+      success: true,
+      message: `Restored ${results.churches.length} church(es)${results.registry ? ' + registry' : ''}.`,
+      ...results,
+    });
+  } catch (error) {
+    console.error('Local restore zip error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Restore a single church from a local sqlite file
+app.post('/api/local-backups/restore-church', async (req, res) => {
+  try {
+    const { filename, churchId } = req.body;
+    if (!filename || !churchId) {
+      return res.status(400).json({ error: 'filename and churchId are required' });
+    }
+
+    const backupDir = getBackupDir();
+    const srcPath = path.join(backupDir, filename);
+    if (!fs.existsSync(srcPath)) {
+      return res.status(404).json({ error: 'Backup file not found' });
+    }
+
+    const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+    const destPath = path.join(dataDir, 'churches', `${churchId}.sqlite`);
+    fs.mkdirSync(path.join(dataDir, 'churches'), { recursive: true });
+
+    // Close existing connection
+    Database.closeChurchDb(churchId);
+
+    checkpointAndCopy(srcPath, destPath);
+
+    // Re-open and verify
+    const db = Database.getChurchDb(churchId);
+    db.prepare('SELECT 1').get();
+
+    // Ensure church exists in registry
+    const settings = await Database.queryForChurch(churchId, 'SELECT church_name FROM church_settings LIMIT 1');
+    const churchName = settings[0]?.church_name || churchId;
+    Database.ensureChurch(churchId, churchName);
+
+    res.json({
+      success: true,
+      message: `Restored church "${churchName}" (${churchId}) successfully.`,
+      churchId,
+    });
+  } catch (error) {
+    console.error('Local restore church error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Restore registry from a local sqlite file
+app.post('/api/local-backups/restore-registry', async (req, res) => {
+  try {
+    const { filename } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename is required' });
+
+    const backupDir = getBackupDir();
+    const srcPath = path.join(backupDir, filename);
+    if (!fs.existsSync(srcPath)) {
+      return res.status(404).json({ error: 'Backup file not found' });
+    }
+
+    const dataDir = process.env.CHURCH_DATA_DIR || process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+    const destPath = path.join(dataDir, 'registry.sqlite');
+
+    // Close all connections and reinitialize
+    Database.closeAll();
+
+    checkpointAndCopy(srcPath, destPath);
+
+    Database.initialize();
+    Database.migrateRegistry();
+
+    res.json({
+      success: true,
+      message: 'Registry restored successfully.',
+    });
+  } catch (error) {
+    console.error('Local restore registry error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Checkpoint WAL into the main sqlite file, then copy the clean file to dest.
+ * Also removes any existing WAL/SHM at the destination.
+ */
+function checkpointAndCopy(srcPath, destPath) {
+  const BetterSqlite3 = require('better-sqlite3');
+
+  // If source has a WAL file, checkpoint it first to merge data into the main file
+  const srcWal = srcPath + '-wal';
+  if (fs.existsSync(srcWal) && fs.statSync(srcWal).size > 0) {
+    const tmpDb = new BetterSqlite3(srcPath);
+    try {
+      tmpDb.pragma('wal_checkpoint(TRUNCATE)');
+    } finally {
+      tmpDb.close();
+    }
+  }
+
+  // Remove destination WAL/SHM files
+  for (const suffix of ['-wal', '-shm']) {
+    const f = destPath + suffix;
+    if (fs.existsSync(f)) fs.unlinkSync(f);
+  }
+
+  // Copy the checkpointed sqlite file
+  fs.copyFileSync(srcPath, destPath);
+}
 
 // Serve admin UI
 app.get('*', (req, res) => {

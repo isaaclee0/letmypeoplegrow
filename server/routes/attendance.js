@@ -748,9 +748,10 @@ router.post('/headcount/update-user/:gatheringTypeId/:date/:targetUserId',
 const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount, upToDate = null) => {
   try {
     let query = `
-      SELECT DISTINCT session_date 
-      FROM attendance_sessions 
+      SELECT DISTINCT session_date
+      FROM attendance_sessions
       WHERE gathering_type_id = ? AND church_id = ?
+        AND excluded_from_stats = 0
     `;
     const params = [gatheringTypeId, churchId];
     
@@ -832,6 +833,7 @@ const getVisitorAbsenceCounts = async (gatheringTypeId, churchId) => {
       WHERE s.gathering_type_id = ?
         AND s.church_id = ?
         AND s.roster_snapshotted = 1
+        AND s.excluded_from_stats = 0
         AND i.people_type IN ('local_visitor', 'traveller_visitor')
       ORDER BY ar.individual_id, s.session_date DESC
     `, [gatheringTypeId, churchId]);

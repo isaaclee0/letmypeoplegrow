@@ -30,7 +30,7 @@ router.get('/', async (req, res) => {
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
-        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
+        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id AND as_table.excluded_from_stats = 0
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         WHERE gt.is_active = 1 AND gt.church_id = ?
@@ -52,7 +52,7 @@ router.get('/', async (req, res) => {
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
-        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id
+        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id AND as_table.excluded_from_stats = 0
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id

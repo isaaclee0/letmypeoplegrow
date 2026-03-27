@@ -44,6 +44,7 @@ async function generateWeeklyReviewData(churchId) {
       `SELECT id, session_date, headcount_mode
        FROM attendance_sessions
        WHERE gathering_type_id = ? AND session_date >= ? AND session_date <= ? AND church_id = ?
+         AND excluded_from_stats = 0
        ORDER BY session_date DESC`,
       [gathering.id, startDate, endDate, churchId]
     );
@@ -96,6 +97,7 @@ async function generateWeeklyReviewData(churchId) {
       `SELECT id, session_date, headcount_mode
        FROM attendance_sessions
        WHERE gathering_type_id = ? AND session_date < ? AND church_id = ?
+         AND excluded_from_stats = 0
        ORDER BY session_date DESC LIMIT 3`,
       [gathering.id, startDate, churchId]
     );
@@ -249,6 +251,7 @@ async function getWeeklyTotals(churchId, startDate, endDate) {
      FROM attendance_sessions as_t
      JOIN gathering_types gt ON gt.id = as_t.gathering_type_id
      WHERE as_t.session_date >= ? AND as_t.session_date <= ? AND as_t.church_id = ?
+       AND as_t.excluded_from_stats = 0
      ORDER BY as_t.session_date`,
     [startDate, endDate, churchId]
   );
@@ -319,6 +322,7 @@ async function getRegularEngagementChanges(churchId, endDate) {
          SELECT 1 FROM attendance_records ar
          JOIN attendance_sessions s ON s.id = ar.session_id
          WHERE ar.individual_id = i.id AND ar.church_id = ? AND s.session_date >= ?
+           AND s.excluded_from_stats = 0
        )`,
     [churchId, churchId, startDate12]
   );
@@ -330,6 +334,7 @@ async function getRegularEngagementChanges(churchId, endDate) {
      JOIN gathering_types gt ON gt.id = s.gathering_type_id
      WHERE s.session_date >= ? AND s.session_date <= ? AND s.church_id = ?
        AND gt.attendance_type = 'standard'
+       AND s.excluded_from_stats = 0
      ORDER BY s.session_date`,
     [startDate8, endDate, churchId]
   );
@@ -517,7 +522,7 @@ async function getLocalVisitorRetention(churchId, endDate) {
         COUNT(DISTINCT s.session_date) as total_visits
        FROM individuals i
        JOIN attendance_records ar ON ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = i.church_id
-       JOIN attendance_sessions s ON s.id = ar.session_id AND s.session_date <= ?
+       JOIN attendance_sessions s ON s.id = ar.session_id AND s.session_date <= ? AND s.excluded_from_stats = 0
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
        WHERE i.people_type = 'local_visitor' AND i.church_id = ?
        GROUP BY i.id
@@ -568,6 +573,7 @@ async function getCrossGatheringTrends(churchId, endDate) {
       `SELECT id, session_date, headcount_mode
        FROM attendance_sessions
        WHERE gathering_type_id = ? AND session_date >= ? AND session_date <= ? AND church_id = ?
+         AND excluded_from_stats = 0
        ORDER BY session_date`,
       [g.id, startDate, endDate, churchId]
     );
@@ -634,6 +640,7 @@ async function getCrossGatheringTrends(churchId, endDate) {
        FROM attendance_sessions s
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
        WHERE s.session_date >= ? AND s.session_date <= ? AND s.church_id = ?
+         AND s.excluded_from_stats = 0
        ORDER BY s.session_date`,
       [startDate, endDate, churchId]
     );
@@ -743,6 +750,7 @@ async function getFamilyAttendancePatterns(churchId, endDate) {
      FROM attendance_sessions s
      JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
      WHERE s.session_date >= ? AND s.session_date <= ? AND s.church_id = ?
+       AND s.excluded_from_stats = 0
      ORDER BY s.session_date`,
     [startDate, endDate, churchId]
   );
@@ -882,6 +890,7 @@ async function getNewlyDisengaged(churchId, endDate) {
          JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
          WHERE ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = ?
            AND s.session_date >= ? AND s.session_date < ?
+           AND s.excluded_from_stats = 0
        )
        AND NOT EXISTS (
          SELECT 1 FROM attendance_records ar
@@ -889,6 +898,7 @@ async function getNewlyDisengaged(churchId, endDate) {
          JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
          WHERE ar.individual_id = i.id AND ar.present = 1 AND ar.church_id = ?
            AND s.session_date >= ? AND s.session_date <= ?
+           AND s.excluded_from_stats = 0
        )
      ORDER BY i.last_name, i.first_name`,
     [churchId, churchId, olderStart, recentStart, churchId, recentStart, endDate]
@@ -907,6 +917,7 @@ async function getNewlyDisengaged(churchId, endDate) {
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
        WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
          AND s.session_date >= ? AND s.session_date < ?
+         AND s.excluded_from_stats = 0
        ORDER BY gt.name`,
       [person.id, churchId, olderStart, recentStart]
     );
@@ -932,7 +943,8 @@ async function getWeeklyVisitorBreakdown(churchId, startDate, endDate) {
      JOIN attendance_sessions s ON s.id = ar.session_id
      JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
      WHERE i.people_type = 'local_visitor' AND i.is_active = 1 AND i.church_id = ?
-       AND s.session_date >= ? AND s.session_date <= ?`,
+       AND s.session_date >= ? AND s.session_date <= ?
+       AND s.excluded_from_stats = 0`,
     [churchId, startDate, endDate]
   );
 
@@ -948,6 +960,7 @@ async function getWeeklyVisitorBreakdown(churchId, startDate, endDate) {
        JOIN attendance_sessions s ON s.id = ar.session_id
        WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
          AND s.session_date < ?
+         AND s.excluded_from_stats = 0
        LIMIT 1`,
       [visitor.id, churchId, startDate]
     );
@@ -960,6 +973,7 @@ async function getWeeklyVisitorBreakdown(churchId, startDate, endDate) {
        JOIN gathering_types gt ON gt.id = s.gathering_type_id AND gt.attendance_type = 'standard'
        WHERE ar.individual_id = ? AND ar.present = 1 AND ar.church_id = ?
          AND s.session_date >= ? AND s.session_date <= ?
+         AND s.excluded_from_stats = 0
        ORDER BY gt.name`,
       [visitor.id, churchId, startDate, endDate]
     );

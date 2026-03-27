@@ -159,6 +159,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
           WHERE as_table.session_date >= ? AND as_table.session_date <= ?
             AND as_table.gathering_type_id IN (${placeholders})
             AND as_table.church_id = ?
+            AND as_table.excluded_from_stats = 0
           GROUP BY as_table.session_date, as_table.gathering_type_id, as_table.headcount_mode
           ORDER BY as_table.session_date DESC
         `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
@@ -179,6 +180,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
           WHERE as_table.session_date >= ? AND as_table.session_date <= ?
            AND (i.is_active = 1 OR ar.present = 1)
           AND as_table.church_id = ?
+          AND as_table.excluded_from_stats = 0
           AND as_table.gathering_type_id IN (${placeholders})
           GROUP BY as_table.session_date, as_table.gathering_type_id
           ORDER BY as_table.session_date DESC
@@ -210,6 +212,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
             WHERE as_table.session_date >= ? AND as_table.session_date <= ?
               AND as_table.gathering_type_id IN (${placeholders})
               AND as_table.church_id = ?
+              AND as_table.excluded_from_stats = 0
             GROUP BY as_table.session_date, as_table.gathering_type_id, as_table.headcount_mode
             ORDER BY as_table.session_date DESC
           `, [startDate, endDate, ...headcountGatheringIds, req.user.church_id]);
@@ -250,6 +253,7 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
           WHERE as_table.session_date >= ? AND as_table.session_date <= ?
             AND as_table.gathering_type_id IN (${placeholders})
             AND as_table.church_id = ?
+            AND as_table.excluded_from_stats = 0
           GROUP BY as_table.session_date
           ORDER BY as_table.session_date DESC
         `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
@@ -447,8 +451,9 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
           AND ar.present = 1
           AND as_table.gathering_type_id IN (${placeholders})
           AND as_table.church_id = ?
+          AND as_table.excluded_from_stats = 0
         `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
-        
+
         console.log(`Total visitors (attendance_records) found: ${totalVisitors[0]?.total || 0}`);
       } catch (err) {
         console.error('Error querying total visitors (attendance_records):', err);
@@ -546,6 +551,7 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
       AND as_table.gathering_type_id IN (${placeholders})
       AND as_table.church_id = ?
+      AND as_table.excluded_from_stats = 0
       ORDER BY as_table.session_date ASC
     `;
     
@@ -577,10 +583,11 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
         AND EXISTS (
           SELECT 1 FROM attendance_records ar
           JOIN attendance_sessions as_table ON ar.session_id = as_table.id
-          WHERE ar.individual_id = i.id 
-            AND as_table.session_date >= ? 
+          WHERE ar.individual_id = i.id
+            AND as_table.session_date >= ?
             AND as_table.session_date <= ?
             AND as_table.gathering_type_id IN (${placeholders})
+            AND as_table.excluded_from_stats = 0
         )
       ORDER BY 
         CASE 
@@ -610,8 +617,9 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
       AND as_table.gathering_type_id IN (${placeholders})
       AND as_table.church_id = ?
+      AND as_table.excluded_from_stats = 0
     `;
-    
+
     const attendanceData = await Database.query(
       attendanceQuery,
       [startDate, endDate, ...gatheringIds, req.user.church_id]

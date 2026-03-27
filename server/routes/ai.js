@@ -164,6 +164,7 @@ async function buildChurchContext(churchId) {
       JOIN gathering_types gt ON s.gathering_type_id = gt.id
       LEFT JOIN attendance_records ar ON s.id = ar.session_id
       WHERE s.church_id = ? AND s.session_date >= ? AND s.session_date <= ?
+        AND s.excluded_from_stats = 0
       GROUP BY s.id
       ORDER BY s.session_date DESC
     `, [churchId, startDate, today]);
@@ -186,6 +187,7 @@ async function buildChurchContext(churchId) {
       JOIN attendance_sessions s ON h.session_id = s.id
       JOIN gathering_types gt ON s.gathering_type_id = gt.id
       WHERE s.church_id = ? AND s.session_date >= ? AND s.session_date <= ?
+        AND s.excluded_from_stats = 0
       ORDER BY s.session_date DESC
     `, [churchId, startDate, today]);
 
@@ -209,6 +211,7 @@ async function buildChurchContext(churchId) {
       JOIN gathering_types gt ON s.gathering_type_id = gt.id
       JOIN individuals i ON ar.individual_id = i.id
       WHERE s.church_id = ? AND s.session_date >= ? AND s.session_date <= ?
+        AND s.excluded_from_stats = 0
       ORDER BY i.last_name, i.first_name, s.session_date DESC
     `, [churchId, startDate, today]);
 
@@ -654,6 +657,7 @@ async function buildEnrichedContext(churchId) {
       SELECT DISTINCT strftime('%Y-%m-%d', session_date) as d
       FROM attendance_sessions
       WHERE church_id = ? AND session_date >= ?
+        AND excluded_from_stats = 0
       ORDER BY session_date
     `, [churchId, threeMonthsAgo.toISOString().split('T')[0]]);
 

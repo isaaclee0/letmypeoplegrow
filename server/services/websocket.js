@@ -918,6 +918,7 @@ class WebSocketService {
             const rows = await conn.query(
               `SELECT DISTINCT session_date FROM attendance_sessions
                WHERE gathering_type_id = ? AND church_id = ? AND session_date <= ?
+                 AND excluded_from_stats = 0
                ORDER BY session_date DESC LIMIT ?`,
               [gatheringId, socket.churchId, date, limit]
             );

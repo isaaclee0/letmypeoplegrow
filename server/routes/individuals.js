@@ -559,9 +559,10 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
       FROM attendance_records ar
       JOIN attendance_sessions as_table ON ar.session_id = as_table.id
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-      WHERE ar.individual_id = ? 
+      WHERE ar.individual_id = ?
         AND ar.church_id = ?
         AND ar.present = 1
+        AND as_table.excluded_from_stats = 0
       ORDER BY as_table.session_date DESC, ar.updated_at DESC
       LIMIT 1
     `, [id, req.user.church_id]);
@@ -581,10 +582,11 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
       FROM attendance_records ar
       JOIN attendance_sessions as_table ON ar.session_id = as_table.id
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
-      WHERE ar.individual_id = ? 
+      WHERE ar.individual_id = ?
         AND ar.church_id = ?
         AND ar.present = 1
         AND as_table.session_date >= ?
+        AND as_table.excluded_from_stats = 0
       ORDER BY as_table.session_date ASC
     `, [id, req.user.church_id, oneYearAgoStr]);
 

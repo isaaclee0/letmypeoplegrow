@@ -15,7 +15,7 @@ async function triggerAttendanceNotifications(gatheringTypeId, sessionDate) {
 
       // Get recent sessions for this gathering
       const recentSessions = await Database.query(
-        `SELECT id, session_date FROM attendance_sessions WHERE gathering_type_id = ? ORDER BY session_date DESC LIMIT ?` ,
+        `SELECT id, session_date FROM attendance_sessions WHERE gathering_type_id = ? AND excluded_from_stats = 0 ORDER BY session_date DESC LIMIT ?` ,
         [gatheringTypeId, threshold_count]
       );
       if (recentSessions.length < threshold_count) continue;

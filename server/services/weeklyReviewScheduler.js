@@ -66,6 +66,48 @@ function wasSentThisWeek(lastSent) {
 }
 
 /**
+ * Get the day name after a given day name.
+ */
+function getDayAfter(dayName) {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const idx = days.indexOf(dayName);
+  return days[(idx + 1) % 7];
+}
+
+/**
+ * Check if the main gathering(s) have attendance data for this week.
+ * Returns true if at least one session exists for the most common gathering day.
+ */
+async function hasMainGatheringData(churchId, startDate, endDate) {
+  // Find the most common gathering day
+  const gatherings = await Database.query(
+    `SELECT day_of_week, COUNT(*) as cnt
+     FROM gathering_types
+     WHERE is_active = 1 AND day_of_week IS NOT NULL AND church_id = ?
+     GROUP BY day_of_week
+     ORDER BY cnt DESC
+     LIMIT 1`,
+    [churchId]
+  );
+
+  if (gatherings.length === 0) return true; // no day info, can't check — proceed
+
+  const mainDay = gatherings[0].day_of_week;
+
+  // Check if any session exists for a gathering on that day within the week window
+  const sessions = await Database.query(
+    `SELECT 1 FROM attendance_sessions s
+     JOIN gathering_types gt ON gt.id = s.gathering_type_id
+     WHERE gt.day_of_week = ? AND s.session_date >= ? AND s.session_date <= ? AND s.church_id = ?
+       AND s.excluded_from_stats = 0
+     LIMIT 1`,
+    [mainDay, startDate, endDate, churchId]
+  );
+
+  return sessions.length > 0;
+}
+
+/**
  * Process a single church for weekly review email.
  */
 async function processChurch(church) {
@@ -102,7 +144,12 @@ async function processChurch(church) {
         sendDay = await detectSendDay(churchId);
       }
 
-      if (localDay !== sendDay) return;
+      // Allow sending on the primary send day OR the day after (retry)
+      const retryDay = getDayAfter(sendDay);
+      const isPrimaryDay = localDay === sendDay;
+      const isRetryDay = localDay === retryDay;
+
+      if (!isPrimaryDay && !isRetryDay) return;
 
       // Check for duplicate sends this week
       if (wasSentThisWeek(s.weekly_review_email_last_sent)) return;
@@ -112,6 +159,23 @@ async function processChurch(church) {
       if (!reviewData) {
         console.log(`Weekly review: No attendance data for church ${churchId}, skipping`);
         return;
+      }
+
+      // On the primary send day, check if the main gathering has data yet.
+      // If not, defer to the retry day (gives people time to enter data).
+      if (isPrimaryDay) {
+        const now = new Date();
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        const hasData = await hasMainGatheringData(
+          churchId,
+          weekAgo.toISOString().split('T')[0],
+          now.toISOString().split('T')[0]
+        );
+        if (!hasData) {
+          console.log(`Weekly review: Main gathering data not yet entered for church ${churchId}, deferring to ${retryDay}`);
+          return;
+        }
       }
 
       // Generate insight
