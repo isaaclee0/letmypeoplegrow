@@ -13,6 +13,7 @@ import { useWebSocket } from '../contexts/WebSocketContext';
 import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
 import HeadcountAttendanceInterface from '../components/HeadcountAttendanceInterface';
 import logger from '../utils/logger';
+import SampleDataBanner from '../components/SampleDataBanner';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
 import { useTabSlider } from '../hooks/useTabSlider';
 import { useGatheringReorder } from '../hooks/useGatheringReorder';
@@ -2438,6 +2439,7 @@ const AttendancePage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-32">
+      <SampleDataBanner />
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -2458,81 +2460,33 @@ const AttendancePage: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-            {/* Mobile: Horizontal scrollable tabs with fade indicators */}
+            {/* Mobile: Dropdown selector */}
             <div className="block md:hidden">
-              <div className="relative w-full overflow-hidden">
-                <div 
-                  ref={tabSliderRef}
-                  className="flex items-center space-x-1 overflow-x-auto scrollbar-hide cursor-grab select-none w-full tab-slider" 
-                  style={{scrollbarWidth: 'none', msOverflowStyle: 'none'}}
-                  onMouseDown={(e) => handleMouseDown(e, tabSliderRef)}
-                  onMouseLeave={() => handleMouseLeave(tabSliderRef)}
-                  onMouseUp={() => handleMouseUp(tabSliderRef)}
-                  onMouseMove={(e) => handleMouseMove(e, tabSliderRef)}
-                  onTouchStart={(e) => handleTouchStart(e, tabSliderRef)}
-                  onTouchMove={(e) => handleTouchMove(e, tabSliderRef)}
-                  onTouchEnd={handleTouchEnd}
+              <div className="flex items-center space-x-2">
+                <select
+                  value={selectedGathering?.id || ''}
+                  onChange={(e) => {
+                    const gathering = (orderedGatherings.length ? orderedGatherings : gatherings)
+                      .find(g => g.id === parseInt(e.target.value));
+                    if (gathering) handleGatheringChange(gathering);
+                  }}
+                  className="flex-1 h-10 px-3 text-sm font-medium border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500"
                 >
-                  {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering, index) => (
-                    <div key={gathering.id} className="flex-shrink-0 min-w-0">
-                      <button
-                        draggable={false}
-                        onClick={() => handleGatheringChange(gathering)}
-                        className={`h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg group ${
-                          selectedGathering?.id === gathering.id
-                            ? 'bg-primary-500 text-white'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
-                        }`}
-                        title={gathering.name}
-                      >
-                        <div className="flex items-center justify-center h-full">
-                          <span className="text-center leading-tight whitespace-nowrap">
-                            {gathering.name}
-                          </span>
-                        </div>
-                      </button>
-                    </div>
+                  {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
+                    <option key={gathering.id} value={gathering.id}>
+                      {gathering.name}
+                    </option>
                   ))}
-                  
-                  {/* Edit Tab - Only show when there are multiple gatherings */}
-                  {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
-                    <div className="flex-shrink-0 min-w-0">
-                      <button
-                        draggable={false}
-                        onClick={() => openReorderModal()}
-                        className="h-12 py-2 px-3 font-medium text-xs transition-all duration-300 rounded-t-lg border-2 border-dashed border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-700 hover:bg-gray-50"
-                        title="Edit gathering order"
-                      >
-                        <div className="flex items-center justify-center h-full">
-                          <span className="text-center leading-tight whitespace-nowrap flex items-center space-x-1">
-                            <PencilIcon className="h-3 w-3" />
-                            <span>Edit Order</span>
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  )}
-                  
-                </div>
-                
-                {/* Fade indicators */}
-                {showLeftFade && (
-                  <div className="absolute top-0 left-0 w-8 h-12 bg-gradient-to-r from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 left-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M10 4L6 8L10 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
-                )}
-                {showRightFade && (
-                  <div className="absolute top-0 right-0 w-8 h-12 bg-gradient-to-l from-white dark:from-gray-800 via-white/90 dark:via-gray-800/90 to-transparent pointer-events-none z-10">
-                    <div className="absolute top-1/2 right-2 -translate-y-1/2 w-4 h-4 text-gray-600 bg-white rounded-full shadow-sm flex items-center justify-center">
-                      <svg viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                  </div>
+                </select>
+
+                {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
+                  <button
+                    onClick={() => openReorderModal()}
+                    className="h-10 w-10 flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    title="Edit gathering order"
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                  </button>
                 )}
               </div>
             </div>
