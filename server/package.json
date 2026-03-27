@@ -1,6 +1,6 @@
 {
   "name": "let-my-people-grow-server",
-  "version": "1.8.9",
+  "version": "1.9.2",
   "description": "Backend server for Let My People Grow - Church Attendance Tracking and Reporting",
   "main": "index.js",
   "scripts": {
@@ -15,6 +15,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1003.0",
     "@getbrevo/brevo": "^2.5.0",
+    "adm-zip": "^0.5.16",
     "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.6.2",
