@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   email_from_address TEXT DEFAULT 'noreply@letmypeoplegrow.com.au',
   brevo_api_key TEXT,
   onboarding_completed INTEGER DEFAULT 0,
+  has_sample_data INTEGER DEFAULT 0,
   default_badge_text TEXT,
   default_child_badge_text TEXT,
   default_child_badge_color TEXT,
@@ -97,6 +98,10 @@ CREATE TABLE IF NOT EXISTS church_settings (
   location_name TEXT,
   location_lat REAL,
   location_lng REAL,
+  weekly_review_email_enabled INTEGER DEFAULT 1,
+  weekly_review_email_day TEXT DEFAULT NULL,
+  weekly_review_email_include_insight INTEGER DEFAULT 1,
+  weekly_review_email_last_sent TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -210,6 +215,7 @@ CREATE TABLE IF NOT EXISTS attendance_sessions (
   notes TEXT,
   headcount_mode TEXT DEFAULT 'separate',
   roster_snapshotted INTEGER DEFAULT 0,
+  excluded_from_stats INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   church_id TEXT NOT NULL,
