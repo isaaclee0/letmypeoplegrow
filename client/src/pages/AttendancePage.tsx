@@ -66,6 +66,8 @@ const AttendancePage: React.FC = () => {
   const [headcountValue, setHeadcountValue] = useState<number>(0);
   const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [excludedFromStats, setExcludedFromStats] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
@@ -896,6 +898,8 @@ const AttendancePage: React.FC = () => {
     
     const loadRegularAttendance = async () => {
       if (!selectedGathering || !selectedDate) {
+        setExcludedFromStats(false);
+        setCurrentSessionId(null);
         return;
       }
       
@@ -1056,6 +1060,9 @@ const AttendancePage: React.FC = () => {
         };
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
+        setExcludedFromStats(response.excludedFromStats || false);
+        setCurrentSessionId(response.sessionId || null);
+
         logger.log('✅ Fresh data loaded from server and cached');
         setError('');
         
@@ -1463,6 +1470,11 @@ const AttendancePage: React.FC = () => {
         // Handle visitor updates
         if (data.visitors) {
           setVisitors(data.visitors);
+        }
+
+        // Handle session exclusion updates
+        if (data.type === 'session_excluded') {
+          setExcludedFromStats(data.excludedFromStats);
         }
       }
     };
@@ -2686,9 +2698,58 @@ const AttendancePage: React.FC = () => {
         </div>
       </div>
 
+      {/* Exclude from Stats Toggle - Admin/Coordinator only */}
+      {(user?.role === 'admin' || user?.role === 'coordinator') && currentSessionId && !excludedFromStats && (
+        <div className="flex items-center justify-end">
+          <button
+            onClick={async () => {
+              try {
+                await attendanceAPI.toggleExcludeFromStats(currentSessionId);
+                setExcludedFromStats(true);
+                showSuccess('Session excluded from stats');
+              } catch (err) {
+                console.error('Failed to exclude session:', err);
+              }
+            }}
+            className="text-xs text-gray-500 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 flex items-center space-x-1"
+          >
+            <XMarkIcon className="h-3.5 w-3.5" />
+            <span>Exclude from stats</span>
+          </button>
+        </div>
+      )}
+
+      {/* Excluded from Stats Banner */}
+      {excludedFromStats && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <XMarkIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              This session is excluded from stats
+            </span>
+          </div>
+          {(user?.role === 'admin' || user?.role === 'coordinator') && currentSessionId && (
+            <button
+              onClick={async () => {
+                try {
+                  await attendanceAPI.toggleExcludeFromStats(currentSessionId);
+                  setExcludedFromStats(false);
+                  showSuccess('Session included in stats');
+                } catch (err) {
+                  console.error('Failed to include session:', err);
+                }
+              }}
+              className="text-sm text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 underline"
+            >
+              Include in stats
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Attendance Summary Bar - Show only for standard gatherings */}
       {selectedGathering && validDates.length > 0 && selectedGathering.attendanceType === 'standard' && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
           <div className="px-4 py-5 sm:p-6">
             {isAttendanceLocked && selectedGathering.attendanceType === 'standard' && (
               <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-amber-800 text-sm">
@@ -2843,6 +2904,7 @@ const AttendancePage: React.FC = () => {
       )}
 
       {/* Conditional Rendering based on Gathering Type */}
+      <div className={excludedFromStats ? 'opacity-50 pointer-events-none' : ''}>
       {selectedGathering && validDates.length > 0 && (
         <>
           {selectedGathering.attendanceType === 'headcount' ? (
@@ -3089,10 +3151,11 @@ const AttendancePage: React.FC = () => {
           )}
         </>
       )}
+      </div>
 
       {/* Recent Visitors Section - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && filteredGroupedVisitors.length > 0 && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
               Recent Visitors
@@ -3264,7 +3327,7 @@ const AttendancePage: React.FC = () => {
 
       {/* All People (people not currently visible in this gathering) - Only show for standard gatherings */}
       {selectedGathering?.attendanceType === 'standard' && (
-        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+        <div className={`bg-white dark:bg-gray-800 shadow rounded-lg ${excludedFromStats ? 'opacity-50 pointer-events-none' : ''}`}>
           <div className="px-4 py-5 sm:p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">All People</h3>
@@ -3388,7 +3451,7 @@ const AttendancePage: React.FC = () => {
       )}
 
       {/* Floating Add Visitor Button - Only for Standard Gatherings */}
-      {selectedGathering?.attendanceType === 'standard' && (
+      {selectedGathering?.attendanceType === 'standard' && !excludedFromStats && (
         <button
           onClick={handleAddVisitor}
           disabled={isAttendanceLocked}
