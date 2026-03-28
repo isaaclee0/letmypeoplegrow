@@ -13,6 +13,7 @@ import NotesModal from '../components/people/NotesModal';
 import DataSecurityInfo from '../components/people/DataSecurityInfo';
 import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
+import SampleDataBanner from '../components/SampleDataBanner';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import logger from '../utils/logger';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
@@ -1248,6 +1249,7 @@ const PeoplePage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-32">
+      <SampleDataBanner />
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -2503,7 +2505,7 @@ const PeoplePage: React.FC = () => {
        {selectedPeople.length > 0 ? (
          <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
            <div className="flex items-center justify-end space-x-3">
-             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+             <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Edit Selected
              </div>
              <button
@@ -2621,7 +2623,7 @@ const PeoplePage: React.FC = () => {
            </div>
            {/* Archive Button - Always shown when people are selected */}
            <div className="flex items-center justify-end space-x-3">
-             <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+             <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
              </div>
              <button
@@ -2641,7 +2643,7 @@ const PeoplePage: React.FC = () => {
            {/* Merge Button - Only shown for 2+ people and admin users */}
            {isAdmin && selectedPeople.length >= 2 && (
                <div className="flex items-center justify-end space-x-3">
-                 <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                 <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge
                  </div>
                  <button

@@ -543,10 +543,27 @@
 
     <!-- Backups View -->
     <div id="view-backups" style="display: none;">
+      <!-- Local Restore Section -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Local Restore</h2>
+          <button class="tab" style="cursor: pointer; padding: 0.4rem 0.75rem;" onclick="scanLocalBackups()">Scan ./backups/</button>
+        </div>
+        <div class="modal-body" style="padding-bottom: 0.5rem;">
+          <p style="font-size: 0.8rem; color: #64748b; margin-bottom: 1rem;">
+            Place downloaded .zip or .sqlite files in the <code>./backups/</code> directory, then click Scan.
+            You can also put extracted files in <code>./backups/churches/</code>.
+          </p>
+        </div>
+        <div id="local-backups-content">
+          <div class="empty-state">Click "Scan ./backups/" to check for available backup files</div>
+        </div>
+      </div>
+
       <!-- Status Card -->
       <div class="section">
         <div class="section-header">
-          <h2>Backup Status</h2>
+          <h2>S3 Backup Status</h2>
           <div id="backup-status-indicator" style="font-size: 0.875rem; color: #94a3b8;">Loading...</div>
         </div>
         <div class="modal-body" id="backup-status-content">
@@ -1219,7 +1236,203 @@
     setInterval(loadHealth, 30000);
 
     // ============================================
-    // Backup functions
+    // Local backup/restore functions
+    // ============================================
+
+    async function scanLocalBackups() {
+      const container = document.getElementById('local-backups-content');
+      container.innerHTML = '<div class="loading">Scanning ./backups/ directory...</div>';
+
+      try {
+        const data = await fetchJSON('/api/local-backups');
+        let html = '';
+
+        // Zip files
+        if (data.zips.length) {
+          html += `
+            <div style="padding: 0 1.5rem;">
+              <h4 style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 0.5rem;">Zip Archives</h4>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Filename</th>
+                  <th>Size</th>
+                  <th>Contents</th>
+                  <th>Modified</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.zips.map(z => {
+                  const churches = z.contents.filter(c => !c.isRegistry);
+                  const hasRegistry = z.contents.some(c => c.isRegistry);
+                  return `
+                    <tr>
+                      <td style="font-family: monospace; font-size: 0.8rem;">${z.filename}</td>
+                      <td>${formatBytes(z.size)}</td>
+                      <td>
+                        ${hasRegistry ? '<span style="color: #60a5fa;">registry</span> + ' : ''}
+                        ${churches.length} church(es)
+                        <div class="timestamp">${churches.map(c => c.churchId).join(', ')}</div>
+                      </td>
+                      <td class="timestamp">${formatDate(z.modified)}</td>
+                      <td class="actions">
+                        <button class="action-btn" onclick="restoreFromZip('${z.filename.replace(/'/g, "\\'")}')"
+                          style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
+                          Restore All
+                        </button>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          `;
+        }
+
+        // Individual sqlite files
+        if (data.files.length) {
+          const churches = data.files.filter(f => !f.isRegistry);
+          const registries = data.files.filter(f => f.isRegistry);
+
+          html += `
+            <div style="padding: 0.5rem 1.5rem 0;">
+              <h4 style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 0.5rem;">Individual Files</h4>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Church ID</th>
+                  <th>Size</th>
+                  <th>WAL</th>
+                  <th>Modified</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${registries.map(f => `
+                  <tr>
+                    <td style="font-family: monospace; font-size: 0.8rem;">${f.filename}</td>
+                    <td><span style="color: #60a5fa;">registry</span></td>
+                    <td>${formatBytes(f.size)}</td>
+                    <td>${f.hasWal ? formatBytes(f.walSize) : '-'}</td>
+                    <td class="timestamp">${formatDate(f.modified)}</td>
+                    <td class="actions">
+                      <button class="action-btn" onclick="restoreLocalRegistry('${f.filename.replace(/'/g, "\\'")}')"
+                        style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
+                        Restore
+                      </button>
+                    </td>
+                  </tr>
+                `).join('')}
+                ${churches.map(f => `
+                  <tr>
+                    <td style="font-family: monospace; font-size: 0.8rem;">${f.filename}</td>
+                    <td><code>${f.churchId}</code></td>
+                    <td>${formatBytes(f.size)}</td>
+                    <td>${f.hasWal ? formatBytes(f.walSize) : '-'}</td>
+                    <td class="timestamp">${formatDate(f.modified)}</td>
+                    <td class="actions">
+                      <button class="action-btn" onclick="restoreLocalChurch('${f.filename.replace(/'/g, "\\'")}', '${f.churchId}')"
+                        style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
+                        Restore
+                      </button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        }
+
+        if (!data.zips.length && !data.files.length) {
+          html = '<div class="empty-state">No backup files found in ./backups/ directory.<br>Place .zip or .sqlite files there and scan again.</div>';
+        }
+
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = `<div class="empty-state" style="color: #fca5a5;">Error scanning: ${err.message}</div>`;
+      }
+    }
+
+    async function restoreFromZip(filename) {
+      if (!confirm(`Restore ALL churches and registry from "${filename}"?\n\nThis will replace all current dev data. Existing connections will be reset.`)) return;
+
+      const container = document.getElementById('local-backups-content');
+      container.insertAdjacentHTML('afterbegin',
+        '<div style="padding: 1rem 1.5rem; color: #94a3b8; background: #0f172a; border-bottom: 1px solid #334155;">Restoring from zip... please wait.</div>');
+
+      try {
+        const res = await fetch('/api/local-backups/restore-zip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message, 'success');
+          if (data.errors?.length) {
+            showToast(`${data.errors.length} error(s): ${data.errors.map(e => e.target).join(', ')}`, 'error');
+          }
+          loadStats();
+          loadChurches();
+        } else {
+          showToast('Restore failed: ' + data.error, 'error');
+        }
+      } catch (err) {
+        showToast('Restore failed: ' + err.message, 'error');
+      }
+      scanLocalBackups();
+    }
+
+    async function restoreLocalChurch(filename, churchId) {
+      if (!confirm(`Restore church "${churchId}" from "${filename}"?\n\nThis will replace the current database for this church.`)) return;
+
+      try {
+        const res = await fetch('/api/local-backups/restore-church', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, churchId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message, 'success');
+          loadStats();
+          loadChurches();
+        } else {
+          showToast('Restore failed: ' + data.error, 'error');
+        }
+      } catch (err) {
+        showToast('Restore failed: ' + err.message, 'error');
+      }
+    }
+
+    async function restoreLocalRegistry(filename) {
+      if (!confirm('Restore registry database? This will replace the current registry.')) return;
+
+      try {
+        const res = await fetch('/api/local-backups/restore-registry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message, 'success');
+          loadStats();
+          loadChurches();
+        } else {
+          showToast('Restore failed: ' + data.error, 'error');
+        }
+      } catch (err) {
+        showToast('Restore failed: ' + err.message, 'error');
+      }
+    }
+
+    // ============================================
+    // S3 Backup functions
     // ============================================
 
     function formatBytes(bytes) {

@@ -138,6 +138,9 @@ dist/
 # Local SQL dump (ignore sensitive DB exports)
 sqldumps/
 
+# Local backup files for dev restore
+backups/
+
 # Local one-off SQL migration
 /migration.sql
 
@@ -146,3 +149,6 @@ family-dummy-data.tsv
 
 # MariaDB backup module (kept for reference during migration)
 server/config/database-mariadb.js
+
+# Internal planning docs
+MONETISATION.md

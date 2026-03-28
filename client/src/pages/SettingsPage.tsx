@@ -19,12 +19,13 @@ import {
   MapPinIcon,
   UserIcon,
   ArrowDownTrayIcon,
+  BellIcon,
 } from '@heroicons/react/24/outline';
 import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user, updateUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'integrations' | 'data'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'notifications' | 'integrations' | 'data'>('general');
 
   // My Info (profile) state
   const [profileFirstName, setProfileFirstName] = useState('');
@@ -101,6 +102,18 @@ const SettingsPage: React.FC = () => {
   const [adultBadgeColor, setAdultBadgeColor] = useState<string>('');
   const [adultBadgeIcon, setAdultBadgeIcon] = useState<string>('');
 
+  // Weekly review email state
+  const [weeklyReviewEnabled, setWeeklyReviewEnabled] = useState(true);
+  const [weeklyReviewDay, setWeeklyReviewDay] = useState<string | null>(null);
+  const [weeklyReviewDetectedDay, setWeeklyReviewDetectedDay] = useState('Monday');
+  const [weeklyReviewIncludeInsight, setWeeklyReviewIncludeInsight] = useState(true);
+  const [weeklyReviewLastSent, setWeeklyReviewLastSent] = useState<string | null>(null);
+  const [weeklyReviewLoading, setWeeklyReviewLoading] = useState(false);
+  const [weeklyReviewSaving, setWeeklyReviewSaving] = useState(false);
+  const [weeklyReviewTestSending, setWeeklyReviewTestSending] = useState(false);
+  const [weeklyReviewSuccess, setWeeklyReviewSuccess] = useState('');
+  const [weeklyReviewError, setWeeklyReviewError] = useState('');
+
   // Track original values to detect changes
   const [originalBadgeSettings, setOriginalBadgeSettings] = useState({
     childText: '',
@@ -135,6 +148,7 @@ const SettingsPage: React.FC = () => {
   const tabs = [
     { id: 'general', name: 'General', icon: PencilIcon },
     { id: 'myinfo', name: 'My Info', icon: UserIcon },
+    ...(user?.role === 'admin' ? [{ id: 'notifications', name: 'Notifications', icon: BellIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'integrations', name: 'Integrations', icon: LinkIcon }] : []),
     ...(user?.role === 'admin' ? [{ id: 'data', name: 'Data', icon: ArrowDownTrayIcon }] : []),
   ];
@@ -403,8 +417,8 @@ const SettingsPage: React.FC = () => {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tabParam = urlParams.get('tab');
-    if (tabParam && ['general', 'myinfo', 'integrations', 'data'].includes(tabParam)) {
-      setActiveTab(tabParam as 'general' | 'myinfo' | 'integrations' | 'data');
+    if (tabParam && ['general', 'myinfo', 'notifications', 'integrations', 'data'].includes(tabParam)) {
+      setActiveTab(tabParam as 'general' | 'myinfo' | 'notifications' | 'integrations' | 'data');
     }
 
     // Handle Planning Center OAuth callback
@@ -444,6 +458,54 @@ const SettingsPage: React.FC = () => {
       logger.error('Failed to save visitor config:', err);
     } finally {
       setVisitorConfigLoading(false);
+    }
+  };
+
+  // Load weekly review settings when notifications tab is active
+  useEffect(() => {
+    if (activeTab === 'notifications' && user?.role === 'admin') {
+      setWeeklyReviewLoading(true);
+      settingsAPI.getWeeklyReview().then(res => {
+        setWeeklyReviewEnabled(res.data.enabled);
+        setWeeklyReviewDay(res.data.day);
+        setWeeklyReviewDetectedDay(res.data.detectedDay || 'Monday');
+        setWeeklyReviewIncludeInsight(res.data.includeInsight);
+        setWeeklyReviewLastSent(res.data.lastSent);
+      }).catch(err => {
+        logger.error('Failed to load weekly review settings:', err);
+      }).finally(() => {
+        setWeeklyReviewLoading(false);
+      });
+    }
+  }, [activeTab, user?.role]);
+
+  const saveWeeklyReview = async (updates: { enabled?: boolean; day?: string | null; includeInsight?: boolean }) => {
+    setWeeklyReviewSaving(true);
+    setWeeklyReviewSuccess('');
+    setWeeklyReviewError('');
+    try {
+      await settingsAPI.updateWeeklyReview(updates);
+      setWeeklyReviewSuccess('Settings saved');
+      setTimeout(() => setWeeklyReviewSuccess(''), 3000);
+    } catch (err: any) {
+      setWeeklyReviewError(err.response?.data?.error || 'Failed to save settings');
+    } finally {
+      setWeeklyReviewSaving(false);
+    }
+  };
+
+  const sendTestWeeklyReview = async () => {
+    setWeeklyReviewTestSending(true);
+    setWeeklyReviewSuccess('');
+    setWeeklyReviewError('');
+    try {
+      const res = await settingsAPI.sendTestWeeklyReview();
+      setWeeklyReviewSuccess(res.data.message || 'Test email sent!');
+      setTimeout(() => setWeeklyReviewSuccess(''), 5000);
+    } catch (err: any) {
+      setWeeklyReviewError(err.response?.data?.error || 'Failed to send test email');
+    } finally {
+      setWeeklyReviewTestSending(false);
     }
   };
 
@@ -1221,6 +1283,126 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </dl>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && user?.role === 'admin' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Email Notifications</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  Configure automated email notifications for your church.
+                </p>
+              </div>
+
+              {weeklyReviewLoading ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400">Loading...</div>
+              ) : (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6 space-y-6">
+                  <div>
+                    <h4 className="text-base font-medium text-gray-900 dark:text-gray-100 mb-1">Weekly Gathering Review</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      A summary of attendance numbers, trends, and insights sent the morning after your main gathering day. Sent to admins and coordinators with email notifications enabled.
+                    </p>
+
+                    {/* Enable toggle */}
+                    <div className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-700">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable weekly review email</div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={weeklyReviewEnabled}
+                        onClick={() => {
+                          const next = !weeklyReviewEnabled;
+                          setWeeklyReviewEnabled(next);
+                          saveWeeklyReview({ enabled: next });
+                        }}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${weeklyReviewEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    {/* Send day */}
+                    <div className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-700">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Send day</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Auto-detected: {weeklyReviewDetectedDay}</div>
+                      </div>
+                      <select
+                        value={weeklyReviewDay || ''}
+                        onChange={(e) => {
+                          const val = e.target.value || null;
+                          setWeeklyReviewDay(val);
+                          saveWeeklyReview({ day: val });
+                        }}
+                        className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-primary-500 focus:border-primary-500"
+                      >
+                        <option value="">Auto-detect</option>
+                        <option value="Sunday">Sunday</option>
+                        <option value="Monday">Monday</option>
+                        <option value="Tuesday">Tuesday</option>
+                        <option value="Wednesday">Wednesday</option>
+                        <option value="Thursday">Thursday</option>
+                        <option value="Friday">Friday</option>
+                        <option value="Saturday">Saturday</option>
+                      </select>
+                    </div>
+
+                    {/* Include insight toggle */}
+                    <div className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-700">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Include AI insight</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">One free AI-generated insight per week</div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={weeklyReviewIncludeInsight}
+                        onClick={() => {
+                          const next = !weeklyReviewIncludeInsight;
+                          setWeeklyReviewIncludeInsight(next);
+                          saveWeeklyReview({ includeInsight: next });
+                        }}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewIncludeInsight ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                      >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${weeklyReviewIncludeInsight ? 'translate-x-5' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    {/* Test email button */}
+                    <div className="pt-4 flex items-center gap-4">
+                      <button
+                        onClick={sendTestWeeklyReview}
+                        disabled={weeklyReviewTestSending}
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+                      >
+                        {weeklyReviewTestSending ? 'Sending...' : 'Send Test Email'}
+                      </button>
+                      {weeklyReviewSuccess && (
+                        <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
+                          <CheckCircleIcon className="h-4 w-4" />
+                          {weeklyReviewSuccess}
+                        </span>
+                      )}
+                      {weeklyReviewError && (
+                        <span className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1">
+                          <ExclamationTriangleIcon className="h-4 w-4" />
+                          {weeklyReviewError}
+                        </span>
+                      )}
+                    </div>
+
+                    {weeklyReviewLastSent && (
+                      <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                        Last sent: {weeklyReviewLastSent}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -7,10 +7,6 @@ WORKDIR /app
 # Copy package files
 COPY client/package*.json ./
 
-# Get version from VERSION file and set as environment variable for Vite
-ARG VERSION
-ENV VITE_APP_VERSION=$VERSION
-
 # Install dependencies
 RUN npm install --legacy-peer-deps
 

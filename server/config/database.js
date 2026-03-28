@@ -50,6 +50,14 @@ class Database {
       console.log(`✅ Created church database: ${churchId}`);
     }
 
+    // Migrate existing church DBs
+    if (!isNew) {
+      const cols = db.prepare('PRAGMA table_info(church_settings)').all();
+      if (!cols.some(c => c.name === 'has_sample_data')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN has_sample_data INTEGER DEFAULT 0');
+      }
+    }
+
     churchDbs.set(churchId, db);
     return db;
   }

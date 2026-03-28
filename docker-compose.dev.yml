@@ -32,6 +32,7 @@ services:
       - /app/node_modules
       - ./server/uploads:/app/uploads
       - server_data_dev:/app/data
+      - ./backups:/app/backups
     networks:
       - app-network-dev
     command: npm run dev
@@ -42,7 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile.client.dev
       args:
-        - VERSION=${VERSION:-1.7.0}
+        - VERSION=${VERSION:-0.0.0}
     container_name: church_attendance_client_dev
     restart: unless-stopped
     ports:
@@ -58,7 +59,7 @@ services:
       - FAST_REFRESH=false
       - VITE_HMR=false
       - VITE_USE_WEBSOCKETS=true
-      - VITE_APP_VERSION=${VERSION:-1.7.0}
+      # Version is read from /VERSION mount by vite.config.ts — no env var needed
     depends_on:
       - server
     networks:
@@ -85,6 +86,7 @@ services:
       - ./server:/app
       - /app/node_modules
       - server_data_dev:/app/data
+      - ./backups:/app/backups
     command: node admin/index.js
     networks:
       - app-network-dev

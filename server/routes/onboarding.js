@@ -758,4 +758,214 @@ router.get('/csv-template', (req, res) => {
   }
 });
 
+// Load sample data for new churches
+router.post('/sample-data',
+  verifyToken,
+  requireRole(['admin']),
+  auditLog('LOAD_SAMPLE_DATA'),
+  async (req, res) => {
+    try {
+      // Check if sample data already loaded
+      const settings = await Database.query(
+        'SELECT has_sample_data FROM church_settings WHERE church_id = ? LIMIT 1',
+        [req.user.church_id]
+      );
+      if (settings.length > 0 && settings[0].has_sample_data) {
+        return res.status(400).json({ error: 'Sample data is already loaded' });
+      }
+
+      const churchId = req.user.church_id;
+      const userId = req.user.id;
+
+      await Database.transaction(async (conn) => {
+        // 1. Create gathering
+        const gatheringResult = await conn.query(`
+          INSERT INTO gathering_types (name, description, day_of_week, start_time, frequency, attendance_type, created_by, church_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, ['Sunday Morning Service', 'Weekly Sunday worship service', 'Sunday', '10:00', 'weekly', 'standard', userId, churchId]);
+        const gatheringId = Number(gatheringResult.insertId);
+
+        // 2. Assign admin user to gathering
+        await conn.query(`
+          INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
+          VALUES (?, ?, ?, ?)
+        `, [userId, gatheringId, userId, churchId]);
+
+        // 3. Create families
+        const familyNames = ['Johnson', 'Garcia', 'Kim', 'Patel'];
+        const familyIds = [];
+        for (const name of familyNames) {
+          const result = await conn.query(`
+            INSERT INTO families (family_name, created_by, church_id)
+            VALUES (?, ?, ?)
+          `, [name, userId, churchId]);
+          familyIds.push(Number(result.insertId));
+        }
+
+        // 4. Create individuals
+        const people = [
+          { first: 'Michael', last: 'Johnson', familyIdx: 0 },
+          { first: 'Sarah', last: 'Johnson', familyIdx: 0 },
+          { first: 'Carlos', last: 'Garcia', familyIdx: 1 },
+          { first: 'Maria', last: 'Garcia', familyIdx: 1 },
+          { first: 'David', last: 'Kim', familyIdx: 2 },
+          { first: 'Grace', last: 'Kim', familyIdx: 2 },
+          { first: 'Raj', last: 'Patel', familyIdx: 3 },
+          { first: 'Priya', last: 'Patel', familyIdx: 3 },
+        ];
+
+        const individualIds = [];
+        for (const person of people) {
+          const result = await conn.query(`
+            INSERT INTO individuals (first_name, last_name, family_id, people_type, is_visitor, created_by, church_id)
+            VALUES (?, ?, ?, 'regular', 0, ?, ?)
+          `, [person.first, person.last, familyIds[person.familyIdx], userId, churchId]);
+          individualIds.push(Number(result.insertId));
+        }
+
+        // 5. Create visitor (no family)
+        const visitorResult = await conn.query(`
+          INSERT INTO individuals (first_name, last_name, people_type, is_visitor, created_by, church_id)
+          VALUES (?, ?, 'local_visitor', 1, ?, ?)
+        `, ['Alex', 'Thompson', userId, churchId]);
+        individualIds.push(Number(visitorResult.insertId));
+
+        // 6. Add all individuals to gathering list
+        for (const indId of individualIds) {
+          await conn.query(`
+            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [gatheringId, indId, userId, churchId]);
+        }
+
+        // 7. Create 2 attendance sessions (last 2 Sundays)
+        const today = new Date();
+        const dayOfWeek = today.getDay(); // 0 = Sunday
+        const daysToLastSunday = (dayOfWeek === 0) ? 7 : dayOfWeek;
+
+        const sessionDates = [];
+        for (let i = 0; i < 2; i++) {
+          const d = new Date(today);
+          d.setDate(today.getDate() - daysToLastSunday - (7 * i));
+          sessionDates.push(d.toISOString().split('T')[0]);
+        }
+
+        const sessionIds = [];
+        for (const date of sessionDates) {
+          const result = await conn.query(`
+            INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [gatheringId, date, userId, churchId]);
+          sessionIds.push(Number(result.insertId));
+        }
+
+        // 8. Create attendance records with realistic mix
+        // Week 1 (most recent): 7 of 9 present (Michael Johnson and Carlos Garcia absent)
+        const week1Absent = new Set([0, 2]); // indices into individualIds
+        for (let i = 0; i < individualIds.length; i++) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [sessionIds[0], individualIds[i], week1Absent.has(i) ? 0 : 1, churchId]);
+        }
+
+        // Week 2 (older): 8 of 9 present (visitor Alex Thompson absent)
+        const week2Absent = new Set([8]); // visitor index
+        for (let i = 0; i < individualIds.length; i++) {
+          await conn.query(`
+            INSERT INTO attendance_records (session_id, individual_id, present, church_id)
+            VALUES (?, ?, ?, ?)
+          `, [sessionIds[1], individualIds[i], week2Absent.has(i) ? 0 : 1, churchId]);
+        }
+
+        // 9. Set has_sample_data flag
+        await conn.query(`
+          UPDATE church_settings SET has_sample_data = 1 WHERE church_id = ?
+        `, [churchId]);
+      });
+
+      res.json({
+        message: 'Sample data loaded successfully',
+        summary: {
+          gatherings: 1,
+          families: 4,
+          individuals: 9,
+          sessions: 2
+        }
+      });
+    } catch (error) {
+      console.error('Load sample data error:', error);
+      res.status(500).json({ error: 'Failed to load sample data' });
+    }
+  }
+);
+
+// Clear sample data
+router.post('/clear-sample-data',
+  verifyToken,
+  requireRole(['admin']),
+  auditLog('CLEAR_SAMPLE_DATA'),
+  async (req, res) => {
+    try {
+      const settings = await Database.query(
+        'SELECT has_sample_data FROM church_settings WHERE church_id = ? LIMIT 1',
+        [req.user.church_id]
+      );
+      if (!settings.length || !settings[0].has_sample_data) {
+        return res.status(400).json({ error: 'No sample data to clear' });
+      }
+
+      const churchId = req.user.church_id;
+
+      await Database.transaction(async (conn) => {
+        // Delete in dependency order
+        // 1. Attendance records
+        await conn.query(`
+          DELETE FROM attendance_records WHERE church_id = ?
+        `, [churchId]);
+
+        // 2. Attendance sessions
+        await conn.query(`
+          DELETE FROM attendance_sessions WHERE church_id = ?
+        `, [churchId]);
+
+        // 3. Gathering lists
+        await conn.query(`
+          DELETE FROM gathering_lists WHERE church_id = ?
+        `, [churchId]);
+
+        // 4. Individuals
+        await conn.query(`
+          DELETE FROM individuals WHERE church_id = ?
+        `, [churchId]);
+
+        // 5. Families
+        await conn.query(`
+          DELETE FROM families WHERE church_id = ?
+        `, [churchId]);
+
+        // 6. User gathering assignments
+        await conn.query(`
+          DELETE FROM user_gathering_assignments WHERE church_id = ?
+        `, [churchId]);
+
+        // 7. Gathering types
+        await conn.query(`
+          DELETE FROM gathering_types WHERE church_id = ?
+        `, [churchId]);
+
+        // 8. Clear flag
+        await conn.query(`
+          UPDATE church_settings SET has_sample_data = 0 WHERE church_id = ?
+        `, [churchId]);
+      });
+
+      res.json({ message: 'Sample data cleared successfully' });
+    } catch (error) {
+      console.error('Clear sample data error:', error);
+      res.status(500).json({ error: 'Failed to clear sample data' });
+    }
+  }
+);
+
 module.exports = router; 

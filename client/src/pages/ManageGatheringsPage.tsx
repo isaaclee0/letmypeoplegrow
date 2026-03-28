@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { gatheringsAPI } from '../services/api';
+import { gatheringsAPI, onboardingAPI } from '../services/api';
 import logger from '../utils/logger';
+import SampleDataBanner from '../components/SampleDataBanner';
 import {
   PlusIcon,
   UserGroupIcon,
@@ -70,7 +71,7 @@ interface CreateGatheringData {
 
 const ManageGatheringsPage: React.FC = () => {
 
-  const { user } = useAuth();
+  const { user, refreshUserData } = useAuth();
   const navigate = useNavigate();
   const [gatherings, setGatherings] = useState<Gathering[]>([]);
   const [selectedGathering, setSelectedGathering] = useState<Gathering | null>(null);
@@ -78,6 +79,7 @@ const ManageGatheringsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isLoadingSampleData, setIsLoadingSampleData] = useState(false);
 
   const [showEditForm, setShowEditForm] = useState(false);
   const [showAddGatheringWizard, setShowAddGatheringWizard] = useState(false);
@@ -588,6 +590,7 @@ const ManageGatheringsPage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-32">
+      <SampleDataBanner />
       {/* Header */}
       <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -656,6 +659,29 @@ const ManageGatheringsPage: React.FC = () => {
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 Get started by creating your first gathering.
               </p>
+              {user?.role === 'admin' && (
+                <div className="mt-6">
+                  <p className="text-sm text-gray-400 dark:text-gray-500 mb-3">&mdash; or &mdash;</p>
+                  <button
+                    onClick={async () => {
+                      setIsLoadingSampleData(true);
+                      try {
+                        await onboardingAPI.loadSampleData();
+                        await refreshUserData();
+                        await loadGatherings();
+                      } catch (err: any) {
+                        setError(err.response?.data?.error || 'Failed to load sample data');
+                      } finally {
+                        setIsLoadingSampleData(false);
+                      }
+                    }}
+                    disabled={isLoadingSampleData}
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+                  >
+                    {isLoadingSampleData ? 'Loading...' : 'Try with sample data'}
+                  </button>
+                </div>
+              )}
               {/* Prominent guidance to add button */}
               <div className="hidden sm:block">
                 <div className="fixed bottom-4 sm:bottom-6 right-20 z-40 flex items-center">

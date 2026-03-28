@@ -580,6 +580,16 @@ async function startServer() {
       console.warn('⚠️  WebSocket service initialization failed:', error.message);
     }
     
+    // Initialize weekly review scheduler
+    let weeklyReviewScheduler;
+    try {
+      weeklyReviewScheduler = require('./services/weeklyReviewScheduler');
+      weeklyReviewScheduler.start();
+      console.log('✅ Weekly review scheduler initialized');
+    } catch (error) {
+      console.warn('⚠️  Weekly review scheduler initialization failed:', error.message);
+    }
+
     // Start the server
     server.listen(PORT, () => {
       console.log(`🎉 Server running on port ${PORT}`);
@@ -599,12 +609,14 @@ async function startServer() {
 process.on('SIGTERM', () => {
   console.log('🛑 Received SIGTERM, shutting down gracefully...');
   webSocketService.shutdown();
+  try { require('./services/weeklyReviewScheduler').stop(); } catch (_) {}
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('🛑 Received SIGINT, shutting down gracefully...');
   webSocketService.shutdown();
+  try { require('./services/weeklyReviewScheduler').stop(); } catch (_) {}
   process.exit(0);
 });
 

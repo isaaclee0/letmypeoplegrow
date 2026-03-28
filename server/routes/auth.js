@@ -484,6 +484,11 @@ router.get('/me', verifyToken, async (req, res) => {
       [user.id]
     );
 
+    const churchSettings = await Database.query(
+      'SELECT has_sample_data FROM church_settings WHERE church_id = ? LIMIT 1',
+      [user.church_id]
+    );
+
     res.json({
       user: {
         id: user.id,
@@ -498,7 +503,8 @@ router.get('/me', verifyToken, async (req, res) => {
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
         gatheringAssignments: assignmentsWithNumbers,
-        unreadNotifications: Number(notificationCount[0].count)
+        unreadNotifications: Number(notificationCount[0].count),
+        hasSampleData: !!(churchSettings.length && churchSettings[0].has_sample_data)
       }
     });
   } catch (error) {
