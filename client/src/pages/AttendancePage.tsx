@@ -1916,10 +1916,9 @@ const AttendancePage: React.FC = () => {
       grouped[groupKey].members.push(visitor);
     });
     
-    // Sort groups by firstSeenIndex to preserve the order families were first encountered
-    // and sort members within each family by their original order in the input array
+    // Sort groups alphabetically by family name
     const sortedGroups = Object.values(grouped)
-      .sort((a, b) => a.firstSeenIndex - b.firstSeenIndex)
+      .sort((a, b) => (a.familyName || '').localeCompare(b.familyName || ''))
       .map(group => {
         // Sort family members: adults first, then by original order
         const sortedMembers = group.members.sort((a, b) => {
