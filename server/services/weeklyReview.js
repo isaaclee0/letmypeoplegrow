@@ -198,6 +198,7 @@ async function generateWeeklyReviewData(churchId) {
   let followUpData = { people: [], total: 0 };
   let weeklyVisitors = null;
   if (hasStandardGatherings) {
+    await cleanupStaleDismissals(churchId);
     followUpData = await getNewlyDisengaged(churchId, endDate);
     weeklyVisitors = await getWeeklyVisitorBreakdown(churchId, startDate, endDate);
   }
@@ -865,6 +866,35 @@ async function getFamilyAttendancePatterns(churchId, endDate) {
 
   patterns.sort((a, b) => b.significance - a.significance);
   return patterns.slice(0, 5);
+}
+
+/**
+ * Clean up absence dismissals for individuals who have attended recently.
+ * An individual's dismissal is removed if they were present in any of the last 3 sessions
+ * for the dismissed gathering, meaning their streak has reset.
+ */
+async function cleanupStaleDismissals(churchId) {
+  try {
+    // Delete dismissals where the individual has attended recently (streak reset)
+    await Database.query(
+      `DELETE FROM absence_dismissals
+       WHERE church_id = ?
+         AND EXISTS (
+           SELECT 1 FROM attendance_records ar
+           JOIN attendance_sessions s ON s.id = ar.session_id
+           WHERE ar.individual_id = absence_dismissals.individual_id
+             AND s.gathering_type_id = absence_dismissals.gathering_type_id
+             AND ar.present = 1
+             AND s.church_id = ?
+             AND s.excluded_from_stats = 0
+             AND s.session_date >= date('now', '-21 days')
+         )`,
+      [churchId, churchId]
+    );
+  } catch (error) {
+    console.error('Failed to cleanup stale dismissals:', error);
+    // Non-critical — don't fail the weekly review
+  }
 }
 
 /**
