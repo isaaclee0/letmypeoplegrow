@@ -624,8 +624,14 @@ export const reportsAPI = {
   getDashboard: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) => 
     api.get('/reports/dashboard', { params }),
   
-  exportData: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) => 
+  exportData: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) =>
     api.get('/reports/export', { params, responseType: 'blob' }),
+
+  dismissAbsence: (data: { key: string; gatheringTypeIds: number[] }) =>
+    api.post('/reports/dismiss-absence', data),
+
+  getDismissals: (params: { gatheringTypeIds: number[] }) =>
+    api.get('/reports/dismissals', { params }),
 };
 
 // Notifications API
