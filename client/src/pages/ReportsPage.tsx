@@ -3,11 +3,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI } from '../services/api';
 import { userPreferences } from '../services/userPreferences';
 import logger from '../utils/logger';
-import { 
-  ChartBarIcon, 
-  UsersIcon, 
+import {
+  ChartBarIcon,
+  UsersIcon,
   ArrowTrendingUpIcon,
-  ArrowDownTrayIcon
+  ArrowDownTrayIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 import 'chart.js/auto';
 import { Bar } from 'react-chartjs-2';
@@ -43,6 +44,7 @@ const ReportsPage: React.FC = () => {
   const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number }>>([]);
   const [showAllAbsences, setShowAllAbsences] = useState(false);
   const [showAllVisitors, setShowAllVisitors] = useState(false);
+  const [dismissals, setDismissals] = useState<Array<{ individualId: number; gatheringTypeId: number; dismissedAtStreak: number }>>([]);
   // DISABLED: External data access feature is currently disabled
   // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
 
@@ -438,6 +440,21 @@ const ReportsPage: React.FC = () => {
     }
   }, [selectedGatherings, startDate, endDate, saveReportsPreferences]);
 
+  useEffect(() => {
+    if (!hasReportsAccess || selectedGatherings.length === 0) return;
+    const fetchDismissals = async () => {
+      try {
+        const response = await reportsAPI.getDismissals({
+          gatheringTypeIds: selectedGatherings.map(g => g.id)
+        });
+        setDismissals(response.data.dismissals || []);
+      } catch (e) {
+        // Non-critical — just show all absences if this fails
+      }
+    };
+    fetchDismissals();
+  }, [hasReportsAccess, selectedGatherings]);
+
   // Attendance chart based on selected period sessions
   const formatShortDate = (isoDate: string) => {
     try {
@@ -564,6 +581,38 @@ const ReportsPage: React.FC = () => {
       ]
     };
   }, [metrics?.attendanceData, visitorsChartLabels]);
+
+  const filteredAbsences = useMemo(() => {
+    if (dismissals.length === 0) return groupedAbsences;
+
+    // Build a lookup: individualId -> max dismissedAtStreak across selected gatherings
+    const dismissalMap = new Map<number, number>();
+    dismissals.forEach(d => {
+      const existing = dismissalMap.get(d.individualId) || 0;
+      if (d.dismissedAtStreak > existing) {
+        dismissalMap.set(d.individualId, d.dismissedAtStreak);
+      }
+    });
+
+    return groupedAbsences.filter(g => {
+      if (g.key.startsWith('ind:')) {
+        const id = parseInt(g.key.split(':')[1], 10);
+        const dismissedAt = dismissalMap.get(id);
+        if (dismissedAt !== undefined && g.streak < dismissedAt + 3) return false;
+      } else if (g.key.startsWith('fam:')) {
+        const famId = parseInt(g.key.split(':')[1], 10);
+        // A family is filtered out only if ALL members in absenceList for this family are dismissed
+        const familyMembers = absenceList.filter(a => a.familyId === famId);
+        if (familyMembers.length > 0 && familyMembers.every(m => {
+          const dismissedAt = dismissalMap.get(m.individualId);
+          return dismissedAt !== undefined && m.streak < dismissedAt + 3;
+        })) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [groupedAbsences, absenceList, dismissals]);
 
   const loadAttendanceDetails = useCallback(async () => {
     if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
@@ -765,6 +814,19 @@ const ReportsPage: React.FC = () => {
     }
   };
 
+  const handleDismissAbsence = async (key: string) => {
+    try {
+      await reportsAPI.dismissAbsence({
+        key,
+        gatheringTypeIds: selectedGatherings.map(g => g.id)
+      });
+      // Optimistic update: remove from displayed list
+      setGroupedAbsences(prev => prev.filter(g => g.key !== key));
+    } catch (e) {
+      console.error('Failed to dismiss absence:', e);
+    }
+  };
+
   if (!hasReportsAccess) {
     return (
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
@@ -924,7 +986,7 @@ const ReportsPage: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
           <div className="p-5">
             <div className="flex items-center">
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 <UsersIcon className="h-6 w-6 text-gray-400" />
               </div>
               <div className="ml-5 w-0 flex-1">
@@ -947,7 +1009,7 @@ const ReportsPage: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
           <div className="p-5">
             <div className="flex items-center">
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
               </div>
               <div className="ml-5 w-0 flex-1">
@@ -971,7 +1033,7 @@ const ReportsPage: React.FC = () => {
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
               <div className="p-5">
                 <div className="flex items-center">
-                  <div className="flex-shrink-0">
+                  <div className="shrink-0">
                     <UsersIcon className="h-6 w-6 text-gray-400" />
                   </div>
                   <div className="ml-5 w-0 flex-1">
@@ -996,7 +1058,7 @@ const ReportsPage: React.FC = () => {
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
               <div className="p-5">
                 <div className="flex items-center">
-                  <div className="flex-shrink-0">
+                  <div className="shrink-0">
                     <UsersIcon className="h-6 w-6 text-gray-400" />
                   </div>
                   <div className="ml-5 w-0 flex-1">
@@ -1123,30 +1185,40 @@ const ReportsPage: React.FC = () => {
                   <div className="flex justify-center items-center h-40">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
                   </div>
-                 ) : groupedAbsences.length === 0 ? (
+                 ) : filteredAbsences.length === 0 ? (
                   <div className="text-sm text-gray-500 dark:text-gray-400">No concerning absences right now.</div>
                 ) : (
                   <>
                   <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {(showAllAbsences ? groupedAbsences : groupedAbsences.slice(0, 5)).map((g) => {
+                    {(showAllAbsences ? filteredAbsences : filteredAbsences.slice(0, 5)).map((g) => {
                       const base = 'px-3 py-2 flex items-center justify-between';
                       const color = g.streak >= 3 ? 'bg-orange-200 dark:bg-orange-900/40' : 'bg-orange-100 dark:bg-orange-900/20';
                       return (
                         <li key={g.key} className={`${base} ${color} rounded`}>
                           <span className="font-medium text-gray-900 dark:text-gray-100">{g.name}</span>
-                          <span className="text-sm text-gray-700 dark:text-gray-300">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm text-gray-700 dark:text-gray-300">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDismissAbsence(g.key)}
+                              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                              title="Dismiss — won't show again until 3 more absences"
+                            >
+                              <XMarkIcon className="h-4 w-4" />
+                            </button>
+                          </div>
                         </li>
                       );
                     })}
                   </ul>
-                   {groupedAbsences.length > 5 && (
+                   {filteredAbsences.length > 5 && (
                     <div className="mt-3 text-right">
                       <button
                         type="button"
                         onClick={() => setShowAllAbsences((v) => !v)}
                         className="text-sm font-medium text-primary-600 hover:text-primary-700"
                       >
-                         {showAllAbsences ? 'Show less' : `Show all (${groupedAbsences.length})`}
+                         {showAllAbsences ? 'Show less' : `Show all (${filteredAbsences.length})`}
                       </button>
                     </div>
                   )}
