@@ -777,4 +777,37 @@ router.post('/dismiss-absence', requireRole(['admin', 'coordinator']), async (re
   }
 });
 
+// Get active dismissals for the given gatherings
+router.get('/dismissals', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { gatheringTypeIds } = req.query;
+    const churchId = req.user.church_id;
+
+    if (!gatheringTypeIds || (Array.isArray(gatheringTypeIds) && gatheringTypeIds.length === 0)) {
+      return res.json({ dismissals: [] });
+    }
+
+    const ids = Array.isArray(gatheringTypeIds) ? gatheringTypeIds : [gatheringTypeIds];
+    const placeholders = ids.map(() => '?').join(',');
+
+    const dismissals = await Database.query(
+      `SELECT individual_id, gathering_type_id, dismissed_at_streak
+       FROM absence_dismissals
+       WHERE gathering_type_id IN (${placeholders}) AND church_id = ?`,
+      [...ids, churchId]
+    );
+
+    res.json({
+      dismissals: dismissals.map(d => ({
+        individualId: d.individual_id,
+        gatheringTypeId: d.gathering_type_id,
+        dismissedAtStreak: d.dismissed_at_streak
+      }))
+    });
+  } catch (error) {
+    console.error('Get dismissals error:', error);
+    res.status(500).json({ error: 'Failed to get dismissals' });
+  }
+});
+
 module.exports = router; 
