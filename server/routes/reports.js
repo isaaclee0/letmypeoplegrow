@@ -688,4 +688,93 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
   }
 });
 
+// Dismiss an absence entry (individual or family)
+router.post('/dismiss-absence', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { key, gatheringTypeIds } = req.body;
+
+    if (!key || !gatheringTypeIds || !Array.isArray(gatheringTypeIds) || gatheringTypeIds.length === 0) {
+      return res.status(400).json({ error: 'key and gatheringTypeIds are required' });
+    }
+
+    const churchId = req.user.church_id;
+    const userId = req.user.id;
+
+    // Parse the key to get individual IDs to dismiss
+    let individualIds = [];
+    const [keyType, keyId] = key.split(':');
+
+    if (keyType === 'ind') {
+      individualIds = [parseInt(keyId, 10)];
+    } else if (keyType === 'fam') {
+      const familyId = parseInt(keyId, 10);
+      const members = await Database.query(
+        'SELECT id FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
+        [familyId, churchId]
+      );
+      individualIds = members.map(m => m.id);
+    } else {
+      return res.status(400).json({ error: 'Invalid key format. Expected ind:{id} or fam:{id}' });
+    }
+
+    if (individualIds.length === 0) {
+      return res.status(404).json({ error: 'No individuals found for the given key' });
+    }
+
+    // Compute current streak for each individual across the selected gatherings
+    const gatheringPlaceholders = gatheringTypeIds.map(() => '?').join(',');
+    const sessions = await Database.query(
+      `SELECT DISTINCT s.id, s.session_date
+       FROM attendance_sessions s
+       WHERE s.gathering_type_id IN (${gatheringPlaceholders})
+         AND s.church_id = ?
+         AND s.excluded_from_stats = 0
+       ORDER BY s.session_date DESC
+       LIMIT 12`,
+      [...gatheringTypeIds, churchId]
+    );
+
+    const sessionIds = sessions.map(s => s.id);
+
+    for (const individualId of individualIds) {
+      let streak = 0;
+
+      if (sessionIds.length > 0) {
+        const sessionPlaceholders = sessionIds.map(() => '?').join(',');
+        const records = await Database.query(
+          `SELECT s.session_date, COALESCE(ar.present, 0) as present
+           FROM attendance_sessions s
+           LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.individual_id = ?
+           WHERE s.id IN (${sessionPlaceholders})
+           ORDER BY s.session_date DESC`,
+          [individualId, ...sessionIds]
+        );
+
+        for (const record of records) {
+          if (record.present) break;
+          streak++;
+        }
+      }
+
+      // Upsert dismissal for each gathering
+      for (const gatheringTypeId of gatheringTypeIds) {
+        await Database.query(
+          `INSERT INTO absence_dismissals (individual_id, gathering_type_id, dismissed_at_streak, dismissed_by, church_id)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(individual_id, gathering_type_id) DO UPDATE SET
+             dismissed_at_streak = excluded.dismissed_at_streak,
+             dismissed_by = excluded.dismissed_by,
+             created_at = datetime('now')`,
+          [individualId, gatheringTypeId, streak, userId, churchId]
+        );
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Dismiss absence error:', error);
+    res.status(500).json({ error: 'Failed to dismiss absence' });
+  }
+});
+
 module.exports = router; 
