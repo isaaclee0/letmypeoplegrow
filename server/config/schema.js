@@ -412,6 +412,21 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   UNIQUE(user_id, preference_key)
 );
 CREATE INDEX IF NOT EXISTS idx_uprefs_user ON user_preferences(user_id);
+CREATE TABLE IF NOT EXISTS absence_dismissals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  individual_id INTEGER NOT NULL,
+  gathering_type_id INTEGER NOT NULL,
+  dismissed_at_streak INTEGER NOT NULL,
+  dismissed_by INTEGER,
+  church_id TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
+  FOREIGN KEY (dismissed_by) REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE(individual_id, gathering_type_id)
+);
+CREATE INDEX IF NOT EXISTS idx_absence_dismissals_individual ON absence_dismissals(individual_id, gathering_type_id);
+CREATE INDEX IF NOT EXISTS idx_absence_dismissals_church ON absence_dismissals(church_id);
 `;
 
 const UPDATED_AT_TRIGGERS = `
