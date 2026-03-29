@@ -900,8 +900,12 @@ async function getNewlyDisengaged(churchId, endDate) {
            AND s.session_date >= ? AND s.session_date <= ?
            AND s.excluded_from_stats = 0
        )
+       AND NOT EXISTS (
+         SELECT 1 FROM absence_dismissals ad
+         WHERE ad.individual_id = i.id AND ad.church_id = ?
+       )
      ORDER BY i.last_name, i.first_name`,
-    [churchId, churchId, olderStart, recentStart, churchId, recentStart, endDate]
+    [churchId, churchId, olderStart, recentStart, churchId, recentStart, endDate, churchId]
   );
 
   const total = disengaged.length;
