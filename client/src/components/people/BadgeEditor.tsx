@@ -79,7 +79,7 @@ const BadgeEditor: React.FC<BadgeEditorProps> = ({
                 />
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Leave empty to use church default settings
+                Leave empty to use default settings
               </div>
             </div>
 
@@ -117,7 +117,7 @@ const BadgeEditor: React.FC<BadgeEditorProps> = ({
                 ))}
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Select "Default" to use church default icon
+                Select "Default" to use the default icon
               </div>
             </div>
 
@@ -141,7 +141,7 @@ const BadgeEditor: React.FC<BadgeEditorProps> = ({
                 />
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Leave empty to use church default color
+                Leave empty to use the default colour
               </div>
             </div>
 

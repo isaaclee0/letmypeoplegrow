@@ -157,10 +157,10 @@ const OnboardingPage: React.FC = () => {
       <div className="max-w-md mx-auto">
         <div className="text-center mb-10">
           <div className="mx-auto h-16 w-16 mb-6 flex items-center justify-center">
-            <img className="h-16 w-auto" src="/logo.png" alt="Let My People Grow" />
+            <img className="h-16 w-auto" src="/logo.svg" alt="Let My People Grow" />
           </div>
           <h1 className="text-3xl font-bold text-primary-700 mb-2 font-title">
-            Create your church account
+            Create your organisation account
           </h1>
           <p className="text-sm text-primary-600">Just two quick steps to get started</p>
         </div>
@@ -176,13 +176,13 @@ const OnboardingPage: React.FC = () => {
             <form className="space-y-6" onSubmit={setupForm.handleSubmit(handleSetupSubmit)}>
                 <div>
                   <label htmlFor="churchName" className="block text-sm font-medium text-gray-700">
-                  Church name
+                  Organisation name
                   </label>
                   <input
-                  {...setupForm.register('churchName', { required: 'Church name is required' })}
+                  {...setupForm.register('churchName', { required: 'Organisation name is required' })}
                     type="text"
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="e.g. Sunday Community Church"
+                  placeholder="e.g. Sunday Community Group"
                   />
                 {setupForm.formState.errors.churchName && (
                   <p className="mt-1 text-sm text-red-600">{setupForm.formState.errors.churchName.message}</p>
@@ -210,12 +210,12 @@ const OnboardingPage: React.FC = () => {
                 {/* Optional location */}
                 <div>
                   <label htmlFor="location-search" className="block text-sm font-medium text-gray-700">
-                    Church location <span className="text-gray-400 font-normal">(optional)</span>
+                    Location <span className="text-gray-400 font-normal">(optional)</span>
                   </label>
                   {selectedLocation ? (
                     <div className="mt-1 flex items-center justify-between bg-gray-50 rounded-md border border-gray-300 px-3 py-2">
                       <div className="flex items-center text-sm text-gray-900">
-                        <MapPinIcon className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+                        <MapPinIcon className="h-4 w-4 text-gray-400 mr-2 shrink-0" />
                         {selectedLocation.displayName}
                       </div>
                       <button

@@ -1115,7 +1115,7 @@ const ImportPage: React.FC = () => {
                                       checked={isSelected}
                                       onChange={() => togglePersonSelection(person.id, family.id, members)}
                                       onClick={(e) => e.stopPropagation()}
-                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded mr-3 flex-shrink-0"
+                                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded mr-3 shrink-0"
                                     />
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-2">
@@ -1445,7 +1445,7 @@ const ImportPage: React.FC = () => {
 
       {/* Gathering Edit Modal */}
       {showGatheringEditModal && gatheringsNeedingInfo.length > 0 && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[10000]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
               <div className="flex items-center justify-between mb-4">
@@ -1590,7 +1590,7 @@ const ImportPage: React.FC = () => {
 
       {/* Gathering Selection Modal for People Import */}
       {showGatheringSelectionModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[10000]">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[10000]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
               <div className="flex items-center justify-between mb-4">
@@ -1796,7 +1796,7 @@ const ImportPage: React.FC = () => {
                 {pcError && (
                   <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                     <div className="flex">
-                      <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                      <XCircleIcon className="h-5 w-5 text-red-400 shrink-0" />
                       <div className="ml-2">
                         <p className="text-sm text-red-700 dark:text-red-400">{pcError}</p>
                       </div>
@@ -1910,7 +1910,7 @@ const ImportPage: React.FC = () => {
                 {pcError && (
                   <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                     <div className="flex">
-                      <XCircleIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                      <XCircleIcon className="h-5 w-5 text-red-400 shrink-0" />
                       <div className="ml-2">
                         <p className="text-sm text-red-700 dark:text-red-400">{pcError}</p>
                       </div>

@@ -708,7 +708,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
       {successMessage && (
         <div className="mb-4 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-3 text-sm text-green-700 dark:text-green-300 flex items-center justify-between">
           <div className="flex items-center">
-            <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2 flex-shrink-0" />
+            <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2 shrink-0" />
             <span>{successMessage}</span>
           </div>
           <button onClick={() => setSuccessMessage(null)} className="text-green-400 hover:text-green-600 dark:hover:text-green-300">
@@ -878,7 +878,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                           className="sr-only"
                         />
                         <div
-                          className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                          className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                             isUndoTab
                               ? (isChecked
                                   ? 'bg-red-500 border-red-500'
@@ -909,13 +909,13 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                         </span>
                         {badgeInfo && (
                           <span
-                            className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                            className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                               badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                             }`}
                             style={badgeInfo.styles}
                           >
                             {badgeInfo.icon && (
-                              <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                              <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
                             )}
                             {badgeInfo.text && (
                               <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
@@ -965,7 +965,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                     className="sr-only"
                   />
                   <div
-                    className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                    className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                       isUndoTab
                         ? (isChecked
                             ? 'bg-red-500 border-red-500'
@@ -996,13 +996,13 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                   </span>
                   {badgeInfo && (
                     <span
-                      className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                      className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                         badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                       }`}
                       style={badgeInfo.styles}
                     >
                       {badgeInfo.icon && (
-                        <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                        <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
                       )}
                       {badgeInfo.text && (
                         <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>

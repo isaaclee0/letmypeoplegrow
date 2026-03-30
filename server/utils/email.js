@@ -1,50 +1,56 @@
-const brevo = require('@getbrevo/brevo');
+const { BrevoClient } = require('@getbrevo/brevo');
 
 // Configure Brevo API
 const apiKey = process.env.BREVO_API_KEY || 'your_brevo_api_key_here';
 
-const transactionalEmailsApi = new brevo.TransactionalEmailsApi();
-transactionalEmailsApi.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, apiKey);
+const brevo = new BrevoClient({ apiKey });
 
 const sendEmail = async (to, subject, htmlContent, textContent = null, options = {}) => {
   try {
-    const sendSmtpEmail = new brevo.SendSmtpEmail();
-    sendSmtpEmail.to = [{ email: to }];
-    sendSmtpEmail.subject = subject;
-    sendSmtpEmail.htmlContent = htmlContent;
-    if (textContent) {
-      sendSmtpEmail.textContent = textContent;
+    // Dev email allowlist: if set, only send to listed addresses
+    const allowlist = process.env.DEV_EMAIL_ALLOWLIST;
+    if (allowlist) {
+      const allowed = allowlist.split(',').map(e => e.trim().toLowerCase());
+      if (!allowed.includes(to.toLowerCase())) {
+        console.log(`[DEV] Email to ${to} blocked by DEV_EMAIL_ALLOWLIST (subject: ${subject})`);
+        return { success: true, messageId: 'dev-blocked' };
+      }
     }
-    
+
     // Anti-spam best practices: Proper sender configuration
     const fromEmail = process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au';
     const fromName = process.env.EMAIL_FROM_NAME || process.env.CHURCH_NAME || 'Let My People Grow';
-    
-    sendSmtpEmail.sender = { 
-      email: fromEmail,
-      name: fromName
+
+    const emailData = {
+      to: [{ email: to }],
+      subject,
+      htmlContent,
+      sender: {
+        email: fromEmail,
+        name: fromName
+      },
+      headers: {
+        'List-Unsubscribe': `<mailto:${fromEmail}?subject=unsubscribe>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        'Precedence': 'bulk',
+        'X-Auto-Response-Suppress': 'OOF, AutoReply',
+        'X-Mailer': 'Let My People Grow'
+      }
     };
 
-    // Anti-spam best practices: Add proper headers
-    sendSmtpEmail.headers = {
-      'List-Unsubscribe': `<mailto:${fromEmail}?subject=unsubscribe>`,
-      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      'Precedence': 'bulk',
-      'X-Auto-Response-Suppress': 'OOF, AutoReply',
-      'X-Mailer': 'Let My People Grow Church Management System'
-    };
+    if (textContent) {
+      emailData.textContent = textContent;
+    }
 
-    // Anti-spam best practices: Add reply-to header
     if (options.replyTo) {
-      sendSmtpEmail.replyTo = { email: options.replyTo };
+      emailData.replyTo = { email: options.replyTo };
     }
 
-    // Anti-spam best practices: Add message ID for tracking
     if (options.messageId) {
-      sendSmtpEmail.messageId = options.messageId;
+      emailData.messageId = options.messageId;
     }
 
-    const response = await transactionalEmailsApi.sendTransacEmail(sendSmtpEmail);
+    const response = await brevo.transactionalEmails.sendTransacEmail(emailData);
     console.log('Email sent successfully:', response);
     return { success: true, messageId: response.messageId };
   } catch (error) {
@@ -66,7 +72,7 @@ const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, 
     }
   });
 
-  const churchName = process.env.CHURCH_NAME || 'our church';
+  const churchName = process.env.CHURCH_NAME || 'our organisation';
   const subject = `You're invited to join ${churchName}!`;
   
   // Anti-spam best practices: Create a proper HTML structure with better formatting
@@ -98,9 +104,9 @@ const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, 
         <div class="content">
           <p>Hi ${firstName},</p>
           
-          <p>${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join the Let My People Grow church management system as a <strong>${role}</strong>.</p>
-          
-          <p>This system helps churches track attendance, manage members, and grow their communities together.</p>
+          <p>${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join Let My People Grow as a <strong>${role}</strong>.</p>
+
+          <p>This system helps organisations track attendance, manage members, and grow their communities together.</p>
           
           <div style="text-align: center;">
             <a href="${loginLink}" class="button">
@@ -119,7 +125,7 @@ const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, 
         </div>
         
         <div class="footer">
-          <p>This email was sent from the Let My People Grow church management system.</p>
+          <p>This email was sent from Let My People Grow.</p>
           <p class="unsubscribe">
             If you no longer wish to receive emails from ${churchName}, please reply to this email with "unsubscribe" in the subject line.
           </p>
@@ -128,14 +134,14 @@ const sendInvitationEmail = async (email, firstName, lastName, role, loginLink, 
     </body>
     </html>
   `;
-  
+
   // Anti-spam best practices: Clean, simple text version
   const textContent = `
 Welcome to ${churchName}!
 
 Hi ${firstName},
 
-${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join our church management system as a ${role}.
+${invitedBy.first_name || invitedBy.firstName} ${invitedBy.last_name || invitedBy.lastName} has invited you to join Let My People Grow as a ${role}.
 
 This system helps us track attendance, manage members, and grow our community together.
 
@@ -149,10 +155,10 @@ Blessings,
 ${churchName}
 
 ---
-This email was sent from the Let My People Grow church management system.
+This email was sent from Let My People Grow.
 To unsubscribe, reply to this email with "unsubscribe" in the subject line.
   `;
-  
+
   console.log('📧 [EMAIL_DEBUG] Email content prepared', {
     subject,
     htmlLength: htmlContent.length,
@@ -173,7 +179,7 @@ To unsubscribe, reply to this email with "unsubscribe" in the subject line.
 };
 
 const sendOTCEmail = async (email, otcCode) => {
-  const churchName = process.env.CHURCH_NAME || 'church management system';
+  const churchName = process.env.CHURCH_NAME || 'Let My People Grow';
   const subject = `Your login code for ${churchName}`;
   
   // Anti-spam best practices: Create a proper HTML structure with better formatting
@@ -203,7 +209,7 @@ const sendOTCEmail = async (email, otcCode) => {
         </div>
         
         <div class="content">
-          <p>You requested a login code for the Let My People Grow church management system.</p>
+          <p>You requested a login code for Let My People Grow.</p>
           
           <div class="code-display">
             <div class="code">${otcCode}</div>
@@ -223,7 +229,7 @@ const sendOTCEmail = async (email, otcCode) => {
         </div>
         
         <div class="footer">
-          <p>This email was sent from the Let My People Grow church management system.</p>
+          <p>This email was sent from Let My People Grow.</p>
           <p class="unsubscribe">
             If you no longer wish to receive emails from ${churchName}, please reply to this email with "unsubscribe" in the subject line.
           </p>
@@ -232,12 +238,12 @@ const sendOTCEmail = async (email, otcCode) => {
     </body>
     </html>
   `;
-  
+
   // Anti-spam best practices: Clean, simple text version
   const textContent = `
 Your Login Code
 
-You requested a login code for the Let My People Grow church management system.
+You requested a login code for Let My People Grow.
 
 Your code is: ${otcCode}
 
@@ -250,10 +256,10 @@ Blessings,
 ${churchName}
 
 ---
-This email was sent from the Let My People Grow church management system.
+This email was sent from Let My People Grow.
 To unsubscribe, reply to this email with "unsubscribe" in the subject line.
   `;
-  
+
   return sendEmail(email, subject, htmlContent, textContent, {
     replyTo: process.env.EMAIL_FROM || 'hello@letmypeoplegrow.com.au',
     messageId: `otc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}@${process.env.EMAIL_DOMAIN || 'letmypeoplegrow.com.au'}`
@@ -262,7 +268,7 @@ To unsubscribe, reply to this email with "unsubscribe" in the subject line.
 
 const sendNewChurchApprovalEmail = async (churchName, churchId, adminName, adminEmail) => {
   const adminPanelUrl = process.env.ADMIN_PANEL_URL || 'http://localhost:7777';
-  const subject = `New church pending approval: ${churchName}`;
+  const subject = `New organisation pending approval: ${churchName}`;
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -285,18 +291,18 @@ const sendNewChurchApprovalEmail = async (churchName, churchId, adminName, admin
     <body>
       <div class="container">
         <div class="header">
-          <h1 style="margin: 0; color: #92400e;">New Church Pending Approval</h1>
+          <h1 style="margin: 0; color: #92400e;">New Organisation Pending Approval</h1>
         </div>
         <div class="content">
-          <p>A new church has been registered and is waiting for your approval.</p>
-          <div class="detail-row"><span class="detail-label">Church Name:</span> ${churchName}</div>
-          <div class="detail-row"><span class="detail-label">Church ID:</span> <code>${churchId}</code></div>
+          <p>A new organisation has been registered and is waiting for your approval.</p>
+          <div class="detail-row"><span class="detail-label">Organisation Name:</span> ${churchName}</div>
+          <div class="detail-row"><span class="detail-label">Organisation ID:</span> <code>${churchId}</code></div>
           <div class="detail-row"><span class="detail-label">Admin:</span> ${adminName}</div>
           <div class="detail-row"><span class="detail-label">Admin Email:</span> ${adminEmail}</div>
           <div style="text-align: center;">
             <a href="${adminPanelUrl}" class="button">Open Admin Panel</a>
           </div>
-          <p>Log in to the admin panel to approve or reject this church.</p>
+          <p>Log in to the admin panel to approve or reject this organisation.</p>
         </div>
         <div class="footer">
           <p>Let My People Grow - Admin Notification</p>
@@ -306,16 +312,16 @@ const sendNewChurchApprovalEmail = async (churchName, churchId, adminName, admin
     </html>
   `;
 
-  const textContent = `New Church Pending Approval
+  const textContent = `New Organisation Pending Approval
 
-A new church has been registered and is waiting for your approval.
+A new organisation has been registered and is waiting for your approval.
 
-Church Name: ${churchName}
-Church ID: ${churchId}
+Organisation Name: ${churchName}
+Organisation ID: ${churchId}
 Admin: ${adminName}
 Admin Email: ${adminEmail}
 
-Log in to the admin panel to approve or reject this church: ${adminPanelUrl}
+Log in to the admin panel to approve or reject this organisation: ${adminPanelUrl}
   `;
 
   return sendEmail('hello@letmypeoplegrow.app', subject, htmlContent, textContent, {
@@ -439,12 +445,12 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
         <tr>
           <td style="background-color: #ffffff; border-radius: 8px; padding: 20px; border: 1px solid #e5e7eb; border-left: 4px solid #9B51E0;">
-            <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 12px; font-size: 15px;">&#127793; Your Church is Growing</div>
+            <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #7c3aed; margin-bottom: 12px; font-size: 15px;">&#127793; Your Organisation is Growing</div>
             <div style="color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6;">
               You've set up ${gs.gatheringCount} ${gatheringWord} and added ${gs.peopleCount} ${personWord} &mdash; great start! You've been tracking attendance for ${gs.weeksTracked} ${weekWord} so far.
             </div>
             <div style="color: #6b7280; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.6; margin-top: 10px;">
-              Keep it up! As you record more weeks of attendance, this email will start including follow-up suggestions, visitor insights, and AI-powered trends to help your church grow.
+              Keep it up! As you record more weeks of attendance, this email will start including follow-up suggestions, visitor insights, and AI-powered trends to help your organisation grow.
             </div>
           </td>
         </tr>
@@ -560,7 +566,7 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
   let gettingStartedText = '';
   if (reviewData.gettingStarted) {
     const gs = reviewData.gettingStarted;
-    gettingStartedText = `\nYour Church is Growing!\nYou've set up ${gs.gatheringCount} gathering(s) and added ${gs.peopleCount} people — great start! You've been tracking attendance for ${gs.weeksTracked} week(s) so far.\n\nKeep it up! As you record more weeks, this email will include follow-up suggestions, visitor insights, and AI-powered trends.\n`;
+    gettingStartedText = `\nYour Organisation is Growing!\nYou've set up ${gs.gatheringCount} gathering(s) and added ${gs.peopleCount} people — great start! You've been tracking attendance for ${gs.weeksTracked} week(s) so far.\n\nKeep it up! As you record more weeks, this email will include follow-up suggestions, visitor insights, and AI-powered trends.\n`;
   }
 
   const textContent = `
@@ -579,7 +585,7 @@ Blessings,
 ${churchName}
 
 ---
-This email was sent from the Let My People Grow church management system.
+This email was sent from Let My People Grow.
 To stop receiving these emails, ask your admin to update your notification preferences.
   `;
 

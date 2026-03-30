@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const http = require('http');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 // Import Winston logger with error handling
 let logger;
@@ -142,6 +142,11 @@ try {
 
 // Trust proxy (client nginx sets X-Forwarded-For)
 app.set('trust proxy', 1);
+
+// Use extended query parser (qs) so bracket notation like ?ids[]=1&ids[]=2 is
+// parsed into arrays. Express 5 defaults to the simple parser which does not
+// support this.
+app.set('query parser', 'extended');
 
 // Validate required environment variables
 const validateEnvironment = () => {
@@ -528,7 +533,7 @@ app.use((err, req, res, next) => {
 });
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use('*splat', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 

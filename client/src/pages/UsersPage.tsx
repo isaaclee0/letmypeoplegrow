@@ -661,7 +661,7 @@ const UsersPage: React.FC = () => {
               >
                 <div className="flex space-x-3">
                   {/* Checkbox Column */}
-                  <div className="flex-shrink-0 pt-1">
+                  <div className="shrink-0 pt-1">
                     <input
                       type="checkbox"
                       checked={selectedUsers.includes(user.id)}
@@ -677,7 +677,7 @@ const UsersPage: React.FC = () => {
                       <h4 className="text-base font-medium text-gray-900 dark:text-gray-100 truncate">
                         {user.firstName} {user.lastName}
                       </h4>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-2`}>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)} shrink-0 ml-2`}>
                         {user.role.replace('_', ' ')}
                       </span>
                     </div>
@@ -723,7 +723,7 @@ const UsersPage: React.FC = () => {
               >
                 <div className="flex space-x-4">
                   {/* Checkbox Column */}
-                  <div className="flex-shrink-0 pt-1">
+                  <div className="shrink-0 pt-1">
                     <input
                       type="checkbox"
                       checked={selectedUsers.includes(user.id)}
@@ -739,7 +739,7 @@ const UsersPage: React.FC = () => {
                       <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
                         {user.firstName} {user.lastName}
                       </h4>
-                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getRoleBadgeColor(user.role)} flex-shrink-0 ml-3`}>
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getRoleBadgeColor(user.role)} shrink-0 ml-3`}>
                         {user.role.replace('_', ' ')}
                       </span>
                     </div>
@@ -749,12 +749,12 @@ const UsersPage: React.FC = () => {
                         <div className="font-medium text-gray-900 dark:text-gray-100">Contact Information</div>
                         <div className="space-y-1 mt-1">
                           <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
-                            <EnvelopeIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                            <EnvelopeIcon className="h-4 w-4 mr-2 shrink-0" />
                             <span className="truncate">{user.email || 'No email'}</span>
                           </div>
                           {user.mobileNumber && (
                             <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
-                              <PhoneIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                              <PhoneIcon className="h-4 w-4 mr-2 shrink-0" />
                               <span className="truncate">{user.mobileNumber}</span>
                             </div>
                           )}
@@ -764,7 +764,7 @@ const UsersPage: React.FC = () => {
                       <div className="text-sm text-gray-700 dark:text-gray-300">
                         <div className="font-medium text-gray-900 dark:text-gray-100">Gathering Access</div>
                         <div className="flex items-center text-sm text-gray-600 dark:text-gray-400 mt-1">
-                          <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                          <UserGroupIcon className="h-4 w-4 mr-2 shrink-0" />
                           <span>{user.gatheringCount} gathering{user.gatheringCount !== 1 ? 's' : ''} assigned</span>
                         </div>
                       </div>
@@ -848,7 +848,7 @@ const UsersPage: React.FC = () => {
 
       {/* Invite User Modal */}
       {showInviteModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Invite New User</h3>
@@ -1035,7 +1035,7 @@ const UsersPage: React.FC = () => {
 
       {/* User Details Modal */}
       {showUserDetails && selectedUser ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">User Details</h3>
@@ -1099,7 +1099,7 @@ const UsersPage: React.FC = () => {
 
       {/* Assign Gatherings Modal */}
       {showAssignGatherings && selectedUser ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
@@ -1162,7 +1162,7 @@ const UsersPage: React.FC = () => {
 
       {/* Edit User Modal */}
       {showEditUserModal && selectedUser ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1307,7 +1307,7 @@ const UsersPage: React.FC = () => {
 
       {/* Invite User Confirmation Modal */}
       {showInviteConfirmation ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1375,7 +1375,7 @@ const UsersPage: React.FC = () => {
 
       {/* Deactivate User Confirmation Modal */}
       {showDeactivateModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">

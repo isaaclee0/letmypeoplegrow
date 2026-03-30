@@ -254,7 +254,7 @@ router.get('/template', verifyToken, async (req, res) => {
 });
 
 // Copy & Paste import with optional service assignment
-router.post('/copy-paste/:gatheringId?',
+router.post('/copy-paste{/:gatheringId}',
   requireRole(['admin', 'coordinator']),
   createSecurityRateLimit(15 * 60 * 1000, 10), // 10 imports per 15 minutes
   auditLog('COPY_PASTE_IMPORT'),

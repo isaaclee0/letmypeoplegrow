@@ -104,15 +104,15 @@ const SignupPage: React.FC = () => {
           <div className="mx-auto h-20 w-20 flex items-center justify-center">
             <img
               className="h-20 w-auto"
-              src="/logo.png"
+              src="/logo.svg"
               alt="Let My People Grow"
             />
           </div>
           <h2 className="mt-6 text-center text-3xl font-bold text-gray-900 dark:text-gray-100 font-title">
-            Set Up Your Church
+            Set Up Your Organisation
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
-            Create your church's attendance tracking account
+            Create your organisation's attendance tracking account
           </p>
         </div>
 
@@ -134,13 +134,13 @@ const SignupPage: React.FC = () => {
           <form className="mt-8 space-y-6" onSubmit={signupForm.handleSubmit(handleSignupSubmit)}>
             <div>
               <label htmlFor="churchName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Church Name *
+                Organisation Name *
               </label>
               <input
-                {...signupForm.register('churchName', { required: 'Church name is required' })}
+                {...signupForm.register('churchName', { required: 'Organisation name is required' })}
                 type="text"
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 placeholder-gray-500 dark:placeholder-gray-400 text-gray-900 dark:text-gray-100 dark:bg-gray-700 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Your Church Name"
+                placeholder="Your Organisation Name"
               />
               {signupForm.formState.errors.churchName && (
                 <p className="mt-1 text-sm text-red-600">{signupForm.formState.errors.churchName.message as string}</p>
@@ -148,7 +148,7 @@ const SignupPage: React.FC = () => {
             </div>
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Church Admin Email *
+                Admin Email *
               </label>
               <input
                 {...signupForm.register('email', {
@@ -205,13 +205,13 @@ const SignupPage: React.FC = () => {
                 disabled={isLoading}
                 className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? 'Setting Up Church...' : 'Set Up Church'}
+                {isLoading ? 'Setting Up Organisation...' : 'Set Up Organisation'}
               </button>
             </div>
 
             <div className="text-center">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                Already have a church account?{' '}
+                Already have an account?{' '}
                 <Link to="/login" className="font-medium text-primary-600 hover:text-primary-500">
                   Sign in here
                 </Link>

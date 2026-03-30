@@ -27,7 +27,7 @@ const DataSecurityInfo: React.FC = () => {
               </p>
               <p className="mb-2">
                 <strong>Access Control:</strong> Information stored in the system is only accessible to users
-                with active logins and appropriate permissions within your church organisation.
+                with active logins and appropriate permissions within your organisation.
               </p>
               <p className="text-blue-700 dark:text-blue-300">
                 <strong>User Responsibility:</strong> You are responsible for the security of the information

@@ -90,27 +90,31 @@ const createFileTransports = () => {
   
   try {
     // Error log file (errors only)
-    transports.push(new DailyRotateFile({
+    const errorTransport = new DailyRotateFile({
       filename: path.join(logsDir, 'error-%DATE%.log'),
       datePattern: 'YYYY-MM-DD',
       maxSize: '20m',
       maxFiles: '14d',
       level: 'error',
       format: customFormat
-    }));
+    });
+    errorTransport.on('error', (err) => console.warn('Error log transport error:', err.message));
+    transports.push(errorTransport);
   } catch (error) {
     console.warn('Failed to create error log transport:', error.message);
   }
-  
+
   try {
     // Combined log file (all levels)
-    transports.push(new DailyRotateFile({
+    const combinedTransport = new DailyRotateFile({
       filename: path.join(logsDir, 'combined-%DATE%.log'),
       datePattern: 'YYYY-MM-DD',
       maxSize: '20m',
       maxFiles: '30d',
       format: customFormat
-    }));
+    });
+    combinedTransport.on('error', (err) => console.warn('Combined log transport error:', err.message));
+    transports.push(combinedTransport);
   } catch (error) {
     console.warn('Failed to create combined log transport:', error.message);
   }

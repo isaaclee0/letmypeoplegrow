@@ -22,7 +22,7 @@ const Modal: React.FC<ModalProps> = ({
 
   return createPortal(
     <div 
-      className={`fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999] ${overlayClassName}`}
+      className={`fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999] ${overlayClassName}`}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onClose();

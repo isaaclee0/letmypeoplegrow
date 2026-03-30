@@ -62,7 +62,7 @@ const ActionMenu: React.FC<ActionMenuProps> = ({ items, className = '' }) => {
                   item.className || 'text-gray-700 dark:text-gray-300'
                 }`}
               >
-                {item.icon && <span className="mr-3 flex-shrink-0">{item.icon}</span>}
+                {item.icon && <span className="mr-3 shrink-0">{item.icon}</span>}
                 {item.label}
               </button>
             ))}

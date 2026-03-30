@@ -24,7 +24,7 @@ const SampleDataBanner: React.FC = () => {
   return (
     <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 flex items-center justify-between">
       <div className="flex items-center space-x-2 text-blue-800 dark:text-blue-200">
-        <InformationCircleIcon className="h-5 w-5 flex-shrink-0" />
+        <InformationCircleIcon className="h-5 w-5 shrink-0" />
         <span className="text-sm">You're viewing sample data to explore the app.</span>
       </div>
       <button

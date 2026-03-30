@@ -260,7 +260,7 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         style={{ zIndex: 99999 }}
       >
         {/* Top bar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 shrink-0">
           <span className="text-sm font-medium text-gray-700 truncate">
             {gatheringName}
           </span>
@@ -304,7 +304,7 @@ const HeadcountAttendanceInterface: React.FC<HeadcountAttendanceInterfaceProps> 
         </div>
 
         {!isConnected && (
-          <div className="text-center text-sm text-yellow-600 pb-2 flex-shrink-0">
+          <div className="text-center text-sm text-yellow-600 pb-2 shrink-0">
             Offline - changes will sync when reconnected
           </div>
         )}

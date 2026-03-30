@@ -1,5 +1,5 @@
 # Multi-stage build for React client
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -22,8 +22,6 @@ COPY client/src ./src
 COPY client/scripts ./scripts
 COPY client/index.html ./index.html
 COPY client/tsconfig.json ./
-COPY client/tailwind.config.js ./
-COPY client/postcss.config.js ./
 COPY client/vite.config.ts ./
 
 # Set VITE_APP_VERSION from VERSION file and build

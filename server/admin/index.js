@@ -12,7 +12,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true });
 
 // Import database and backup service
 const Database = require('../config/database');
@@ -1083,7 +1083,7 @@ function checkpointAndCopy(srcPath, destPath) {
 }
 
 // Serve admin UI
-app.get('*', (req, res) => {
+app.get('*splat', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

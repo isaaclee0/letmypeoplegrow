@@ -182,7 +182,7 @@ const Layout: React.FC = () => {
       <div className="flex overflow-hidden h-full">
         {/* Mobile sidebar */}
       <div className={`fixed inset-0 flex z-40 lg:hidden ${sidebarOpen ? '' : 'hidden'}`}>
-        <div className="fixed inset-0 bg-primary-900 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-primary-900/75" onClick={() => setSidebarOpen(false)} />
         <div className="relative flex-1 flex flex-col max-w-xs w-full bg-primary-500 dark:bg-gray-800">
           <div className="absolute top-0 right-0 -mr-12 pt-2">
             <button
@@ -235,17 +235,17 @@ const Layout: React.FC = () => {
             </div>
 
             {/* Logo at bottom */}
-            <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
+            <div className="shrink-0 flex flex-col items-center px-4 py-6">
               <img
                 className="w-3/4 aspect-square object-contain mb-3"
-                src="/logo-white-transparent.png"
+                src="/logo-white-transparent.svg"
                 alt="Let My People Grow"
               />
               <div className="text-center">
-                <div className="text-white font-title font-bold text-lg leading-tight tracking-normal">
+                <div className="text-white font-title font-bold text-[1.35rem] leading-tight tracking-tight">
                   LET MY PEOPLE
                 </div>
-                <div className="text-white font-title font-bold text-3xl leading-tight tracking-wide">
+                <div className="text-white font-title font-extrabold text-[2.88rem] leading-none tracking-[0.15em] pl-[0.15em] -mt-1.5">
                   GROW
                 </div>
               </div>
@@ -265,7 +265,7 @@ const Layout: React.FC = () => {
       </div>
 
       {/* Desktop sidebar */}
-      <div className="hidden lg:flex lg:flex-shrink-0">
+      <div className="hidden lg:flex lg:shrink-0">
         <div className="flex flex-col w-64">
           <div className="flex flex-col h-0 flex-1 border-r border-primary-700 dark:border-gray-700 bg-primary-500 dark:bg-gray-800">
                         <div className="flex-1 flex flex-col pt-5 pb-4 overflow-y-auto scrollbar-hide">
@@ -296,17 +296,17 @@ const Layout: React.FC = () => {
                 </button>
               </div>
               {/* Logo at bottom */}
-              <div className="flex-shrink-0 flex flex-col items-center px-4 py-6">
+              <div className="shrink-0 flex flex-col items-center px-4 py-6">
                 <img
                   className="w-3/4 aspect-square object-contain mb-3"
-                  src="/logo-white-transparent.png"
+                  src="/logo-white-transparent.svg"
                   alt="Let My People Grow"
                 />
                 <div className="text-center">
                   <div className="text-white font-title font-bold text-lg leading-tight tracking-normal">
                     LET MY PEOPLE
                   </div>
-                  <div className="text-white font-title font-bold text-3xl leading-tight tracking-wide">
+                  <div className="text-white font-title font-extrabold text-[2.28rem] leading-tight tracking-[0.18em] pl-[0.18em] -mt-1">
                     GROW
                   </div>
                 </div>
@@ -329,7 +329,7 @@ const Layout: React.FC = () => {
       {/* Main content */}
       <div className="flex flex-col w-0 flex-1 overflow-hidden">
         {/* Top bar */}
-        <div className="relative z-10 flex-shrink-0 flex h-16 bg-white dark:bg-gray-800 shadow-lg">
+        <div className="relative z-10 shrink-0 flex h-16 bg-white dark:bg-gray-800 shadow-lg">
           <button
             className="px-4 border-r border-primary-200 text-primary-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500 lg:hidden"
             onClick={() => setSidebarOpen(true)}
@@ -374,7 +374,7 @@ const Layout: React.FC = () => {
                       {updateAvailable && (
                         <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
                           <div className="flex items-start">
-                            <ArrowPathIcon className="h-5 w-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0" />
+                            <ArrowPathIcon className="h-5 w-5 text-blue-600 mt-0.5 mr-3 shrink-0" />
                             <div className="flex-1">
                               <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200">App Update Available</h4>
                               <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">

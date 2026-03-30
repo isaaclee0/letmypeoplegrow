@@ -113,9 +113,7 @@ services:
     image: cloudflare/cloudflared:latest
     network_mode: "service:nginx"
     restart: unless-stopped
-    env_file:
-      - ./server/.env
-    command: tunnel run
+    command: tunnel --no-autoupdate run --token eyJhIjoiYzczNGNkZjcxZmU2ZmQ1NTExYTJmOGEyNDQ3ZWQwM2YiLCJ0IjoiN2Y2YmZiYTctZmE3NS00NmVkLTg1MTktZWQ3YjYzNGE5ODBhIiwicyI6Ik9XUmtPVEk0TmpVdFpUTXpZaTAwTW1Ka0xXSTVZVEl0T1RCbFpEYzNNV1ptTVdObSJ9
     depends_on:
       - nginx
     profiles:

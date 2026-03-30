@@ -287,7 +287,7 @@ const AiInsightsPage: React.FC = () => {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">AI Insights</h2>
           <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Ask questions about your church's attendance data in plain language. To get started, an admin needs to connect an AI provider.
+            Ask questions about your attendance data in plain language. To get started, an admin needs to connect an AI provider.
           </p>
           <Link
             to="/app/settings?tab=integrations"
@@ -370,7 +370,7 @@ const AiInsightsPage: React.FC = () => {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Header */}
-        <div className="bg-white dark:bg-gray-800 shadow rounded-t-lg px-4 lg:px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="bg-white dark:bg-gray-800 shadow rounded-t-lg px-4 lg:px-6 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2 lg:space-x-3">
               {/* Desktop: Toggle sidebar button */}
@@ -408,7 +408,7 @@ const AiInsightsPage: React.FC = () => {
             <div className="text-center py-8">
               <SparklesIcon className="w-12 h-12 text-purple-300 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Ask me anything about your church data
+                Ask me anything about your data
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-md mx-auto">
                 I can help you understand attendance patterns, identify trends, and spot people who may need follow-up.
@@ -475,7 +475,7 @@ const AiInsightsPage: React.FC = () => {
         </div>
 
         {/* Input Area */}
-        <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-4 flex-shrink-0">
+        <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-4 shrink-0">
           <div className="flex items-end space-x-2">
             <div className="flex-1">
               <textarea
@@ -483,7 +483,7 @@ const AiInsightsPage: React.FC = () => {
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask a question about your church data..."
+                placeholder="Ask a question about your data..."
                 className="w-full px-4 py-3 text-base border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 rows={2}
                 style={{ minHeight: '80px', maxHeight: '200px' }}
@@ -492,7 +492,7 @@ const AiInsightsPage: React.FC = () => {
             <button
               onClick={() => sendMessage()}
               disabled={isLoading || !input.trim()}
-              className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+              className="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
             >
               <PaperAirplaneIcon className="w-5 h-5" />
             </button>
@@ -503,7 +503,7 @@ const AiInsightsPage: React.FC = () => {
         </div>
 
         {/* Mobile Chat History - Collapsible section at bottom */}
-        <div className="lg:hidden bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className="lg:hidden bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 shrink-0">
           <button
             onClick={() => setShowHistoryMobile(!showHistoryMobile)}
             className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
@@ -564,7 +564,7 @@ const AiInsightsPage: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && deleteTarget && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">

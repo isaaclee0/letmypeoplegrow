@@ -24,7 +24,7 @@ const NonAdminSetupPage: React.FC = () => {
           <div className="mx-auto h-16 w-16 mb-6 flex items-center justify-center">
             <img
               className="h-16 w-auto"
-              src="/logo.png"
+              src="/logo.svg"
               alt="Let My People Grow"
             />
           </div>
@@ -50,7 +50,7 @@ const NonAdminSetupPage: React.FC = () => {
 
             <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
               <div className="flex">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <CalendarIcon className="h-5 w-5 text-blue-400" />
                 </div>
                 <div className="ml-3">
@@ -59,7 +59,7 @@ const NonAdminSetupPage: React.FC = () => {
                   </h4>
                   <div className="mt-2 text-sm text-blue-700">
                     <ul className="list-disc list-inside space-y-1">
-                      <li>Contact your church administrator</li>
+                      <li>Contact your organisation administrator</li>
                       <li>Request access to specific gatherings</li>
                       <li>Set up your default gathering view</li>
                     </ul>

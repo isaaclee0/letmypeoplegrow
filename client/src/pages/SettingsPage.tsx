@@ -534,7 +534,7 @@ const SettingsPage: React.FC = () => {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.download = `church-data-export-${new Date().toISOString().split('T')[0]}.zip`;
+      link.download = `data-export-${new Date().toISOString().split('T')[0]}.zip`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -555,7 +555,7 @@ const SettingsPage: React.FC = () => {
       window.location.href = '/login';
     } catch (err: any) {
       logger.error('Delete failed:', err);
-      alert(err.response?.data?.error || 'Failed to delete church account. Please try again.');
+      alert(err.response?.data?.error || 'Failed to delete organisation account. Please try again.');
       setShowDeleteConfirm(false);
     } finally {
       setDeleting(false);
@@ -794,15 +794,15 @@ const SettingsPage: React.FC = () => {
               {/* Church Location */}
               {user?.role === 'admin' && (
                 <div>
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Church Location</h3>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Location</h3>
                   <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                    Set your church's location to enable weather and holiday-aware attendance predictions.
+                    Set your organisation's location to enable weather and holiday-aware attendance predictions.
                   </p>
 
                   <div className="mt-4 bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                     {locationName && (
                       <div className="flex items-center mb-4 text-sm text-gray-900 dark:text-gray-100">
-                        <MapPinIcon className="h-5 w-5 text-gray-400 mr-2 flex-shrink-0" />
+                        <MapPinIcon className="h-5 w-5 text-gray-400 mr-2 shrink-0" />
                         <span className="font-medium">{locationName}</span>
                       </div>
                     )}
@@ -1053,7 +1053,7 @@ const SettingsPage: React.FC = () => {
                             style={getChildBadgeStyles(childBadgeColor)}
                           >
                             {childBadgeIcon && (
-                              <BadgeIcon type={childBadgeIcon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                              <BadgeIcon type={childBadgeIcon as BadgeIconType} className="w-4 h-4 shrink-0" />
                             )}
                             {childBadgeText && (
                               <span className="text-xs font-medium whitespace-nowrap">{childBadgeText}</span>
@@ -1172,7 +1172,7 @@ const SettingsPage: React.FC = () => {
                             }`}
                             style={getChildBadgeStyles(adultBadgeColor || '#c5aefb')}
                           >
-                            <BadgeIcon type={adultBadgeIcon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                            <BadgeIcon type={adultBadgeIcon as BadgeIconType} className="w-4 h-4 shrink-0" />
                             {adultBadgeText && (
                               <span className="text-xs font-medium whitespace-nowrap">{adultBadgeText}</span>
                             )}
@@ -1291,7 +1291,7 @@ const SettingsPage: React.FC = () => {
               <div>
                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Email Notifications</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  Configure automated email notifications for your church.
+                  Configure automated email notifications for your organisation.
                 </p>
               </div>
 
@@ -1319,7 +1319,7 @@ const SettingsPage: React.FC = () => {
                           setWeeklyReviewEnabled(next);
                           saveWeeklyReview({ enabled: next });
                         }}
-                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                       >
                         <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${weeklyReviewEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                       </button>
@@ -1366,7 +1366,7 @@ const SettingsPage: React.FC = () => {
                           setWeeklyReviewIncludeInsight(next);
                           saveWeeklyReview({ includeInsight: next });
                         }}
-                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewIncludeInsight ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${weeklyReviewIncludeInsight ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                       >
                         <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${weeklyReviewIncludeInsight ? 'translate-x-5' : 'translate-x-0'}`} />
                       </button>
@@ -1411,7 +1411,7 @@ const SettingsPage: React.FC = () => {
               <div>
                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">External Integrations</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  Connect your account with external services to enhance your church management experience.
+                  Connect your account with external services to enhance your management experience.
                 </p>
 
                 <div className="mt-6 space-y-6">
@@ -1420,7 +1420,7 @@ const SettingsPage: React.FC = () => {
                     {/* Connection Status Header */}
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
@@ -1502,7 +1502,7 @@ const SettingsPage: React.FC = () => {
                           {connectionError && (
                             <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                               <div className="flex">
-                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 shrink-0" />
                                 <div className="ml-2">
                                   <p className="text-sm text-red-700 dark:text-red-400">{connectionError}</p>
                                 </div>
@@ -1535,7 +1535,7 @@ const SettingsPage: React.FC = () => {
 
                     <div className="mt-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                       <div className="flex">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-blue-400" />
                         </div>
                         <div className="ml-3">
@@ -1557,7 +1557,7 @@ const SettingsPage: React.FC = () => {
                     {/* AI Status Header */}
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -1644,7 +1644,7 @@ const SettingsPage: React.FC = () => {
                           {aiError && (
                             <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                               <div className="flex">
-                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                                <ShieldExclamationIcon className="h-5 w-5 text-red-400 shrink-0" />
                                 <div className="ml-2">
                                   <p className="text-sm text-red-700 dark:text-red-400">{aiError}</p>
                                 </div>
@@ -1677,7 +1677,7 @@ const SettingsPage: React.FC = () => {
 
                     <div className="mt-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
                       <div className="flex">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-purple-400" />
                         </div>
                         <div className="ml-3">
@@ -1699,7 +1699,7 @@ const SettingsPage: React.FC = () => {
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                             <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
@@ -1755,7 +1755,7 @@ const SettingsPage: React.FC = () => {
                         {planningCenterError && (
                           <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
                             <div className="flex">
-                              <ShieldExclamationIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
+                              <ShieldExclamationIcon className="h-5 w-5 text-red-400 shrink-0" />
                               <div className="ml-2">
                                 <p className="text-sm text-red-700 dark:text-red-400">{planningCenterError}</p>
                               </div>
@@ -1787,7 +1787,7 @@ const SettingsPage: React.FC = () => {
 
                     <div className="mt-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
                       <div className="flex">
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <InformationCircleIcon className="h-5 w-5 text-green-400" />
                         </div>
                         <div className="ml-3">
@@ -1816,13 +1816,13 @@ const SettingsPage: React.FC = () => {
               <div>
                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Export All Data</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  Download all your church data as CSV files in a ZIP archive. This includes members, families, attendance records, gatherings, and all other church data.
+                  Download all your data as CSV files in a ZIP archive. This includes members, families, attendance records, gatherings, and all other data.
                 </p>
               </div>
 
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                  The export includes all tables from your church database. Sensitive fields (API keys) are automatically redacted.
+                  The export includes all tables from your database. Sensitive fields (API keys) are automatically redacted.
                 </p>
                 <button
                   onClick={handleExport}
@@ -1836,9 +1836,9 @@ const SettingsPage: React.FC = () => {
 
               {/* Delete Section */}
               <div className="mt-10">
-                <h3 className="text-lg font-medium text-red-900 dark:text-red-300">Delete Church Account</h3>
+                <h3 className="text-lg font-medium text-red-900 dark:text-red-300">Delete Organisation Account</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  Permanently delete your church account and all associated data. This action cannot be undone.
+                  Permanently delete your organisation account and all associated data. This action cannot be undone.
                 </p>
               </div>
 
@@ -1846,8 +1846,8 @@ const SettingsPage: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded-md p-4 mb-4">
                   <p className="text-sm font-medium text-red-800 dark:text-red-300 mb-2">This will permanently:</p>
                   <ul className="text-sm text-red-700 dark:text-red-400 list-disc list-inside space-y-1">
-                    <li>Delete all church data (members, families, attendance, gatherings)</li>
-                    <li>Remove all user accounts associated with this church</li>
+                    <li>Delete all data (members, families, attendance, gatherings)</li>
+                    <li>Remove all user accounts associated with this organisation</li>
                     <li>Log out all users immediately</li>
                   </ul>
                   <p className="text-sm font-bold text-red-800 dark:text-red-300 mt-2">This cannot be recovered. Please export your data first.</p>
@@ -1860,7 +1860,7 @@ const SettingsPage: React.FC = () => {
                   type="text"
                   value={deleteConfirmName}
                   onChange={(e) => setDeleteConfirmName(e.target.value)}
-                  placeholder="Type church name here"
+                  placeholder="Type organisation name here"
                   className="block w-full max-w-md rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm mb-4"
                 />
                 <button
@@ -1868,7 +1868,7 @@ const SettingsPage: React.FC = () => {
                   disabled={deleteConfirmName.trim() !== churchName.trim() || !churchName}
                   className="inline-flex items-center px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Delete Church Account
+                  Delete Organisation Account
                 </button>
               </div>
             </div>
@@ -1948,7 +1948,7 @@ const SettingsPage: React.FC = () => {
             {/* Step 1 */}
             <div className="border-l-4 border-blue-500 pl-4">
               <div className="flex items-start">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
                     1
                   </div>
@@ -1965,7 +1965,7 @@ const SettingsPage: React.FC = () => {
             {/* Step 2 */}
             <div className="border-l-4 border-blue-500 pl-4">
               <div className="flex items-start">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
                     2
                   </div>
@@ -1982,7 +1982,7 @@ const SettingsPage: React.FC = () => {
             {/* Step 3 */}
             <div className="border-l-4 border-blue-500 pl-4">
               <div className="flex items-start">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
                     3
                   </div>
@@ -1999,7 +1999,7 @@ const SettingsPage: React.FC = () => {
             {/* Step 4 */}
             <div className="border-l-4 border-blue-500 pl-4">
               <div className="flex items-start">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-500 text-white font-semibold">
                     4
                   </div>
@@ -2015,7 +2015,7 @@ const SettingsPage: React.FC = () => {
 
             <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
               <div className="flex">
-                <InformationCircleIcon className="h-5 w-5 text-yellow-400 flex-shrink-0" />
+                <InformationCircleIcon className="h-5 w-5 text-yellow-400 shrink-0" />
                 <div className="ml-3">
                   <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-300">Keep Your API Key Secure</h4>
                   <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-400">

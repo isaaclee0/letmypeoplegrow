@@ -600,7 +600,7 @@ const ManageGatheringsPage: React.FC = () => {
                 Manage Gatherings
               </h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Manage your church gatherings and their members
+                Create, edit, and configure your gatherings and their schedules
               </p>
             </div>
           </div>
@@ -705,7 +705,7 @@ const ManageGatheringsPage: React.FC = () => {
                 >
                   <div className="flex space-x-4">
                     {/* Checkbox Column */}
-                    <div className="flex-shrink-0 pt-1">
+                    <div className="shrink-0 pt-1">
                       <input
                         type="checkbox"
                         checked={selectedGatherings.includes(gathering.id)}
@@ -725,7 +725,7 @@ const ManageGatheringsPage: React.FC = () => {
                           gathering.attendanceType === 'headcount' 
                             ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300'
                             : 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                        } flex-shrink-0 ml-3`}>
+                        } shrink-0 ml-3`}>
                           {gathering.attendanceType === 'headcount' ? 'Headcount' : 'Standard'}
                         </span>
                       </div>
@@ -773,7 +773,7 @@ const ManageGatheringsPage: React.FC = () => {
                         
                         {gathering.attendanceType === 'standard' && (
                           <div className="flex items-center text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 p-3 rounded-md">
-                            <UserGroupIcon className="h-4 w-4 mr-2 flex-shrink-0" />
+                            <UserGroupIcon className="h-4 w-4 mr-2 shrink-0" />
                             <div>
                               <div className="font-medium text-gray-900 dark:text-gray-100">
                                 {gathering.memberCount || 0} regular attendees
@@ -830,7 +830,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Edit Gathering Modal */}
       {showEditForm && editingGathering ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1096,7 +1096,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Add Gathering Modal (simplified) */}
       {showAddGatheringWizard ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1731,7 +1731,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Delete Gathering Confirmation Modal */}
       {showDeleteModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1784,7 +1784,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Manage Occurrences Modal */}
       {showManageOccurrencesModal && gatheringOccurrences.gathering ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -1915,7 +1915,7 @@ const ManageGatheringsPage: React.FC = () => {
 
       {/* Duplicate Gathering Modal */}
       {showDuplicateModal && duplicateGathering ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">

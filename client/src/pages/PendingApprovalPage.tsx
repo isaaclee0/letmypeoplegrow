@@ -30,12 +30,12 @@ const PendingApprovalPage: React.FC = () => {
           <div className="mx-auto h-20 w-20 flex items-center justify-center">
             <img
               className="h-20 w-auto"
-              src="/logo.png"
+              src="/logo.svg"
               alt="Let My People Grow"
             />
           </div>
           <h2 className="mt-6 text-center text-2xl font-bold text-gray-900 dark:text-gray-100 font-title">
-            Church Pending Approval
+            Organisation Pending Approval
           </h2>
           <div className="mt-4 text-center">
             <div className="mx-auto w-16 h-16 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mb-4">
@@ -44,7 +44,7 @@ const PendingApprovalPage: React.FC = () => {
               </svg>
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Your church has been registered and is awaiting approval. Once approved, you'll be able to start using Let My People Grow.
+              Your organisation has been registered and is awaiting approval. Once approved, you'll be able to start using Let My People Grow.
             </p>
             <p className="mt-3 text-sm text-gray-500 dark:text-gray-500">
               This usually doesn't take long. Check back soon!

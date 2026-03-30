@@ -101,7 +101,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
                           className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-medium"
                           style={badge.styles}
                         >
-                          {badge.icon && <BadgeIcon type={badge.icon as BadgeIconType} className="w-3 h-3 flex-shrink-0" />}
+                          {badge.icon && <BadgeIcon type={badge.icon as BadgeIconType} className="w-3 h-3 shrink-0" />}
                           {badge.text && <span>{badge.text}</span>}
                         </span>
                       )}

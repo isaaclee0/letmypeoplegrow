@@ -143,7 +143,7 @@ const MergeModal: React.FC<MergeModalProps> = ({
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
+    <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">

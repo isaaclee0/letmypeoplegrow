@@ -72,7 +72,7 @@ const PersonCard: React.FC<PersonCardProps> = ({
           type="checkbox"
           checked={isSelected}
           onChange={() => onToggleSelection(person.id)}
-          className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+          className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 shrink-0"
           onClick={(e) => e.stopPropagation()}
         />
         <div className={isGrouped ? 'flex-1 min-w-0' : 'flex-1 min-w-0'}>
@@ -80,7 +80,7 @@ const PersonCard: React.FC<PersonCardProps> = ({
             <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {displayName}
             </span>
-            <div className="flex items-center space-x-1 flex-shrink-0">
+            <div className="flex items-center space-x-1 shrink-0">
               {standardGatherings.map(gathering => (
                 <div
                   key={gathering.id}
@@ -96,13 +96,13 @@ const PersonCard: React.FC<PersonCardProps> = ({
       {/* Badge: inline right-aligned on mobile, floating top-right on sm+ */}
       {badgeInfo && (
         <span
-          className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+          className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
             badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
           }`}
           style={badgeInfo.styles}
         >
           {badgeInfo.icon && (
-            <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+            <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
           )}
           {badgeInfo.text && (
             <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>

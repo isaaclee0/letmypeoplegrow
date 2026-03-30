@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import fs from 'fs';
 import path from 'path';
 
@@ -16,7 +17,7 @@ const appVersion = versionFile
   : '0.0.0';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
 
   server: {
     host: '0.0.0.0',
@@ -27,8 +28,6 @@ export default defineConfig({
       usePolling: true,
       interval: 1000,
     },
-    // Completely disable WebSocket functionality
-    ws: false,
     // Allow all hosts to work with nginx proxy
     // Nginx will rewrite Host header to localhost:3000, but Vite still checks origin
     allowedHosts: ['all'],

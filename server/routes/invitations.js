@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const moment = require('moment');
 
 const Database = require('../config/database');
@@ -191,7 +191,7 @@ router.post('/send',
       console.log('💾 [INVITATION_DEBUG] Starting database transaction');
       await Database.transaction(async (conn) => {
         // Generate invitation token
-        const invitationToken = uuidv4();
+        const invitationToken = randomUUID();
         const expiresAt = moment().add(7, 'days').format('YYYY-MM-DD HH:mm:ss');
         
         console.log('🔑 [INVITATION_DEBUG] Generated invitation token:', invitationToken);
@@ -388,7 +388,7 @@ router.post('/resend/:id',
       }
 
       // Generate new token and extend expiry
-      const newToken = uuidv4();
+      const newToken = randomUUID();
       const newExpiresAt = moment().add(7, 'days').format('YYYY-MM-DD HH:mm:ss');
 
       await Database.query(`

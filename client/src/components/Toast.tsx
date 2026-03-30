@@ -68,7 +68,7 @@ const Toast: React.FC<ToastProps> = ({ id, type, message, duration = 4000, onClo
   return (
     <div className={`${getBackgroundColor()} border rounded-lg p-4 shadow-lg max-w-sm w-full transform transition-all duration-300 ease-in-out`}>
       <div className="flex items-start">
-        <div className="flex-shrink-0">
+        <div className="shrink-0">
           {getIcon()}
         </div>
         <div className="ml-3 flex-1">
@@ -76,7 +76,7 @@ const Toast: React.FC<ToastProps> = ({ id, type, message, duration = 4000, onClo
             {message}
           </p>
         </div>
-        <div className="ml-4 flex-shrink-0 flex">
+        <div className="ml-4 shrink-0 flex">
           <button
             onClick={() => onClose(id)}
             className={`inline-flex ${getTextColor()} hover:opacity-75 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-green-50 focus:ring-green-500`}

@@ -304,7 +304,7 @@ router.post('/church-info',
       const churchInfo = { churchName, countryCode, timezone, emailFromName, emailFromAddress };
       await saveOnboardingProgress(req.user.id, 2, { church_info: churchInfo }, [1]);
 
-      res.json({ message: 'Church information saved successfully' });
+      res.json({ message: 'Organisation information saved successfully' });
     } catch (error) {
       console.error('Save church info error:', error);
       res.status(500).json({ error: 'Failed to save church information' });

@@ -155,7 +155,7 @@ const LoginPage: React.FC = () => {
             <div className="mx-auto h-20 w-20 flex items-center justify-center">
               <img
                 className="h-20 w-auto"
-                src="/logo.png"
+                src="/logo.svg"
                 alt="Let My People Grow"
               />
             </div>
@@ -179,7 +179,7 @@ const LoginPage: React.FC = () => {
           <div className="mx-auto h-20 w-20 flex items-center justify-center">
             <img
               className="h-20 w-auto"
-              src="/logo.png"
+              src="/logo.svg"
               alt="Let My People Grow"
             />
           </div>
@@ -188,10 +188,10 @@ const LoginPage: React.FC = () => {
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
             {hasExpiredToken 
-              ? 'Sign in again to continue with your church attendance tracking system'
-              : hasNonAdminUsers 
-                ? 'Sign in to your church attendance tracking system' 
-                : 'Set up your church attendance tracking system'
+              ? 'Sign in again to continue with your attendance tracking system'
+              : hasNonAdminUsers
+                ? 'Sign in to your attendance tracking system'
+                : 'Set up your attendance tracking system'
             }
           </p>
         </div>
@@ -317,19 +317,19 @@ const LoginPage: React.FC = () => {
             <p className="text-sm text-gray-600 dark:text-gray-400">
               New to Let My People Grow?{' '}
               <Link to="/signup" className="font-medium text-primary-600 hover:text-primary-500">
-                Create your church account
+                Create your organisation account
               </Link>
             </p>
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                No users found. Get started by creating your church account.
+                No users found. Get started by creating your organisation account.
               </p>
               <Link 
                 to="/signup" 
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
               >
-                Set Up Your Church
+                Set Up Your Organisation
               </Link>
             </div>
           )}

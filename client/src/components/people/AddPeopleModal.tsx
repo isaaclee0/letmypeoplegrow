@@ -615,7 +615,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
+    <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between mb-4">
@@ -681,7 +681,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                   onTouchMove={handleModalTabTouchMove}
                   onTouchEnd={handleModalTabTouchEnd}
                 >
-                  <div className="flex-shrink-0 min-w-0">
+                  <div className="shrink-0 min-w-0">
                     <button
                       draggable={false}
                       onClick={(e) => {
@@ -702,7 +702,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       </div>
                     </button>
                   </div>
-                  <div className="flex-shrink-0 min-w-0">
+                  <div className="shrink-0 min-w-0">
                     <button
                       draggable={false}
                       onClick={(e) => {
@@ -723,7 +723,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                       </div>
                     </button>
                   </div>
-                  <div className="flex-shrink-0 min-w-0">
+                  <div className="shrink-0 min-w-0">
                     <button
                       draggable={false}
                       onClick={(e) => {
@@ -1019,7 +1019,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               {tsvAnalysis && (
                 <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-4">
                   <div className="flex">
-                    <div className="flex-shrink-0">
+                    <div className="shrink-0">
                       <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                       </svg>
@@ -1062,7 +1062,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
               {tsvAnalysis && tsvAnalysis.newPeople > 0 && (
                 <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-md p-4">
                   <div className="flex">
-                    <div className="flex-shrink-0">
+                    <div className="shrink-0">
                       <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                       </svg>
@@ -1090,7 +1090,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                     : 'bg-yellow-50 border-yellow-200'
                 }`}>
                   <div className="flex">
-                    <div className="flex-shrink-0">
+                    <div className="shrink-0">
                       <svg className={`h-5 w-5 ${
                         potentialDuplicates.length > 5 ? 'text-red-400' : 'text-yellow-400'
                       }`} viewBox="0 0 20 20" fill="currentColor">

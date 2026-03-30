@@ -151,7 +151,7 @@ const AttendanceInfoButton: React.FC<{
       </button>
 
       {showModal ? createPortal(
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Attendance Information</h3>
@@ -1259,7 +1259,7 @@ const PeoplePage: React.FC = () => {
                 Manage People
               </h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Manage all people and families in your church
+                Add, edit, and organize people and families
               </p>
             </div>
             {people.length > 0 && (
@@ -1534,7 +1534,7 @@ const PeoplePage: React.FC = () => {
                 id="gatheringFilter"
                 value={selectedGathering || ''}
                 onChange={(e) => setSelectedGathering(e.target.value ? parseInt(e.target.value) : null)}
-                className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                className="mt-1 block w-full py-2 pl-3 pr-10 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md leading-5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
               >
                 <option value="">All Gatherings</option>
                 {gatheringTypes
@@ -1549,7 +1549,7 @@ const PeoplePage: React.FC = () => {
           </div>
           
           {/* Grouping Toggle & Age Filter */}
-          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-6">
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-col items-center sm:flex-row sm:items-center sm:justify-between gap-x-3 gap-y-4">
             <div className="flex items-center space-x-3">
               <input
                 type="checkbox"
@@ -1559,7 +1559,7 @@ const PeoplePage: React.FC = () => {
                   setGroupByFamily(e.target.checked);
                   setSelectedPeople([]);
                 }}
-                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                className="h-4 w-4 shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               />
               <label htmlFor="groupByFamily" className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Group people by families
@@ -1568,7 +1568,7 @@ const PeoplePage: React.FC = () => {
                 (Uncheck for individual view with easier multi-select)
               </span>
             </div>
-            <div className="flex items-center space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
+            <div className="inline-flex items-center space-x-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
               {(['all', 'adult', 'child'] as const).map((value) => (
                 <button
                   key={value}
@@ -1957,7 +1957,7 @@ const PeoplePage: React.FC = () => {
                                   type="checkbox"
                                   checked={selectedPeople.includes(person.id)}
                                   onChange={() => togglePersonSelection(person.id)}
-                                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 shrink-0"
                                   onClick={(e) => e.stopPropagation()}
                                 />
                                 <div className="flex items-center space-x-2">
@@ -2129,7 +2129,7 @@ const PeoplePage: React.FC = () => {
                                     type="checkbox"
                                     checked={selectedPeople.includes(person.id)}
                                     onChange={() => togglePersonSelection(person.id)}
-                                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 shrink-0"
                                     onClick={(e) => e.stopPropagation()}
                                   />
                                   <div className="flex items-center space-x-2">
@@ -2238,7 +2238,7 @@ const PeoplePage: React.FC = () => {
 
       {/* Delete Person Confirmation Modal */}
       {showDeleteModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -2289,7 +2289,7 @@ const PeoplePage: React.FC = () => {
 
       {/* Remove People Confirmation Modal */}
       {showRemoveModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -2339,7 +2339,7 @@ const PeoplePage: React.FC = () => {
       ) : null}
 
       {showPermanentDeleteModal ? createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <div className="flex items-center justify-between mb-4">
@@ -2398,7 +2398,7 @@ const PeoplePage: React.FC = () => {
 
        {/* Delete Person Confirmation Modal */}
        {showDeleteModal && (
-         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+         <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
            <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
              <div className="mt-3">
                <div className="flex items-center justify-between mb-4">
@@ -2448,7 +2448,7 @@ const PeoplePage: React.FC = () => {
 
        {/* Remove People Confirmation Modal */}
        {showRemoveModal && (
-         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+         <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
            <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
              <div className="mt-3">
                <div className="flex items-center justify-between mb-4">

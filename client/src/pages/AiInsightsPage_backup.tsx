@@ -157,7 +157,7 @@ const AiInsightsPage: React.FC = () => {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">AI Insights</h2>
           <p className="text-gray-600 mb-6">
-            Ask questions about your church's attendance data in plain language. To get started, an admin needs to connect an AI provider.
+            Ask questions about your attendance data in plain language. To get started, an admin needs to connect an AI provider.
           </p>
           <Link
             to="/app/settings?tab=integrations"
@@ -183,7 +183,7 @@ const AiInsightsPage: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto flex flex-col" style={{ height: 'calc(100vh - 10rem)' }}>
       {/* Header */}
-      <div className="bg-white shadow rounded-t-lg px-6 py-4 border-b border-gray-200 flex-shrink-0">
+      <div className="bg-white shadow rounded-t-lg px-6 py-4 border-b border-gray-200 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
@@ -213,7 +213,7 @@ const AiInsightsPage: React.FC = () => {
           <div className="text-center py-8">
             <SparklesIcon className="w-12 h-12 text-purple-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-700 mb-2">
-              Ask me anything about your church data
+              Ask me anything about your data
             </h3>
             <p className="text-sm text-gray-500 mb-6 max-w-md mx-auto">
               I can help you understand attendance patterns, identify trends, and spot people who may need follow-up.
@@ -289,7 +289,7 @@ const AiInsightsPage: React.FC = () => {
       </div>
 
       {/* Input Area */}
-      <div className="bg-white border-t border-gray-200 rounded-b-lg px-4 py-3 flex-shrink-0">
+      <div className="bg-white border-t border-gray-200 rounded-b-lg px-4 py-3 shrink-0">
         <div className="flex items-end space-x-3">
           <textarea
             ref={inputRef}
@@ -304,7 +304,7 @@ const AiInsightsPage: React.FC = () => {
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || isLoading}
-            className="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isLoading ? (
               <ArrowPathIcon className="w-5 h-5 animate-spin" />

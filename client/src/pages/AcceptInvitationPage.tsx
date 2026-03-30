@@ -153,7 +153,7 @@ const AcceptInvitationPage: React.FC = () => {
             You're Invited!
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            Join Let My People Grow - Church Attendance Tracking and Reporting
+            Join Let My People Grow - Attendance Tracking and Reporting
           </p>
         </div>
 
@@ -189,7 +189,7 @@ const AcceptInvitationPage: React.FC = () => {
 
               <div className="border-t border-gray-200 pt-4">
                 <p className="text-sm text-gray-600 mb-4">
-                  By accepting this invitation, you'll create an account and gain access to the church attendance tracking system.
+                  By accepting this invitation, you'll create an account and gain access to the attendance tracking system.
                 </p>
                 
                 {error && (

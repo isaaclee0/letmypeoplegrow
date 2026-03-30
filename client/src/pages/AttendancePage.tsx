@@ -2515,7 +2515,7 @@ const AttendancePage: React.FC = () => {
                   onMouseMove={(e) => handleMouseMove(e, desktopTabSliderRef)}
                 >
                   {(orderedGatherings.length ? orderedGatherings : gatherings).map((gathering) => (
-                    <div key={gathering.id} className="flex-shrink-0">
+                    <div key={gathering.id} className="shrink-0">
                       <button
                         draggable={false}
                         onClick={() => handleGatheringChange(gathering)}
@@ -2537,7 +2537,7 @@ const AttendancePage: React.FC = () => {
                   
                   {/* Edit Tab - Only show when there are multiple gatherings */}
                   {(orderedGatherings.length ? orderedGatherings : gatherings).length > 1 && (
-                    <div className="flex-shrink-0">
+                    <div className="shrink-0">
                       <button
                         draggable={false}
                         onClick={() => openReorderModal()}
@@ -3107,7 +3107,7 @@ const AttendancePage: React.FC = () => {
                               className="sr-only"
                               disabled={isSaving || isAttendanceLocked}
                             />
-                            <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                            <div className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                               isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
                             } ${isSaving ? 'animate-pulse' : ''}`}>
                               {isPresent && (
@@ -3124,13 +3124,13 @@ const AttendancePage: React.FC = () => {
                             {/* Floating Badge at Top Right */}
                             {badgeInfo && (
                               <span
-                                className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                   badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                                 }`}
                                 style={badgeInfo.styles}
                               >
                                 {badgeInfo.icon && (
-                                  <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 flex-shrink-0" />
+                                  <BadgeIcon type={badgeInfo.icon as BadgeIconType} className="w-4 h-4 shrink-0" />
                                 )}
                                 {badgeInfo.text && (
                                   <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
@@ -3256,7 +3256,7 @@ const AttendancePage: React.FC = () => {
                             className="sr-only"
                             disabled={isAttendanceLocked}
                           />
-                          <div className={`flex-shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
+                          <div className={`shrink-0 h-5 w-5 rounded border-2 flex items-center justify-center ${
                             isPresent ? 'bg-primary-600 border-primary-600' : 'border-gray-300 dark:border-gray-500'
                           }`}>
                             {isPresent && (
@@ -3300,7 +3300,7 @@ const AttendancePage: React.FC = () => {
                           {/* Floating Badge at Top Right */}
                           {badgeInfo && (
                             <span
-                              className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                              className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                 badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                               }`}
                               style={badgeInfo.styles}
@@ -3341,7 +3341,7 @@ const AttendancePage: React.FC = () => {
             {showAllVisitorsSection && (
               <div className="mt-4">
                 {isLoadingAllVisitors ? (
-                  <div className="text-center py-6 text-gray-500">Loading church people…</div>
+                  <div className="text-center py-6 text-gray-500">Loading people…</div>
                 ) : groupedAllChurchVisitors.length === 0 ? (
                   <div className="text-sm text-gray-500 dark:text-gray-400">No additional people available to add.</div>
                 ) : (
@@ -3401,13 +3401,13 @@ const AttendancePage: React.FC = () => {
                                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                     {displayName}
                                   </div>
-                                  <PlusIcon className={`h-4 w-4 flex-shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
+                                  <PlusIcon className={`h-4 w-4 shrink-0 ${isAttendanceLocked ? 'text-gray-300' : 'text-primary-500'}`} />
                                 </div>
 
                                 {/* Floating Badge at Top Right */}
                                 {badgeInfo && (
                                   <span
-                                    className={`flex-shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
+                                    className={`shrink-0 ml-auto sm:absolute sm:right-3 sm:top-0 sm:-translate-y-1/2 flex items-center space-x-1 shadow-sm ${
                                       badgeInfo.text ? 'px-2 py-1 rounded-full' : 'w-6 h-6 justify-center rounded-full'
                                     }`}
                                     style={badgeInfo.styles}
@@ -3462,7 +3462,7 @@ const AttendancePage: React.FC = () => {
 
             {/* Add Visitor Modal - Only for Standard Gatherings */}
       {selectedGathering?.attendanceType === 'standard' && showAddVisitorModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]">
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]">
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-3/4 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800">
               <div className="flex items-center justify-between mb-4">
@@ -3706,7 +3706,7 @@ const AttendancePage: React.FC = () => {
 
       {/* Reorder Modal */}
       {showReorderModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[9999]" onClick={closeReorderModal}>
           <div className="flex items-center justify-center min-h-screen p-4">
             <div className="relative w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl p-5 border dark:border-gray-700 shadow-lg rounded-md bg-white dark:bg-gray-800" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">

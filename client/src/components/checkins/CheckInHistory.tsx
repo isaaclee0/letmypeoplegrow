@@ -202,16 +202,16 @@ const CheckInHistory: React.FC<CheckInHistoryProps> = ({ gatheringId, gatheringN
                       </div>
                     </div>
                     {isExpanded ? (
-                      <ChevronUpIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                      <ChevronUpIcon className="h-5 w-5 text-gray-400 shrink-0" />
                     ) : (
-                      <ChevronDownIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                      <ChevronDownIcon className="h-5 w-5 text-gray-400 shrink-0" />
                     )}
                   </button>
                   {user?.role === 'admin' && (
                     <button
                       onClick={() => handleDeleteSession(session.date)}
                       disabled={deletingSession === session.date}
-                      className="p-2 mr-2 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 flex-shrink-0"
+                      className="p-2 mr-2 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 shrink-0"
                       title="Delete session"
                     >
                       {deletingSession === session.date ? (
