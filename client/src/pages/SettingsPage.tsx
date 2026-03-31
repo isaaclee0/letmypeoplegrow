@@ -66,7 +66,7 @@ const SettingsPage: React.FC = () => {
     loading: boolean;
   }>({ configured: false, provider: null, loading: true });
   const [aiApiKey, setAiApiKey] = useState('');
-  const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic'>('openai');
+  const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic' | 'grok'>('openai');
   const [aiSaving, setAiSaving] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [showAiDisconnectModal, setShowAiDisconnectModal] = useState(false);
@@ -210,6 +210,8 @@ const SettingsPage: React.FC = () => {
     try {
       setAiStatus(prev => ({ ...prev, loading: true }));
       await aiAPI.disconnect();
+      // Clear cached preference so sync doesn't re-insert it
+      localStorage.removeItem('preference_ai_config');
       // Reload so the sidebar removes the AI Insights nav item
       window.location.reload();
     } catch (error: any) {
@@ -1572,7 +1574,7 @@ const SettingsPage: React.FC = () => {
                           {aiStatus.configured && (
                             <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center">
                               <CheckCircleIcon className="w-3 h-3 mr-1" />
-                              Connected via {aiStatus.provider === 'openai' ? 'OpenAI' : 'Anthropic'}
+                              Connected via {aiStatus.provider === 'openai' ? 'OpenAI' : aiStatus.provider === 'anthropic' ? 'Anthropic' : 'Grok'}
                             </p>
                           )}
                         </div>
@@ -1614,11 +1616,12 @@ const SettingsPage: React.FC = () => {
                             <select
                               id="ai-provider"
                               value={aiProvider}
-                              onChange={(e) => setAiProvider(e.target.value as 'openai' | 'anthropic')}
+                              onChange={(e) => setAiProvider(e.target.value as 'openai' | 'anthropic' | 'grok')}
                               className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
                             >
                               <option value="openai">OpenAI (ChatGPT)</option>
                               <option value="anthropic">Anthropic (Claude)</option>
+                              <option value="grok">xAI (Grok)</option>
                             </select>
                           </div>
                           <div>
@@ -1632,12 +1635,14 @@ const SettingsPage: React.FC = () => {
                               onChange={(e) => setAiApiKey(e.target.value)}
                               onKeyPress={(e) => e.key === 'Enter' && handleAiConnect()}
                               className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
-                              placeholder={aiProvider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                              placeholder={aiProvider === 'openai' ? 'sk-...' : aiProvider === 'anthropic' ? 'sk-ant-...' : 'xai-...'}
                             />
                             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                               {aiProvider === 'openai'
                                 ? 'Get your key from platform.openai.com/api-keys'
-                                : 'Get your key from console.anthropic.com/settings/keys'}
+                                : aiProvider === 'anthropic'
+                                ? 'Get your key from console.anthropic.com/settings/keys'
+                                : 'Get your key from console.x.ai'}
                             </p>
                           </div>
 

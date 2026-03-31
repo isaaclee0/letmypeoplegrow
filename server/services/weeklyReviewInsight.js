@@ -1,6 +1,7 @@
 const https = require('https');
 
 const PLATFORM_API_KEY = process.env.PLATFORM_ANTHROPIC_API_KEY;
+const PLATFORM_XAI_API_KEY = process.env.PLATFORM_XAI_API_KEY;
 
 const SYSTEM_PROMPT = 'You are an attendance analyst for a church. Given this week\'s data, provide ONE brief, actionable insight (2-3 sentences). Pick the single most noteworthy pattern from: engagement changes among regulars, local visitor retention, cross-gathering trends, or family attendance shifts. Be warm and pastoral in tone. Do not use markdown formatting. Use the real names provided — they will appear in an email to church leaders. Local visitors are people the church hopes will return and integrate. Traveller visitors are passing through and not expected to return — do not flag their non-return as a problem.';
 
@@ -138,7 +139,7 @@ async function generateInsight(reviewData, options = {}) {
     return generateAlgorithmicInsight(reviewData);
   }
 
-  if (!PLATFORM_API_KEY) {
+  if (!PLATFORM_API_KEY && !PLATFORM_XAI_API_KEY) {
     return generateAlgorithmicInsight(reviewData);
   }
 
@@ -149,7 +150,23 @@ async function generateInsight(reviewData, options = {}) {
 
   try {
     const context = buildContext(reviewData);
-    const response = await callClaude(context);
+
+    // Try Claude first, fall back to Grok if it fails
+    let response = null;
+    if (PLATFORM_API_KEY) {
+      try {
+        response = await callClaude(context);
+      } catch (err) {
+        console.warn('Weekly review: Claude failed, trying Grok fallback:', err.message);
+      }
+    }
+    if (!response && PLATFORM_XAI_API_KEY) {
+      try {
+        response = await callGrok(context);
+      } catch (err) {
+        console.warn('Weekly review: Grok fallback also failed:', err.message);
+      }
+    }
     if (!response) return generateAlgorithmicInsight(reviewData);
 
     // Link to AI insights page for follow-up
@@ -205,6 +222,57 @@ function callClaude(context) {
 
     req.setTimeout(10000, () => {
       req.destroy(new Error('Claude API request timed out'));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function callGrok(context) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model: 'grok-3-mini',
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: context }
+      ],
+      max_tokens: 150,
+      temperature: 0.3
+    });
+
+    const options = {
+      hostname: 'api.x.ai',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${PLATFORM_XAI_API_KEY}`,
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.choices?.[0]?.message?.content) {
+            resolve(parsed.choices[0].message.content.trim());
+          } else {
+            console.error('Weekly review: unexpected Grok response:', data.substring(0, 500));
+            resolve(null);
+          }
+        } catch (e) {
+          console.error('Weekly review: failed to parse Grok response:', e.message);
+          resolve(null);
+        }
+      });
+    });
+
+    req.setTimeout(10000, () => {
+      req.destroy(new Error('Grok API request timed out'));
     });
     req.on('error', reject);
     req.write(body);

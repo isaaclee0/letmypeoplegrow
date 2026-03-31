@@ -357,6 +357,36 @@ async function callAnthropic(apiKey, systemPrompt, chatHistory, currentQuestion,
   return response.data.content?.[0]?.text || 'No response from AI.';
 }
 
+// ===== Helper: call Grok (xAI) =====
+// xAI uses an OpenAI-compatible API
+async function callGrok(apiKey, systemPrompt, chatHistory, currentQuestion, model) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...chatHistory.map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: currentQuestion }
+  ];
+
+  const response = await makeHttpsRequest('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: model || 'grok-3-mini',
+      messages,
+      temperature: 0.3,
+      max_tokens: 2000
+    })
+  });
+
+  if (response.status !== 200) {
+    classifyAiError(response.status, response.data, 'Grok');
+  }
+
+  return response.data.choices?.[0]?.message?.content || 'No response from AI.';
+}
+
 // ===== ROUTES =====
 
 // Get AI config status (is it configured?)
@@ -382,16 +412,18 @@ router.post('/configure', requireRole(['admin']), async (req, res) => {
       return res.status(400).json({ error: 'API key is required.' });
     }
 
-    if (!provider || !['openai', 'anthropic'].includes(provider)) {
-      return res.status(400).json({ error: 'Provider must be "openai" or "anthropic".' });
+    if (!provider || !['openai', 'anthropic', 'grok'].includes(provider)) {
+      return res.status(400).json({ error: 'Provider must be "openai", "anthropic", or "grok".' });
     }
 
     // Quick validation: try a tiny request
     try {
       if (provider === 'openai') {
         await callOpenAI(apiKey.trim(), 'Say OK', [], 'Test', model || 'gpt-4o-mini');
-      } else {
+      } else if (provider === 'anthropic') {
         await callAnthropic(apiKey.trim(), 'Say OK', [], 'Test', model || 'claude-haiku-4-5-20251001');
+      } else {
+        await callGrok(apiKey.trim(), 'Say OK', [], 'Test', model || 'grok-3-mini');
       }
     } catch (validationError) {
       const errorType = validationError.errorType || 'validation_failed';
@@ -786,6 +818,8 @@ RESPONSE GUIDELINES:
       answer = await callOpenAI(config.api_key, systemPrompt, chatHistory, question.trim(), config.model);
     } else if (config.provider === 'anthropic') {
       answer = await callAnthropic(config.api_key, systemPrompt, chatHistory, question.trim(), config.model);
+    } else if (config.provider === 'grok') {
+      answer = await callGrok(config.api_key, systemPrompt, chatHistory, question.trim(), config.model);
     } else {
       return res.status(400).json({ error: `Unknown provider: ${config.provider}` });
     }

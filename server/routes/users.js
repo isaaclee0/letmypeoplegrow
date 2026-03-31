@@ -784,18 +784,21 @@ router.get('/:userId/gatherings',
 
 // User preferences endpoints
 // Get user preferences
+// Keys managed by dedicated endpoints — exclude from generic sync
+const MANAGED_PREFERENCE_KEYS = ['ai_config', 'elvanto_api_key', 'planning_center_tokens'];
+
 router.get('/me/preferences', verifyToken, async (req, res) => {
   try {
     const preferences = await Database.query(`
       SELECT preference_key, preference_value, updated_at
-      FROM user_preferences 
+      FROM user_preferences
       WHERE user_id = ? AND church_id = ?
       ORDER BY updated_at DESC
     `, [req.user.id, req.user.church_id]);
 
-    // Convert to object format for easier frontend consumption
+    // Convert to object format, excluding keys managed by dedicated endpoints
     const preferencesObj = {};
-    preferences.forEach(pref => {
+    preferences.filter(p => !MANAGED_PREFERENCE_KEYS.includes(p.preference_key)).forEach(pref => {
       try {
         // Handle different data types that might be returned from the database
         let parsedValue;
@@ -842,6 +845,10 @@ router.post('/me/preferences',
       const userId = req.user.id;
       const churchId = req.user.church_id;
 
+      if (MANAGED_PREFERENCE_KEYS.includes(key)) {
+        return res.status(400).json({ error: `Preference "${key}" is managed by a dedicated endpoint.` });
+      }
+
       // Insert or update preference
       await Database.query(`
         INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
@@ -886,8 +893,8 @@ router.post('/me/preferences/batch',
         }
       }
 
-      // Insert or update all preferences
-      for (const [key, value] of Object.entries(preferences)) {
+      // Insert or update all preferences (skip keys managed by dedicated endpoints)
+      for (const [key, value] of Object.entries(preferences).filter(([k]) => !MANAGED_PREFERENCE_KEYS.includes(k))) {
         await Database.query(`
           INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
           VALUES (?, ?, ?, ?)
