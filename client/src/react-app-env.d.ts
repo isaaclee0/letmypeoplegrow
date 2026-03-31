@@ -1,4 +1,4 @@
-/// <reference types="react-scripts" />
+/// <reference types="vite/client" />
 
 // Type declarations for modules without type definitions
 declare module 'socket.io-client' {
