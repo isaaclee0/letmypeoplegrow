@@ -2224,26 +2224,19 @@ const PeoplePage: React.FC = () => {
       )}
 
       {/* Add People Modal */}
-      {(() => {
-        const addPeopleDefaultMode = gatheringTypes.some(g => g.individualMode)
-          ? 'individual' as const
-          : 'family' as const;
-        return (
-          <AddPeopleModal
-            isOpen={showAddModal}
-            onClose={() => setShowAddModal(false)}
-            onSuccess={async () => {
-              await loadPeople();
-              await loadFamilies();
-              showSuccess('People added successfully');
-            }}
-            gatheringTypes={gatheringTypes}
-            people={people}
-            defaultMode={addPeopleDefaultMode}
-            showModeToggle={true}
-          />
-        );
-      })()}
+      <AddPeopleModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSuccess={async () => {
+          await loadPeople();
+          await loadFamilies();
+          showSuccess('People added successfully');
+        }}
+        gatheringTypes={gatheringTypes}
+        people={people}
+        defaultMode={gatheringTypes.some(g => g.individualMode) ? 'individual' : 'family'}
+        showModeToggle={true}
+      />
 
       {/* Removed duplicate Person Details Modal */}
 
