@@ -182,6 +182,7 @@ export interface GatheringType {
   endTime?: string;
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
+  individualMode?: boolean;
   kioskMessage?: string;
   isActive: boolean;
   memberCount?: number;
@@ -314,6 +315,7 @@ export const gatheringsAPI = {
     };
     kioskEnabled?: boolean;
     leaderCheckinEnabled?: boolean;
+    individualMode?: boolean;
     setAsDefault?: boolean;
   }) =>
     api.post('/gatherings', data),

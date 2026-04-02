@@ -39,6 +39,7 @@ interface Gathering {
   };
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
+  individualMode?: boolean;
   isActive: boolean;
   memberCount?: number;
   recentVisitorCount?: number;
@@ -67,6 +68,7 @@ interface CreateGatheringData {
   };
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
+  individualMode?: boolean;
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -159,7 +161,12 @@ const ManageGatheringsPage: React.FC = () => {
       const response = await gatheringsAPI.getAll();
       const gatherings = response.data.gatherings || [];
       setGatherings(gatherings);
-      
+
+      // Auto-open the add wizard when there are no gatherings (new account / first run)
+      if (gatherings.length === 0) {
+        setShowAddGatheringWizard(true);
+      }
+
       // Check if user has gatherings but they have very few people (likely a new user) - show arrow prompt
       if (gatherings.length > 0) {
         const totalMembers = gatherings.reduce((sum: number, gathering: Gathering) => sum + (gathering.memberCount || 0), 0);
