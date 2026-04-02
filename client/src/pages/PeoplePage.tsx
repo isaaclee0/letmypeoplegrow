@@ -69,6 +69,7 @@ interface GatheringType {
   startTime: string;
   frequency: string;
   attendanceType?: 'standard' | 'headcount';
+  individualMode?: boolean;
 }
 
 interface VisitorConfig {

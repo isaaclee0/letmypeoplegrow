@@ -461,7 +461,7 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
     // Get the new gathering details
     const newGathering = await Database.query(`
       SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency,
-             gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.is_active, gt.created_at,
+             gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.individual_mode, gt.is_active, gt.created_at,
              COUNT(DISTINCT gl.individual_id) as member_count
       FROM gathering_types gt
       LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id

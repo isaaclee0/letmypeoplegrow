@@ -196,7 +196,12 @@ const ManageGatheringsPage: React.FC = () => {
       description: 'Weekly Sunday morning gathering',
       dayOfWeek: 'Sunday',
       startTime: '10:00',
-      frequency: 'weekly'
+      endTime: '11:00',
+      frequency: 'weekly',
+      attendanceType: 'standard',
+      kioskEnabled: false,
+      leaderCheckinEnabled: false,
+      individualMode: false,
     });
     setError('');
     setSuccess('');
