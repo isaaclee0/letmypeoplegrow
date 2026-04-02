@@ -56,6 +56,12 @@ class Database {
       if (!cols.some(c => c.name === 'has_sample_data')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN has_sample_data INTEGER DEFAULT 0');
       }
+
+      // Migrate gathering_types table
+      const gatheringCols = db.prepare('PRAGMA table_info(gathering_types)').all();
+      if (!gatheringCols.some(c => c.name === 'individual_mode')) {
+        db.exec('ALTER TABLE gathering_types ADD COLUMN individual_mode INTEGER DEFAULT 0');
+      }
     }
 
     churchDbs.set(churchId, db);

@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   kiosk_message TEXT,
   kiosk_end_time TEXT,
   group_by_family INTEGER DEFAULT 1,
+  individual_mode INTEGER DEFAULT 0,
   is_active INTEGER DEFAULT 1,
   created_by INTEGER,
   church_id TEXT NOT NULL DEFAULT 'default',
