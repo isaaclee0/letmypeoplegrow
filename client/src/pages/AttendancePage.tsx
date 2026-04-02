@@ -888,13 +888,6 @@ const AttendancePage: React.FC = () => {
     if (!selectedGathering || !selectedDate) return;
     if (validDates.length > 0 && !validDates.includes(selectedDate)) return;
 
-    // Load the last used group by family setting for this gathering
-    const lastSetting = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
-    if (lastSetting !== null) {
-      setGroupByFamily(lastSetting === 'true');
-    } else {
-      setGroupByFamily(true);
-    }
   }, [selectedGathering, selectedDate, validDates]);
 
   // WebSocket real-time updates handle all data synchronization now
