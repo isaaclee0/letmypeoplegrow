@@ -418,8 +418,8 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
       const insertResult = await conn.query(`
         INSERT INTO gathering_types (
           name, description, day_of_week, start_time, end_time, frequency,
-          attendance_type, custom_schedule, group_by_family, kiosk_enabled, leader_checkin_enabled, church_id, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          attendance_type, custom_schedule, group_by_family, kiosk_enabled, leader_checkin_enabled, individual_mode, church_id, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         name.trim(),
         originalGathering.description,
@@ -432,6 +432,7 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
         originalGathering.group_by_family !== undefined ? originalGathering.group_by_family : true,
         originalGathering.kiosk_enabled || false,
         originalGathering.leader_checkin_enabled || false,
+        originalGathering.individual_mode || false,
         req.user.church_id,
         req.user.id
       ]);
