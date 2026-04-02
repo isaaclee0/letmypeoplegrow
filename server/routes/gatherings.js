@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
     // Admin users can see all gatherings, other users only see their assigned gatherings
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at,
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
@@ -34,12 +34,12 @@ router.get('/', async (req, res) => {
         LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
         LEFT JOIN individuals i ON ar.individual_id = i.id
         WHERE gt.is_active = 1 AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.is_active, gt.created_at
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.church_id]);
     } else {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.is_active, gt.created_at,
+        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at,
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
                COUNT(DISTINCT CASE
                  WHEN ar.individual_id IS NOT NULL
@@ -57,7 +57,7 @@ router.get('/', async (req, res) => {
         LEFT JOIN individuals i ON ar.individual_id = i.id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE gt.is_active = 1 AND uga.user_id = ? AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.is_active, gt.created_at
+        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at
         ORDER BY gt.id
       `, [req.user.id, req.user.church_id]);
     }
@@ -124,7 +124,7 @@ router.post('/',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { name, description, dayOfWeek, startTime, endTime, frequency, attendanceType, customSchedule, setAsDefault, kioskEnabled, leaderCheckinEnabled, kioskEndTime, kioskMessage } = req.body;
+      const { name, description, dayOfWeek, startTime, endTime, frequency, attendanceType, customSchedule, setAsDefault, kioskEnabled, leaderCheckinEnabled, kioskEndTime, kioskMessage, individualMode } = req.body;
     
     // Validate that standard gatherings have required fields
     if (attendanceType === 'standard' && (!dayOfWeek || !startTime || !frequency)) {
@@ -145,8 +145,8 @@ router.post('/',
     const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
     
     const result = await Database.query(`
-      INSERT INTO gathering_types (name, description, day_of_week, start_time, end_time, frequency, attendance_type, custom_schedule, kiosk_enabled, leader_checkin_enabled, kiosk_message, created_by, church_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gathering_types (name, description, day_of_week, start_time, end_time, frequency, attendance_type, custom_schedule, kiosk_enabled, leader_checkin_enabled, kiosk_message, individual_mode, created_by, church_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       name,
       description,
@@ -159,6 +159,7 @@ router.post('/',
       attendanceType === 'standard' && kioskEnabled ? true : false,
       attendanceType === 'standard' && leaderCheckinEnabled ? true : false,
       kioskMessage || null,
+      attendanceType === 'standard' && individualMode ? true : false,
       req.user.id,
       req.user.church_id
     ]);
@@ -250,7 +251,7 @@ router.patch('/:id/kiosk-settings', async (req, res) => {
 router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHERING_TYPE'), async (req, res) => {
   try {
     const gatheringId = parseInt(req.params.id);
-    const { name, description, dayOfWeek, startTime, endTime, frequency, attendanceType, customSchedule, kioskEnabled, leaderCheckinEnabled, kioskEndTime, kioskMessage } = req.body;
+    const { name, description, dayOfWeek, startTime, endTime, frequency, attendanceType, customSchedule, kioskEnabled, leaderCheckinEnabled, kioskEndTime, kioskMessage, individualMode } = req.body;
     
     // Verify user has access to this gathering
     const assignments = await Database.query(
@@ -303,6 +304,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
     // Only allow check-in modes for standard gatherings
     const kioskValue = attendanceType === 'standard' && kioskEnabled ? true : false;
     const leaderCheckinValue = attendanceType === 'standard' && leaderCheckinEnabled ? true : false;
+    const individualModeValue = attendanceType === 'standard' && individualMode ? true : false;
 
     const result = await Database.query(`
       UPDATE gathering_types
@@ -311,7 +313,8 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
           custom_schedule = ?,
           kiosk_enabled = ?,
           leader_checkin_enabled = ?,
-          kiosk_message = ?
+          kiosk_message = ?,
+          individual_mode = ?
       WHERE id = ? AND church_id = ?
     `, [
       name,
@@ -325,6 +328,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
       kioskValue,
       leaderCheckinValue,
       kioskMessage || null,
+      individualModeValue,
       gatheringId,
       req.user.church_id
     ]);
