@@ -39,12 +39,22 @@ interface Person {
   familyName?: string;
 }
 
+interface IndividualCard {
+  id: string;              // temporary local id
+  firstName: string;
+  lastName: string;
+  isChild: boolean;
+  siblingGroupId: string | null;  // null = solo; shared value = linked siblings
+}
+
 interface AddPeopleModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => Promise<void>;
   gatheringTypes: GatheringType[];
   people: Person[];
+  defaultMode?: 'individual' | 'family';
+  showModeToggle?: boolean;
 }
 
 const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
@@ -52,11 +62,21 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   onClose,
   onSuccess,
   gatheringTypes,
-  people
+  people,
+  defaultMode,
+  showModeToggle
 }) => {
   const [addModalMode, setAddModalMode] = useState<'person' | 'csv' | 'copy-paste'>('person');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Individual mode state
+  const [isIndividualMode, setIsIndividualMode] = useState(false);
+  const [individualCards, setIndividualCards] = useState<IndividualCard[]>([
+    { id: Date.now().toString(), firstName: '', lastName: '', isChild: false, siblingGroupId: null }
+  ]);
+  const [individualSelectedGatherings, setIndividualSelectedGatherings] = useState<{ [key: number]: boolean }>({});
+  const [showSiblingPickerFor, setShowSiblingPickerFor] = useState<string | null>(null);
 
   const [addPeopleForm, setAddPeopleForm] = useState<AddPeopleFormState>({
     personType: 'regular',
@@ -281,6 +301,17 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       }
     };
   }, []);
+
+  // Sync individual mode state when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setIsIndividualMode(defaultMode === 'individual');
+    setIndividualCards([
+      { id: Date.now().toString(), firstName: '', lastName: '', isChild: false, siblingGroupId: null }
+    ]);
+    setIndividualSelectedGatherings({});
+    setShowSiblingPickerFor(null);
+  }, [isOpen, defaultMode]);
 
   // Modal tab slider functions
   const handleModalTabMouseDown = (e: React.MouseEvent) => {
@@ -544,6 +575,74 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
     }
   };
 
+  const handleAddIndividuals = async () => {
+    try {
+      setIsLoading(true);
+      setError('');
+
+      for (const card of individualCards) {
+        if (!card.firstName.trim()) {
+          setError('First name is required for all people');
+          return;
+        }
+      }
+
+      const siblingGroups = new Map<string, IndividualCard[]>();
+      const soloCards: IndividualCard[] = [];
+
+      for (const card of individualCards) {
+        if (card.siblingGroupId) {
+          const group = siblingGroups.get(card.siblingGroupId) ?? [];
+          group.push(card);
+          siblingGroups.set(card.siblingGroupId, group);
+        } else {
+          soloCards.push(card);
+        }
+      }
+
+      const selectedGatheringIds = Object.entries(individualSelectedGatherings)
+        .filter(([, checked]) => checked)
+        .map(([id]) => parseInt(id));
+
+      const createGroup = async (cards: IndividualCard[]) => {
+        const familyName = generateFamilyName(cards.map(c => ({
+          firstName: c.firstName.trim(),
+          lastName: c.lastName.trim(),
+          lastUnknown: false,
+        })));
+        const familyResponse = await familiesAPI.create({ familyName });
+        const individuals = await Promise.all(
+          cards.map(card =>
+            individualsAPI.create({
+              firstName: card.firstName.trim(),
+              lastName: card.lastName.trim() || 'Unknown',
+              familyId: familyResponse.data.id,
+              isChild: card.isChild,
+            })
+          )
+        );
+        const ids = individuals.map(r => r.data.id);
+        for (const gId of selectedGatheringIds) {
+          await csvImportAPI.massAssign(gId, ids);
+        }
+      };
+
+      for (const [, groupCards] of siblingGroups) {
+        await createGroup(groupCards);
+      }
+      for (const card of soloCards) {
+        await createGroup([card]);
+      }
+
+      await onSuccess();
+      onClose();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add people');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleCSVUpload = async () => {
     try {
       setIsLoading(true);
@@ -777,6 +876,239 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
           {/* Add People Form */}
           {addModalMode === 'person' && (
+            <>
+            {showModeToggle && (
+              <div className="mb-4 flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+                  Are these people in a family?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsIndividualMode(v => !v)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 ${
+                    !isIndividualMode ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'
+                  }`}
+                  role="switch"
+                  aria-checked={!isIndividualMode}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    !isIndividualMode ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  {isIndividualMode ? 'No — add as individuals' : 'Yes — add as a family'}
+                </span>
+              </div>
+            )}
+
+            {isIndividualMode ? (
+              <div className="space-y-3">
+                {/* Individual cards */}
+                {individualCards.map((card, index) => (
+                  <div
+                    key={card.id}
+                    className={`border rounded-lg p-3 bg-white dark:bg-gray-700 space-y-3 ${
+                      card.siblingGroupId ? 'border-primary-300 dark:border-primary-600' : 'border-gray-200 dark:border-gray-600'
+                    }`}
+                  >
+                    <div className="flex gap-2 items-start">
+                      {/* First name */}
+                      <div className="flex-1">
+                        <input
+                          type="text"
+                          value={card.firstName}
+                          onChange={(e) => setIndividualCards(cards =>
+                            cards.map(c => c.id === card.id ? { ...c, firstName: e.target.value } : c)
+                          )}
+                          placeholder="First name"
+                          className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-sm"
+                        />
+                      </div>
+                      {/* Last name */}
+                      <div className="flex-1">
+                        <input
+                          type="text"
+                          value={card.lastName}
+                          onChange={(e) => setIndividualCards(cards =>
+                            cards.map(c => c.id === card.id ? { ...c, lastName: e.target.value } : c)
+                          )}
+                          placeholder="Last name"
+                          className="block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-sm"
+                        />
+                      </div>
+                      {/* Remove button — shown once there are 2+ cards */}
+                      {individualCards.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIndividualCards(cards => {
+                              const updated = cards.filter(c => c.id !== card.id);
+                              if (card.siblingGroupId) {
+                                const remaining = updated.filter(c => c.siblingGroupId === card.siblingGroupId);
+                                if (remaining.length === 1) {
+                                  return updated.map(c =>
+                                    c.siblingGroupId === card.siblingGroupId ? { ...c, siblingGroupId: null } : c
+                                  );
+                                }
+                              }
+                              return updated;
+                            });
+                          }}
+                          className="text-gray-400 hover:text-red-500 mt-1"
+                          aria-label="Remove person"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Child checkbox + sibling link row */}
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-1.5 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={card.isChild}
+                          onChange={(e) => setIndividualCards(cards =>
+                            cards.map(c => c.id === card.id ? { ...c, isChild: e.target.checked } : c)
+                          )}
+                          className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                        />
+                        Child
+                      </label>
+
+                      {/* Sibling link affordance */}
+                      {individualCards.length > 1 && (
+                        <div className="relative">
+                          {card.siblingGroupId ? (
+                            <button
+                              type="button"
+                              onClick={() => setIndividualCards(cards => {
+                                const updated = cards.map(c =>
+                                  c.id === card.id ? { ...c, siblingGroupId: null } : c
+                                );
+                                const groupId = card.siblingGroupId!;
+                                const remaining = updated.filter(c => c.siblingGroupId === groupId);
+                                if (remaining.length === 1) {
+                                  return updated.map(c =>
+                                    c.siblingGroupId === groupId ? { ...c, siblingGroupId: null } : c
+                                  );
+                                }
+                                return updated;
+                              })}
+                              className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                            >
+                              ✓ Linked as sibling — remove link
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setShowSiblingPickerFor(
+                                showSiblingPickerFor === card.id ? null : card.id
+                              )}
+                              className="text-xs text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400"
+                            >
+                              Link as sibling →
+                            </button>
+                          )}
+
+                          {/* Sibling picker dropdown */}
+                          {showSiblingPickerFor === card.id && (
+                            <div className="absolute left-0 top-6 z-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-md shadow-lg py-1 min-w-max">
+                              {individualCards
+                                .filter(c => c.id !== card.id)
+                                .map(other => (
+                                  <button
+                                    key={other.id}
+                                    type="button"
+                                    onClick={() => {
+                                      const groupId = card.siblingGroupId || other.siblingGroupId || `sibling-${Date.now()}`;
+                                      setIndividualCards(cards =>
+                                        cards.map(c =>
+                                          (c.id === card.id || c.id === other.id || c.siblingGroupId === other.siblingGroupId)
+                                            ? { ...c, siblingGroupId: groupId }
+                                            : c
+                                        )
+                                      );
+                                      setShowSiblingPickerFor(null);
+                                    }}
+                                    className="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                  >
+                                    {other.firstName || 'Unnamed'} {other.lastName}
+                                  </button>
+                                ))
+                              }
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Sibling group badge */}
+                      {card.siblingGroupId && (
+                        <span className="text-xs text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 px-2 py-0.5 rounded-full">
+                          siblings
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Add another person */}
+                {individualCards.length < 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setIndividualCards(cards => [
+                      ...cards,
+                      { id: Date.now().toString(), firstName: '', lastName: '', isChild: false, siblingGroupId: null }
+                    ])}
+                    className="w-full py-2 px-4 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:border-primary-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+                  >
+                    + Add another person
+                  </button>
+                )}
+
+                {/* Gathering assignment */}
+                {gatheringTypes.filter(g => g.attendanceType !== 'headcount').length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Assign to gatherings
+                    </label>
+                    <div className="space-y-2">
+                      {gatheringTypes
+                        .filter(g => g.attendanceType !== 'headcount')
+                        .map(g => (
+                          <label key={g.id} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={!!individualSelectedGatherings[g.id]}
+                              onChange={(e) => setIndividualSelectedGatherings(prev => ({
+                                ...prev,
+                                [g.id]: e.target.checked
+                              }))}
+                              className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                            />
+                            <span className="text-sm text-gray-700 dark:text-gray-300">{g.name}</span>
+                          </label>
+                        ))
+                      }
+                    </div>
+                  </div>
+                )}
+
+                {/* Save button — individual mode */}
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={handleAddIndividuals}
+                    disabled={isLoading}
+                    className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+                  >
+                    {isLoading ? 'Saving...' : 'Add People'}
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={(e) => { e.preventDefault(); handleAddPeople(); }} className="space-y-4">
               {/* Person Type Selection */}
               <div>
@@ -1010,6 +1342,8 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                 </button>
               </div>
             </form>
+            )}
+            </>
           )}
 
           {/* TSV Upload Form */}
