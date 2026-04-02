@@ -111,7 +111,8 @@ const ManageGatheringsPage: React.FC = () => {
     frequency: 'weekly',
     attendanceType: 'standard',
     kioskEnabled: false,
-    leaderCheckinEnabled: false
+    leaderCheckinEnabled: false,
+    individualMode: false,
   });
 
   // Confirmation modal states
@@ -247,9 +248,10 @@ const ManageGatheringsPage: React.FC = () => {
         attendanceType: createGatheringData.attendanceType,
         customSchedule: createGatheringData.customSchedule,
         kioskEnabled: createGatheringData.kioskEnabled,
-        leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled
+        leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
+        individualMode: createGatheringData.individualMode,
       };
-      
+
       logger.log('Creating gathering with data:', gatheringData);
       
       const gatheringResponse = await gatheringsAPI.create(gatheringData);
@@ -268,6 +270,7 @@ const ManageGatheringsPage: React.FC = () => {
         customSchedule: createGatheringData.customSchedule,
         kioskEnabled: createGatheringData.kioskEnabled,
         leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
+        individualMode: createGatheringData.individualMode,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -1194,6 +1197,43 @@ const ManageGatheringsPage: React.FC = () => {
                       </label>
                     </div>
                   </div>
+
+                  {/* People organisation — only for standard gatherings */}
+                  {createGatheringData.attendanceType === 'standard' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        How are people in this gathering typically organised?
+                      </label>
+                      <div className="space-y-2">
+                        <label className="flex items-start cursor-pointer">
+                          <input
+                            type="radio"
+                            name="individualMode"
+                            value="family"
+                            checked={!createGatheringData.individualMode}
+                            onChange={() => setCreateGatheringData({ ...createGatheringData, individualMode: false })}
+                            className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
+                          />
+                          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                            <strong>As families</strong> — parents, children, and siblings grouped together
+                          </span>
+                        </label>
+                        <label className="flex items-start cursor-pointer">
+                          <input
+                            type="radio"
+                            name="individualMode"
+                            value="individual"
+                            checked={!!createGatheringData.individualMode}
+                            onChange={() => setCreateGatheringData({ ...createGatheringData, individualMode: true })}
+                            className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500"
+                          />
+                          <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                            <strong>As individuals</strong> — mostly standalone people, like a youth group or small group
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Check-in Mode Toggles - only for standard gatherings */}
                   {createGatheringData.attendanceType === 'standard' && (

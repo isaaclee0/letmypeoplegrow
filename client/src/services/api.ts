@@ -341,6 +341,7 @@ export const gatheringsAPI = {
     };
     kioskEnabled?: boolean;
     leaderCheckinEnabled?: boolean;
+    individualMode?: boolean;
   }) =>
     api.put(`/gatherings/${gatheringId}`, data),
     
