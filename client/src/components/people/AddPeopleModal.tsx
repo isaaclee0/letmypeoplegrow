@@ -580,17 +580,16 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       setIsLoading(true);
       setError('');
 
-      for (const card of individualCards) {
-        if (!card.firstName.trim()) {
-          setError('First name is required for all people');
-          return;
-        }
+      const validCards = individualCards.filter(card => card.firstName.trim());
+      if (validCards.length === 0) {
+        setError('Please enter at least one person\'s name');
+        return;
       }
 
       const siblingGroups = new Map<string, IndividualCard[]>();
       const soloCards: IndividualCard[] = [];
 
-      for (const card of individualCards) {
+      for (const card of validCards) {
         if (card.siblingGroupId) {
           const group = siblingGroups.get(card.siblingGroupId) ?? [];
           group.push(card);
@@ -1104,7 +1103,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
                     disabled={isLoading}
                     className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
                   >
-                    {isLoading ? 'Saving...' : 'Add People'}
+                    {(() => { const validCount = individualCards.filter(c => c.firstName.trim()).length; return isLoading ? 'Saving...' : `Add ${validCount} ${validCount === 1 ? 'Person' : 'People'}`; })()}
                   </button>
                 </div>
               </div>
