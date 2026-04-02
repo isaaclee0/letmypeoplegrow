@@ -1505,7 +1505,8 @@ const PeoplePage: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Search */}
+            {/* Search - only show when there are people to search */}
+            {people.length > 0 && (
             <div>
               <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                 Search People
@@ -1524,6 +1525,7 @@ const PeoplePage: React.FC = () => {
                 </div>
               </div>
             </div>
+            )}
 
             {/* Family Filter */}
             <div>
@@ -2222,17 +2224,26 @@ const PeoplePage: React.FC = () => {
       )}
 
       {/* Add People Modal */}
-      <AddPeopleModal
-        isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onSuccess={async () => {
-          await loadPeople();
-          await loadFamilies();
-          showSuccess('People added successfully');
-        }}
-        gatheringTypes={gatheringTypes}
-        people={people}
-      />
+      {(() => {
+        const addPeopleDefaultMode = gatheringTypes.some(g => g.individualMode)
+          ? 'individual' as const
+          : 'family' as const;
+        return (
+          <AddPeopleModal
+            isOpen={showAddModal}
+            onClose={() => setShowAddModal(false)}
+            onSuccess={async () => {
+              await loadPeople();
+              await loadFamilies();
+              showSuccess('People added successfully');
+            }}
+            gatheringTypes={gatheringTypes}
+            people={people}
+            defaultMode={addPeopleDefaultMode}
+            showModeToggle={true}
+          />
+        );
+      })()}
 
       {/* Removed duplicate Person Details Modal */}
 
