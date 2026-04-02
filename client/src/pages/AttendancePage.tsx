@@ -216,6 +216,19 @@ const AttendancePage: React.FC = () => {
     }
   }, [selectedGathering]);
 
+  // Initialise groupByFamily whenever the selected gathering changes.
+  // Individual-mode gatherings default to ungrouped; family-mode gatherings default to grouped.
+  // A user's manual toggle choice is always respected when stored in localStorage.
+  useEffect(() => {
+    if (!selectedGathering) return;
+    const stored = localStorage.getItem(`gathering_${selectedGathering.id}_groupByFamily`);
+    if (stored !== null) {
+      setGroupByFamily(JSON.parse(stored));
+    } else {
+      setGroupByFamily(selectedGathering.individualMode ? false : true);
+    }
+  }, [selectedGathering?.id]);
+
   // Helper function to find the nearest date (closest to today)
   const findNearestDate = useCallback((dates: string[]) => {
     if (dates.length === 0) return null;
@@ -2651,8 +2664,8 @@ const AttendancePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Search/Filter Bar - Only show for standard gatherings */}
-            {selectedGathering?.attendanceType === 'standard' && (
+            {/* Search/Filter Bar - Only show for standard gatherings with members */}
+            {selectedGathering?.attendanceType === 'standard' && attendanceList.length > 0 && (
               <div>
                 <label htmlFor="search" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Filter Families & Visitors
