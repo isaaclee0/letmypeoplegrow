@@ -302,9 +302,10 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
     const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
     
     // Only allow check-in modes for standard gatherings
-    const kioskValue = attendanceType === 'standard' && kioskEnabled ? true : false;
-    const leaderCheckinValue = attendanceType === 'standard' && leaderCheckinEnabled ? true : false;
-    const individualModeValue = attendanceType === 'standard' && individualMode ? true : false;
+    const effectiveAttendanceType = attendanceType ?? currentGathering[0].attendance_type;
+    const kioskValue = effectiveAttendanceType === 'standard' && kioskEnabled ? true : false;
+    const leaderCheckinValue = effectiveAttendanceType === 'standard' && leaderCheckinEnabled ? true : false;
+    const individualModeValue = effectiveAttendanceType === 'standard' && individualMode ? true : false;
 
     const result = await Database.query(`
       UPDATE gathering_types
@@ -383,7 +384,7 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
     // Check if gathering exists and user has access
     const gathering = await Database.query(`
       SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.frequency,
-             gt.attendance_type, gt.custom_schedule, gt.group_by_family, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.is_active, gt.created_at
+             gt.attendance_type, gt.custom_schedule, gt.group_by_family, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.individual_mode, gt.is_active, gt.created_at
       FROM gathering_types gt
       LEFT JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
       WHERE gt.id = ? AND gt.church_id = ? AND (
