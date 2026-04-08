@@ -595,10 +595,47 @@ To stop receiving these emails, ask your admin to update your notification prefe
   });
 };
 
+const sendCaregiverNotificationEmail = async (contact, individual, family, missedCount, gatheringTypeName) => {
+  const churchName = process.env.CHURCH_NAME || 'your church';
+  const subject = `Attendance follow-up: ${individual.first_name} ${individual.last_name}`;
+  const gatheringLabel = gatheringTypeName || 'their gathering';
+  const weeksText = missedCount === 1 ? '1 week' : `${missedCount} weeks`;
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <p>Hi ${contact.first_name},</p>
+      <p>
+        Just a heads-up — <strong>${individual.first_name} ${individual.last_name}</strong>
+        ${family ? `from the <strong>${family.family_name}</strong> family ` : ''}hasn't attended <strong>${gatheringLabel}</strong> for the past ${weeksText}.
+        You may want to check in with them.
+      </p>
+      <p style="color: #666; font-size: 14px;">— ${churchName}</p>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+      <p style="color: #999; font-size: 12px;">
+        You're receiving this because you've been assigned as a caregiver for this family in ${churchName}'s attendance system.
+      </p>
+    </body>
+    </html>
+  `;
+
+  const textContent = `Hi ${contact.first_name},\n\nJust a heads-up — ${individual.first_name} ${individual.last_name}${family ? ` from the ${family.family_name} family` : ''} hasn't attended ${gatheringLabel} for the past ${weeksText}. You may want to check in with them.\n\n— ${churchName}`;
+
+  await sendEmail(
+    contact.email,
+    subject,
+    htmlContent,
+    textContent
+  );
+};
+
 module.exports = {
   sendEmail,
   sendInvitationEmail,
   sendOTCEmail,
   sendNewChurchApprovalEmail,
-  sendWeeklyReviewEmail
-}; 
+  sendWeeklyReviewEmail,
+  sendCaregiverNotificationEmail
+};
