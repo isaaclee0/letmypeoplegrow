@@ -302,13 +302,15 @@ const PeoplePage: React.FC = () => {
   const [familyCaregivers, setFamilyCaregivers] = useState<Record<number, FamilyCaregiver[]>>({});
   const [caregiverPopoverFamilyId, setCaregiverPopoverFamilyId] = useState<number | null>(null);
   const [caregiverSearch, setCaregiverSearch] = useState('');
-  const [caregiverSearchResults, setCaregiverSearchResults] = useState<CaregiverSearchResult[]>([]);
 
   // Bulk caregiver assign state (Task 11)
   const [showBulkCaregiverModal, setShowBulkCaregiverModal] = useState(false);
   const [bulkCaregiverSearch, setBulkCaregiverSearch] = useState('');
-  const [bulkCaregiverResults, setBulkCaregiverResults] = useState<CaregiverSearchResult[]>([]);
   const [bulkAssigning, setBulkAssigning] = useState(false);
+
+  // Shared list of all users+contacts, loaded once when a caregiver modal opens
+  const [allCaregiverOptions, setAllCaregiverOptions] = useState<CaregiverSearchResult[]>([]);
+  const [caregiverOptionsLoading, setCaregiverOptionsLoading] = useState(false);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
   const savedScrollPositionRef = useRef<number | null>(null);
@@ -678,7 +680,7 @@ const PeoplePage: React.FC = () => {
   const handleOpenCaregiverPopover = async (familyId: number) => {
     setCaregiverPopoverFamilyId(familyId);
     setCaregiverSearch('');
-    setCaregiverSearchResults([]);
+    loadCaregiverOptions();
     await loadFamilyCaregivers(familyId);
   };
 
@@ -691,27 +693,24 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const handleCaregiverSearch = async (query: string) => {
-    setCaregiverSearch(query);
-    if (query.trim().length < 2) { setCaregiverSearchResults([]); return; }
+  const loadCaregiverOptions = async () => {
+    if (allCaregiverOptions.length > 0) return; // already loaded
+    setCaregiverOptionsLoading(true);
     try {
       const [usersResp, allContacts] = await Promise.all([
         usersAPI.getAll(),
         contactsAPI.getAll(),
       ]);
       const allUsers = (usersResp as any).data?.users || [];
-      const q = query.toLowerCase();
-      const results: CaregiverSearchResult[] = [
-        ...allUsers
-          .filter((u: any) => `${u.firstName} ${u.lastName}`.toLowerCase().includes(q))
-          .map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
-        ...allContacts
-          .filter((c: any) => `${c.first_name} ${c.last_name}`.toLowerCase().includes(q))
-          .map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
-      ].slice(0, 8);
-      setCaregiverSearchResults(results);
+      const options: CaregiverSearchResult[] = [
+        ...allUsers.map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
+        ...allContacts.map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
+      ];
+      setAllCaregiverOptions(options);
     } catch (err) {
-      console.error('Caregiver search failed', err);
+      console.error('Failed to load caregiver options', err);
+    } finally {
+      setCaregiverOptionsLoading(false);
     }
   };
 
@@ -723,34 +722,8 @@ const PeoplePage: React.FC = () => {
         contact_id: result.type === 'contact' ? result.id : undefined,
       });
       await loadFamilyCaregivers(familyId);
-      setCaregiverSearch('');
-      setCaregiverSearchResults([]);
     } catch (err) {
       console.error('Failed to add caregiver', err);
-    }
-  };
-
-  const handleBulkCaregiverSearch = async (query: string) => {
-    setBulkCaregiverSearch(query);
-    if (query.trim().length < 2) { setBulkCaregiverResults([]); return; }
-    try {
-      const [usersResp, allContacts] = await Promise.all([
-        usersAPI.getAll(),
-        contactsAPI.getAll(),
-      ]);
-      const allUsers = (usersResp as any).data?.users || [];
-      const q = query.toLowerCase();
-      const results: CaregiverSearchResult[] = [
-        ...allUsers
-          .filter((u: any) => `${u.firstName} ${u.lastName}`.toLowerCase().includes(q))
-          .map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
-        ...allContacts
-          .filter((c: any) => `${c.first_name} ${c.last_name}`.toLowerCase().includes(q))
-          .map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
-      ].slice(0, 8);
-      setBulkCaregiverResults(results);
-    } catch (err) {
-      console.error('Caregiver search failed', err);
     }
   };
 
@@ -773,7 +746,6 @@ const PeoplePage: React.FC = () => {
       );
       setShowBulkCaregiverModal(false);
       setBulkCaregiverSearch('');
-      setBulkCaregiverResults([]);
     } catch (err) {
       console.error('Bulk assign failed', err);
     } finally {
@@ -2835,7 +2807,7 @@ const PeoplePage: React.FC = () => {
                Assign Caregiver
              </div>
              <button
-               onClick={() => { setShowBulkCaregiverModal(true); setBulkCaregiverSearch(''); setBulkCaregiverResults([]); }}
+               onClick={() => { setShowBulkCaregiverModal(true); setBulkCaregiverSearch(''); loadCaregiverOptions(); }}
                className="w-14 h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
                title="Assign caregiver to selected families"
              >
@@ -2915,27 +2887,53 @@ const PeoplePage: React.FC = () => {
                 </ul>
               )}
 
-              <div className="relative">
+              <div>
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase mb-1">Add caregiver</p>
                 <input
                   type="text"
-                  placeholder="Search users or contacts..."
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  placeholder="Filter..."
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2"
                   value={caregiverSearch}
-                  onChange={e => handleCaregiverSearch(e.target.value)}
+                  onChange={e => setCaregiverSearch(e.target.value)}
+                  autoFocus
                 />
-                {caregiverSearchResults.length > 0 && (
-                  <ul className="absolute z-10 w-full bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md shadow-lg mt-1 max-h-48 overflow-y-auto">
-                    {caregiverSearchResults.map(result => (
-                      <li key={`${result.type}-${result.id}`}>
-                        <button
-                          onClick={() => handleAddCaregiver(familyId, result)}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100"
-                        >
-                          {result.first_name} {result.last_name}
-                          <span className="ml-1 text-xs text-gray-400">({result.type})</span>
-                        </button>
-                      </li>
-                    ))}
+                {caregiverOptionsLoading ? (
+                  <p className="text-sm text-gray-400 py-2 text-center">Loading...</p>
+                ) : (
+                  <ul className="border border-gray-200 dark:border-gray-600 rounded-md max-h-48 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                    {allCaregiverOptions
+                      .filter(o => {
+                        const q = caregiverSearch.toLowerCase();
+                        return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                      })
+                      .map(result => {
+                        const alreadyAssigned = caregivers.some(cg =>
+                          (result.type === 'user' && cg.user_id === result.id) ||
+                          (result.type === 'contact' && cg.contact_id === result.id)
+                        );
+                        return (
+                          <li key={`${result.type}-${result.id}`}>
+                            <button
+                              onClick={() => !alreadyAssigned && handleAddCaregiver(familyId, result)}
+                              disabled={alreadyAssigned}
+                              className={`w-full text-left px-3 py-2 text-sm flex justify-between items-center ${
+                                alreadyAssigned
+                                  ? 'text-gray-400 dark:text-gray-500 cursor-default'
+                                  : 'hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100'
+                              }`}
+                            >
+                              <span>{result.first_name} {result.last_name}</span>
+                              <span className="text-xs text-gray-400 dark:text-gray-500">{alreadyAssigned ? 'assigned' : result.type}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    {allCaregiverOptions.filter(o => {
+                      const q = caregiverSearch.toLowerCase();
+                      return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                    }).length === 0 && (
+                      <li className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500">No matches</li>
+                    )}
                   </ul>
                 )}
               </div>
@@ -2954,35 +2952,46 @@ const PeoplePage: React.FC = () => {
               <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Assign caregiver</h3>
               <button onClick={() => setShowBulkCaregiverModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">✕</button>
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              Search for a user or contact to assign as caregiver for the selected families.
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              Select a user or contact to assign as caregiver for the selected families.
             </p>
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search users or contacts..."
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                value={bulkCaregiverSearch}
-                onChange={e => handleBulkCaregiverSearch(e.target.value)}
-                autoFocus
-              />
-              {bulkCaregiverResults.length > 0 && (
-                <ul className="absolute z-10 w-full bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md shadow-lg mt-1 max-h-48 overflow-y-auto">
-                  {bulkCaregiverResults.map(result => (
+            <input
+              type="text"
+              placeholder="Filter..."
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2"
+              value={bulkCaregiverSearch}
+              onChange={e => setBulkCaregiverSearch(e.target.value)}
+              autoFocus
+            />
+            {caregiverOptionsLoading ? (
+              <p className="text-sm text-gray-400 py-2 text-center">Loading...</p>
+            ) : (
+              <ul className="border border-gray-200 dark:border-gray-600 rounded-md max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                {allCaregiverOptions
+                  .filter(o => {
+                    const q = bulkCaregiverSearch.toLowerCase();
+                    return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                  })
+                  .map(result => (
                     <li key={`${result.type}-${result.id}`}>
                       <button
                         onClick={() => handleBulkAssignCaregiver(result)}
                         disabled={bulkAssigning}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                        className="w-full text-left px-3 py-2 text-sm flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                       >
-                        {result.first_name} {result.last_name}
-                        <span className="ml-1 text-xs text-gray-400">({result.type})</span>
+                        <span>{result.first_name} {result.last_name}</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500">{result.type}</span>
                       </button>
                     </li>
                   ))}
-                </ul>
-              )}
-            </div>
+                {allCaregiverOptions.filter(o => {
+                  const q = bulkCaregiverSearch.toLowerCase();
+                  return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                }).length === 0 && (
+                  <li className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500">No matches</li>
+                )}
+              </ul>
+            )}
             {bulkAssigning && <p className="text-sm text-gray-500 dark:text-gray-400 mt-3">Assigning...</p>}
           </div>
         </div>
