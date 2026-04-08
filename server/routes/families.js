@@ -373,4 +373,87 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
   }
 });
 
-module.exports = router; 
+// Get caregivers for a family (Admin/Coordinator)
+router.get('/:id/caregivers', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const caregivers = await Database.query(
+      `SELECT
+         fc.id,
+         fc.caregiver_type,
+         fc.user_id,
+         fc.contact_id,
+         CASE fc.caregiver_type WHEN 'user' THEN u.first_name ELSE c.first_name END as first_name,
+         CASE fc.caregiver_type WHEN 'user' THEN u.last_name ELSE c.last_name END as last_name,
+         CASE fc.caregiver_type WHEN 'user' THEN u.email ELSE c.email END as email,
+         CASE fc.caregiver_type WHEN 'user' THEN u.mobile_number ELSE c.mobile_number END as mobile_number
+       FROM family_caregivers fc
+       LEFT JOIN users u ON fc.user_id = u.id
+       LEFT JOIN contacts c ON fc.contact_id = c.id AND c.is_active = 1
+       WHERE fc.family_id = ? AND fc.church_id = ?
+       ORDER BY last_name, first_name`,
+      [id, req.user.church_id]
+    );
+    res.json({ caregivers });
+  } catch (error) {
+    console.error('Failed to fetch caregivers:', error);
+    res.status(500).json({ error: 'Failed to fetch caregivers' });
+  }
+});
+
+// Assign a caregiver to a family (Admin/Coordinator)
+router.post('/:id/caregivers', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { caregiver_type, user_id, contact_id } = req.body;
+
+    if (!['user', 'contact'].includes(caregiver_type)) {
+      return res.status(400).json({ error: 'caregiver_type must be "user" or "contact"' });
+    }
+    if (caregiver_type === 'user' && !user_id) {
+      return res.status(400).json({ error: 'user_id is required when caregiver_type is "user"' });
+    }
+    if (caregiver_type === 'contact' && !contact_id) {
+      return res.status(400).json({ error: 'contact_id is required when caregiver_type is "contact"' });
+    }
+
+    const [family] = await Database.query(
+      `SELECT id FROM families WHERE id = ? AND church_id = ?`,
+      [id, req.user.church_id]
+    );
+    if (!family) return res.status(404).json({ error: 'Family not found' });
+
+    try {
+      await Database.query(
+        `INSERT INTO family_caregivers (church_id, family_id, caregiver_type, user_id, contact_id)
+         VALUES (?, ?, ?, ?, ?)`,
+        [req.user.church_id, id, caregiver_type, user_id || null, contact_id || null]
+      );
+    } catch (uniqueErr) {
+      if (!uniqueErr.message?.includes('UNIQUE constraint failed')) throw uniqueErr;
+      // Already assigned — idempotent
+    }
+
+    res.json({ message: 'Caregiver assigned' });
+  } catch (error) {
+    console.error('Failed to assign caregiver:', error);
+    res.status(500).json({ error: 'Failed to assign caregiver' });
+  }
+});
+
+// Remove a caregiver from a family (Admin/Coordinator)
+router.delete('/:id/caregivers/:caregiverId', requireRole(['admin', 'coordinator']), async (req, res) => {
+  try {
+    const { id, caregiverId } = req.params;
+    await Database.query(
+      `DELETE FROM family_caregivers WHERE id = ? AND family_id = ? AND church_id = ?`,
+      [caregiverId, id, req.user.church_id]
+    );
+    res.json({ message: 'Caregiver removed' });
+  } catch (error) {
+    console.error('Failed to remove caregiver:', error);
+    res.status(500).json({ error: 'Failed to remove caregiver' });
+  }
+});
+
+module.exports = router;
