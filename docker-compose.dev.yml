@@ -32,7 +32,7 @@ services:
       - /app/node_modules
       - ./server/uploads:/app/uploads
       - server_data_dev:/app/data
-      - ./backups:/app/backups
+      - ./backups:/backups
     networks:
       - app-network-dev
     command: npm run dev
@@ -86,7 +86,7 @@ services:
       - ./server:/app
       - /app/node_modules
       - server_data_dev:/app/data
-      - ./backups:/app/backups
+      - ./backups:/backups
     command: node admin/index.js
     networks:
       - app-network-dev

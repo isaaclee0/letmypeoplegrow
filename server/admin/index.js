@@ -774,8 +774,8 @@ app.post('/api/backups/prune', async (req, res) => {
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, '..', '..', 'backups');
 
 function getBackupDir() {
-  // In Docker, use /app/backups (bind-mounted from host ./backups/)
-  if (process.env.DOCKER_ENV) return '/app/backups';
+  // In Docker, use /backups (bind-mounted from host ./backups/)
+  if (process.env.DOCKER_ENV) return '/backups';
   return BACKUP_DIR;
 }
 

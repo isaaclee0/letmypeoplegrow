@@ -232,7 +232,7 @@ function callClaude(context) {
 function callGrok(context) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'grok-3-mini',
+      model: 'grok-4-fast',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: context }
