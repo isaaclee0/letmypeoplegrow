@@ -111,7 +111,10 @@ router.post('/',
             throw new Error('Custom schedule must have startDate');
           }
           if (value.type === 'recurring' && !value.endDate) {
-            throw new Error('Recurring schedule must have endDate');
+            // Allow missing endDate when customDates is provided (e.g. standard custom-dates gathering)
+            if (!value.pattern?.customDates?.length) {
+              throw new Error('Recurring schedule must have endDate or customDates');
+            }
           }
         }
         return true;
@@ -125,24 +128,24 @@ router.post('/',
       }
 
       const { name, description, dayOfWeek, startTime, endTime, frequency, attendanceType, customSchedule, setAsDefault, kioskEnabled, leaderCheckinEnabled, kioskEndTime, kioskMessage, individualMode } = req.body;
-    
-    // Validate that standard gatherings have required fields
-    if (attendanceType === 'standard' && (!dayOfWeek || !startTime || !frequency)) {
-      return res.status(400).json({ 
-        error: 'Standard gatherings require day of week, start time, and frequency' 
+
+    // For gatherings with custom schedules, don't save conflicting regular schedule fields
+    const hasCustomSchedule = customSchedule && Object.keys(customSchedule).length > 0;
+    const isCustomScheduleGathering = hasCustomSchedule;
+
+    // Validate that standard gatherings have required fields (unless using a custom schedule)
+    if (attendanceType === 'standard' && !hasCustomSchedule && (!dayOfWeek || !startTime || !frequency)) {
+      return res.status(400).json({
+        error: 'Standard gatherings require day of week, start time, and frequency'
       });
     }
 
     // Validate that headcount gatherings have custom schedule or basic schedule
-    if (attendanceType === 'headcount' && (!customSchedule || Object.keys(customSchedule).length === 0) && (!dayOfWeek || !startTime || !frequency)) {
-      return res.status(400).json({ 
-        error: 'Headcount gatherings require either a custom schedule or basic schedule fields' 
+    if (attendanceType === 'headcount' && !hasCustomSchedule && (!dayOfWeek || !startTime || !frequency)) {
+      return res.status(400).json({
+        error: 'Headcount gatherings require either a custom schedule or basic schedule fields'
       });
     }
-    
-    // For headcount gatherings with custom schedules, don't save conflicting regular schedule fields
-    const hasCustomSchedule = customSchedule && Object.keys(customSchedule).length > 0;
-    const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
     
     const result = await Database.query(`
       INSERT INTO gathering_types (name, description, day_of_week, start_time, end_time, frequency, attendance_type, custom_schedule, kiosk_enabled, leader_checkin_enabled, kiosk_message, individual_mode, created_by, church_id)
@@ -150,10 +153,10 @@ router.post('/',
     `, [
       name,
       description,
-      isHeadcountWithCustom ? null : dayOfWeek,
-      isHeadcountWithCustom ? null : startTime,
-      isHeadcountWithCustom ? null : (endTime || null),
-      isHeadcountWithCustom ? null : (frequency || 'weekly'),
+      isCustomScheduleGathering ? null : dayOfWeek,
+      isCustomScheduleGathering ? null : startTime,
+      isCustomScheduleGathering ? null : (endTime || null),
+      isCustomScheduleGathering ? null : (frequency || 'weekly'),
       attendanceType,
       customSchedule ? JSON.stringify(customSchedule) : null,
       attendanceType === 'standard' && kioskEnabled ? true : false,
@@ -283,24 +286,24 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
       }
     }
 
-    // Validate that standard gatherings have required fields
-    if (attendanceType === 'standard' && (!dayOfWeek || !startTime || !frequency)) {
-      return res.status(400).json({ 
-        error: 'Standard gatherings require day of week, start time, and frequency' 
+    // For gatherings with custom schedules, don't save conflicting regular schedule fields
+    const hasCustomSchedule = customSchedule && Object.keys(customSchedule).length > 0;
+    const isCustomScheduleGathering = hasCustomSchedule;
+
+    // Validate that standard gatherings have required fields (unless using a custom schedule)
+    if (attendanceType === 'standard' && !hasCustomSchedule && (!dayOfWeek || !startTime || !frequency)) {
+      return res.status(400).json({
+        error: 'Standard gatherings require day of week, start time, and frequency'
       });
     }
 
     // Validate that headcount gatherings have custom schedule or basic schedule
-    if (attendanceType === 'headcount' && (!customSchedule || Object.keys(customSchedule).length === 0) && (!dayOfWeek || !startTime || !frequency)) {
-      return res.status(400).json({ 
-        error: 'Headcount gatherings require either a custom schedule or basic schedule fields' 
+    if (attendanceType === 'headcount' && !hasCustomSchedule && (!dayOfWeek || !startTime || !frequency)) {
+      return res.status(400).json({
+        error: 'Headcount gatherings require either a custom schedule or basic schedule fields'
       });
     }
-    
-    // For headcount gatherings with custom schedules, don't save conflicting regular schedule fields
-    const hasCustomSchedule = customSchedule && Object.keys(customSchedule).length > 0;
-    const isHeadcountWithCustom = attendanceType === 'headcount' && hasCustomSchedule;
-    
+
     // Only allow check-in modes for standard gatherings
     const effectiveAttendanceType = attendanceType ?? currentGathering[0].attendance_type;
     const kioskValue = effectiveAttendanceType === 'standard' && kioskEnabled ? true : false;
@@ -320,10 +323,10 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_GATHE
     `, [
       name,
       description,
-      isHeadcountWithCustom ? null : dayOfWeek,
-      isHeadcountWithCustom ? null : startTime,
-      isHeadcountWithCustom ? null : (endTime || null),
-      isHeadcountWithCustom ? null : (frequency || 'weekly'),
+      isCustomScheduleGathering ? null : dayOfWeek,
+      isCustomScheduleGathering ? null : startTime,
+      isCustomScheduleGathering ? null : (endTime || null),
+      isCustomScheduleGathering ? null : (frequency || 'weekly'),
       attendanceType,
       customSchedule ? JSON.stringify(customSchedule) : null,
       kioskValue,
@@ -413,7 +416,7 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
       // Create new gathering with all original details
       // For headcount gatherings with custom schedules, don't save conflicting regular schedule fields
       const hasCustomSchedule = originalGathering.custom_schedule && Object.keys(originalGathering.custom_schedule).length > 0;
-      const isHeadcountWithCustom = originalGathering.attendance_type === 'headcount' && hasCustomSchedule;
+      const isCustomScheduleGathering = hasCustomSchedule;
       
       const insertResult = await conn.query(`
         INSERT INTO gathering_types (
@@ -423,10 +426,10 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
       `, [
         name.trim(),
         originalGathering.description,
-        isHeadcountWithCustom ? null : originalGathering.day_of_week,
-        isHeadcountWithCustom ? null : originalGathering.start_time,
-        isHeadcountWithCustom ? null : originalGathering.end_time,
-        isHeadcountWithCustom ? null : originalGathering.frequency,
+        isCustomScheduleGathering ? null : originalGathering.day_of_week,
+        isCustomScheduleGathering ? null : originalGathering.start_time,
+        isCustomScheduleGathering ? null : originalGathering.end_time,
+        isCustomScheduleGathering ? null : originalGathering.frequency,
         originalGathering.attendance_type,
         originalGathering.custom_schedule ? JSON.stringify(originalGathering.custom_schedule) : null,
         originalGathering.group_by_family !== undefined ? originalGathering.group_by_family : true,
@@ -440,20 +443,23 @@ router.post('/:id/duplicate', requireRole(['admin', 'coordinator']), async (req,
       const newGatheringId = insertResult.insertId;
       
       // Copy people assignments (gathering_lists)
+      // Note: church isolation is guaranteed by gathering_type_id — the original gathering's
+      // church was verified above. We omit the church_id filter here to handle legacy rows
+      // (migrated from MariaDB) where church_id may be NULL.
       await conn.query(`
         INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
         SELECT ?, individual_id, ?, ?
-        FROM gathering_lists 
-        WHERE gathering_type_id = ? AND church_id = ?
-      `, [newGatheringId, req.user.id, req.user.church_id, id, req.user.church_id]);
-      
+        FROM gathering_lists
+        WHERE gathering_type_id = ?
+      `, [newGatheringId, req.user.id, req.user.church_id, id]);
+
       // Copy user assignments (user_gathering_assignments)
       await conn.query(`
         INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
         SELECT user_id, ?, ?, ?
-        FROM user_gathering_assignments 
-        WHERE gathering_type_id = ? AND church_id = ?
-      `, [newGatheringId, req.user.id, req.user.church_id, id, req.user.church_id]);
+        FROM user_gathering_assignments
+        WHERE gathering_type_id = ?
+      `, [newGatheringId, req.user.id, req.user.church_id, id]);
       
       return newGatheringId;
     });

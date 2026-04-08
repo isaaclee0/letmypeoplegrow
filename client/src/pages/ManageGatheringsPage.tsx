@@ -69,6 +69,7 @@ interface CreateGatheringData {
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
+  customDatesText?: string;
 }
 
 const ManageGatheringsPage: React.FC = () => {
@@ -99,7 +100,8 @@ const ManageGatheringsPage: React.FC = () => {
     attendanceType: 'standard' as 'standard' | 'headcount',
     customSchedule: undefined as any,
     kioskEnabled: false,
-    leaderCheckinEnabled: false
+    leaderCheckinEnabled: false,
+    customDatesText: '' as string,
   });
 
   const [createGatheringData, setCreateGatheringData] = useState<CreateGatheringData>({
@@ -202,6 +204,7 @@ const ManageGatheringsPage: React.FC = () => {
       kioskEnabled: false,
       leaderCheckinEnabled: false,
       individualMode: false,
+      customDatesText: '',
     });
     setError('');
     setSuccess('');
@@ -244,7 +247,7 @@ const ManageGatheringsPage: React.FC = () => {
         ? `0${createGatheringData.startTime}` 
         : createGatheringData.startTime;
       
-      const gatheringData = {
+      let gatheringData: any = {
         name: createGatheringData.name,
         description: createGatheringData.description,
         dayOfWeek: createGatheringData.dayOfWeek,
@@ -257,25 +260,50 @@ const ManageGatheringsPage: React.FC = () => {
         individualMode: createGatheringData.individualMode,
       };
 
+      if (createGatheringData.attendanceType === 'standard' && createGatheringData.frequency === 'custom') {
+        const dates = (createGatheringData.customDatesText || '')
+          .split('\n')
+          .map((d: string) => d.trim())
+          .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+        if (dates.length === 0) {
+          setError('Please enter at least one valid date in YYYY-MM-DD format');
+          setIsCreating(false);
+          return;
+        }
+        const sortedDates = [...dates].sort();
+        gatheringData = {
+          ...gatheringData,
+          dayOfWeek: undefined,
+          startTime: undefined,
+          endTime: undefined,
+          frequency: undefined,
+          customSchedule: {
+            type: 'recurring',
+            startDate: sortedDates[0],
+            pattern: { frequency: 'daily', interval: 1, customDates: sortedDates }
+          }
+        };
+      }
+
       logger.log('Creating gathering with data:', gatheringData);
       
       const gatheringResponse = await gatheringsAPI.create(gatheringData);
 
       const newGatheringId = gatheringResponse.data.id;
 
-      // Success - update local state
+      // Success - update local state using the final computed gatheringData
       const newGathering: Gathering = {
         id: newGatheringId,
-        name: createGatheringData.name,
-        description: createGatheringData.description,
-        dayOfWeek: createGatheringData.dayOfWeek,
-        startTime: createGatheringData.startTime,
-        frequency: createGatheringData.frequency,
-        attendanceType: createGatheringData.attendanceType,
-        customSchedule: createGatheringData.customSchedule,
-        kioskEnabled: createGatheringData.kioskEnabled,
-        leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
-        individualMode: createGatheringData.individualMode,
+        name: gatheringData.name,
+        description: gatheringData.description,
+        dayOfWeek: gatheringData.dayOfWeek,
+        startTime: gatheringData.startTime,
+        frequency: gatheringData.frequency,
+        attendanceType: gatheringData.attendanceType,
+        customSchedule: gatheringData.customSchedule,
+        kioskEnabled: gatheringData.kioskEnabled,
+        leaderCheckinEnabled: gatheringData.leaderCheckinEnabled,
+        individualMode: gatheringData.individualMode,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -316,6 +344,8 @@ const ManageGatheringsPage: React.FC = () => {
   const handleEditGathering = useCallback((gathering: Gathering) => {
     // Optimized with batched updates for efficiency
     setEditingGathering(gathering);
+    const isCustomDates = gathering.attendanceType === 'standard' &&
+      gathering.customSchedule?.pattern?.customDates?.length;
     setEditFormData({
       name: gathering.name,
       description: gathering.description || '',
@@ -327,11 +357,14 @@ const ManageGatheringsPage: React.FC = () => {
         const endHours = (hours + 1) % 24;
         return `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
       })() : '11:00'),
-      frequency: gathering.frequency,
+      frequency: isCustomDates ? 'custom' : gathering.frequency,
       attendanceType: gathering.attendanceType,
-      customSchedule: gathering.customSchedule,
+      customSchedule: isCustomDates ? undefined : gathering.customSchedule,
       kioskEnabled: gathering.kioskEnabled || false,
-      leaderCheckinEnabled: gathering.leaderCheckinEnabled || false
+      leaderCheckinEnabled: gathering.leaderCheckinEnabled || false,
+      customDatesText: isCustomDates
+        ? (gathering.customSchedule!.pattern!.customDates!.join('\n'))
+        : '',
     });
     setShowEditForm(true);
   }, []);
@@ -340,12 +373,36 @@ const ManageGatheringsPage: React.FC = () => {
     if (!editingGathering) return;
 
     try {
-      await gatheringsAPI.update(editingGathering.id, editFormData);
+      let updateData: any = { ...editFormData };
+      if (editFormData.attendanceType === 'standard' && editFormData.frequency === 'custom') {
+        const dates = (editFormData.customDatesText || '')
+          .split('\n')
+          .map((d: string) => d.trim())
+          .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+        if (dates.length === 0) {
+          setError('Please enter at least one valid date in YYYY-MM-DD format');
+          return;
+        }
+        const sortedDates = [...dates].sort();
+        updateData = {
+          ...updateData,
+          dayOfWeek: undefined,
+          startTime: undefined,
+          endTime: undefined,
+          frequency: undefined,
+          customSchedule: {
+            type: 'recurring',
+            startDate: sortedDates[0],
+            pattern: { frequency: 'daily', interval: 1, customDates: sortedDates }
+          }
+        };
+      }
+      await gatheringsAPI.update(editingGathering.id, updateData);
       
       // Update the gathering in the local state
       setGatherings(gatherings.map(g =>
         g.id === editingGathering.id
-          ? { ...g, ...editFormData }
+          ? { ...g, ...updateData }
           : g
       ));
 
@@ -747,8 +804,8 @@ const ManageGatheringsPage: React.FC = () => {
                       
                       <div className="space-y-3">
                         <div className="text-sm text-gray-700 dark:text-gray-300">
-                          {gathering.attendanceType === 'headcount' && gathering.customSchedule ? (
-                            // Show custom schedule info for headcount gatherings
+                          {gathering.customSchedule ? (
+                            // Show custom schedule info for any gathering with a custom schedule
                             gathering.customSchedule.type === 'one_off' ? (
                               <div>
                                 <div className="font-medium text-gray-900 dark:text-gray-100">One-off Event</div>
@@ -763,8 +820,10 @@ const ManageGatheringsPage: React.FC = () => {
                               <div>
                                 <div className="font-medium text-gray-900 dark:text-gray-100">Custom Schedule</div>
                                 <div className="text-gray-600 dark:text-gray-400">
-                                  {gathering.customSchedule.pattern?.frequency || 'recurring'} from {new Date(gathering.customSchedule.startDate).toLocaleDateString()}
-                                  {gathering.customSchedule.endDate && ` to ${new Date(gathering.customSchedule.endDate).toLocaleDateString()}`}
+                                  {gathering.customSchedule.pattern?.customDates?.length
+                                    ? `${gathering.customSchedule.pattern.customDates.length} specific date${gathering.customSchedule.pattern.customDates.length === 1 ? '' : 's'}`
+                                    : `${gathering.customSchedule.pattern?.frequency || 'recurring'} from ${new Date(gathering.customSchedule.startDate).toLocaleDateString()}${gathering.customSchedule.endDate ? ` to ${new Date(gathering.customSchedule.endDate).toLocaleDateString()}` : ''}`
+                                  }
                                 </div>
                               </div>
                             )
@@ -893,30 +952,59 @@ const ManageGatheringsPage: React.FC = () => {
                   />
                 </div>
 
-                {/* Only show regular schedule fields for standard gatherings or headcount without custom schedule */}
-                {(editFormData.attendanceType === 'standard' || !editFormData.customSchedule) && (
+                {/* Frequency selector for standard gatherings */}
+                {editFormData.attendanceType === 'standard' && (
+                  <div>
+                    <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Schedule *
+                    </label>
+                    <select
+                      id="edit-frequency"
+                      value={editFormData.frequency}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === 'custom') {
+                          setEditFormData({ ...editFormData, frequency: 'custom', dayOfWeek: undefined, startTime: undefined, endTime: undefined });
+                        } else {
+                          setEditFormData({ ...editFormData, frequency: val, customDatesText: '', customSchedule: undefined });
+                        }
+                      }}
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                    >
+                      <option value="weekly">Weekly</option>
+                      <option value="biweekly">Bi-weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="custom">Custom dates</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Regular schedule fields for standard (non-custom) or headcount without custom schedule */}
+                {(editFormData.attendanceType === 'standard' ? editFormData.frequency !== 'custom' : !editFormData.customSchedule) && (
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Day of Week *
-                        </label>
-                        <select
-                          id="edit-dayOfWeek"
-                          value={editFormData.dayOfWeek}
-                          onChange={(e) => setEditFormData({ ...editFormData, dayOfWeek: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                          required
-                        >
-                          <option value="Sunday">Sunday</option>
-                          <option value="Monday">Monday</option>
-                          <option value="Tuesday">Tuesday</option>
-                          <option value="Wednesday">Wednesday</option>
-                          <option value="Thursday">Thursday</option>
-                          <option value="Friday">Friday</option>
-                          <option value="Saturday">Saturday</option>
-                        </select>
-                      </div>
+                      {editFormData.attendanceType === 'standard' && (
+                        <div>
+                          <label htmlFor="edit-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Day of Week *
+                          </label>
+                          <select
+                            id="edit-dayOfWeek"
+                            value={editFormData.dayOfWeek}
+                            onChange={(e) => setEditFormData({ ...editFormData, dayOfWeek: e.target.value })}
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required
+                          >
+                            <option value="Sunday">Sunday</option>
+                            <option value="Monday">Monday</option>
+                            <option value="Tuesday">Tuesday</option>
+                            <option value="Wednesday">Wednesday</option>
+                            <option value="Thursday">Thursday</option>
+                            <option value="Friday">Friday</option>
+                            <option value="Saturday">Saturday</option>
+                          </select>
+                        </div>
+                      )}
 
                       <div>
                         <label htmlFor="edit-startTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -956,24 +1044,52 @@ const ManageGatheringsPage: React.FC = () => {
                         />
                       </div>
 
-                      <div>
-                        <label htmlFor="edit-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Frequency *
-                        </label>
-                        <select
-                          id="edit-frequency"
-                          value={editFormData.frequency}
-                          onChange={(e) => setEditFormData({ ...editFormData, frequency: e.target.value })}
-                          className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                          required
-                        >
-                          <option value="weekly">Weekly</option>
-                          <option value="biweekly">Bi-weekly</option>
-                          <option value="monthly">Monthly</option>
-                        </select>
-                      </div>
+                      {editFormData.attendanceType === 'headcount' && (
+                        <div>
+                          <label htmlFor="edit-frequency-hc" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Frequency *
+                          </label>
+                          <select
+                            id="edit-frequency-hc"
+                            value={editFormData.frequency}
+                            onChange={(e) => setEditFormData({ ...editFormData, frequency: e.target.value })}
+                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            required
+                          >
+                            <option value="weekly">Weekly</option>
+                            <option value="biweekly">Bi-weekly</option>
+                            <option value="monthly">Monthly</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </>
+                )}
+
+                {/* Custom dates textarea for standard gatherings */}
+                {editFormData.attendanceType === 'standard' && editFormData.frequency === 'custom' && (
+                  <div>
+                    <label htmlFor="edit-customDates" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Custom Dates *
+                    </label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Enter one date per line in YYYY-MM-DD format (e.g. 2025-04-18)</p>
+                    <textarea
+                      id="edit-customDates"
+                      rows={6}
+                      placeholder={"2025-04-18\n2025-12-25"}
+                      value={editFormData.customDatesText || ''}
+                      onChange={(e) => setEditFormData({ ...editFormData, customDatesText: e.target.value })}
+                      className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                    />
+                    {editFormData.customDatesText && (() => {
+                      const valid = editFormData.customDatesText.split('\n').map(d => d.trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+                      return valid.length > 0 ? (
+                        <p className="text-xs text-green-600 dark:text-green-400 mt-1">{valid.length} valid date{valid.length === 1 ? '' : 's'}</p>
+                      ) : (
+                        <p className="text-xs text-red-500 mt-1">No valid dates found</p>
+                      );
+                    })()}
+                  </div>
                 )}
 
                 {/* Attendance Type (editable if no attendance records) */}
@@ -1695,30 +1811,62 @@ const ManageGatheringsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {(createGatheringData.attendanceType === 'standard' || !createGatheringData.customSchedule) && (
+                  {/* Frequency selector for standard gatherings */}
+                  {createGatheringData.attendanceType === 'standard' && (
+                    <div>
+                      <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Schedule *
+                      </label>
+                      <select
+                        id="add-frequency"
+                        value={createGatheringData.frequency || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === 'custom') {
+                            setCreateGatheringData({ ...createGatheringData, frequency: 'custom', dayOfWeek: undefined, startTime: undefined, endTime: undefined });
+                          } else {
+                            setCreateGatheringData({ ...createGatheringData, frequency: val, customDatesText: '', customSchedule: undefined });
+                          }
+                        }}
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                        required
+                      >
+                        <option value="">Select frequency</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="biweekly">Bi-weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="custom">Custom dates</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Regular schedule fields */}
+                  {(createGatheringData.attendanceType === 'standard' ? createGatheringData.frequency !== 'custom' : !createGatheringData.customSchedule) && (
                     <>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                          <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                            Day of Week {createGatheringData.attendanceType === 'standard' ? '*' : ''}
-                          </label>
-                          <select
-                            id="add-dayOfWeek"
-                            value={createGatheringData.dayOfWeek || ''}
-                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
-                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                            required={createGatheringData.attendanceType === 'standard'}
-                          >
-                            <option value="">Select day</option>
-                            <option value="Sunday">Sunday</option>
-                            <option value="Monday">Monday</option>
-                            <option value="Tuesday">Tuesday</option>
-                            <option value="Wednesday">Wednesday</option>
-                            <option value="Thursday">Thursday</option>
-                            <option value="Friday">Friday</option>
-                            <option value="Saturday">Saturday</option>
-                          </select>
-                        </div>
+                        {createGatheringData.attendanceType === 'standard' && (
+                          <div>
+                            <label htmlFor="add-dayOfWeek" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Day of Week *
+                            </label>
+                            <select
+                              id="add-dayOfWeek"
+                              value={createGatheringData.dayOfWeek || ''}
+                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, dayOfWeek: e.target.value })}
+                              className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                              required
+                            >
+                              <option value="">Select day</option>
+                              <option value="Sunday">Sunday</option>
+                              <option value="Monday">Monday</option>
+                              <option value="Tuesday">Tuesday</option>
+                              <option value="Wednesday">Wednesday</option>
+                              <option value="Thursday">Thursday</option>
+                              <option value="Friday">Friday</option>
+                              <option value="Saturday">Saturday</option>
+                            </select>
+                          </div>
+                        )}
 
                         <div>
                           <label htmlFor="add-startTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -1734,25 +1882,52 @@ const ManageGatheringsPage: React.FC = () => {
                           />
                         </div>
 
-                        <div>
-                          <label htmlFor="add-frequency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                            Frequency {createGatheringData.attendanceType === 'standard' ? '*' : ''}
-                          </label>
-                          <select
-                            id="add-frequency"
-                            value={createGatheringData.frequency || ''}
-                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
-                            className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
-                            required={createGatheringData.attendanceType === 'standard'}
-                          >
-                            <option value="">Select frequency</option>
-                            <option value="weekly">Weekly</option>
-                            <option value="biweekly">Bi-weekly</option>
-                            <option value="monthly">Monthly</option>
-                          </select>
-                        </div>
+                        {createGatheringData.attendanceType === 'headcount' && (
+                          <div>
+                            <label htmlFor="add-frequency-hc" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Frequency
+                            </label>
+                            <select
+                              id="add-frequency-hc"
+                              value={createGatheringData.frequency || ''}
+                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, frequency: e.target.value })}
+                              className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                            >
+                              <option value="">Select frequency</option>
+                              <option value="weekly">Weekly</option>
+                              <option value="biweekly">Bi-weekly</option>
+                              <option value="monthly">Monthly</option>
+                            </select>
+                          </div>
+                        )}
                       </div>
                     </>
+                  )}
+
+                  {/* Custom dates textarea for standard gatherings */}
+                  {createGatheringData.attendanceType === 'standard' && createGatheringData.frequency === 'custom' && (
+                    <div>
+                      <label htmlFor="add-customDates" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Custom Dates *
+                      </label>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Enter one date per line in YYYY-MM-DD format (e.g. 2025-04-18)</p>
+                      <textarea
+                        id="add-customDates"
+                        rows={6}
+                        placeholder={"2025-04-18\n2025-12-25"}
+                        value={createGatheringData.customDatesText || ''}
+                        onChange={(e) => setCreateGatheringData({ ...createGatheringData, customDatesText: e.target.value })}
+                        className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                      />
+                      {createGatheringData.customDatesText && (() => {
+                        const valid = createGatheringData.customDatesText.split('\n').map(d => d.trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+                        return valid.length > 0 ? (
+                          <p className="text-xs text-green-600 dark:text-green-400 mt-1">{valid.length} valid date{valid.length === 1 ? '' : 's'}</p>
+                        ) : (
+                          <p className="text-xs text-red-500 mt-1">No valid dates found</p>
+                        );
+                      })()}
+                    </div>
                   )}
 
                   <div className="flex justify-end space-x-3 pt-4">
