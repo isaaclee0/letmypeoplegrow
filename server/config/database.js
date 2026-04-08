@@ -62,6 +62,66 @@ class Database {
       if (!gatheringCols.some(c => c.name === 'individual_mode')) {
         db.exec('ALTER TABLE gathering_types ADD COLUMN individual_mode INTEGER DEFAULT 0');
       }
+
+      // Migrate caregiver tables
+      const existingTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+
+      if (!existingTables.includes('contacts')) {
+        db.exec(`CREATE TABLE IF NOT EXISTS contacts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          church_id TEXT NOT NULL,
+          first_name TEXT NOT NULL,
+          last_name TEXT NOT NULL,
+          email TEXT,
+          mobile_number TEXT,
+          primary_contact_method TEXT CHECK(primary_contact_method IN ('email', 'sms')) DEFAULT 'email',
+          notes TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        )`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_church ON contacts(church_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_contacts_active ON contacts(is_active)`);
+      }
+
+      if (!existingTables.includes('family_caregivers')) {
+        db.exec(`CREATE TABLE IF NOT EXISTS family_caregivers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          church_id TEXT NOT NULL,
+          family_id INTEGER NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+          caregiver_type TEXT NOT NULL CHECK(caregiver_type IN ('user', 'contact')),
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+          created_at TEXT DEFAULT (datetime('now')),
+          CHECK(
+            (caregiver_type = 'user' AND user_id IS NOT NULL AND contact_id IS NULL) OR
+            (caregiver_type = 'contact' AND contact_id IS NOT NULL AND user_id IS NULL)
+          )
+        )`);
+        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_user ON family_caregivers(family_id, user_id) WHERE user_id IS NOT NULL`);
+        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_contact ON family_caregivers(family_id, contact_id) WHERE contact_id IS NOT NULL`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_fc_family ON family_caregivers(family_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_fc_church ON family_caregivers(church_id)`);
+      }
+
+      if (!existingTables.includes('contact_notifications')) {
+        db.exec(`CREATE TABLE IF NOT EXISTS contact_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          church_id TEXT NOT NULL,
+          contact_id INTEGER NOT NULL REFERENCES contacts(id),
+          family_id INTEGER REFERENCES families(id),
+          individual_id INTEGER REFERENCES individuals(id),
+          rule_id INTEGER REFERENCES notification_rules(id),
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          email_sent INTEGER DEFAULT 0,
+          sms_sent INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        )`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_cn_contact ON contact_notifications(contact_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_cn_church ON contact_notifications(church_id)`);
+      }
     }
 
     churchDbs.set(churchId, db);

@@ -443,6 +443,8 @@ CREATE TABLE IF NOT EXISTS contacts (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_contacts_church ON contacts(church_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_active ON contacts(is_active);
 
 CREATE TABLE IF NOT EXISTS family_caregivers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -452,9 +454,15 @@ CREATE TABLE IF NOT EXISTS family_caregivers (
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(family_id, user_id),
-  UNIQUE(family_id, contact_id)
+  CHECK(
+    (caregiver_type = 'user' AND user_id IS NOT NULL AND contact_id IS NULL) OR
+    (caregiver_type = 'contact' AND contact_id IS NOT NULL AND user_id IS NULL)
+  )
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_user ON family_caregivers(family_id, user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fc_contact ON family_caregivers(family_id, contact_id) WHERE contact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_fc_family ON family_caregivers(family_id);
+CREATE INDEX IF NOT EXISTS idx_fc_church ON family_caregivers(church_id);
 
 CREATE TABLE IF NOT EXISTS contact_notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -469,6 +477,8 @@ CREATE TABLE IF NOT EXISTS contact_notifications (
   sms_sent INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_cn_contact ON contact_notifications(contact_id);
+CREATE INDEX IF NOT EXISTS idx_cn_church ON contact_notifications(church_id);
 `;
 
 const UPDATED_AT_TRIGGERS = `
@@ -507,6 +517,9 @@ BEGIN UPDATE visitor_config SET updated_at = datetime('now') WHERE id = NEW.id; 
 
 CREATE TRIGGER IF NOT EXISTS user_preferences_updated_at AFTER UPDATE ON user_preferences
 BEGIN UPDATE user_preferences SET updated_at = datetime('now') WHERE id = NEW.id; END;
+
+CREATE TRIGGER IF NOT EXISTS contacts_updated_at AFTER UPDATE ON contacts
+BEGIN UPDATE contacts SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `;
 
 module.exports = { REGISTRY_SCHEMA, CHURCH_SCHEMA, UPDATED_AT_TRIGGERS };
