@@ -388,11 +388,11 @@ router.get('/:id/caregivers', requireRole(['admin', 'coordinator']), async (req,
          CASE fc.caregiver_type WHEN 'user' THEN u.email ELSE c.email END as email,
          CASE fc.caregiver_type WHEN 'user' THEN u.mobile_number ELSE c.mobile_number END as mobile_number
        FROM family_caregivers fc
-       LEFT JOIN users u ON fc.user_id = u.id
+       LEFT JOIN users u ON fc.user_id = u.id AND u.church_id = ?
        LEFT JOIN contacts c ON fc.contact_id = c.id AND c.is_active = 1
        WHERE fc.family_id = ? AND fc.church_id = ?
        ORDER BY last_name, first_name`,
-      [id, req.user.church_id]
+      [req.user.church_id, id, req.user.church_id]
     );
     res.json({ caregivers });
   } catch (error) {
@@ -423,6 +423,21 @@ router.post('/:id/caregivers', requireRole(['admin', 'coordinator']), async (req
     );
     if (!family) return res.status(404).json({ error: 'Family not found' });
 
+    if (caregiver_type === 'user') {
+      const [user] = await Database.query(
+        `SELECT id FROM users WHERE id = ? AND church_id = ? AND is_active = 1`,
+        [user_id, req.user.church_id]
+      );
+      if (!user) return res.status(404).json({ error: 'User not found' });
+    }
+    if (caregiver_type === 'contact') {
+      const [contact] = await Database.query(
+        `SELECT id FROM contacts WHERE id = ? AND church_id = ? AND is_active = 1`,
+        [contact_id, req.user.church_id]
+      );
+      if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    }
+
     try {
       await Database.query(
         `INSERT INTO family_caregivers (church_id, family_id, caregiver_type, user_id, contact_id)
@@ -445,10 +460,13 @@ router.post('/:id/caregivers', requireRole(['admin', 'coordinator']), async (req
 router.delete('/:id/caregivers/:caregiverId', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     const { id, caregiverId } = req.params;
-    await Database.query(
+    const result = await Database.query(
       `DELETE FROM family_caregivers WHERE id = ? AND family_id = ? AND church_id = ?`,
       [caregiverId, id, req.user.church_id]
     );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Caregiver assignment not found' });
+    }
     res.json({ message: 'Caregiver removed' });
   } catch (error) {
     console.error('Failed to remove caregiver:', error);
