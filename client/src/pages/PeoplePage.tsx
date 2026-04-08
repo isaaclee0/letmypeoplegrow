@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI } from '../services/api';
+import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
@@ -70,6 +70,25 @@ interface GatheringType {
   frequency: string;
   attendanceType?: 'standard' | 'headcount';
   individualMode?: boolean;
+}
+
+interface FamilyCaregiver {
+  id: number;
+  caregiver_type: 'user' | 'contact';
+  user_id?: number;
+  contact_id?: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  mobile_number: string | null;
+}
+
+interface CaregiverSearchResult {
+  type: 'user' | 'contact';
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
 }
 
 interface VisitorConfig {
@@ -278,6 +297,18 @@ const PeoplePage: React.FC = () => {
   const [uploadMode, setUploadMode] = useState<'new' | 'update'>('new');
   const [selectedPeople, setSelectedPeople] = useState<number[]>([]);
   const [gatheringTypes, setGatheringTypes] = useState<GatheringType[]>([]);
+
+  // Caregiver chip state (Task 10)
+  const [familyCaregivers, setFamilyCaregivers] = useState<Record<number, FamilyCaregiver[]>>({});
+  const [caregiverPopoverFamilyId, setCaregiverPopoverFamilyId] = useState<number | null>(null);
+  const [caregiverSearch, setCaregiverSearch] = useState('');
+  const [caregiverSearchResults, setCaregiverSearchResults] = useState<CaregiverSearchResult[]>([]);
+
+  // Bulk caregiver assign state (Task 11)
+  const [showBulkCaregiverModal, setShowBulkCaregiverModal] = useState(false);
+  const [bulkCaregiverSearch, setBulkCaregiverSearch] = useState('');
+  const [bulkCaregiverResults, setBulkCaregiverResults] = useState<CaregiverSearchResult[]>([]);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
 
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
   const savedScrollPositionRef = useRef<number | null>(null);
@@ -631,6 +662,122 @@ const PeoplePage: React.FC = () => {
       // Select all people in individual view
       const allPeopleIds = filteredIndividualPeople.map((person: Person) => person.id);
       setSelectedPeople(allPeopleIds);
+    }
+  };
+
+  // Caregiver handlers
+  const loadFamilyCaregivers = async (familyId: number) => {
+    try {
+      const caregivers = await familiesAPI.getCaregivers(familyId);
+      setFamilyCaregivers(prev => ({ ...prev, [familyId]: caregivers }));
+    } catch (err) {
+      console.error('Failed to load family caregivers', err);
+    }
+  };
+
+  const handleOpenCaregiverPopover = async (familyId: number) => {
+    setCaregiverPopoverFamilyId(familyId);
+    setCaregiverSearch('');
+    setCaregiverSearchResults([]);
+    await loadFamilyCaregivers(familyId);
+  };
+
+  const handleRemoveCaregiver = async (familyId: number, caregiverId: number) => {
+    try {
+      await familiesAPI.removeCaregiver(familyId, caregiverId);
+      await loadFamilyCaregivers(familyId);
+    } catch (err) {
+      console.error('Failed to remove caregiver', err);
+    }
+  };
+
+  const handleCaregiverSearch = async (query: string) => {
+    setCaregiverSearch(query);
+    if (query.trim().length < 2) { setCaregiverSearchResults([]); return; }
+    try {
+      const [usersResp, allContacts] = await Promise.all([
+        usersAPI.getAll(),
+        contactsAPI.getAll(),
+      ]);
+      const allUsers = (usersResp as any).data?.users || [];
+      const q = query.toLowerCase();
+      const results: CaregiverSearchResult[] = [
+        ...allUsers
+          .filter((u: any) => `${u.firstName} ${u.lastName}`.toLowerCase().includes(q))
+          .map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
+        ...allContacts
+          .filter((c: any) => `${c.first_name} ${c.last_name}`.toLowerCase().includes(q))
+          .map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
+      ].slice(0, 8);
+      setCaregiverSearchResults(results);
+    } catch (err) {
+      console.error('Caregiver search failed', err);
+    }
+  };
+
+  const handleAddCaregiver = async (familyId: number, result: CaregiverSearchResult) => {
+    try {
+      await familiesAPI.assignCaregiver(familyId, {
+        caregiver_type: result.type,
+        user_id: result.type === 'user' ? result.id : undefined,
+        contact_id: result.type === 'contact' ? result.id : undefined,
+      });
+      await loadFamilyCaregivers(familyId);
+      setCaregiverSearch('');
+      setCaregiverSearchResults([]);
+    } catch (err) {
+      console.error('Failed to add caregiver', err);
+    }
+  };
+
+  const handleBulkCaregiverSearch = async (query: string) => {
+    setBulkCaregiverSearch(query);
+    if (query.trim().length < 2) { setBulkCaregiverResults([]); return; }
+    try {
+      const [usersResp, allContacts] = await Promise.all([
+        usersAPI.getAll(),
+        contactsAPI.getAll(),
+      ]);
+      const allUsers = (usersResp as any).data?.users || [];
+      const q = query.toLowerCase();
+      const results: CaregiverSearchResult[] = [
+        ...allUsers
+          .filter((u: any) => `${u.firstName} ${u.lastName}`.toLowerCase().includes(q))
+          .map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
+        ...allContacts
+          .filter((c: any) => `${c.first_name} ${c.last_name}`.toLowerCase().includes(q))
+          .map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
+      ].slice(0, 8);
+      setBulkCaregiverResults(results);
+    } catch (err) {
+      console.error('Caregiver search failed', err);
+    }
+  };
+
+  const handleBulkAssignCaregiver = async (caregiver: CaregiverSearchResult) => {
+    setBulkAssigning(true);
+    try {
+      const familyIds = new Set<number>();
+      for (const individualId of selectedPeople) {
+        const individual = people.find(p => p.id === individualId);
+        if (individual?.familyId) familyIds.add(individual.familyId);
+      }
+      await Promise.all(
+        Array.from(familyIds).map(familyId =>
+          familiesAPI.assignCaregiver(familyId, {
+            caregiver_type: caregiver.type,
+            user_id: caregiver.type === 'user' ? caregiver.id : undefined,
+            contact_id: caregiver.type === 'contact' ? caregiver.id : undefined,
+          }).catch(() => {}) // Ignore duplicate assignments
+        )
+      );
+      setShowBulkCaregiverModal(false);
+      setBulkCaregiverSearch('');
+      setBulkCaregiverResults([]);
+    } catch (err) {
+      console.error('Bulk assign failed', err);
+    } finally {
+      setBulkAssigning(false);
     }
   };
 
@@ -1695,6 +1842,28 @@ const PeoplePage: React.FC = () => {
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
+                        {/* Caregiver chip */}
+                        {(() => {
+                          const caregivers = familyCaregivers[group.familyId];
+                          const count = caregivers?.length ?? 0;
+                          return (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleOpenCaregiverPopover(group.familyId); }}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${
+                                count > 0
+                                  ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300'
+                                  : 'text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300'
+                              }`}
+                              title="Manage caregivers"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                              {count > 0 && count}
+                            </button>
+                          );
+                        })()}
                       </div>
                       <div className="flex items-center space-x-2">
                         <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
@@ -2660,6 +2829,22 @@ const PeoplePage: React.FC = () => {
                  </button>
                </div>
            )}
+           {/* Assign caregiver button */}
+           <div className="flex items-center justify-end space-x-3">
+             <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+               Assign Caregiver
+             </div>
+             <button
+               onClick={() => { setShowBulkCaregiverModal(true); setBulkCaregiverSearch(''); setBulkCaregiverResults([]); }}
+               className="w-14 h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+               title="Assign caregiver to selected families"
+             >
+               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                   d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+               </svg>
+             </button>
+           </div>
          </div>
         ) : (
          <>
@@ -2694,6 +2879,114 @@ const PeoplePage: React.FC = () => {
         people={people}
         families={families}
       />
+
+      {/* Caregiver Popover Modal */}
+      {caregiverPopoverFamilyId !== null && (() => {
+        const familyId = caregiverPopoverFamilyId;
+        const caregivers = familyCaregivers[familyId] || [];
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+               onClick={() => setCaregiverPopoverFamilyId(null)}>
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-5"
+                 onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Caregivers</h3>
+                <button onClick={() => setCaregiverPopoverFamilyId(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">✕</button>
+              </div>
+
+              {caregivers.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">No caregivers assigned.</p>
+              ) : (
+                <ul className="mb-3 space-y-2">
+                  {caregivers.map(cg => (
+                    <li key={cg.id} className="flex justify-between items-center text-sm">
+                      <span className="text-gray-800 dark:text-gray-200">
+                        {cg.first_name} {cg.last_name}
+                        <span className="ml-1 text-xs text-gray-400">({cg.caregiver_type})</span>
+                      </span>
+                      <button
+                        onClick={() => handleRemoveCaregiver(familyId, cg.id)}
+                        className="text-red-400 hover:text-red-600 text-xs"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search users or contacts..."
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  value={caregiverSearch}
+                  onChange={e => handleCaregiverSearch(e.target.value)}
+                />
+                {caregiverSearchResults.length > 0 && (
+                  <ul className="absolute z-10 w-full bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md shadow-lg mt-1 max-h-48 overflow-y-auto">
+                    {caregiverSearchResults.map(result => (
+                      <li key={`${result.type}-${result.id}`}>
+                        <button
+                          onClick={() => handleAddCaregiver(familyId, result)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100"
+                        >
+                          {result.first_name} {result.last_name}
+                          <span className="ml-1 text-xs text-gray-400">({result.type})</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Bulk Assign Caregiver Modal */}
+      {showBulkCaregiverModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+             onClick={() => setShowBulkCaregiverModal(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-5"
+               onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Assign caregiver</h3>
+              <button onClick={() => setShowBulkCaregiverModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">✕</button>
+            </div>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              Search for a user or contact to assign as caregiver for the selected families.
+            </p>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search users or contacts..."
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                value={bulkCaregiverSearch}
+                onChange={e => handleBulkCaregiverSearch(e.target.value)}
+                autoFocus
+              />
+              {bulkCaregiverResults.length > 0 && (
+                <ul className="absolute z-10 w-full bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md shadow-lg mt-1 max-h-48 overflow-y-auto">
+                  {bulkCaregiverResults.map(result => (
+                    <li key={`${result.type}-${result.id}`}>
+                      <button
+                        onClick={() => handleBulkAssignCaregiver(result)}
+                        disabled={bulkAssigning}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                      >
+                        {result.first_name} {result.last_name}
+                        <span className="ml-1 text-xs text-gray-400">({result.type})</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {bulkAssigning && <p className="text-sm text-gray-500 dark:text-gray-400 mt-3">Assigning...</p>}
+          </div>
+        </div>
+      )}
 
       {/* Family Notes Modal */}
       <NotesModal
