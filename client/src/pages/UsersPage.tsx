@@ -69,6 +69,10 @@ const UsersPage: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userAssignments, setUserAssignments] = useState<GatheringType[]>([]);
   const [availableGatherings, setAvailableGatherings] = useState<GatheringType[]>([]);
+  const [bulkAssignUsers, setBulkAssignUsers] = useState<User[]>([]);
+  // Per-gathering override for bulk: true = add to all, false = remove from all, undefined = leave unchanged
+  const [bulkGatheringOverrides, setBulkGatheringOverrides] = useState<Record<number, boolean | undefined>>({});
+  const [bulkUserAssignments, setBulkUserAssignments] = useState<Map<number, Set<number>>>(new Map());
 
   // Form states
   const [inviteForm, setInviteForm] = useState({
@@ -364,6 +368,35 @@ const UsersPage: React.FC = () => {
     }
   };
 
+  const handleSaveBulkAssignments = async () => {
+    try {
+      await Promise.all(
+        bulkAssignUsers.map(async (user) => {
+          const currentIds = bulkUserAssignments.get(user.id) || new Set<number>();
+          const finalIds = new Set(currentIds);
+          Object.entries(bulkGatheringOverrides).forEach(([gId, override]) => {
+            const gatheringId = Number(gId);
+            if (override === true) finalIds.add(gatheringId);
+            else if (override === false) finalIds.delete(gatheringId);
+          });
+          await usersAPI.assignGatherings(user.id, Array.from(finalIds));
+        })
+      );
+      setSuccess(`Gathering assignments updated for ${bulkAssignUsers.length} user${bulkAssignUsers.length === 1 ? '' : 's'}`);
+      setShowAssignGatherings(false);
+      setBulkAssignUsers([]);
+      setBulkGatheringOverrides({});
+      setBulkUserAssignments(new Map());
+      setSelectedUsers([]);
+      loadData();
+      setTimeout(() => setSuccess(''), 5000);
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || 'Failed to update assignments';
+      setError(errorMessage);
+      setTimeout(() => setError(''), 8000);
+    }
+  };
+
   const showDeactivateConfirmation = (userId: number, userName: string) => {
     setDeactivateConfirmation({ userId, userName });
     setShowDeactivateModal(true);
@@ -511,17 +544,31 @@ const UsersPage: React.FC = () => {
     }
   };
 
-  const handleAssignSelectedUsers = () => {
+  const handleAssignSelectedUsers = async () => {
     if (selectedUsers.length === 1) {
       const user = users.find(u => u.id === selectedUsers[0]);
       if (user) {
         handleAssignGatherings(user);
       }
     } else if (selectedUsers.length > 1) {
-      // For multiple users, we'll need to implement a bulk assignment modal
-      // For now, just show an error
-      setError('Bulk gathering assignment not yet implemented');
-      setTimeout(() => setError(''), 5000);
+      try {
+        const selected = users.filter(u => selectedUsers.includes(u.id));
+        setBulkAssignUsers(selected);
+        const responses = await Promise.all(selected.map(u => usersAPI.getGatheringAssignments(u.id)));
+        const assignmentMap = new Map<number, Set<number>>();
+        let available: GatheringType[] = [];
+        responses.forEach((resp, i) => {
+          assignmentMap.set(selected[i].id, new Set((resp.data.currentAssignments || []).map((g: any) => g.id)));
+          available = resp.data.availableGatherings || [];
+        });
+        setBulkUserAssignments(assignmentMap);
+        setAvailableGatherings(available);
+        setBulkGatheringOverrides({});
+        setShowAssignGatherings(true);
+      } catch (err: any) {
+        setError(err.response?.data?.error || 'Failed to load gathering assignments');
+        setTimeout(() => setError(''), 5000);
+      }
     }
   };
 
@@ -1098,41 +1145,75 @@ const UsersPage: React.FC = () => {
       ) : null}
 
       {/* Assign Gatherings Modal */}
-      {showAssignGatherings && selectedUser ? createPortal(
+      {showAssignGatherings && (selectedUser || bulkAssignUsers.length > 0) ? createPortal(
         <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white dark:bg-gray-800">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
-                Assign Gatherings - {selectedUser.firstName} {selectedUser.lastName}
+                {bulkAssignUsers.length > 0
+                  ? `Assign Gatherings (${bulkAssignUsers.length} users selected)`
+                  : `Assign Gatherings - ${selectedUser?.firstName} ${selectedUser?.lastName}`}
               </h3>
-              
+              {bulkAssignUsers.length > 0 && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                  Checking a gathering will add it to all selected users. Unchecking will remove it. A dash (—) means only some users are assigned — leave it to keep each user's current assignment.
+                </p>
+              )}
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Select Gatherings</label>
                   <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-3">
-                    {availableGatherings.map((gathering) => (
-                      <label key={gathering.id} className="flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={assignForm.gatheringIds.includes(gathering.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setAssignForm({
-                                ...assignForm,
-                                gatheringIds: [...assignForm.gatheringIds, gathering.id]
-                              });
-                            } else {
-                              setAssignForm({
-                                ...assignForm,
-                                gatheringIds: assignForm.gatheringIds.filter(id => id !== gathering.id)
-                              });
-                            }
-                          }}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                        />
-                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
-                      </label>
-                    ))}
+                    {availableGatherings.map((gathering) => {
+                      if (bulkAssignUsers.length > 0) {
+                        // Bulk mode: tri-state checkboxes
+                        const countAssigned = bulkAssignUsers.filter(u =>
+                          bulkUserAssignments.get(u.id)?.has(gathering.id)
+                        ).length;
+                        const override = bulkGatheringOverrides[gathering.id];
+                        const isChecked = override === true || (override === undefined && countAssigned === bulkAssignUsers.length);
+                        const isIndeterminate = override === undefined && countAssigned > 0 && countAssigned < bulkAssignUsers.length;
+                        return (
+                          <label key={gathering.id} className="flex items-center">
+                            <input
+                              type="checkbox"
+                              ref={(el) => { if (el) el.indeterminate = isIndeterminate; }}
+                              checked={isChecked}
+                              onChange={() => {
+                                setBulkGatheringOverrides(prev => ({
+                                  ...prev,
+                                  [gathering.id]: isChecked ? false : true
+                                }));
+                              }}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                            />
+                            <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
+                            {isIndeterminate && (
+                              <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">({countAssigned}/{bulkAssignUsers.length})</span>
+                            )}
+                          </label>
+                        );
+                      } else {
+                        // Single-user mode
+                        return (
+                          <label key={gathering.id} className="flex items-center">
+                            <input
+                              type="checkbox"
+                              checked={assignForm.gatheringIds.includes(gathering.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setAssignForm({ ...assignForm, gatheringIds: [...assignForm.gatheringIds, gathering.id] });
+                                } else {
+                                  setAssignForm({ ...assignForm, gatheringIds: assignForm.gatheringIds.filter(id => id !== gathering.id) });
+                                }
+                              }}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                            />
+                            <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{gathering.name}</span>
+                          </label>
+                        );
+                      }
+                    })}
                   </div>
                   {availableGatherings.length === 0 && (
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">No gatherings available</p>
@@ -1142,13 +1223,18 @@ const UsersPage: React.FC = () => {
 
               <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6">
                 <button
-                  onClick={() => setShowAssignGatherings(false)}
+                  onClick={() => {
+                    setShowAssignGatherings(false);
+                    setBulkAssignUsers([]);
+                    setBulkGatheringOverrides({});
+                    setBulkUserAssignments(new Map());
+                  }}
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleSaveAssignments}
+                  onClick={bulkAssignUsers.length > 0 ? handleSaveBulkAssignments : handleSaveAssignments}
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
                 >
                   Save Assignments
