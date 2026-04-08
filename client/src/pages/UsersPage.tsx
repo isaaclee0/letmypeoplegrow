@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { usersAPI, gatheringsAPI } from '../services/api';
+import { usersAPI, gatheringsAPI, contactsAPI } from '../services/api';
 import { useSearchParams } from 'react-router-dom';
 import {
   UserIcon,
@@ -49,6 +49,148 @@ interface GatheringType {
   id: number;
   name: string;
   description?: string;
+}
+
+interface Contact {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  mobile_number: string | null;
+  primary_contact_method: 'email' | 'sms';
+  notes: string | null;
+  is_active: number;
+  family_count: number;
+}
+
+interface ContactFormData {
+  first_name: string;
+  last_name: string;
+  email: string;
+  mobile_number: string;
+  primary_contact_method: 'email' | 'sms';
+  notes: string;
+}
+
+function ContactModal({
+  contact,
+  onSave,
+  onClose,
+}: {
+  contact: Contact | null;
+  onSave: (data: ContactFormData) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState<ContactFormData>({
+    first_name: contact?.first_name || '',
+    last_name: contact?.last_name || '',
+    email: contact?.email || '',
+    mobile_number: contact?.mobile_number || '',
+    primary_contact_method: contact?.primary_contact_method || 'email',
+    notes: contact?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!form.email && !form.mobile_number) {
+      setError('At least one of email or mobile number is required');
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(form);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          {contact ? 'Edit Contact' : 'Add Contact'}
+        </h3>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">First name *</label>
+              <input
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                value={form.first_name}
+                onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last name *</label>
+              <input
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                value={form.last_name}
+                onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))}
+                required
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+            <input
+              type="email"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              value={form.email}
+              onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mobile number</label>
+            <input
+              type="tel"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              value={form.mobile_number}
+              onChange={e => setForm(f => ({ ...f, mobile_number: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Preferred contact method</label>
+            <select
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              value={form.primary_contact_method}
+              onChange={e => setForm(f => ({ ...f, primary_contact_method: e.target.value as 'email' | 'sms' }))}
+            >
+              <option value="email">Email</option>
+              <option value="sms">SMS</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
+            <textarea
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              rows={2}
+              value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+            />
+          </div>
+          {error && <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 const UsersPage: React.FC = () => {
@@ -116,9 +258,27 @@ const UsersPage: React.FC = () => {
   // Selection state
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'users' | 'contacts'>('users');
+
+  // Contacts state
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [convertingContact, setConvertingContact] = useState<Contact | null>(null);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [convertRole, setConvertRole] = useState<'coordinator' | 'attendance_taker'>('attendance_taker');
+
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'contacts') {
+      loadContacts();
+    }
+  }, [activeTab]);
 
   // Handle profile parameter to open current user's details
   useEffect(() => {
@@ -158,6 +318,57 @@ const UsersPage: React.FC = () => {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Contacts handlers
+  const loadContacts = async () => {
+    setContactsLoading(true);
+    try {
+      const data = await contactsAPI.getAll();
+      setContacts(data);
+    } catch (err) {
+      console.error('Failed to load contacts', err);
+    } finally {
+      setContactsLoading(false);
+    }
+  };
+
+  const handleSaveContact = async (data: ContactFormData) => {
+    if (editingContact) {
+      const updated = await contactsAPI.update(editingContact.id, data);
+      setContacts(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+    } else {
+      const created = await contactsAPI.create(data);
+      setContacts(prev => [...prev, { ...created, family_count: 0 }]);
+    }
+    setShowContactModal(false);
+    setEditingContact(null);
+  };
+
+  const handleDeactivateContact = async (contact: Contact) => {
+    if (!confirm(`Deactivate ${contact.first_name} ${contact.last_name}?`)) return;
+    try {
+      await contactsAPI.delete(contact.id);
+      setContacts(prev => prev.filter(c => c.id !== contact.id));
+    } catch (err) {
+      setError('Failed to deactivate contact');
+      setTimeout(() => setError(''), 5000);
+    }
+  };
+
+  const handleConvertToUser = async () => {
+    if (!convertingContact) return;
+    try {
+      await contactsAPI.convertToUser(convertingContact.id, convertRole);
+      setContacts(prev => prev.filter(c => c.id !== convertingContact.id));
+      setShowConvertModal(false);
+      setConvertingContact(null);
+      setActiveTab('users');
+      loadData();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || 'Failed to convert contact');
+      setTimeout(() => setError(''), 5000);
     }
   };
 
@@ -665,8 +876,102 @@ const UsersPage: React.FC = () => {
         </div>
       )}
 
+      {/* Tab switcher */}
+      <div className="flex border-b border-gray-200 dark:border-gray-700">
+        <button
+          onClick={() => setActiveTab('users')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+            activeTab === 'users'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+          }`}
+        >
+          Users
+        </button>
+        <button
+          onClick={() => setActiveTab('contacts')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ml-4 ${
+            activeTab === 'contacts'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+          }`}
+        >
+          Contacts
+        </button>
+      </div>
+
+      {activeTab === 'contacts' && (
+        <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">Contacts</h2>
+              <button
+                onClick={() => { setEditingContact(null); setShowContactModal(true); }}
+                className="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700"
+              >
+                Add Contact
+              </button>
+            </div>
+
+            {contactsLoading ? (
+              <p className="text-gray-500 dark:text-gray-400 text-sm">Loading...</p>
+            ) : contacts.length === 0 ? (
+              <p className="text-gray-500 dark:text-gray-400 text-sm">No contacts yet. Add one to get started.</p>
+            ) : (
+              <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 rounded-lg">
+                <table className="min-w-full divide-y divide-gray-300 dark:divide-gray-600">
+                  <thead className="bg-gray-50 dark:bg-gray-700">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Name</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Contact</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Families</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                    {contacts.map(contact => (
+                      <tr key={contact.id}>
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900 dark:text-gray-100">
+                          {contact.first_name} {contact.last_name}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          {contact.primary_contact_method === 'email' ? contact.email : contact.mobile_number}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                          {contact.family_count} {contact.family_count === 1 ? 'family' : 'families'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right space-x-3">
+                          <button
+                            onClick={() => { setEditingContact(contact); setShowContactModal(true); }}
+                            className="text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => { setConvertingContact(contact); setShowConvertModal(true); }}
+                            className="text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400"
+                          >
+                            Convert to user
+                          </button>
+                          <button
+                            onClick={() => handleDeactivateContact(contact)}
+                            className="text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
+                          >
+                            Deactivate
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Users Section */}
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
+      {activeTab === 'users' && <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">
@@ -832,7 +1137,7 @@ const UsersPage: React.FC = () => {
             ))}
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Floating Action Buttons */}
       {selectedUsers.length > 0 ? (
@@ -1509,6 +1814,53 @@ const UsersPage: React.FC = () => {
         </div>,
         document.body
       ) : null}
+      {/* Contact Add/Edit Modal */}
+      {showContactModal && (
+        <ContactModal
+          contact={editingContact}
+          onSave={handleSaveContact}
+          onClose={() => { setShowContactModal(false); setEditingContact(null); }}
+        />
+      )}
+
+      {/* Convert Contact to User Modal */}
+      {showConvertModal && convertingContact && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6">
+            <h3 className="text-lg font-semibold mb-2 text-gray-900 dark:text-gray-100">Convert to User</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              {convertingContact.first_name} {convertingContact.last_name} will become an app user.
+              Their family caregiver assignments will be preserved. An invitation email will be sent to{' '}
+              <strong>{convertingContact.email}</strong>.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
+              <select
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                value={convertRole}
+                onChange={e => setConvertRole(e.target.value as 'coordinator' | 'attendance_taker')}
+              >
+                <option value="attendance_taker">Attendance Taker</option>
+                <option value="coordinator">Coordinator</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setShowConvertModal(false); setConvertingContact(null); }}
+                className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConvertToUser}
+                className="px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700"
+              >
+                Convert &amp; Invite
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
