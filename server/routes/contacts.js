@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { sendInvitationEmail } = require('../utils/email');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -36,6 +37,9 @@ router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
     if (!email && !mobile_number) {
       return res.status(400).json({ error: 'At least one of email or mobile number is required' });
     }
+    if (primary_contact_method && !['email', 'sms'].includes(primary_contact_method)) {
+      return res.status(400).json({ error: 'primary_contact_method must be "email" or "sms"' });
+    }
 
     const result = await Database.query(
       `INSERT INTO contacts (church_id, first_name, last_name, email, mobile_number, primary_contact_method, notes, created_by)
@@ -52,8 +56,8 @@ router.post('/', requireRole(['admin', 'coordinator']), async (req, res) => {
       ]
     );
     const [contact] = await Database.query(
-      `SELECT * FROM contacts WHERE id = ?`,
-      [result.insertId]
+      `SELECT * FROM contacts WHERE id = ? AND church_id = ?`,
+      [result.insertId, req.user.church_id]
     );
     res.status(201).json({ contact });
   } catch (error) {
@@ -71,6 +75,15 @@ router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
     if (!first_name || !last_name) {
       return res.status(400).json({ error: 'First name and last name are required' });
     }
+    if (primary_contact_method && !['email', 'sms'].includes(primary_contact_method)) {
+      return res.status(400).json({ error: 'primary_contact_method must be "email" or "sms"' });
+    }
+
+    const [existing] = await Database.query(
+      `SELECT id FROM contacts WHERE id = ? AND church_id = ?`,
+      [id, req.user.church_id]
+    );
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
 
     await Database.query(
       `UPDATE contacts
@@ -92,7 +105,6 @@ router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
       `SELECT * FROM contacts WHERE id = ? AND church_id = ?`,
       [id, req.user.church_id]
     );
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
     res.json({ contact });
   } catch (error) {
     console.error('Failed to update contact:', error);
@@ -119,6 +131,13 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), async (req, res) =>
 router.get('/:id/families', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     const { id } = req.params;
+
+    const [contact] = await Database.query(
+      `SELECT id FROM contacts WHERE id = ? AND church_id = ? AND is_active = 1`,
+      [id, req.user.church_id]
+    );
+    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
     const families = await Database.query(
       `SELECT f.id, f.family_name
        FROM families f
@@ -158,7 +177,7 @@ router.post('/:id/families/:familyId', requireRole(['admin', 'coordinator']), as
         [req.user.church_id, familyId, id]
       );
     } catch (uniqueErr) {
-      // Already assigned — idempotent, not an error
+      if (!uniqueErr.message?.includes('UNIQUE constraint failed')) throw uniqueErr;
     }
 
     res.json({ message: 'Contact assigned to family' });
@@ -240,17 +259,19 @@ router.post('/:id/convert-to-user', requireRole(['admin', 'coordinator']), async
       );
 
       await conn.query(
-        `UPDATE contacts SET is_active = 0, updated_at = datetime('now') WHERE id = ?`,
-        [id]
+        `UPDATE contacts SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [id, req.user.church_id]
       );
 
       const [created] = await conn.query(`SELECT * FROM users WHERE id = ?`, [newUserId]);
       newUser = created;
     });
 
+    // Register user in registry so OTC login routing works
+    Database.registerUserLookup(newUser.id, newUser.email, newUser.mobile_number || null, req.user.church_id);
+
     // Send invitation email outside transaction (network call)
     try {
-      const { sendInvitationEmail } = require('../utils/email');
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const loginLink = `${frontendUrl}/login`;
       await sendInvitationEmail(
