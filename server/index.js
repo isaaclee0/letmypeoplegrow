@@ -57,7 +57,7 @@ const loadRoutes = () => {
     'auth', 'users', 'gatherings', 'families', 'individuals',
     'attendance', 'reports', 'notifications', 'onboarding',
     'invitations', 'csv-import', 'test',
-    'notification_rules',
+    'notification_rules', 'contacts',
     // 'importrange', // Disabled - external data access feature
     'settings', 'activities', 'visitor-config', 'integrations', 'ai', 'kiosk', 'takeout'
   ];
