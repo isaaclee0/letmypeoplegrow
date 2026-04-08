@@ -428,6 +428,47 @@ CREATE TABLE IF NOT EXISTS absence_dismissals (
 );
 CREATE INDEX IF NOT EXISTS idx_absence_dismissals_individual ON absence_dismissals(individual_id, gathering_type_id);
 CREATE INDEX IF NOT EXISTS idx_absence_dismissals_church ON absence_dismissals(church_id);
+
+CREATE TABLE IF NOT EXISTS contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  email TEXT,
+  mobile_number TEXT,
+  primary_contact_method TEXT CHECK(primary_contact_method IN ('email', 'sms')) DEFAULT 'email',
+  notes TEXT,
+  is_active INTEGER DEFAULT 1,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS family_caregivers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  family_id INTEGER NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  caregiver_type TEXT NOT NULL CHECK(caregiver_type IN ('user', 'contact')),
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(family_id, user_id),
+  UNIQUE(family_id, contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS contact_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  contact_id INTEGER NOT NULL REFERENCES contacts(id),
+  family_id INTEGER REFERENCES families(id),
+  individual_id INTEGER REFERENCES individuals(id),
+  rule_id INTEGER REFERENCES notification_rules(id),
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  email_sent INTEGER DEFAULT 0,
+  sms_sent INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `;
 
 const UPDATED_AT_TRIGGERS = `
