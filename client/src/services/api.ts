@@ -565,8 +565,20 @@ export const familiesAPI = {
     familyName: string;
     familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
     mergeAssignments?: boolean;
-  }) => 
+  }) =>
     api.post('/families/merge-individuals', data),
+
+  getCaregivers: (familyId: number) =>
+    api.get(`/families/${familyId}/caregivers`).then(r => r.data.caregivers),
+
+  assignCaregiver: (familyId: number, payload: {
+    caregiver_type: 'user' | 'contact';
+    user_id?: number;
+    contact_id?: number;
+  }) => api.post(`/families/${familyId}/caregivers`, payload).then(r => r.data),
+
+  removeCaregiver: (familyId: number, caregiverId: number) =>
+    api.delete(`/families/${familyId}/caregivers/${caregiverId}`).then(r => r.data),
 };
 
 // Individuals API
@@ -844,6 +856,44 @@ export const visitorConfigAPI = {
 export const takeoutAPI = {
   exportData: () => api.get('/takeout/export', { responseType: 'blob', timeout: 120000 }),
   deleteChurch: (confirmChurchName: string) => api.post('/takeout/delete', { confirmChurchName }),
+};
+
+export const contactsAPI = {
+  getAll: () =>
+    api.get('/contacts').then(r => r.data.contacts),
+
+  create: (data: {
+    first_name: string;
+    last_name: string;
+    email?: string;
+    mobile_number?: string;
+    primary_contact_method?: 'email' | 'sms';
+    notes?: string;
+  }) => api.post('/contacts', data).then(r => r.data.contact),
+
+  update: (id: number, data: {
+    first_name: string;
+    last_name: string;
+    email?: string;
+    mobile_number?: string;
+    primary_contact_method?: 'email' | 'sms';
+    notes?: string;
+  }) => api.put(`/contacts/${id}`, data).then(r => r.data.contact),
+
+  delete: (id: number) =>
+    api.delete(`/contacts/${id}`).then(r => r.data),
+
+  getFamilies: (contactId: number) =>
+    api.get(`/contacts/${contactId}/families`).then(r => r.data.families),
+
+  assignFamily: (contactId: number, familyId: number) =>
+    api.post(`/contacts/${contactId}/families/${familyId}`).then(r => r.data),
+
+  unassignFamily: (contactId: number, familyId: number) =>
+    api.delete(`/contacts/${contactId}/families/${familyId}`).then(r => r.data),
+
+  convertToUser: (contactId: number, role: 'coordinator' | 'attendance_taker') =>
+    api.post(`/contacts/${contactId}/convert-to-user`, { role }).then(r => r.data.user),
 };
 
 export default api;
