@@ -107,12 +107,16 @@ const SettingsPage: React.FC = () => {
   const [weeklyReviewDay, setWeeklyReviewDay] = useState<string | null>(null);
   const [weeklyReviewDetectedDay, setWeeklyReviewDetectedDay] = useState('Monday');
   const [weeklyReviewIncludeInsight, setWeeklyReviewIncludeInsight] = useState(true);
+  const [caregiverAbsenceThreshold, setCaregiverAbsenceThreshold] = useState(3);
   const [weeklyReviewLastSent, setWeeklyReviewLastSent] = useState<string | null>(null);
   const [weeklyReviewLoading, setWeeklyReviewLoading] = useState(false);
   const [weeklyReviewSaving, setWeeklyReviewSaving] = useState(false);
   const [weeklyReviewTestSending, setWeeklyReviewTestSending] = useState(false);
   const [weeklyReviewSuccess, setWeeklyReviewSuccess] = useState('');
   const [weeklyReviewError, setWeeklyReviewError] = useState('');
+  const [caregiverDigestTestSending, setCaregiverDigestTestSending] = useState(false);
+  const [caregiverDigestSuccess, setCaregiverDigestSuccess] = useState('');
+  const [caregiverDigestError, setCaregiverDigestError] = useState('');
 
   // Track original values to detect changes
   const [originalBadgeSettings, setOriginalBadgeSettings] = useState({
@@ -473,6 +477,7 @@ const SettingsPage: React.FC = () => {
         setWeeklyReviewDetectedDay(res.data.detectedDay || 'Monday');
         setWeeklyReviewIncludeInsight(res.data.includeInsight);
         setWeeklyReviewLastSent(res.data.lastSent);
+        setCaregiverAbsenceThreshold(res.data.caregiverAbsenceThreshold ?? 3);
       }).catch(err => {
         logger.error('Failed to load weekly review settings:', err);
       }).finally(() => {
@@ -481,7 +486,7 @@ const SettingsPage: React.FC = () => {
     }
   }, [activeTab, user?.role]);
 
-  const saveWeeklyReview = async (updates: { enabled?: boolean; day?: string | null; includeInsight?: boolean }) => {
+  const saveWeeklyReview = async (updates: { enabled?: boolean; day?: string | null; includeInsight?: boolean; caregiverAbsenceThreshold?: number }) => {
     setWeeklyReviewSaving(true);
     setWeeklyReviewSuccess('');
     setWeeklyReviewError('');
@@ -508,6 +513,21 @@ const SettingsPage: React.FC = () => {
       setWeeklyReviewError(err.response?.data?.error || 'Failed to send test email');
     } finally {
       setWeeklyReviewTestSending(false);
+    }
+  };
+
+  const sendTestCaregiverDigest = async () => {
+    setCaregiverDigestTestSending(true);
+    setCaregiverDigestSuccess('');
+    setCaregiverDigestError('');
+    try {
+      const res = await settingsAPI.sendTestCaregiverDigest();
+      setCaregiverDigestSuccess(res.data.message || 'Caregiver digest sent!');
+      setTimeout(() => setCaregiverDigestSuccess(''), 6000);
+    } catch (err: any) {
+      setCaregiverDigestError(err.response?.data?.error || 'Failed to send caregiver digest');
+    } finally {
+      setCaregiverDigestTestSending(false);
     }
   };
 
@@ -1374,14 +1394,52 @@ const SettingsPage: React.FC = () => {
                       </button>
                     </div>
 
-                    {/* Test email button */}
-                    <div className="pt-4 flex items-center gap-4">
+                    {/* Caregiver absence threshold */}
+                    <div className="flex items-center justify-between py-3 border-t border-gray-100 dark:border-gray-700">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Caregiver notification threshold</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Send caregiver digest emails when someone has missed this many services in a row</div>
+                      </div>
+                      <div className="flex items-center gap-2 ml-4 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.max(1, caregiverAbsenceThreshold - 1);
+                            setCaregiverAbsenceThreshold(next);
+                            saveWeeklyReview({ caregiverAbsenceThreshold: next });
+                          }}
+                          className="w-7 h-7 flex items-center justify-center rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold disabled:opacity-40"
+                          disabled={caregiverAbsenceThreshold <= 1}
+                        >−</button>
+                        <span className="w-6 text-center text-sm font-semibold text-gray-900 dark:text-gray-100">{caregiverAbsenceThreshold}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.min(20, caregiverAbsenceThreshold + 1);
+                            setCaregiverAbsenceThreshold(next);
+                            saveWeeklyReview({ caregiverAbsenceThreshold: next });
+                          }}
+                          className="w-7 h-7 flex items-center justify-center rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm font-bold disabled:opacity-40"
+                          disabled={caregiverAbsenceThreshold >= 20}
+                        >+</button>
+                      </div>
+                    </div>
+
+                    {/* Test email buttons */}
+                    <div className="pt-4 flex flex-wrap items-center gap-3">
                       <button
                         onClick={sendTestWeeklyReview}
                         disabled={weeklyReviewTestSending}
                         className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
                       >
-                        {weeklyReviewTestSending ? 'Sending...' : 'Send Test Email'}
+                        {weeklyReviewTestSending ? 'Sending...' : 'Send Test Weekly Review'}
+                      </button>
+                      <button
+                        onClick={sendTestCaregiverDigest}
+                        disabled={caregiverDigestTestSending}
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+                      >
+                        {caregiverDigestTestSending ? 'Sending...' : 'Send Test Caregiver Digest'}
                       </button>
                       {weeklyReviewSuccess && (
                         <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
@@ -1393,6 +1451,18 @@ const SettingsPage: React.FC = () => {
                         <span className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1">
                           <ExclamationTriangleIcon className="h-4 w-4" />
                           {weeklyReviewError}
+                        </span>
+                      )}
+                      {caregiverDigestSuccess && (
+                        <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
+                          <CheckCircleIcon className="h-4 w-4" />
+                          {caregiverDigestSuccess}
+                        </span>
+                      )}
+                      {caregiverDigestError && (
+                        <span className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1">
+                          <ExclamationTriangleIcon className="h-4 w-4" />
+                          {caregiverDigestError}
                         </span>
                       )}
                     </div>

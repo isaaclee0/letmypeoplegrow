@@ -75,6 +75,9 @@ router.put('/:id', requireRole(['admin', 'coordinator']), async (req, res) => {
     if (!first_name || !last_name) {
       return res.status(400).json({ error: 'First name and last name are required' });
     }
+    if (!email && !mobile_number) {
+      return res.status(400).json({ error: 'At least one of email or mobile number is required' });
+    }
     if (primary_contact_method && !['email', 'sms'].includes(primary_contact_method)) {
       return res.status(400).json({ error: 'primary_contact_method must be "email" or "sms"' });
     }

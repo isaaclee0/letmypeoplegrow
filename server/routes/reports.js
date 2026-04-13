@@ -1,6 +1,7 @@
 const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { generateCaregiverDigests, sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -810,4 +811,4 @@ router.get('/dismissals', requireRole(['admin', 'coordinator']), async (req, res
   }
 });
 
-module.exports = router; 
+module.exports = router;

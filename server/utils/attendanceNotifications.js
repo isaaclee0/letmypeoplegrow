@@ -131,6 +131,12 @@ async function triggerAttendanceNotifications(gatheringTypeId, sessionDate) {
         );
         const gatheringTypeName = gatheringTypeRow?.name || 'their gathering';
 
+        const [churchSettings] = await Database.query(
+          `SELECT church_name FROM church_settings WHERE church_id = ? LIMIT 1`,
+          [rule.church_id]
+        );
+        const churchName = churchSettings?.church_name || 'your church';
+
         for (const caregiver of caregivers) {
           if (caregiver.caregiver_type === 'user') {
             // User caregivers: insert in-app notification (with dedup)
@@ -168,7 +174,7 @@ async function triggerAttendanceNotifications(gatheringTypeId, sessionDate) {
             if (caregiver.email && caregiver.primary_contact_method === 'email') {
               try {
                 await sendCaregiverNotificationEmail(
-                  caregiver, individual, family, threshold_count, gatheringTypeName
+                  caregiver, individual, family, threshold_count, gatheringTypeName, churchName
                 );
                 emailSent = 1;
               } catch (e) {

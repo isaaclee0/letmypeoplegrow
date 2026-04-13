@@ -16,7 +16,8 @@ async function runMigrations() {
       { version: 'v1.8.6_backfill_leader_checkin', name: 'backfill_leader_checkin', description: 'Enable leader check-in for gatherings that had self check-in enabled' },
       { version: 'v1.9.0_add_church_approval', name: 'add_church_approval', description: 'Add is_approved column to churches registry table and approve all existing churches' },
       { version: 'v1.10.0_add_weekly_review_settings', name: 'add_weekly_review_settings', description: 'Add weekly review email settings to church_settings' },
-      { version: 'v1.11.0_add_excluded_from_stats', name: 'add_excluded_from_stats', description: 'Add excluded_from_stats column to attendance_sessions' }
+      { version: 'v1.11.0_add_excluded_from_stats', name: 'add_excluded_from_stats', description: 'Add excluded_from_stats column to attendance_sessions' },
+      { version: 'v1.12.0_add_caregiver_absence_threshold', name: 'add_caregiver_absence_threshold', description: 'Add caregiver_absence_threshold column to church_settings' }
     ];
 
     const executedMigrations = await Database.query(
@@ -77,6 +78,14 @@ async function runMigrations() {
           if (!cols.some(c => c.name === 'excluded_from_stats')) {
             await Database.query(`ALTER TABLE attendance_sessions ADD COLUMN excluded_from_stats INTEGER DEFAULT 0`);
             console.log(`  ✅ Added excluded_from_stats column to attendance_sessions`);
+          }
+        }
+
+        if (migration.version === 'v1.12.0_add_caregiver_absence_threshold') {
+          const cols = await Database.query(`PRAGMA table_info(church_settings)`);
+          if (!cols.some(c => c.name === 'caregiver_absence_threshold')) {
+            await Database.query(`ALTER TABLE church_settings ADD COLUMN caregiver_absence_threshold INTEGER DEFAULT 3`);
+            console.log(`  ✅ Added caregiver_absence_threshold column to church_settings`);
           }
         }
 

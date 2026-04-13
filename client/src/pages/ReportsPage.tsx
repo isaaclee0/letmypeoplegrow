@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI } from '../services/api';
+import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI, familiesAPI, usersAPI, contactsAPI } from '../services/api';
 import { userPreferences } from '../services/userPreferences';
 import logger from '../utils/logger';
 import {
@@ -12,6 +12,25 @@ import {
 } from '@heroicons/react/24/outline';
 import 'chart.js/auto';
 import { Bar } from 'react-chartjs-2';
+
+interface FamilyCaregiver {
+  id: number;
+  caregiver_type: 'user' | 'contact';
+  user_id?: number;
+  contact_id?: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  mobile_number: string | null;
+}
+
+interface CaregiverSearchResult {
+  type: 'user' | 'contact';
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+}
 
 const ReportsPage: React.FC = () => {
   const { user, refreshUserData } = useAuth();
@@ -40,11 +59,16 @@ const ReportsPage: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }>>([]);
-  const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number }>>([]);
-  const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number }>>([]);
+  const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number; familyId?: number | null }>>([]);
+  const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number; familyId?: number | null }>>([]);
   const [showAllAbsences, setShowAllAbsences] = useState(false);
   const [showAllVisitors, setShowAllVisitors] = useState(false);
   const [dismissals, setDismissals] = useState<Array<{ individualId: number; gatheringTypeId: number; dismissedAtStreak: number }>>([]);
+  const [familyCaregivers, setFamilyCaregivers] = useState<Record<number, FamilyCaregiver[]>>({});
+  const [caregiverPopoverFamilyId, setCaregiverPopoverFamilyId] = useState<number | null>(null);
+  const [caregiverSearch, setCaregiverSearch] = useState('');
+  const [allCaregiverOptions, setAllCaregiverOptions] = useState<CaregiverSearchResult[]>([]);
+  const [caregiverOptionsLoading, setCaregiverOptionsLoading] = useState(false);
   // DISABLED: External data access feature is currently disabled
   // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
 
@@ -243,7 +267,7 @@ const ReportsPage: React.FC = () => {
 
       type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; statuses: boolean[] };
       const regularMap = new Map<number, RegularEntry>();
-      const visitorCounts = new Map<string, { name: string; count: number }>();
+      const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
       const now = new Date();
 
       responses.forEach((resp: any, idx: number) => {
@@ -266,7 +290,7 @@ const ReportsPage: React.FC = () => {
             if (!v.present) return;
             const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
             const name = v.name || 'Visitor';
-            const existing = visitorCounts.get(key) || { name, count: 0 };
+            const existing = visitorCounts.get(key) || { name, count: 0, familyId: v.familyId ?? null };
             existing.count += 1;
             visitorCounts.set(key, existing);
           });
@@ -331,14 +355,14 @@ const ReportsPage: React.FC = () => {
         }
         if (allAbsent && minStreak !== Number.MAX_SAFE_INTEGER) {
           meta.memberIds.forEach(id => groupedMemberIds.add(id));
-          grouped.push({ key: `fam:${famId}`, name: formatFamilyLabel(meta.familyName), streak: minStreak });
+          grouped.push({ key: `fam:${famId}`, name: formatFamilyLabel(meta.familyName), streak: minStreak, familyId: famId });
         }
       }
 
       // Add remaining individuals who are absent but not part of a fully-absent family
       absenceArr.forEach(a => {
         if (!groupedMemberIds.has(a.individualId)) {
-          grouped.push({ key: `ind:${a.individualId}`, name: `${a.firstName} ${a.lastName}`, streak: a.streak });
+          grouped.push({ key: `ind:${a.individualId}`, name: `${a.firstName} ${a.lastName}`, streak: a.streak, familyId: a.familyId ?? null });
         }
       });
 
@@ -346,7 +370,7 @@ const ReportsPage: React.FC = () => {
       setGroupedAbsences(grouped);
 
       const visitorsArr = Array.from(visitorCounts.entries())
-        .map(([key, val]) => ({ key, name: val.name, count: val.count }))
+        .map(([key, val]) => ({ key, name: val.name, count: val.count, familyId: val.familyId }))
         .filter((v) => v.count >= 2)
         .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
       setRecentVisitors(visitorsArr);
@@ -614,6 +638,15 @@ const ReportsPage: React.FC = () => {
     });
   }, [groupedAbsences, absenceList, dismissals]);
 
+  // Auto-fetch caregivers for all families appearing in the absence or visitor lists
+  useEffect(() => {
+    const familyIds = new Set<number>();
+    groupedAbsences.forEach(g => { if (g.familyId != null) familyIds.add(g.familyId); });
+    recentVisitors.forEach(v => { if (v.familyId != null) familyIds.add(v.familyId); });
+    familyIds.forEach(id => loadFamilyCaregivers(id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupedAbsences, recentVisitors]);
+
   const loadAttendanceDetails = useCallback(async () => {
     if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
     setIsLoadingDetails(true);
@@ -632,7 +665,7 @@ const ReportsPage: React.FC = () => {
 
       type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
       const regularMap = new Map<number, RegularEntry>();
-      const visitorCounts = new Map<string, { name: string; count: number }>();
+      const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
       const now = new Date();
 
       responses.forEach((resp: any, idx: number) => {
@@ -655,7 +688,7 @@ const ReportsPage: React.FC = () => {
             if (!v.present) return;
             const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
             const name = v.name || 'Visitor';
-            const existing = visitorCounts.get(key) || { name, count: 0 };
+            const existing = visitorCounts.get(key) || { name, count: 0, familyId: v.familyId ?? null };
             existing.count += 1;
             visitorCounts.set(key, existing);
           });
@@ -676,7 +709,7 @@ const ReportsPage: React.FC = () => {
       absenceArr.sort((a, b) => (b.streak - a.streak) || a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
       setAbsenceList(absenceArr);
 
-      const visitorsArr = Array.from(visitorCounts.entries()).map(([key, val]) => ({ key, name: val.name, count: val.count }))
+      const visitorsArr = Array.from(visitorCounts.entries()).map(([key, val]) => ({ key, name: val.name, count: val.count, familyId: val.familyId }))
         .filter((v) => v.count >= 2)
         .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
       setRecentVisitors(visitorsArr);
@@ -824,6 +857,59 @@ const ReportsPage: React.FC = () => {
       setGroupedAbsences(prev => prev.filter(g => g.key !== key));
     } catch (e) {
       console.error('Failed to dismiss absence:', e);
+    }
+  };
+
+  const loadFamilyCaregivers = async (familyId: number) => {
+    try {
+      const caregivers = await familiesAPI.getCaregivers(familyId);
+      setFamilyCaregivers(prev => ({ ...prev, [familyId]: caregivers }));
+    } catch (err) {
+      console.error('Failed to load family caregivers', err);
+    }
+  };
+
+  const loadCaregiverOptions = async () => {
+    if (allCaregiverOptions.length > 0) return;
+    setCaregiverOptionsLoading(true);
+    try {
+      const [usersResp, allContacts] = await Promise.all([
+        usersAPI.getAll(),
+        contactsAPI.getAll(),
+      ]);
+      const allUsers = (usersResp as any).data?.users || [];
+      const options: CaregiverSearchResult[] = [
+        ...allUsers.map((u: any) => ({ type: 'user' as const, id: u.id, first_name: u.firstName, last_name: u.lastName, email: u.email })),
+        ...allContacts.map((c: any) => ({ type: 'contact' as const, id: c.id, first_name: c.first_name, last_name: c.last_name, email: c.email })),
+      ];
+      setAllCaregiverOptions(options);
+    } catch (err) {
+      console.error('Failed to load caregiver options', err);
+    } finally {
+      setCaregiverOptionsLoading(false);
+    }
+  };
+
+  const handleAddCaregiver = async (familyId: number, result: CaregiverSearchResult) => {
+    try {
+      await familiesAPI.assignCaregiver(familyId, {
+        caregiver_type: result.type,
+        user_id: result.type === 'user' ? result.id : undefined,
+        contact_id: result.type === 'contact' ? result.id : undefined,
+      });
+      await loadFamilyCaregivers(familyId);
+      setCaregiverPopoverFamilyId(null);
+    } catch (err) {
+      console.error('Failed to add caregiver', err);
+    }
+  };
+
+  const handleRemoveCaregiver = async (familyId: number, caregiverId: number) => {
+    try {
+      await familiesAPI.removeCaregiver(familyId, caregiverId);
+      await loadFamilyCaregivers(familyId);
+    } catch (err) {
+      console.error('Failed to remove caregiver', err);
     }
   };
 
@@ -1189,24 +1275,55 @@ const ReportsPage: React.FC = () => {
                   <div className="text-sm text-gray-500 dark:text-gray-400">No concerning absences right now.</div>
                 ) : (
                   <>
+                  {/* Column headers */}
+                  <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 px-3 pb-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    <span>Name</span>
+                    <span className="w-16 text-center" title="Consecutive absences">Absences</span>
+                    <span className="w-32">Caregiver</span>
+                    <span className="w-4"></span>
+                  </div>
                   <ul className="divide-y divide-gray-200 dark:divide-gray-700">
                     {(showAllAbsences ? filteredAbsences : filteredAbsences.slice(0, 5)).map((g) => {
-                      const base = 'px-3 py-2 flex items-center justify-between';
                       const color = g.streak >= 3 ? 'bg-orange-200 dark:bg-orange-900/40' : 'bg-orange-100 dark:bg-orange-900/20';
+                      const caregivers = g.familyId != null ? (familyCaregivers[g.familyId] ?? null) : null;
+                      const hasCaregivers = caregivers !== null && caregivers.length > 0;
                       return (
-                        <li key={g.key} className={`${base} ${color} rounded`}>
-                          <span className="font-medium text-gray-900 dark:text-gray-100">{g.name}</span>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-sm text-gray-700 dark:text-gray-300">Missed {g.streak} {g.streak === 1 ? 'service' : 'services'} in a row</span>
-                            <button
-                              type="button"
-                              onClick={() => handleDismissAbsence(g.key)}
-                              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                              title="Dismiss — won't show again until 3 more absences"
-                            >
-                              <XMarkIcon className="h-4 w-4" />
-                            </button>
-                          </div>
+                        <li key={g.key} className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 items-center px-3 py-2 ${color} rounded`}>
+                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{g.name}</span>
+                          <span className="w-16 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">{g.streak}</span>
+                          <span className="w-32 text-sm truncate">
+                            {g.familyId == null ? (
+                              <span className="text-gray-400 dark:text-gray-500">—</span>
+                            ) : hasCaregivers ? (
+                              <button
+                                type="button"
+                                onClick={() => { setCaregiverPopoverFamilyId(g.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
+                                className="text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 text-left truncate w-full"
+                                title={caregivers!.map(c => `${c.first_name} ${c.last_name}`).join(', ')}
+                              >
+                                {caregivers![0].first_name} {caregivers![0].last_name}
+                                {caregivers!.length > 1 && <span className="text-gray-400 ml-1">+{caregivers!.length - 1}</span>}
+                              </button>
+                            ) : caregivers !== null ? (
+                              <button
+                                type="button"
+                                onClick={() => { setCaregiverPopoverFamilyId(g.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
+                                className="text-primary-600 dark:text-primary-400 hover:underline text-left"
+                              >
+                                Assign caregiver
+                              </button>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-500">Loading…</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDismissAbsence(g.key)}
+                            className="w-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                            title="Dismiss — won't show again until 3 more absences"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
                         </li>
                       );
                     })}
@@ -1242,14 +1359,46 @@ const ReportsPage: React.FC = () => {
                   <div className="text-sm text-gray-500 dark:text-gray-400">No recent visitors yet.</div>
                 ) : (
                   <>
+                  {/* Column headers */}
+                  <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 pb-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    <span>Name</span>
+                    <span className="w-16 text-center">Visits</span>
+                    <span className="w-32">Caregiver</span>
+                  </div>
                   <ul className="divide-y divide-gray-200 dark:divide-gray-700">
                     {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
-                      const base = 'px-3 py-2 flex items-center justify-between';
                       const color = v.count >= 3 ? 'bg-green-200 dark:bg-green-900/40' : 'bg-green-100 dark:bg-green-900/20';
+                      const caregivers = v.familyId != null ? (familyCaregivers[v.familyId] ?? null) : null;
+                      const hasCaregivers = caregivers !== null && caregivers.length > 0;
                       return (
-                        <li key={v.key} className={`${base} ${color} rounded`}>
-                          <span className="font-medium text-gray-900 dark:text-gray-100">{v.name}</span>
-                          <span className="text-sm text-gray-700 dark:text-gray-300">Attended {v.count} {v.count === 1 ? 'time' : 'times'}</span>
+                        <li key={v.key} className={`grid grid-cols-[1fr_auto_auto] gap-x-3 items-center px-3 py-2 ${color} rounded`}>
+                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{v.name}</span>
+                          <span className="w-16 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">{v.count}</span>
+                          <span className="w-32 text-sm truncate">
+                            {v.familyId == null ? (
+                              <span className="text-gray-400 dark:text-gray-500">—</span>
+                            ) : hasCaregivers ? (
+                              <button
+                                type="button"
+                                onClick={() => { setCaregiverPopoverFamilyId(v.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
+                                className="text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 text-left truncate w-full"
+                                title={caregivers!.map(c => `${c.first_name} ${c.last_name}`).join(', ')}
+                              >
+                                {caregivers![0].first_name} {caregivers![0].last_name}
+                                {caregivers!.length > 1 && <span className="text-gray-400 ml-1">+{caregivers!.length - 1}</span>}
+                              </button>
+                            ) : caregivers !== null ? (
+                              <button
+                                type="button"
+                                onClick={() => { setCaregiverPopoverFamilyId(v.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
+                                className="text-primary-600 dark:text-primary-400 hover:underline text-left"
+                              >
+                                Assign caregiver
+                              </button>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-500">Loading…</span>
+                            )}
+                          </span>
                         </li>
                       );
                     })}
@@ -1262,7 +1411,7 @@ const ReportsPage: React.FC = () => {
                         className="text-sm font-medium text-primary-600 hover:text-primary-700"
                       >
                         {showAllVisitors ? 'Show less' : `Show all (${recentVisitors.length})`}
-                </button>
+                      </button>
                     </div>
                   )}
                   </>
@@ -1274,6 +1423,103 @@ const ReportsPage: React.FC = () => {
       )}
 
       {/* Commented out Spreadsheet Instructions Modal for now - CSV export is sufficient */}
+
+      {/* Caregiver Assignment Modal */}
+      {caregiverPopoverFamilyId !== null && (() => {
+        const familyId = caregiverPopoverFamilyId;
+        const caregivers = familyCaregivers[familyId] || [];
+        return (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            onClick={() => setCaregiverPopoverFamilyId(null)}
+          >
+            <div
+              className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-5"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Caregivers</h3>
+                <button
+                  onClick={() => setCaregiverPopoverFamilyId(null)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >✕</button>
+              </div>
+
+              {caregivers.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">No caregivers assigned.</p>
+              ) : (
+                <ul className="mb-3 space-y-2">
+                  {caregivers.map(cg => (
+                    <li key={cg.id} className="flex justify-between items-center text-sm">
+                      <span className="text-gray-800 dark:text-gray-200">
+                        {cg.first_name} {cg.last_name}
+                        <span className="ml-1 text-xs text-gray-400">({cg.caregiver_type})</span>
+                      </span>
+                      <button
+                        onClick={() => handleRemoveCaregiver(familyId, cg.id)}
+                        className="text-red-400 hover:text-red-600 text-xs"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div>
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase mb-1">Add caregiver</p>
+                <input
+                  type="text"
+                  placeholder="Filter..."
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 mb-2"
+                  value={caregiverSearch}
+                  onChange={e => setCaregiverSearch(e.target.value)}
+                  autoFocus
+                />
+                {caregiverOptionsLoading ? (
+                  <p className="text-sm text-gray-400 py-2 text-center">Loading...</p>
+                ) : (
+                  <ul className="border border-gray-200 dark:border-gray-600 rounded-md max-h-48 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                    {allCaregiverOptions
+                      .filter(o => {
+                        const q = caregiverSearch.toLowerCase();
+                        return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                      })
+                      .map(result => {
+                        const alreadyAssigned = caregivers.some(cg =>
+                          (result.type === 'user' && cg.user_id === result.id) ||
+                          (result.type === 'contact' && cg.contact_id === result.id)
+                        );
+                        return (
+                          <li key={`${result.type}-${result.id}`}>
+                            <button
+                              onClick={() => !alreadyAssigned && handleAddCaregiver(familyId, result)}
+                              disabled={alreadyAssigned}
+                              className={`w-full text-left px-3 py-2 text-sm flex justify-between items-center ${
+                                alreadyAssigned
+                                  ? 'text-gray-400 dark:text-gray-500 cursor-default'
+                                  : 'hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100'
+                              }`}
+                            >
+                              <span>{result.first_name} {result.last_name}</span>
+                              <span className="text-xs text-gray-400 dark:text-gray-500">{alreadyAssigned ? 'assigned' : result.type}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    {allCaregiverOptions.filter(o => {
+                      const q = caregiverSearch.toLowerCase();
+                      return !q || `${o.first_name} ${o.last_name}`.toLowerCase().includes(q);
+                    }).length === 0 && (
+                      <li className="px-3 py-2 text-sm text-gray-400 dark:text-gray-500">No matches</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

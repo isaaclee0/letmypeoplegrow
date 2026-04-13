@@ -3,6 +3,7 @@ const Database = require('../config/database');
 const { generateWeeklyReviewData, detectSendDay } = require('./weeklyReview');
 const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewInsight');
 const { sendWeeklyReviewEmail } = require('../utils/email');
+const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
 
 let cronJob = null;
 
@@ -210,6 +211,9 @@ async function processChurch(church) {
       if (sentCount > 0) {
         console.log(`Weekly review: Sent ${sentCount} email(s) for church ${churchId} (${reviewData.churchName})`);
       }
+
+      // Send caregiver digest emails on the same day
+      await sendWeeklyCaregiverDigests(churchId);
     });
   } catch (err) {
     console.error(`Weekly review: Error processing church ${churchId}:`, err.message);

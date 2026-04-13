@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   weekly_review_email_day TEXT DEFAULT NULL,
   weekly_review_email_include_insight INTEGER DEFAULT 1,
   weekly_review_email_last_sent TEXT,
+  caregiver_absence_threshold INTEGER DEFAULT 3,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

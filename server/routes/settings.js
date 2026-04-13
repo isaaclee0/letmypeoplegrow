@@ -423,7 +423,8 @@ router.get('/weekly-review', requireRole(['admin']), async (req, res) => {
   try {
     const settings = await Database.query(`
       SELECT weekly_review_email_enabled, weekly_review_email_day,
-             weekly_review_email_include_insight, weekly_review_email_last_sent
+             weekly_review_email_include_insight, weekly_review_email_last_sent,
+             caregiver_absence_threshold
       FROM church_settings WHERE church_id = ? LIMIT 1
     `, [req.user.church_id]);
 
@@ -440,7 +441,8 @@ router.get('/weekly-review', requireRole(['admin']), async (req, res) => {
       day: settings[0].weekly_review_email_day,
       detectedDay,
       includeInsight: !!settings[0].weekly_review_email_include_insight,
-      lastSent: settings[0].weekly_review_email_last_sent
+      lastSent: settings[0].weekly_review_email_last_sent,
+      caregiverAbsenceThreshold: settings[0].caregiver_absence_threshold ?? 3,
     });
   } catch (error) {
     console.error('Get weekly review settings error:', error);
@@ -451,7 +453,7 @@ router.get('/weekly-review', requireRole(['admin']), async (req, res) => {
 // Update weekly review settings
 router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
   try {
-    const { enabled, day, includeInsight } = req.body;
+    const { enabled, day, includeInsight, caregiverAbsenceThreshold } = req.body;
 
     const updates = [];
     const values = [];
@@ -467,6 +469,13 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
       }
       updates.push('weekly_review_email_day = ?');
       values.push(day);
+    }
+    if (caregiverAbsenceThreshold !== undefined) {
+      const threshold = parseInt(caregiverAbsenceThreshold, 10);
+      if (!isNaN(threshold) && threshold >= 1 && threshold <= 20) {
+        updates.push('caregiver_absence_threshold = ?');
+        values.push(threshold);
+      }
     }
     if (typeof includeInsight === 'boolean') {
       updates.push('weekly_review_email_include_insight = ?');
@@ -540,4 +549,24 @@ router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
   }
 });
 
-module.exports = router; 
+// Send test caregiver digest emails
+router.post('/caregiver-digest/test', requireRole(['admin']), async (req, res) => {
+  try {
+    const { generateCaregiverDigests, sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
+
+    // Call generateCaregiverDigests directly so any SQL/config errors surface
+    const digests = await generateCaregiverDigests(req.user.church_id);
+
+    if (digests.length === 0) {
+      return res.json({ message: 'No caregiver digest emails to send — no caregivers have assigned families with recent absences.' });
+    }
+
+    const sent = await sendWeeklyCaregiverDigests(req.user.church_id);
+    res.json({ message: `${sent} caregiver digest email${sent !== 1 ? 's' : ''} sent (${digests.length} caregiver${digests.length !== 1 ? 's' : ''} had qualifying absences).` });
+  } catch (error) {
+    console.error('Send test caregiver digest error:', error);
+    res.status(500).json({ error: `Failed to generate caregiver digests: ${error.message}` });
+  }
+});
+
+module.exports = router;

@@ -782,9 +782,10 @@ export const settingsAPI = {
   updateDefaultBadge: (data: { text?: string; color?: string }) => api.put('/settings/default-badge', data),
   // Weekly review
   getWeeklyReview: () => api.get('/settings/weekly-review'),
-  updateWeeklyReview: (data: { enabled?: boolean; day?: string | null; includeInsight?: boolean }) =>
+  updateWeeklyReview: (data: { enabled?: boolean; day?: string | null; includeInsight?: boolean; caregiverAbsenceThreshold?: number }) =>
     api.put('/settings/weekly-review', data),
   sendTestWeeklyReview: () => api.post('/settings/weekly-review/test'),
+  sendTestCaregiverDigest: () => api.post('/settings/caregiver-digest/test'),
 };
 
 // Integrations API

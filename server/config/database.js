@@ -122,6 +122,12 @@ class Database {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_cn_contact ON contact_notifications(contact_id)`);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_cn_church ON contact_notifications(church_id)`);
       }
+
+      // Migrate church_settings: add caregiver_absence_threshold if missing
+      const settingsCols = db.prepare('PRAGMA table_info(church_settings)').all();
+      if (!settingsCols.some(c => c.name === 'caregiver_absence_threshold')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN caregiver_absence_threshold INTEGER DEFAULT 3');
+      }
     }
 
     churchDbs.set(churchId, db);

@@ -7,13 +7,14 @@ const brevo = new BrevoClient({ apiKey });
 
 const sendEmail = async (to, subject, htmlContent, textContent = null, options = {}) => {
   try {
-    // Dev email allowlist: if set, only send to listed addresses
+    // Dev email redirect: if set, redirect all emails to the first listed address
     const allowlist = process.env.DEV_EMAIL_ALLOWLIST;
     if (allowlist) {
-      const allowed = allowlist.split(',').map(e => e.trim().toLowerCase());
-      if (!allowed.includes(to.toLowerCase())) {
-        console.log(`[DEV] Email to ${to} blocked by DEV_EMAIL_ALLOWLIST (subject: ${subject})`);
-        return { success: true, messageId: 'dev-blocked' };
+      const allowed = allowlist.split(',').map(e => e.trim()).filter(Boolean);
+      const redirectTo = allowed[0];
+      if (to.toLowerCase() !== redirectTo.toLowerCase()) {
+        console.log(`[DEV] Redirecting email from ${to} to ${redirectTo} (subject: ${subject})`);
+        to = redirectTo;
       }
     }
 
@@ -595,8 +596,8 @@ To stop receiving these emails, ask your admin to update your notification prefe
   });
 };
 
-const sendCaregiverNotificationEmail = async (contact, individual, family, missedCount, gatheringTypeName) => {
-  const churchName = process.env.CHURCH_NAME || 'your church';
+const sendCaregiverNotificationEmail = async (contact, individual, family, missedCount, gatheringTypeName, churchName) => {
+  churchName = churchName || 'your church';
   const subject = `Attendance follow-up: ${individual.first_name} ${individual.last_name}`;
   const gatheringLabel = gatheringTypeName || 'their gathering';
   const weeksText = missedCount === 1 ? '1 week' : `${missedCount} weeks`;
@@ -631,11 +632,190 @@ const sendCaregiverNotificationEmail = async (contact, individual, family, misse
   );
 };
 
+/**
+ * Weekly caregiver digest email — sent on the same day as the weekly review.
+ *
+ * @param {string} email
+ * @param {string} firstName
+ * @param {string} churchName
+ * @param {Array} entries - mixed array of family and individual entries from weeklyCaregiverEmail.js
+ *   Family: { type:'family', familyName, minStreak, members:[{ name, streak, gatheringName }] }
+ *   Individual: { type:'individual', name, familyName, streak, gatheringName }
+ */
+const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries) => {
+  const subject = `${churchName} — Pastoral follow-up this week`;
+  const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+
+  const today = new Date();
+  const dateLabel = today.toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const cardCardsHtml = entries.map(entry => {
+    if (entry.type === 'family') {
+      // Family card: heading is the family name, list each member with their streak
+      const memberRows = entry.members.map(m => {
+        const streakText = m.streak === 1 ? '1 absence' : `${m.streak} absences`;
+        const gathering = m.gatheringName ? ` &mdash; ${m.gatheringName}` : '';
+        return `<tr>
+          <td style="padding: 4px 0; font-size: 13px; color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; border-bottom: 1px solid #fed7aa;">
+            ${m.name}
+          </td>
+          <td style="padding: 4px 0 4px 12px; font-size: 13px; color: #ea580c; font-weight: 600; white-space: nowrap; text-align: right; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; border-bottom: 1px solid #fed7aa;">
+            ${streakText}${gathering ? `<span style="color:#9ca3af;font-weight:400;">${gathering}</span>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+
+      return `
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 10px;">
+          <tr>
+            <td style="background-color: #fff7ed; border-radius: 8px; padding: 14px 16px; border-left: 4px solid #f97316;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td>
+                    <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #1f2937; font-size: 15px;">${entry.familyName}</div>
+                    <div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">${entry.members.length} members missing</div>
+                  </td>
+                  <td style="text-align: right; vertical-align: top; white-space: nowrap; padding-left: 12px;">
+                    <div style="font-size: 22px; font-weight: 700; color: #ea580c; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;">${entry.minStreak}+</div>
+                    <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.4px;">in a row</div>
+                  </td>
+                </tr>
+              </table>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 10px;">
+                ${memberRows}
+              </table>
+            </td>
+          </tr>
+        </table>`;
+    } else {
+      // Individual card
+      const streakText = entry.streak === 1 ? '1 consecutive absence' : `${entry.streak} consecutive absences`;
+      const gatheringText = entry.gatheringName ? ` in <strong>${entry.gatheringName}</strong>` : '';
+      return `
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 10px;">
+          <tr>
+            <td style="background-color: #fff7ed; border-radius: 8px; padding: 14px 16px; border-left: 4px solid #f97316;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td>
+                    <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #1f2937; font-size: 15px;">${entry.name}</div>
+                    ${entry.familyName ? `<div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">${entry.familyName}</div>` : ''}
+                  </td>
+                  <td style="text-align: right; vertical-align: top; white-space: nowrap; padding-left: 12px;">
+                    <div style="font-size: 22px; font-weight: 700; color: #ea580c; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;">${entry.streak}</div>
+                    <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.4px;">in a row</div>
+                  </td>
+                </tr>
+              </table>
+              <div style="margin-top: 8px; font-size: 13px; color: #6b7280; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;">
+                ${streakText}${gatheringText}
+              </div>
+            </td>
+          </tr>
+        </table>`;
+    }
+  }).join('');
+
+  const introText = entries.length === 1
+    ? (entries[0].type === 'family' ? 'is a family' : 'is someone')
+    : 'are a few people and families';
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${subject}</title>
+      <!--[if mso]>
+      <style>body { font-family: Arial, sans-serif !important; }</style>
+      <![endif]-->
+    </head>
+    <body style="font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #374151; margin: 0; padding: 0; background-color: #f3f4f6;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f3f4f6; padding: 20px 0;">
+        <tr>
+          <td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; width: 100%;">
+
+              <!-- Header -->
+              <tr>
+                <td style="background-color: #7c3aed; padding: 28px 30px; border-radius: 12px 12px 0 0; text-align: center;">
+                  <h1 style="margin: 0; color: #ffffff; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-size: 22px; font-weight: 700;">${churchName}</h1>
+                  <p style="margin: 6px 0 0; color: #ddd6fe; font-size: 14px; font-weight: 400;">Pastoral Follow-up &middot; ${dateLabel}</p>
+                </td>
+              </tr>
+
+              <!-- Content -->
+              <tr>
+                <td style="background-color: #ffffff; padding: 30px; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb;">
+                  <p style="margin: 0 0 8px; color: #374151; font-size: 15px;">Hi ${firstName},</p>
+                  <p style="margin: 0 0 20px; color: #6b7280; font-size: 14px;">
+                    Here ${introText} you're caring for who may need a check-in this week:
+                  </p>
+
+                  ${cardCardsHtml}
+
+                  <p style="margin-top: 20px; font-size: 13px; color: #9ca3af; line-height: 1.5; font-style: italic;">
+                    Research shows that a personal follow-up from someone who knows them makes a real difference. Even a quick message can go a long way.
+                  </p>
+
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 20px;">
+                    <tr>
+                      <td>
+                        <a href="${appUrl}/app/reports"
+                           style="display: inline-block; background-color: #7c3aed; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;">
+                          View attendance reports &rarr;
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <p style="margin-top: 28px; color: #6b7280; font-size: 14px;">Blessings,<br><strong style="color: #374151;">${churchName}</strong></p>
+                </td>
+              </tr>
+
+              <!-- Footer -->
+              <tr>
+                <td style="background-color: #f9fafb; padding: 20px 30px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none; text-align: center;">
+                  <p style="margin: 0; font-size: 12px; color: #9ca3af;">Sent from <span style="color: #7c3aed;">Let My People Grow</span></p>
+                  <p style="margin: 8px 0 0; font-size: 11px; color: #9ca3af;">
+                    You're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.
+                  </p>
+                </td>
+              </tr>
+
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const entriesText = entries.map(entry => {
+    if (entry.type === 'family') {
+      const memberLines = entry.members.map(m => {
+        const streakText = m.streak === 1 ? '1 absence' : `${m.streak} absences`;
+        return `    - ${m.name}: ${streakText}`;
+      }).join('\n');
+      return `- ${entry.familyName} (${entry.members.length} members, ${entry.minStreak}+ in a row):\n${memberLines}`;
+    }
+    const streakText = entry.streak === 1 ? '1 consecutive absence' : `${entry.streak} consecutive absences`;
+    const gathering = entry.gatheringName ? ` in ${entry.gatheringName}` : '';
+    return `- ${entry.name}${entry.familyName ? ` (${entry.familyName})` : ''}: ${streakText}${gathering}`;
+  }).join('\n');
+
+  const textContent = `Hi ${firstName},\n\nHere ${introText} you're caring for who may need a check-in this week:\n\n${entriesText}\n\nResearch shows that a personal follow-up from someone who knows them makes a real difference.\n\nView attendance reports: ${appUrl}/app/reports\n\nBlessings,\n${churchName}\n\n---\nYou're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.`;
+
+  await sendEmail(email, subject, htmlContent, textContent);
+};
+
 module.exports = {
   sendEmail,
   sendInvitationEmail,
   sendOTCEmail,
   sendNewChurchApprovalEmail,
   sendWeeklyReviewEmail,
-  sendCaregiverNotificationEmail
+  sendCaregiverNotificationEmail,
+  sendWeeklyCaregiverDigestEmail,
 };
