@@ -1284,7 +1284,7 @@ const ReportsPage: React.FC = () => {
                   </div>
                   <ul className="divide-y divide-gray-200 dark:divide-gray-700">
                     {(showAllAbsences ? filteredAbsences : filteredAbsences.slice(0, 5)).map((g) => {
-                      const color = g.streak >= 3 ? 'bg-orange-200 dark:bg-orange-900/40' : 'bg-orange-100 dark:bg-orange-900/20';
+                      const color = g.streak >= 3 ? 'border-l-4 border-amber-500 dark:border-amber-600' : 'border-l-4 border-amber-400 dark:border-amber-700';
                       const caregivers = g.familyId != null ? (familyCaregivers[g.familyId] ?? null) : null;
                       const hasCaregivers = caregivers !== null && caregivers.length > 0;
                       return (
@@ -1308,7 +1308,7 @@ const ReportsPage: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => { setCaregiverPopoverFamilyId(g.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
-                                className="text-primary-600 dark:text-primary-400 hover:underline text-left"
+                                className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border border-primary-300 dark:border-primary-600/50 text-primary-600 dark:text-primary-400 hover:bg-primary-100 hover:border-primary-400 dark:hover:bg-primary-900/30 dark:hover:border-primary-500/70 transition-colors cursor-pointer"
                               >
                                 Assign caregiver
                               </button>
@@ -1367,7 +1367,7 @@ const ReportsPage: React.FC = () => {
                   </div>
                   <ul className="divide-y divide-gray-200 dark:divide-gray-700">
                     {(showAllVisitors ? recentVisitors : recentVisitors.slice(0, 5)).map((v) => {
-                      const color = v.count >= 3 ? 'bg-green-200 dark:bg-green-900/40' : 'bg-green-100 dark:bg-green-900/20';
+                      const color = v.count >= 3 ? 'border-l-4 border-teal-500 dark:border-teal-700' : 'border-l-4 border-teal-400 dark:border-teal-800';
                       const caregivers = v.familyId != null ? (familyCaregivers[v.familyId] ?? null) : null;
                       const hasCaregivers = caregivers !== null && caregivers.length > 0;
                       return (
@@ -1391,7 +1391,7 @@ const ReportsPage: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => { setCaregiverPopoverFamilyId(v.familyId!); setCaregiverSearch(''); loadCaregiverOptions(); }}
-                                className="text-primary-600 dark:text-primary-400 hover:underline text-left"
+                                className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border border-primary-300 dark:border-primary-600/50 text-primary-600 dark:text-primary-400 hover:bg-primary-100 hover:border-primary-400 dark:hover:bg-primary-900/30 dark:hover:border-primary-500/70 transition-colors cursor-pointer"
                               >
                                 Assign caregiver
                               </button>

@@ -42,19 +42,17 @@ const AttendanceDatePicker: React.FC<AttendanceDatePickerProps> = ({
 
   const goToToday = () => {
     const today = new Date();
-    setCurrentMonth(today);
-    
-    // Find the closest valid date to today
     const todayStr = format(today, 'yyyy-MM-dd');
+
     if (validDateSet.has(todayStr)) {
+      setCurrentMonth(today);
       onDateChange(todayStr);
     } else {
-      // Find the closest valid date
-      const sortedValidDates = validDates.sort();
-      const closestDate = sortedValidDates.find(date => date >= todayStr) || 
-                         sortedValidDates[sortedValidDates.length - 1];
-      if (closestDate) {
-        onDateChange(closestDate);
+      // Find the most recent past gathering date (validDates is descending)
+      const lastPast = validDates.find(date => date <= todayStr);
+      if (lastPast) {
+        setCurrentMonth(new Date(lastPast));
+        onDateChange(lastPast);
       }
     }
   };

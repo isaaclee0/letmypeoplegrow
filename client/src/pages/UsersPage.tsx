@@ -246,6 +246,7 @@ const UsersPage: React.FC = () => {
 
   // Confirmation modal states
   const [showDeactivateModal, setShowDeactivateModal] = useState(false);
+  const [showBulkDeactivateModal, setShowBulkDeactivateModal] = useState(false);
   const [showInviteConfirmation, setShowInviteConfirmation] = useState(false);
   const [cancelConfirmation, setCancelConfirmation] = useState<{
     invitationId: number | null;
@@ -790,10 +791,29 @@ const UsersPage: React.FC = () => {
         showDeactivateConfirmation(user.id, `${user.firstName} ${user.lastName}`);
       }
     } else if (selectedUsers.length > 1) {
-      // For multiple users, we'll need to implement a bulk delete modal
-      // For now, just show an error
-      setError('Bulk user deletion not yet implemented');
-      setTimeout(() => setError(''), 5000);
+      setShowBulkDeactivateModal(true);
+    }
+  };
+
+  const handleBulkDeleteUsers = async () => {
+    const toDelete = [...selectedUsers];
+    let failed = 0;
+    for (const userId of toDelete) {
+      try {
+        await usersAPI.delete(userId);
+      } catch {
+        failed++;
+      }
+    }
+    setShowBulkDeactivateModal(false);
+    clearSelection();
+    loadData();
+    if (failed > 0) {
+      setError(`Failed to deactivate ${failed} user(s)`);
+      setTimeout(() => setError(''), 8000);
+    } else {
+      setSuccess(`${toDelete.length} users deactivated successfully`);
+      setTimeout(() => setSuccess(''), 5000);
     }
   };
 
@@ -1814,6 +1834,61 @@ const UsersPage: React.FC = () => {
         </div>,
         document.body
       ) : null}
+
+      {/* Bulk Deactivate Users Confirmation Modal */}
+      {showBulkDeactivateModal ? createPortal(
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 md:w-1/2 lg:w-1/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                  Confirm Deactivation
+                </h3>
+                <button
+                  onClick={() => setShowBulkDeactivateModal(false)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <XMarkIcon className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-center w-12 h-12 mx-auto mb-4 bg-red-100 dark:bg-red-900/30 rounded-full">
+                <TrashIcon className="h-6 w-6 text-red-600" />
+              </div>
+
+              <div className="mb-4 text-center">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Are you sure you want to deactivate the following {selectedUsers.length} users? This action cannot be undone.
+                </p>
+              </div>
+
+              <ul className="mb-5 text-sm text-gray-700 dark:text-gray-300 max-h-40 overflow-y-auto list-disc list-inside border border-gray-200 dark:border-gray-600 rounded p-2">
+                {selectedUsers.map(id => {
+                  const u = users.find(u => u.id === id);
+                  return u ? <li key={id}>{u.firstName} {u.lastName}</li> : null;
+                })}
+              </ul>
+
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setShowBulkDeactivateModal(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleBulkDeleteUsers}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700"
+                >
+                  Deactivate {selectedUsers.length} Users
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      ) : null}
+
       {/* Contact Add/Edit Modal */}
       {showContactModal && (
         <ContactModal
