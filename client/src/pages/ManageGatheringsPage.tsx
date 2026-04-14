@@ -243,8 +243,8 @@ const ManageGatheringsPage: React.FC = () => {
 
       // Create the gathering
       // Ensure time format is correct (HH:MM)
-      const formattedStartTime = createGatheringData.startTime.length === 4 
-        ? `0${createGatheringData.startTime}` 
+      const formattedStartTime = createGatheringData.startTime?.length === 4
+        ? `0${createGatheringData.startTime}`
         : createGatheringData.startTime;
       
       let gatheringData: any = {

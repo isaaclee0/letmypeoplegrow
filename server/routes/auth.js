@@ -64,7 +64,7 @@ const otcLimiter = rateLimit({
   skipSuccessfulRequests: true
 });
 
-async function findUserByContact(contact) {
+async function findUserByContact(contact, specificChurchId = null) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const isEmail = emailRegex.test(contact);
 
@@ -74,13 +74,18 @@ async function findUserByContact(contact) {
     normalizedContact = getInternationalFormat(contact, countryCode) || contact;
   }
 
-  const lookup = isEmail
-    ? Database.lookupChurchByEmail(contact)
-    : Database.lookupChurchByMobile(normalizedContact);
+  let churchId;
+  if (specificChurchId) {
+    churchId = specificChurchId;
+  } else {
+    const lookup = isEmail
+      ? Database.lookupChurchByEmail(contact)
+      : Database.lookupChurchByMobile(normalizedContact);
 
-  if (!lookup) return { users: [], isEmail, normalizedContact, churchId: null };
+    if (!lookup) return { users: [], isEmail, normalizedContact, churchId: null };
+    churchId = lookup.church_id;
+  }
 
-  const churchId = lookup.church_id;
   const whereClause = isEmail ? 'email = ?' : 'mobile_number = ?';
   const users = await Database.queryForChurch(
     churchId,
@@ -119,7 +124,7 @@ router.post('/request-code',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { contact } = req.body;
+      const { contact, churchId: selectedChurchId } = req.body;
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const isEmail = emailRegex.test(contact);
       const contactType = isEmail ? 'email' : 'sms';
@@ -134,7 +139,26 @@ router.post('/request-code',
         normalizedContact = internationalFormat;
       }
 
-      let { users, churchId } = await findUserByContact(isEmail ? contact : normalizedContact);
+      if (!selectedChurchId) {
+        const allLookups = isEmail
+          ? Database.lookupAllChurchesByEmail(contact)
+          : Database.lookupAllChurchesByMobile(normalizedContact);
+
+        if (allLookups.length > 1) {
+          return res.json({
+            requiresChurchSelection: true,
+            churches: allLookups.map(l => ({
+              churchId: l.church_id,
+              churchName: l.church_name
+            }))
+          });
+        }
+      }
+
+      let { users, churchId } = await findUserByContact(
+        isEmail ? contact : normalizedContact,
+        selectedChurchId || null
+      );
 
       if (users.length === 0) {
         if (isDev && devBypassEnabled && contact === 'dev@church.local') {
@@ -304,7 +328,7 @@ router.post('/verify-code',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { contact, code } = req.body;
+      const { contact, code, churchId: selectedChurchId } = req.body;
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const isEmail = emailRegex.test(contact);
       const contactType = isEmail ? 'email' : 'sms';
@@ -319,7 +343,10 @@ router.post('/verify-code',
         normalizedContact = internationalFormat;
       }
 
-      const searchResult = await findUserByContact(isEmail ? contact : normalizedContact);
+      const searchResult = await findUserByContact(
+        isEmail ? contact : normalizedContact,
+        selectedChurchId || null
+      );
       const { users, churchId } = searchResult;
 
       if (users.length === 0) {

@@ -499,6 +499,53 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
   }
 });
 
+// Get/update integration settings
+router.get('/integrations', requireRole(['admin']), async (req, res) => {
+  try {
+    const rows = await Database.query(
+      `SELECT planning_center_sync_indicator, planning_center_auto_archive,
+              planning_center_last_sync, planning_center_last_sync_archived
+       FROM church_settings WHERE church_id = ? LIMIT 1`,
+      [req.user.church_id]
+    );
+    const row = rows[0] || {};
+    res.json({
+      planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
+      planningCenterAutoArchive: !!(row.planning_center_auto_archive),
+      planningCenterLastSync: row.planning_center_last_sync || null,
+      planningCenterLastSyncArchived: row.planning_center_last_sync_archived || 0,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve integration settings.' });
+  }
+});
+
+router.put('/integrations', requireRole(['admin']), async (req, res) => {
+  try {
+    const { planningCenterSyncIndicator, planningCenterAutoArchive } = req.body;
+    const updates = [];
+    const params = [];
+    if (typeof planningCenterSyncIndicator === 'boolean') {
+      updates.push('planning_center_sync_indicator = ?');
+      params.push(planningCenterSyncIndicator ? 1 : 0);
+    }
+    if (typeof planningCenterAutoArchive === 'boolean') {
+      updates.push('planning_center_auto_archive = ?');
+      params.push(planningCenterAutoArchive ? 1 : 0);
+    }
+    if (updates.length) {
+      params.push(req.user.church_id);
+      await Database.query(
+        `UPDATE church_settings SET ${updates.join(', ')} WHERE church_id = ?`,
+        params
+      );
+    }
+    res.json({ message: 'Integration settings updated.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update integration settings.' });
+  }
+});
+
 // Send test weekly review email
 router.post('/weekly-review/test', requireRole(['admin']), async (req, res) => {
   try {

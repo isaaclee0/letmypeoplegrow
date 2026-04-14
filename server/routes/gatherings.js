@@ -15,51 +15,56 @@ router.get('/', async (req, res) => {
     let gatherings;
     
     // Admin users can see all gatherings, other users only see their assigned gatherings
+    // Use a CTE to pre-filter attendance to only recent sessions (42 days) before joining records.
+    // This avoids scanning all historical attendance_records which is O(n) slow.
+    const recentVisitorCte = `
+      WITH recent_visitors AS (
+        SELECT DISTINCT s.gathering_type_id, ar.individual_id
+        FROM attendance_sessions s
+        JOIN attendance_records ar ON ar.session_id = s.id
+        JOIN individuals i ON ar.individual_id = i.id
+        WHERE s.excluded_from_stats = 0
+          AND s.church_id = ?
+          AND ar.present = 1
+          AND i.is_active = 1
+          AND (
+            (i.people_type = 'local_visitor' AND s.session_date >= date('now', '-42 days'))
+            OR (i.people_type = 'traveller_visitor' AND s.session_date >= date('now', '-14 days'))
+          )
+      )
+    `;
+    const selectCols = `gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at`;
+    const groupByCols = selectCols;
+
     if (req.user.role === 'admin') {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at,
+        ${recentVisitorCte}
+        SELECT ${selectCols},
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
-               COUNT(DISTINCT CASE
-                 WHEN ar.individual_id IS NOT NULL
-                   AND ar.present = 1
-                   AND i.is_active = 1
-                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= datetime(date('now'), '-42 day'))
-                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= datetime(date('now'), '-14 day')))
-                 THEN ar.individual_id
-               END) as recent_visitor_count
+               COUNT(DISTINCT rv.individual_id) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
-        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id AND as_table.excluded_from_stats = 0
-        LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
-        LEFT JOIN individuals i ON ar.individual_id = i.id
+        LEFT JOIN recent_visitors rv ON gt.id = rv.gathering_type_id
         WHERE gt.is_active = 1 AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at
+        GROUP BY ${groupByCols}
         ORDER BY gt.id
-      `, [req.user.church_id]);
+      `, [req.user.church_id, req.user.church_id]);
     } else {
       gatherings = await Database.query(`
-        SELECT gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at,
+        ${recentVisitorCte}
+        SELECT ${selectCols},
                COUNT(DISTINCT CASE WHEN gl_indiv.is_active = 1 AND gl_indiv.people_type = 'regular' THEN gl.individual_id END) as member_count,
-               COUNT(DISTINCT CASE
-                 WHEN ar.individual_id IS NOT NULL
-                   AND ar.present = 1
-                   AND i.is_active = 1
-                   AND ((i.people_type = 'local_visitor' AND as_table.session_date >= datetime(date('now'), '-42 day'))
-                     OR (i.people_type = 'traveller_visitor' AND as_table.session_date >= datetime(date('now'), '-14 day')))
-                 THEN ar.individual_id
-               END) as recent_visitor_count
+               COUNT(DISTINCT rv.individual_id) as recent_visitor_count
         FROM gathering_types gt
         LEFT JOIN gathering_lists gl ON gt.id = gl.gathering_type_id
         LEFT JOIN individuals gl_indiv ON gl.individual_id = gl_indiv.id
-        LEFT JOIN attendance_sessions as_table ON gt.id = as_table.gathering_type_id AND as_table.excluded_from_stats = 0
-        LEFT JOIN attendance_records ar ON as_table.id = ar.session_id
-        LEFT JOIN individuals i ON ar.individual_id = i.id
+        LEFT JOIN recent_visitors rv ON gt.id = rv.gathering_type_id
         JOIN user_gathering_assignments uga ON gt.id = uga.gathering_type_id
         WHERE gt.is_active = 1 AND uga.user_id = ? AND gt.church_id = ?
-        GROUP BY gt.id, gt.name, gt.description, gt.day_of_week, gt.start_time, gt.end_time, gt.frequency, gt.attendance_type, gt.custom_schedule, gt.kiosk_enabled, gt.leader_checkin_enabled, gt.kiosk_message, gt.individual_mode, gt.is_active, gt.created_at
+        GROUP BY ${groupByCols}
         ORDER BY gt.id
-      `, [req.user.id, req.user.church_id]);
+      `, [req.user.church_id, req.user.id, req.user.church_id]);
     }
     
     // Use systematic conversion utility for field name conversion and BigInt handling

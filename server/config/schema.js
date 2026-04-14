@@ -103,6 +103,10 @@ CREATE TABLE IF NOT EXISTS church_settings (
   weekly_review_email_include_insight INTEGER DEFAULT 1,
   weekly_review_email_last_sent TEXT,
   caregiver_absence_threshold INTEGER DEFAULT 3,
+  planning_center_sync_indicator INTEGER DEFAULT 0,
+  planning_center_auto_archive INTEGER DEFAULT 0,
+  planning_center_last_sync TEXT,
+  planning_center_last_sync_archived INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -158,6 +162,7 @@ CREATE TABLE IF NOT EXISTS families (
   family_name TEXT NOT NULL,
   family_notes TEXT,
   family_identifier TEXT,
+  planning_center_id TEXT,
   family_type TEXT DEFAULT 'regular',
   last_attended TEXT,
   created_by INTEGER,
@@ -186,6 +191,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   badge_text TEXT,
   badge_color TEXT,
   badge_icon TEXT,
+  planning_center_id TEXT,
   FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );

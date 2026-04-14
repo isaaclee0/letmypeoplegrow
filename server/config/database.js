@@ -123,10 +123,34 @@ class Database {
         db.exec(`CREATE INDEX IF NOT EXISTS idx_cn_church ON contact_notifications(church_id)`);
       }
 
-      // Migrate church_settings: add caregiver_absence_threshold if missing
+      // Migrate church_settings
       const settingsCols = db.prepare('PRAGMA table_info(church_settings)').all();
       if (!settingsCols.some(c => c.name === 'caregiver_absence_threshold')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN caregiver_absence_threshold INTEGER DEFAULT 3');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_sync_indicator')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_sync_indicator INTEGER DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_auto_archive')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_auto_archive INTEGER DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_last_sync')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_last_sync_archived')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync_archived INTEGER DEFAULT 0');
+      }
+
+      // Migrate families: add planning_center_id if missing
+      const familiesCols = db.prepare('PRAGMA table_info(families)').all();
+      if (!familiesCols.some(c => c.name === 'planning_center_id')) {
+        db.exec('ALTER TABLE families ADD COLUMN planning_center_id TEXT');
+      }
+
+      // Migrate individuals: add planning_center_id if missing
+      const individualsCols = db.prepare('PRAGMA table_info(individuals)').all();
+      if (!individualsCols.some(c => c.name === 'planning_center_id')) {
+        db.exec('ALTER TABLE individuals ADD COLUMN planning_center_id TEXT');
       }
     }
 
@@ -343,6 +367,26 @@ class Database {
     return registryDb.prepare(
       'SELECT church_id, user_id FROM user_lookup WHERE mobile_number = ?'
     ).get(mobile) || null;
+  }
+
+  static lookupAllChurchesByMobile(mobile) {
+    if (!registryDb) return [];
+    return registryDb.prepare(
+      `SELECT ul.church_id, ul.user_id, c.church_name
+       FROM user_lookup ul
+       JOIN churches c ON c.church_id = ul.church_id
+       WHERE ul.mobile_number = ?`
+    ).all(mobile);
+  }
+
+  static lookupAllChurchesByEmail(email) {
+    if (!registryDb) return [];
+    return registryDb.prepare(
+      `SELECT ul.church_id, ul.user_id, c.church_name
+       FROM user_lookup ul
+       JOIN churches c ON c.church_id = ul.church_id
+       WHERE ul.email = ?`
+    ).all(email);
   }
 
   static listChurches() {

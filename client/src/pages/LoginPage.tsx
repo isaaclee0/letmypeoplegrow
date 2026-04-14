@@ -17,11 +17,13 @@ const LoginPage: React.FC = () => {
   const [error, setError] = useState('');
   const [contact, setContact] = useState('');
 
-  const [step, setStep] = useState<'contact' | 'code'>('contact');
+  const [step, setStep] = useState<'contact' | 'church-picker' | 'code'>('contact');
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [hasUsers, setHasUsers] = useState<boolean | null>(null);
   const [hasNonAdminUsers, setHasNonAdminUsers] = useState<boolean | null>(null);
   const [hasExpiredToken, setHasExpiredToken] = useState<boolean | null>(null);
+  const [availableChurches, setAvailableChurches] = useState<{ churchId: string; churchName: string }[]>([]);
+  const [selectedChurchId, setSelectedChurchId] = useState<string | undefined>(undefined);
   
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -80,9 +82,33 @@ const LoginPage: React.FC = () => {
     try {
       const response = await authAPI.requestCode(data.contact);
       setContact(data.contact);
+
+      if (response.data.requiresChurchSelection) {
+        setAvailableChurches(response.data.churches);
+        setStep('church-picker');
+        return;
+      }
+
       setStep('code');
       setCooldownSeconds(response.data.cooldownSeconds || 60);
       // Reset the code form to ensure it's empty
+      codeForm.reset({ code: '' });
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to send verification code');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleChurchSelect = async (churchId: string) => {
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const response = await authAPI.requestCode(contact, churchId);
+      setSelectedChurchId(churchId);
+      setStep('code');
+      setCooldownSeconds(response.data.cooldownSeconds || 60);
       codeForm.reset({ code: '' });
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to send verification code');
@@ -96,7 +122,7 @@ const LoginPage: React.FC = () => {
     setError('');
 
     try {
-      const response = await authAPI.verifyCode(contact, data.code);
+      const response = await authAPI.verifyCode(contact, data.code, selectedChurchId);
       // Token is now handled by cookies, pass empty string for backward compatibility
       await login('', response.data.user);
 
@@ -131,7 +157,7 @@ const LoginPage: React.FC = () => {
     setError('');
 
     try {
-      const response = await authAPI.requestCode(contact);
+      const response = await authAPI.requestCode(contact, selectedChurchId);
       setCooldownSeconds(response.data.cooldownSeconds || 60);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to resend verification code');
@@ -143,6 +169,8 @@ const LoginPage: React.FC = () => {
   const goBackToContact = () => {
     setStep('contact');
     setError('');
+    setSelectedChurchId(undefined);
+    setAvailableChurches([]);
     codeForm.reset({ code: '' });
   };
 
@@ -203,7 +231,38 @@ const LoginPage: React.FC = () => {
           </div>
         )}
 
-        {step === 'contact' ? (
+        {step === 'church-picker' ? (
+          <div className="mt-8 space-y-4">
+            <div>
+              <p className="text-sm text-gray-700 dark:text-gray-300 text-center">
+                This contact is linked to multiple churches. Please select which one you want to log in to:
+              </p>
+            </div>
+            <div className="space-y-3">
+              {availableChurches.map((church) => (
+                <button
+                  key={church.churchId}
+                  type="button"
+                  onClick={() => handleChurchSelect(church.churchId)}
+                  disabled={isLoading}
+                  className="w-full flex items-center justify-between px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span>{church.churchName}</span>
+                  <span className="text-gray-400">→</span>
+                </button>
+              ))}
+            </div>
+            <div>
+              <button
+                type="button"
+                onClick={goBackToContact}
+                className="w-full text-sm text-primary-600 hover:text-primary-500 text-center"
+              >
+                ← Use different contact
+              </button>
+            </div>
+          </div>
+        ) : step === 'contact' ? (
           <form className="mt-8 space-y-6" onSubmit={contactForm.handleSubmit(handleContactSubmit)}>
             <div>
               <label htmlFor="contact" className="block text-sm font-medium text-gray-700 dark:text-gray-300">

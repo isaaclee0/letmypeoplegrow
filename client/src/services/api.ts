@@ -240,11 +240,11 @@ export interface AddVisitorData {
 
 // Auth API
 export const authAPI = {
-  requestCode: (contact: string) => 
-    api.post('/auth/request-code', { contact }),
-    
-  verifyCode: (contact: string, code: string) => 
-    api.post('/auth/verify-code', { contact, code }),
+  requestCode: (contact: string, churchId?: string) =>
+    api.post('/auth/request-code', { contact, ...(churchId && { churchId }) }),
+
+  verifyCode: (contact: string, code: string, churchId?: string) =>
+    api.post('/auth/verify-code', { contact, code, ...(churchId && { churchId }) }),
     
 
   register: (data: {
@@ -786,6 +786,9 @@ export const settingsAPI = {
     api.put('/settings/weekly-review', data),
   sendTestWeeklyReview: () => api.post('/settings/weekly-review/test'),
   sendTestCaregiverDigest: () => api.post('/settings/caregiver-digest/test'),
+  getIntegrationSettings: () => api.get('/settings/integrations'),
+  updateIntegrationSettings: (data: { planningCenterSyncIndicator?: boolean; planningCenterAutoArchive?: boolean }) =>
+    api.put('/settings/integrations', data),
 };
 
 // Integrations API
@@ -821,9 +824,28 @@ export const integrationsAPI = {
   getPlanningCenterPeople: () => api.get('/integrations/planning-center/people'),
   getPlanningCenterCheckins: (params: { startDate: string; endDate: string }) =>
     api.get('/integrations/planning-center/checkins', { params }),
-  importPeopleFromPlanningCenter: () => api.post('/integrations/planning-center/import-people'),
+  linkPlanningCenterFamily: (data: { householdId: string; familyId: number }) => api.post('/integrations/planning-center/link-family', data),
+  importPeopleFromPlanningCenter: (data?: { householdIds?: string[] }) => api.post('/integrations/planning-center/import-people', data || {}),
   importCheckinsFromPlanningCenter: (data: { startDate: string; endDate: string; eventId?: string }) =>
     api.post('/integrations/planning-center/import-checkins', data),
+
+  // Historical CSV attendance backfill
+  previewHistoricalCsv: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/integrations/historical-csv-preview', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+  },
+  importHistoricalCsv: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/integrations/historical-csv-execute', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    });
+  },
 };
 
 // AI Insights API

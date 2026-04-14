@@ -147,7 +147,7 @@ const Layout: React.FC = () => {
     ...(checkInsAvailable ? [
       { name: 'Check-ins', href: '/app/checkins', icon: ClipboardDocumentCheckIcon }
     ] : []),
-    ...(integrationsConfigured && user?.role === 'admin' ? [
+    ...(user?.role === 'admin' ? [
       { name: 'Import', href: '/app/import', icon: ArrowDownTrayIcon }
     ] : []),
     { name: 'Settings', href: '/app/settings', icon: PencilIcon },

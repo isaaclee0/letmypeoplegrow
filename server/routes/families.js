@@ -10,29 +10,37 @@ router.use(ensureChurchIsolation);
 // Get families
 router.get('/', async (req, res) => {
   try {
-    const families = await Database.query(`
-      SELECT 
-        f.id,
-        f.family_name AS familyName,
-        f.family_notes AS familyNotes,
-        f.family_type AS familyType,
-        f.last_attended AS lastAttended,
-        COUNT(i.id) AS memberCount
-      FROM families f
-      JOIN individuals i ON f.id = i.family_id AND i.is_active = 1
-      WHERE f.church_id = ?
-      GROUP BY f.id
-      ORDER BY f.family_name
-    `, [req.user.church_id]);
+    const [families, settingsRows] = await Promise.all([
+      Database.query(`
+        SELECT
+          f.id,
+          f.family_name AS familyName,
+          f.family_notes AS familyNotes,
+          f.family_type AS familyType,
+          f.last_attended AS lastAttended,
+          f.planning_center_id AS planningCenterId,
+          COUNT(i.id) AS memberCount
+        FROM families f
+        JOIN individuals i ON f.id = i.family_id AND i.is_active = 1
+        WHERE f.church_id = ?
+        GROUP BY f.id
+        ORDER BY f.family_name
+      `, [req.user.church_id]),
+      Database.query(
+        `SELECT planning_center_sync_indicator FROM church_settings WHERE church_id = ? LIMIT 1`,
+        [req.user.church_id]
+      )
+    ]);
 
-    // Convert BigInt values to regular numbers to avoid JSON serialization issues
     const processedFamilies = families.map((family) => ({
       ...family,
       id: Number(family.id),
       memberCount: Number(family.memberCount)
     }));
 
-    res.json({ families: processedFamilies });
+    const planningCenterSyncEnabled = !!(settingsRows[0]?.planning_center_sync_indicator);
+
+    res.json({ families: processedFamilies, planningCenterSyncEnabled });
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Failed to retrieve families.' });

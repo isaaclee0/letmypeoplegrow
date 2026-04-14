@@ -59,6 +59,7 @@ interface Family {
   familyType?: 'regular' | 'local_visitor' | 'traveller_visitor';
   lastAttended?: string;
   familyNotes?: string;
+  planningCenterId?: string;
 }
 
 interface GatheringType {
@@ -271,6 +272,7 @@ const PeoplePage: React.FC = () => {
   const [people, setPeople] = useState<Person[]>([]);
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
+  const [planningCenterSyncEnabled, setPlanningCenterSyncEnabled] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -519,6 +521,7 @@ const PeoplePage: React.FC = () => {
     try {
       const response = await familiesAPI.getAll();
       setFamilies(response.data.families || []);
+      setPlanningCenterSyncEnabled(!!response.data.planningCenterSyncEnabled);
     } catch (err: any) {
       setError('Failed to load families');
     }
@@ -1790,6 +1793,11 @@ const PeoplePage: React.FC = () => {
                            </>
                          );
                        })()}
+                        {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            PCO
+                          </span>
+                        )}
                         <button
                           onClick={() => handleOpenNotes(group)}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -1990,6 +1998,11 @@ const PeoplePage: React.FC = () => {
                                     </>
                                   );
                                 })()}
+                                {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    PCO
+                                  </span>
+                                )}
                                 <button
                                   onClick={() => handleOpenNotes(group)}
                                   className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -2162,6 +2175,11 @@ const PeoplePage: React.FC = () => {
                                       return group.familyName;
                                     })()}
                                   </h4>
+                                  {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                      PCO
+                                    </span>
+                                  )}
                                   <button
                                     onClick={() => handleOpenNotes(group)}
                                     className="p-1 text-gray-400 hover:text-gray-600 transition-colors"

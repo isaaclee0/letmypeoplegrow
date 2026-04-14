@@ -80,6 +80,10 @@ const SettingsPage: React.FC = () => {
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
+  const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
+  const [pcAutoArchive, setPcAutoArchive] = useState(false);
+  const [pcLastSync, setPcLastSync] = useState<string | null>(null);
+  const [pcLastSyncArchived, setPcLastSyncArchived] = useState(0);
 
   // Location state
   const [locationName, setLocationName] = useState<string | null>(null);
@@ -238,6 +242,26 @@ const SettingsPage: React.FC = () => {
       setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
     }
   }, []);
+
+  const handlePcSyncIndicatorToggle = async (value: boolean) => {
+    setPcSyncIndicator(value);
+    try {
+      await settingsAPI.updateIntegrationSettings({ planningCenterSyncIndicator: value });
+    } catch (error) {
+      logger.error('Failed to update sync indicator setting:', error);
+      setPcSyncIndicator(!value); // revert
+    }
+  };
+
+  const handlePcAutoArchiveToggle = async (value: boolean) => {
+    setPcAutoArchive(value);
+    try {
+      await settingsAPI.updateIntegrationSettings({ planningCenterAutoArchive: value });
+    } catch (error) {
+      logger.error('Failed to update auto-archive setting:', error);
+      setPcAutoArchive(!value); // revert
+    }
+  };
 
   // Handle Planning Center connect (OAuth flow)
   const handlePlanningCenterConnect = async () => {
@@ -776,6 +800,12 @@ const SettingsPage: React.FC = () => {
     fetchAiStatus();
     fetchPlanningCenterStatus();
     fetchLocation();
+    settingsAPI.getIntegrationSettings().then(r => {
+      setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
+      setPcAutoArchive(!!r.data.planningCenterAutoArchive);
+      setPcLastSync(r.data.planningCenterLastSync || null);
+      setPcLastSyncArchived(r.data.planningCenterLastSyncArchived || 0);
+    }).catch(() => {});
   }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus, fetchLocation]);
 
   return (
@@ -1769,8 +1799,8 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Planning Center Integration - Only show in dev mode */}
-                  {import.meta.env.DEV && planningCenterStatus.enabled && (
+                  {/* Planning Center Integration */}
+                  {planningCenterStatus.enabled && (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
                     <div className="flex items-center justify-between mb-6">
                       <div className="flex items-center space-x-4">
@@ -1877,6 +1907,49 @@ const SettingsPage: React.FC = () => {
                         </div>
                       </div>
                     </div>
+
+                    {planningCenterStatus.connected && (
+                      <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Show sync indicator</h5>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                              Show a Planning Center badge on families imported from PCO
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => handlePcSyncIndicatorToggle(!pcSyncIndicator)}
+                            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                            role="switch"
+                            aria-checked={pcSyncIndicator}
+                          >
+                            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncIndicator ? 'translate-x-5' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Auto-archive from PCO</h5>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                              Automatically archive people in LMPG when they are marked inactive in Planning Center. Runs daily.
+                            </p>
+                            {pcLastSync && (
+                              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                                Last sync: {new Date(pcLastSync).toLocaleDateString()}{pcLastSyncArchived > 0 ? ` — ${pcLastSyncArchived} archived` : ''}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handlePcAutoArchiveToggle(!pcAutoArchive)}
+                            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcAutoArchive ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                            role="switch"
+                            aria-checked={pcAutoArchive}
+                          >
+                            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcAutoArchive ? 'translate-x-5' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   )}
 

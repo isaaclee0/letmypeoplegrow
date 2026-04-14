@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { integrationsAPI, gatheringsAPI } from '../services/api';
+import { integrationsAPI, gatheringsAPI, familiesAPI } from '../services/api';
 import logger from '../utils/logger';
 import {
   MagnifyingGlassIcon,
@@ -72,11 +72,11 @@ interface ServiceType {
 }
 
 type TabType = 'people' | 'gatherings';
-type SourceTab = 'elvanto' | 'planning-center';
+type SourceTab = 'elvanto' | 'planning-center' | 'historical-csv';
 
 const ImportPage: React.FC = () => {
   // Source tab state (top-level)
-  const [sourceTab, setSourceTab] = useState<SourceTab>('elvanto');
+  const [sourceTab, setSourceTab] = useState<SourceTab>('historical-csv');
 
   // Elvanto tab state
   const [activeTab, setActiveTab] = useState<TabType>('people');
@@ -170,11 +170,49 @@ const ImportPage: React.FC = () => {
   const [pcImporting, setPcImporting] = useState(false);
   const [pcExpandedFamilies, setPcExpandedFamilies] = useState<Set<string>>(new Set());
   const [pcSearchTerm, setPcSearchTerm] = useState('');
+  const [pcSelectedFamilies, setPcSelectedFamilies] = useState<Set<string>>(new Set());
+  const [pcAlreadyImportedCount, setPcAlreadyImportedCount] = useState(0);
+  const [lmpgFamilies, setLmpgFamilies] = useState<any[]>([]);
+  const [linkModal, setLinkModal] = useState<{ householdId: string; familyName: string } | null>(null);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [linking, setLinking] = useState(false);
+
+  // Historical CSV backfill state
+  type HCsvStep = 'upload' | 'preview' | 'done';
+  interface HCsvPreviewItem { name: string; individualId: number; gatherings: { id: number; name: string }[]; trueCount: number; falseCount: number; }
+  interface HCsvUnmatched { firstName: string; lastName: string; reason: string; }
+  interface HCsvNoGathering { firstName: string; lastName: string; individualId: number; reason: string; }
+  interface HCsvPreview { dates: string[]; dateCount: number; matched: HCsvPreviewItem[]; unmatched: HCsvUnmatched[]; noGatherings: HCsvNoGathering[]; }
+  interface HCsvResult { success: boolean; sessionsCreated: number; recordsWritten: number; matchedCount: number; unmatched: HCsvUnmatched[]; noGatherings: HCsvNoGathering[]; }
+  const [hCsvStep, setHCsvStep] = useState<HCsvStep>('upload');
+  const [hCsvFile, setHCsvFile] = useState<File | null>(null);
+  const [hCsvPreviewing, setHCsvPreviewing] = useState(false);
+  const [hCsvPreview, setHCsvPreview] = useState<HCsvPreview | null>(null);
+  const [hCsvImporting, setHCsvImporting] = useState(false);
+  const [hCsvResult, setHCsvResult] = useState<HCsvResult | null>(null);
+  const [hCsvError, setHCsvError] = useState<string | null>(null);
+  const [hCsvShowUnmatched, setHCsvShowUnmatched] = useState(false);
 
   useEffect(() => {
     checkConnection();
     fetchPlanningCenterStatus();
   }, []);
+
+  // Once both status checks complete: set default tab and auto-load PC people
+  useEffect(() => {
+    if (checkingConnection || planningCenterStatus.loading) return;
+
+    if (isConnected) {
+      setSourceTab('elvanto');
+    } else if (planningCenterStatus.connected) {
+      setSourceTab('planning-center');
+    }
+
+    if (planningCenterStatus.connected && !pcPeopleLoaded && !pcPeopleLoading) {
+      loadPcPeople();
+      familiesAPI.getAll().then(r => setLmpgFamilies(r.data.families || [])).catch(() => {});
+    }
+  }, [checkingConnection, planningCenterStatus.loading]);
 
   const checkConnection = async () => {
     try {
@@ -212,7 +250,11 @@ const ImportPage: React.FC = () => {
       setPcPeopleLoading(true);
       setPcError(null);
       const response = await integrationsAPI.getPlanningCenterPeople();
-      setPcPeople(response.data.families || []);
+      const families = response.data.families || [];
+      setPcPeople(families);
+      setPcAlreadyImportedCount(response.data.alreadyImportedCount || 0);
+      // Pre-select all families that are NOT already imported
+      setPcSelectedFamilies(new Set(families.filter((f: any) => !f.alreadyImported).map((f: any) => f.householdId)));
       setPcPeopleLoaded(true);
     } catch (error: any) {
       logger.error('Failed to fetch Planning Center people:', error);
@@ -248,9 +290,12 @@ const ImportPage: React.FC = () => {
     try {
       setPcImporting(true);
       setPcError(null);
-      const response = await integrationsAPI.importPeopleFromPlanningCenter();
+      const householdIds = pcSelectedFamilies.size > 0 ? Array.from(pcSelectedFamilies) : undefined;
+      const response = await integrationsAPI.importPeopleFromPlanningCenter({ householdIds });
       const data = response.data;
       alert(`Successfully imported ${data.imported?.families || 0} families and ${data.imported?.individuals || 0} people from Planning Center!`);
+      // Reload to update already-imported flags
+      loadPcPeople();
     } catch (error: any) {
       logger.error('Failed to import people from Planning Center:', error);
       setPcError(error.response?.data?.error || 'Failed to import people.');
@@ -262,13 +307,98 @@ const ImportPage: React.FC = () => {
   const togglePcFamily = (householdId: string) => {
     setPcExpandedFamilies(prev => {
       const next = new Set(prev);
-      if (next.has(householdId)) {
-        next.delete(householdId);
-      } else {
-        next.add(householdId);
-      }
+      if (next.has(householdId)) { next.delete(householdId); } else { next.add(householdId); }
       return next;
     });
+  };
+
+  const togglePcFamilySelected = (householdId: string) => {
+    setPcSelectedFamilies(prev => {
+      const next = new Set(prev);
+      if (next.has(householdId)) { next.delete(householdId); } else { next.add(householdId); }
+      return next;
+    });
+  };
+
+  const pcSelectAll = () => {
+    setPcSelectedFamilies(new Set(pcPeople.filter(f => !f.alreadyImported).map(f => f.householdId)));
+  };
+
+  const pcDeselectAll = () => {
+    setPcSelectedFamilies(new Set());
+  };
+
+  const handleLinkFamily = async (familyId: number) => {
+    if (!linkModal) return;
+    setLinking(true);
+    try {
+      await integrationsAPI.linkPlanningCenterFamily({ householdId: linkModal.householdId, familyId });
+      // Mark the PCO family as already imported in local state
+      setPcPeople(prev => prev.map(f =>
+        f.householdId === linkModal.householdId ? { ...f, alreadyImported: true } : f
+      ));
+      setPcSelectedFamilies(prev => {
+        const next = new Set(prev);
+        next.delete(linkModal.householdId);
+        return next;
+      });
+      setPcAlreadyImportedCount(c => c + 1);
+      setLinkModal(null);
+      setLinkSearch('');
+    } catch {
+      // silent — user can retry
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const handleHCsvPreview = async () => {
+    if (!hCsvFile) return;
+    setHCsvPreviewing(true);
+    setHCsvError(null);
+    try {
+      const response = await integrationsAPI.previewHistoricalCsv(hCsvFile);
+      setHCsvPreview(response.data);
+      setHCsvStep('preview');
+    } catch (err: any) {
+      setHCsvError(err.response?.data?.error || 'Failed to preview CSV.');
+    } finally {
+      setHCsvPreviewing(false);
+    }
+  };
+
+  const handleHCsvImport = async () => {
+    if (!hCsvFile) return;
+    setHCsvImporting(true);
+    setHCsvError(null);
+    try {
+      const response = await integrationsAPI.importHistoricalCsv(hCsvFile);
+      setHCsvResult(response.data);
+      setHCsvStep('done');
+    } catch (err: any) {
+      setHCsvError(err.response?.data?.error || 'Import failed.');
+    } finally {
+      setHCsvImporting(false);
+    }
+  };
+
+  const handleHCsvDownloadUnmatched = (
+    unmatched: { firstName: string; lastName: string; reason: string }[],
+    noGatherings: { firstName: string; lastName: string; reason: string }[]
+  ) => {
+    const rows = [
+      ['First Name', 'Last Name', 'Reason'],
+      ...unmatched.map(u => [u.firstName, u.lastName, u.reason]),
+      ...noGatherings.map(n => [n.firstName, n.lastName, n.reason]),
+    ];
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'unmatched-attendance.csv';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const loadFamilies = useCallback(async () => {
@@ -808,40 +938,16 @@ const ImportPage: React.FC = () => {
     return true;
   });
 
-  if (checkingConnection) {
+  if (checkingConnection || planningCenterStatus.loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <ArrowPathIcon className="h-8 w-8 animate-spin text-primary-600" />
-        <span className="ml-3 text-gray-600 dark:text-gray-400">Checking Elvanto connection...</span>
+        <span className="ml-3 text-gray-600 dark:text-gray-400">Checking connections...</span>
       </div>
     );
   }
 
-  if (!isConnected) {
-    return (
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
-          <div className="flex">
-            <XCircleIcon className="h-6 w-6 text-yellow-600 mr-3" />
-            <div>
-              <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-300">Elvanto Not Connected</h3>
-              <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-400">
-                You need to connect your Elvanto account before you can import data.
-              </p>
-              <div className="mt-4">
-                <a
-                  href="/app/settings?tab=integrations"
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-                >
-                  Go to Settings
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // No early return for unconnected state — Historical CSV tab is always available
 
   return (
     <div className="space-y-6 pb-32">
@@ -867,9 +973,10 @@ const ImportPage: React.FC = () => {
             )}
           </div>
 
-          {/* Source Tabs */}
+          {/* Source Tabs — always shown; Elvanto/PC tabs only when connected */}
           <div className="mt-6 border-b border-gray-200 dark:border-gray-700">
             <nav className="-mb-px flex space-x-8">
+              {isConnected && (
               <button
                 onClick={() => setSourceTab('elvanto')}
                 className={`${
@@ -881,7 +988,8 @@ const ImportPage: React.FC = () => {
                 <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
                 Elvanto
               </button>
-              {import.meta.env.DEV && (
+              )}
+              {planningCenterStatus.connected && (
               <button
                 onClick={() => setSourceTab('planning-center')}
                 className={`${
@@ -894,13 +1002,47 @@ const ImportPage: React.FC = () => {
                 Planning Center
               </button>
               )}
+              <button
+                onClick={() => setSourceTab('historical-csv')}
+                className={`${
+                  sourceTab === 'historical-csv'
+                    ? 'border-primary-500 text-primary-600'
+                    : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300'
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center`}
+              >
+                <CalendarDaysIcon className="h-5 w-5 mr-2" />
+                Historical CSV
+              </button>
             </nav>
           </div>
         </div>
       </div>
 
       {/* Elvanto Tab Content */}
-      {sourceTab === 'elvanto' && (
+      {sourceTab === 'elvanto' && !isConnected && (
+        <div className="max-w-2xl mx-auto">
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6">
+            <div className="flex">
+              <XCircleIcon className="h-6 w-6 text-yellow-600 mr-3" />
+              <div>
+                <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-300">Elvanto Not Connected</h3>
+                <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-400">
+                  You need to connect your Elvanto account before you can import data.
+                </p>
+                <div className="mt-4">
+                  <a
+                    href="/app/settings?tab=integrations"
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                  >
+                    Go to Settings
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {sourceTab === 'elvanto' && isConnected && (
         <>
       <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
         <div className="px-4 py-5 sm:p-6">
@@ -1675,8 +1817,8 @@ const ImportPage: React.FC = () => {
       </>
       )}
 
-      {/* Planning Center Tab Content (dev only) */}
-      {import.meta.env.DEV && sourceTab === 'planning-center' && (
+      {/* Planning Center Tab Content */}
+      {planningCenterStatus.enabled && sourceTab === 'planning-center' && (
         <>
         {planningCenterStatus.loading ? (
           <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
@@ -1759,37 +1901,45 @@ const ImportPage: React.FC = () => {
                     <p className="text-sm text-gray-500 dark:text-gray-400">
                       {pcPeopleLoaded
                         ? `${pcPeople.reduce((sum, f) => sum + f.members.length, 0)} people in ${pcPeople.length} families`
-                        : 'Load people from your Planning Center account to preview before importing.'}
+                        : pcPeopleLoading ? 'Loading people from Planning Center...' : ''}
                     </p>
                   </div>
                   <div className="flex space-x-2">
+                    {pcPeopleLoaded && pcPeople.length > 0 && (
+                      <>
+                        <button
+                          onClick={pcSelectedFamilies.size === pcPeople.filter(f => !f.alreadyImported).length ? pcDeselectAll : pcSelectAll}
+                          className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                          {pcSelectedFamilies.size === pcPeople.filter(f => !f.alreadyImported).length ? 'Deselect All' : 'Select All'}
+                        </button>
+                        <button
+                          onClick={handlePcImportPeople}
+                          disabled={pcImporting || pcSelectedFamilies.size === 0}
+                          className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {pcImporting ? (
+                            <>
+                              <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                              Importing...
+                            </>
+                          ) : (
+                            <>
+                              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                              Import{pcSelectedFamilies.size > 0 ? ` (${pcSelectedFamilies.size})` : ''}
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={loadPcPeople}
                       disabled={pcPeopleLoading}
                       className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
                     >
                       <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcPeopleLoading ? 'animate-spin' : ''}`} />
-                      {pcPeopleLoaded ? 'Refresh' : 'Load People'}
+                      Refresh
                     </button>
-                    {pcPeopleLoaded && pcPeople.length > 0 && (
-                      <button
-                        onClick={handlePcImportPeople}
-                        disabled={pcImporting}
-                        className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                      >
-                        {pcImporting ? (
-                          <>
-                            <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                            Importing...
-                          </>
-                        ) : (
-                          <>
-                            <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                            Import All
-                          </>
-                        )}
-                      </button>
-                    )}
                   </div>
                 </div>
 
@@ -1844,22 +1994,50 @@ const ImportPage: React.FC = () => {
                               );
                           })
                           .map((family) => (
-                            <div key={family.householdId} className="border border-gray-200 dark:border-gray-700 rounded-lg">
-                              <button
-                                onClick={() => togglePcFamily(family.householdId)}
-                                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700"
-                              >
-                                <div className="flex items-center">
-                                  {pcExpandedFamilies.has(family.householdId) ? (
-                                    <ChevronDownIcon className="h-4 w-4 text-gray-400 mr-2" />
-                                  ) : (
-                                    <ChevronRightIcon className="h-4 w-4 text-gray-400 mr-2" />
-                                  )}
-                                  <UserGroupIcon className="h-5 w-5 text-gray-400 mr-2" />
-                                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{family.familyName}</span>
-                                </div>
-                                <span className="text-xs text-gray-500 dark:text-gray-400">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
-                              </button>
+                            <div key={family.householdId} className={`border rounded-lg ${family.alreadyImported ? 'border-gray-200 dark:border-gray-700 opacity-60' : 'border-gray-200 dark:border-gray-700'}`}>
+                              <div className="flex items-center px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700">
+                                {/* Checkbox */}
+                                <input
+                                  type="checkbox"
+                                  checked={pcSelectedFamilies.has(family.householdId)}
+                                  disabled={family.alreadyImported}
+                                  onChange={() => togglePcFamilySelected(family.householdId)}
+                                  onClick={e => e.stopPropagation()}
+                                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 mr-3 shrink-0 disabled:opacity-40"
+                                />
+                                {/* Expand toggle */}
+                                <button
+                                  onClick={() => togglePcFamily(family.householdId)}
+                                  className="flex-1 flex items-center justify-between min-w-0"
+                                >
+                                  <div className="flex items-center min-w-0">
+                                    {pcExpandedFamilies.has(family.householdId) ? (
+                                      <ChevronDownIcon className="h-4 w-4 text-gray-400 mr-2 shrink-0" />
+                                    ) : (
+                                      <ChevronRightIcon className="h-4 w-4 text-gray-400 mr-2 shrink-0" />
+                                    )}
+                                    <UserGroupIcon className="h-5 w-5 text-gray-400 mr-2 shrink-0" />
+                                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{family.familyName}</span>
+                                    {family.alreadyImported && (
+                                      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 shrink-0">
+                                        <CheckCircleIcon className="h-3 w-3 mr-1" />
+                                        Already Imported
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400 ml-2 shrink-0">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
+                                </button>
+                                {!family.alreadyImported && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); setLinkModal({ householdId: family.householdId, familyName: family.familyName }); setLinkSearch(''); }}
+                                    className="ml-2 shrink-0 inline-flex items-center px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
+                                    title="Link to existing family in LMPG"
+                                  >
+                                    <LinkIcon className="h-3 w-3 mr-1" />
+                                    Link
+                                  </button>
+                                )}
+                              </div>
                               {pcExpandedFamilies.has(family.householdId) && (
                                 <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-2 bg-gray-50 dark:bg-gray-700/50">
                                   {family.members.map((member: any) => (
@@ -1886,12 +2064,6 @@ const ImportPage: React.FC = () => {
                   </>
                 )}
 
-                {!pcPeopleLoaded && !pcPeopleLoading && !pcError && (
-                  <div className="text-center py-12">
-                    <UsersIcon className="mx-auto h-12 w-12 text-gray-300" />
-                    <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Click "Load People" to fetch data from Planning Center.</p>
-                  </div>
-                )}
               </div>
             </div>
           )}
@@ -2013,6 +2185,225 @@ const ImportPage: React.FC = () => {
           </>
         )}
         </>
+      )}
+
+      {/* Link to existing family modal */}
+      {linkModal && createPortal(
+        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[10000]">
+          <div className="flex items-center justify-center min-h-screen p-4">
+            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Link to existing family</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    Choose which LMPG family represents <strong>{linkModal.familyName}</strong> in Planning Center.
+                  </p>
+                </div>
+                <button onClick={() => { setLinkModal(null); setLinkSearch(''); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 ml-4 shrink-0">
+                  <XCircleIcon className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="mb-3">
+                <div className="relative">
+                  <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search families..."
+                    value={linkSearch}
+                    onChange={e => setLinkSearch(e.target.value)}
+                    autoFocus
+                    className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
+                {lmpgFamilies
+                  .filter(f => !linkSearch || f.familyName.toLowerCase().includes(linkSearch.toLowerCase()))
+                  .map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => handleLinkFamily(f.id)}
+                      disabled={linking}
+                      className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+                    >
+                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{f.familyName}</span>
+                      {f.planningCenterId && (
+                        <span className="ml-2 text-xs text-green-600 dark:text-green-400">Already linked to PCO</span>
+                      )}
+                    </button>
+                  ))}
+                {lmpgFamilies.filter(f => !linkSearch || f.familyName.toLowerCase().includes(linkSearch.toLowerCase())).length === 0 && (
+                  <div className="px-4 py-6 text-center text-sm text-gray-400">No families found</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Historical CSV Tab Content */}
+      {sourceTab === 'historical-csv' && (
+        <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-1">Historical Attendance Import</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+              Upload a Sunday attendance CSV to backfill historical records. Each person is matched by exact first and last name. TRUE = present, FALSE = absent.
+            </p>
+
+            {hCsvError && (
+              <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-3 text-sm text-red-700 dark:text-red-400">
+                {hCsvError}
+              </div>
+            )}
+
+            {/* Step 1: Upload */}
+            {hCsvStep === 'upload' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Select CSV file
+                  </label>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={e => { setHCsvFile(e.target.files?.[0] || null); setHCsvError(null); }}
+                    className="block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100 dark:file:bg-primary-900/20 dark:file:text-primary-400"
+                  />
+                </div>
+                <button
+                  onClick={handleHCsvPreview}
+                  disabled={!hCsvFile || hCsvPreviewing}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {hCsvPreviewing ? (
+                    <><ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />Analysing...</>
+                  ) : (
+                    <>Preview</>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Step 2: Preview */}
+            {hCsvStep === 'preview' && hCsvPreview && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 text-center">
+                    <div className="text-2xl font-bold text-green-700 dark:text-green-400">{hCsvPreview.matched.length}</div>
+                    <div className="text-xs text-green-600 dark:text-green-500 mt-1">Matched</div>
+                  </div>
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-center">
+                    <div className="text-2xl font-bold text-yellow-700 dark:text-yellow-400">{hCsvPreview.unmatched.length}</div>
+                    <div className="text-xs text-yellow-600 dark:text-yellow-500 mt-1">No name match</div>
+                  </div>
+                  <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg p-4 text-center">
+                    <div className="text-2xl font-bold text-orange-700 dark:text-orange-400">{hCsvPreview.noGatherings.length}</div>
+                    <div className="text-xs text-orange-600 dark:text-orange-500 mt-1">No Sunday gathering</div>
+                  </div>
+                </div>
+
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{hCsvPreview.dateCount}</span> Sunday dates from{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{hCsvPreview.dates[0]}</span> to{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{hCsvPreview.dates[hCsvPreview.dates.length - 1]}</span>
+                </p>
+
+                {(hCsvPreview.unmatched.length > 0 || hCsvPreview.noGatherings.length > 0) && (
+                  <div>
+                    <button
+                      onClick={() => setHCsvShowUnmatched(v => !v)}
+                      className="text-sm text-primary-600 hover:text-primary-500 flex items-center"
+                    >
+                      {hCsvShowUnmatched ? <ChevronDownIcon className="h-4 w-4 mr-1" /> : <ChevronRightIcon className="h-4 w-4 mr-1" />}
+                      {hCsvShowUnmatched ? 'Hide' : 'Show'} unmatched names ({hCsvPreview.unmatched.length + hCsvPreview.noGatherings.length})
+                    </button>
+                    {hCsvShowUnmatched && (
+                      <div className="mt-2 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-md divide-y divide-gray-100 dark:divide-gray-700">
+                        {hCsvPreview.unmatched.map((u, i) => (
+                          <div key={i} className="px-3 py-2 flex justify-between text-sm">
+                            <span className="text-gray-900 dark:text-gray-100">{u.firstName} {u.lastName}</span>
+                            <span className="text-yellow-600 dark:text-yellow-400 text-xs">{u.reason}</span>
+                          </div>
+                        ))}
+                        {hCsvPreview.noGatherings.map((n, i) => (
+                          <div key={`ng-${i}`} className="px-3 py-2 flex justify-between text-sm">
+                            <span className="text-gray-900 dark:text-gray-100">{n.firstName} {n.lastName}</span>
+                            <span className="text-orange-600 dark:text-orange-400 text-xs">{n.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    onClick={handleHCsvImport}
+                    disabled={hCsvImporting || hCsvPreview.matched.length === 0}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {hCsvImporting ? (
+                      <><ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />Importing...</>
+                    ) : (
+                      <>Import {hCsvPreview.matched.length} people</>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => { setHCsvStep('upload'); setHCsvPreview(null); setHCsvFile(null); setHCsvShowUnmatched(false); }}
+                    className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Done */}
+            {hCsvStep === 'done' && hCsvResult && (
+              <div className="space-y-5">
+                <div className="flex items-center text-green-600 dark:text-green-400">
+                  <CheckCircleIcon className="h-6 w-6 mr-2" />
+                  <span className="font-medium">Import complete</span>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 text-center">
+                    <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{hCsvResult.recordsWritten}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Records written</div>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 text-center">
+                    <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{hCsvResult.sessionsCreated}</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Sessions created</div>
+                  </div>
+                </div>
+
+                {(hCsvResult.unmatched.length > 0 || hCsvResult.noGatherings.length > 0) && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {hCsvResult.unmatched.length + hCsvResult.noGatherings.length} people were not imported.
+                    </p>
+                    <button
+                      onClick={() => handleHCsvDownloadUnmatched(hCsvResult.unmatched, hCsvResult.noGatherings)}
+                      className="inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+                    >
+                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                      Download unmatched names (CSV)
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => { setHCsvStep('upload'); setHCsvPreview(null); setHCsvResult(null); setHCsvFile(null); setHCsvShowUnmatched(false); }}
+                  className="text-sm text-primary-600 hover:text-primary-500"
+                >
+                  Import another file
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

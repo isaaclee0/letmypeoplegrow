@@ -1,5 +1,8 @@
 const express = require('express');
 const https = require('https');
+const fs = require('fs');
+const multer = require('multer');
+const csv = require('csv-parser');
 const Database = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
@@ -138,9 +141,6 @@ function namesMatch(name1, name2) {
   
   // Exact match after normalization
   if (n1 === n2) return true;
-  
-  // Check if one contains the other (for partial matches)
-  if (n1.includes(n2) || n2.includes(n1)) return true;
   
   // Extract surname (first part before comma) and compare
   const getSurname = (n) => n.split(',')[0].trim();
@@ -1880,9 +1880,10 @@ router.get('/planning-center/people', async (req, res) => {
       return res.status(400).json({ error: 'Planning Center not connected.' });
     }
 
-    // Fetch all people from Planning Center
+    // Fetch all people from Planning Center, including household and address data
     let allPeople = [];
-    let nextUrl = 'https://api.planningcenteronline.com/people/v2/people?per_page=100';
+    let allIncluded = [];
+    let nextUrl = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households,addresses';
 
     while (nextUrl) {
       const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
@@ -1893,33 +1894,63 @@ router.get('/planning-center/people', async (req, res) => {
 
       const data = response.data;
       allPeople = allPeople.concat(data.data || []);
+      allIncluded = allIncluded.concat(data.included || []);
       nextUrl = data.links?.next || null;
     }
 
-    // Group people by household
-    const households = {};
-    for (const person of allPeople) {
-      const householdId = person.relationships?.household?.data?.id || `individual_${person.id}`;
+    // Build lookup maps from included resources
+    const householdNames = {};
+    const addressGroupKey = {}; // addressId -> normalized group key
 
-      if (!households[householdId]) {
-        households[householdId] = [];
+    for (const item of allIncluded) {
+      if (item.type === 'Household') {
+        householdNames[item.id] = item.attributes.name;
+      } else if (item.type === 'Address') {
+        const street = (item.attributes.street || '').toLowerCase().trim();
+        const zip = (item.attributes.zip || '').toLowerCase().trim();
+        if (street) {
+          addressGroupKey[item.id] = `addr_${street}_${zip}`;
+        }
       }
-      households[householdId].push(person);
+    }
+
+    // Group people: prefer household ID, fall back to address-based grouping
+    const groups = {};
+    for (const person of allPeople) {
+      // PCO uses plural 'households' (has-many relationship)
+      const householdData = person.relationships?.households?.data;
+      let groupId = householdData?.[0]?.id || null;
+
+      if (!groupId) {
+        // Fall back to address-based grouping
+        const addressData = person.relationships?.addresses?.data || [];
+        const primaryAddr = addressData.find(a => {
+          const inc = allIncluded.find(i => i.id === a.id && i.type === 'Address');
+          return inc?.attributes?.primary;
+        }) || addressData[0];
+
+        groupId = (primaryAddr && addressGroupKey[primaryAddr.id]) || `individual_${person.id}`;
+      }
+
+      if (!groups[groupId]) {
+        groups[groupId] = { householdName: householdNames[groupId] || null, members: [] };
+      }
+      groups[groupId].members.push(person);
     }
 
     // Format response
-    const families = Object.entries(households).map(([householdId, members]) => {
-      const lastNames = [...new Set(members.map(m => m.attributes.last_name).filter(Boolean))];
-      const familyName = lastNames.length === 1
-        ? `${lastNames[0]} Family`
-        : lastNames.length === 2
-        ? `${lastNames[0]} & ${lastNames[1]}`
-        : lastNames.length > 0
-        ? `${lastNames[0]} Family`
-        : 'Unknown Family';
+    const families = Object.entries(groups).map(([groupId, { householdName, members }]) => {
+      // Build LMPG-style name: "Lastname, Firstname and Firstname" using adults (non-children) first
+      const adults = members.filter(m => !m.attributes.child);
+      const nameMembers = adults.length > 0 ? adults : members;
+      const lastName = nameMembers[0]?.attributes.last_name || 'Unknown';
+      const firstNames = nameMembers.map(m => m.attributes.first_name).filter(Boolean);
+      const familyName = firstNames.length > 0
+        ? `${lastName}, ${firstNames.join(' and ')}`
+        : lastName;
 
       return {
-        householdId,
+        householdId: groupId,
         familyName,
         members: members.map(m => ({
           id: m.id,
@@ -1935,10 +1966,37 @@ router.get('/planning-center/people', async (req, res) => {
       };
     });
 
+    // Check which families already exist in the local database
+    const localFamilies = await Database.query(
+      `SELECT id, family_name, planning_center_id FROM families WHERE church_id = ?`,
+      [churchId]
+    );
+    const localPcIds = new Set(localFamilies.map(f => f.planning_center_id).filter(Boolean));
+    const localFamilyNames = localFamilies.map(f => f.family_name);
+    let alreadyImportedCount = 0;
+    for (const family of families) {
+      // Prefer exact PCO ID match, fall back to name matching
+      const matchedLocal = localPcIds.has(family.householdId)
+        ? localFamilies.find(lf => lf.planning_center_id === family.householdId)
+        : localFamilies.find(lf => namesMatch(family.familyName, lf.family_name));
+      family.alreadyImported = !!matchedLocal;
+      if (family.alreadyImported) {
+        alreadyImportedCount++;
+        // Backfill planning_center_id for families imported before this feature
+        if (matchedLocal && !matchedLocal.planning_center_id) {
+          Database.query(
+            `UPDATE families SET planning_center_id = ? WHERE id = ? AND church_id = ?`,
+            [family.householdId, matchedLocal.id, churchId]
+          ).catch(e => logger.warn(`Failed to backfill planning_center_id: ${e.message}`));
+        }
+      }
+    }
+
     res.json({
       success: true,
       totalPeople: allPeople.length,
       totalFamilies: families.length,
+      alreadyImportedCount,
       families
     });
   } catch (error) {
@@ -2035,6 +2093,31 @@ router.get('/planning-center/checkins', async (req, res) => {
   }
 });
 
+router.post('/planning-center/link-family', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const { householdId, familyId } = req.body;
+
+    if (!householdId || !familyId) {
+      return res.status(400).json({ error: 'householdId and familyId are required.' });
+    }
+
+    const result = await Database.query(
+      `UPDATE families SET planning_center_id = ? WHERE id = ? AND church_id = ?`,
+      [householdId, familyId, churchId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Family not found.' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Link Planning Center family error:', error);
+    res.status(500).json({ error: 'Failed to link family.' });
+  }
+});
+
 router.post('/planning-center/import-people', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -2052,9 +2135,13 @@ router.post('/planning-center/import-people', async (req, res) => {
     const importedIndividuals = [];
     const errors = [];
 
-    // Fetch all people from Planning Center
+    // Optional: only import specific households
+    const { householdIds } = req.body; // array of householdId strings, or undefined = import all
+
+    // Fetch all people from Planning Center (same logic as browse endpoint)
     let allPeople = [];
-    let nextUrl = 'https://api.planningcenteronline.com/people/v2/people?per_page=100';
+    let allIncluded = [];
+    let nextUrl = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households,addresses';
 
     while (nextUrl) {
       const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
@@ -2065,8 +2152,7 @@ router.post('/planning-center/import-people', async (req, res) => {
 
       const data = response.data;
       allPeople = allPeople.concat(data.data || []);
-
-      // Check for next page
+      allIncluded = allIncluded.concat(data.included || []);
       nextUrl = data.links?.next || null;
 
       logger.info(`Fetched ${allPeople.length} people so far...`);
@@ -2074,44 +2160,81 @@ router.post('/planning-center/import-people', async (req, res) => {
 
     logger.info(`Total people fetched: ${allPeople.length}`);
 
-    // Group people by household (family)
+    // Build address lookup (same as browse endpoint)
+    const addressGroupKey = {};
+    for (const item of allIncluded) {
+      if (item.type === 'Address') {
+        const street = (item.attributes.street || '').toLowerCase().trim();
+        const zip = (item.attributes.zip || '').toLowerCase().trim();
+        if (street) addressGroupKey[item.id] = `addr_${street}_${zip}`;
+      }
+    }
+
+    // Group people by household with address fallback
     const households = {};
     for (const person of allPeople) {
-      const householdId = person.relationships?.household?.data?.id || `individual_${person.id}`;
-
-      if (!households[householdId]) {
-        households[householdId] = [];
+      const householdData = person.relationships?.households?.data;
+      let groupId = householdData?.[0]?.id || null;
+      if (!groupId) {
+        const addressData = person.relationships?.addresses?.data || [];
+        const primaryAddr = addressData.find(a => {
+          const inc = allIncluded.find(i => i.id === a.id && i.type === 'Address');
+          return inc?.attributes?.primary;
+        }) || addressData[0];
+        groupId = (primaryAddr && addressGroupKey[primaryAddr.id]) || `individual_${person.id}`;
       }
-
-      households[householdId].push(person);
+      if (!households[groupId]) households[groupId] = [];
+      households[groupId].push(person);
     }
 
     logger.info(`Grouped into ${Object.keys(households).length} households`);
 
+    // Load existing family names for duplicate detection
+    const localFamilies = await Database.query(
+      `SELECT id, family_name, planning_center_id FROM families WHERE church_id = ?`,
+      [churchId]
+    );
+    const localFamilyNames = localFamilies.map(f => f.family_name);
+
     // Process each household
     for (const [householdId, members] of Object.entries(households)) {
-      try {
-        // Determine family name
-        const lastNames = [...new Set(members.map(m => m.attributes.last_name).filter(Boolean))];
-        const familyName = lastNames.length === 1
-          ? `${lastNames[0]} Family`
-          : lastNames.length === 2
-          ? `${lastNames[0]} & ${lastNames[1]}`
-          : lastNames.length > 0
-          ? `${lastNames[0]} Family`
-          : 'Unknown Family';
+      // Skip if caller specified a subset and this isn't in it
+      if (householdIds && householdIds.length > 0 && !householdIds.includes(householdId)) continue;
 
-        // Create family
+      try {
+        // Build LMPG-style family name
+        const adults = members.filter(m => !m.attributes.child);
+        const nameMembers = adults.length > 0 ? adults : members;
+        const lastName = nameMembers[0]?.attributes.last_name || 'Unknown';
+        const firstNames = nameMembers.map(m => m.attributes.first_name).filter(Boolean);
+        const familyName = firstNames.length > 0
+          ? `${lastName}, ${firstNames.join(' and ')}`
+          : lastName;
+
+        // Skip families that already exist, but backfill planning_center_id if missing
+        const matchedFamily = localFamilies.find(lf => namesMatch(familyName, lf.family_name));
+        if (matchedFamily) {
+          logger.info(`Skipping already-imported family: ${familyName}`);
+          if (!matchedFamily.planning_center_id) {
+            await Database.query(
+              `UPDATE families SET planning_center_id = ? WHERE id = ? AND church_id = ?`,
+              [householdId, matchedFamily.id, churchId]
+            );
+            logger.info(`Backfilled planning_center_id for family: ${familyName}`);
+          }
+          continue;
+        }
+
+        // Create family, storing the PCO household ID for sync tracking
         const familyResult = await Database.query(`
-          INSERT INTO families (church_id, family_name, created_by, created_at)
-          VALUES (?, ?, ?, datetime('now'))
-        `, [churchId, familyName, userId]);
+          INSERT INTO families (church_id, family_name, planning_center_id, created_by, created_at)
+          VALUES (?, ?, ?, ?, datetime('now'))
+        `, [churchId, familyName, householdId, userId]);
 
         const familyId = familyResult.insertId;
         importedFamilies.push({ id: familyId, name: familyName });
 
-        // Sort members to identify main contacts (adults first)
-        const adults = members.filter(m => m.attributes.child === false);
+        // Sort members: adults first, then children
         const children = members.filter(m => m.attributes.child === true);
         const sortedMembers = [...adults, ...children];
 
@@ -2125,15 +2248,16 @@ router.post('/planning-center/import-people', async (req, res) => {
           const individualResult = await Database.query(`
             INSERT INTO individuals
             (church_id, family_id, first_name, last_name,
-             people_type, is_child, is_active, created_by, created_at)
-            VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'))
+             people_type, is_child, is_active, created_by, created_at, planning_center_id)
+            VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'), ?)
           `, [
             churchId,
             familyId,
             attrs.first_name || '',
             attrs.last_name || '',
             isChild,
-            userId
+            userId,
+            person.id  // PCO person ID
           ]);
 
           importedIndividuals.push({
@@ -2250,5 +2374,253 @@ router.post('/planning-center/import-checkins', async (req, res) => {
     });
   }
 });
+
+// ─── Historical CSV Attendance Backfill ─────────────────────────────────────
+
+const csvUpload = multer({
+  dest: 'uploads/',
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only CSV files are allowed'), false);
+    }
+  },
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+const MONTH_MAP = {
+  Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+  Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+};
+
+function parseDateHeader(str) {
+  // "9-Feb-25" → "2025-02-09"
+  const [day, mon, yr] = str.trim().split('-');
+  if (!day || !mon || !yr || !MONTH_MAP[mon]) return null;
+  return `20${yr}-${MONTH_MAP[mon]}-${day.padStart(2, '0')}`;
+}
+
+function isDateHeader(str) {
+  return /^\d{1,2}-[A-Z][a-z]{2}-\d{2}$/.test(str.trim());
+}
+
+async function parseHistoricalCsv(filePath) {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on('data', (row) => rows.push(row))
+      .on('end', () => resolve(rows))
+      .on('error', reject);
+  });
+}
+
+async function matchAndBuildRecords(rows, churchId) {
+  // Extract date column names from first row keys
+  const firstRow = rows[0] || {};
+  const dateHeaders = Object.keys(firstRow).filter(isDateHeader);
+
+  // Load all individuals for this church once
+  const individuals = await Database.query(
+    `SELECT id, first_name, last_name, people_type FROM individuals WHERE church_id = ?`,
+    [churchId]
+  );
+  // Build lookup: "firstname lastname" → individual
+  const nameMap = new Map();
+  for (const ind of individuals) {
+    const key = `${ind.first_name.trim().toLowerCase()} ${ind.last_name.trim().toLowerCase()}`;
+    nameMap.set(key, ind);
+  }
+
+  // Load all gathering assignments for Sunday gatherings
+  const sundayGatherings = await Database.query(
+    `SELECT gl.individual_id, gt.id AS gathering_type_id, gt.name AS gathering_name
+     FROM gathering_lists gl
+     JOIN gathering_types gt ON gl.gathering_type_id = gt.id
+     WHERE gl.church_id = ? AND gt.day_of_week = 'Sunday' AND gt.attendance_type = 'standard'`,
+    [churchId]
+  );
+  // Build map: individual_id → [{ gathering_type_id, gathering_name }]
+  const gatheringMap = new Map();
+  for (const row of sundayGatherings) {
+    if (!gatheringMap.has(row.individual_id)) gatheringMap.set(row.individual_id, []);
+    gatheringMap.get(row.individual_id).push({ id: row.gathering_type_id, name: row.gathering_name });
+  }
+
+  const matched = [];
+  const unmatched = [];
+  const noGatherings = [];
+
+  for (const row of rows) {
+    const firstName = (row['First Name'] || '').trim();
+    const lastName = (row['Last Name'] || '').trim();
+    if (!firstName && !lastName) continue;
+
+    const key = `${firstName.toLowerCase()} ${lastName.toLowerCase()}`;
+    const individual = nameMap.get(key);
+
+    if (!individual) {
+      unmatched.push({ firstName, lastName, reason: 'No exact match in database' });
+      continue;
+    }
+
+    const gatherings = gatheringMap.get(individual.id) || [];
+    if (gatherings.length === 0) {
+      noGatherings.push({ firstName, lastName, individualId: individual.id, reason: 'Not assigned to any Sunday gathering' });
+      continue;
+    }
+
+    // Build attendance entries per date
+    const entries = [];
+    let trueCount = 0;
+    let falseCount = 0;
+    for (const header of dateHeaders) {
+      const dateStr = parseDateHeader(header);
+      if (!dateStr) continue;
+      const present = (row[header] || '').trim().toUpperCase() === 'TRUE' ? 1 : 0;
+      if (present) trueCount++; else falseCount++;
+      entries.push({ date: dateStr, present });
+    }
+
+    matched.push({
+      firstName,
+      lastName,
+      individualId: individual.id,
+      peopleType: individual.people_type,
+      gatherings,
+      entries,
+      trueCount,
+      falseCount
+    });
+  }
+
+  return { dateHeaders, matched, unmatched, noGatherings };
+}
+
+// Preview — no DB writes
+router.post('/historical-csv-preview',
+  verifyToken,
+  csvUpload.single('file'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded.' });
+    const filePath = req.file.path;
+    try {
+      const rows = await parseHistoricalCsv(filePath);
+      if (!rows.length) return res.status(400).json({ error: 'CSV file is empty.' });
+
+      const { dateHeaders, matched, unmatched, noGatherings } = await matchAndBuildRecords(rows, req.user.church_id);
+
+      const dates = dateHeaders.map(parseDateHeader).filter(Boolean);
+      const previewMatched = matched.map(m => ({
+        name: `${m.firstName} ${m.lastName}`,
+        individualId: m.individualId,
+        gatherings: m.gatherings,
+        trueCount: m.trueCount,
+        falseCount: m.falseCount
+      }));
+
+      res.json({
+        dates,
+        dateCount: dates.length,
+        matched: previewMatched,
+        unmatched,
+        noGatherings
+      });
+    } catch (err) {
+      logger.error('Historical CSV preview error:', err);
+      res.status(500).json({ error: 'Failed to parse CSV.', details: err.message });
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
+  }
+);
+
+// Execute — writes attendance records
+router.post('/historical-csv-execute',
+  verifyToken,
+  csvUpload.single('file'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded.' });
+    const filePath = req.file.path;
+    try {
+      const rows = await parseHistoricalCsv(filePath);
+      if (!rows.length) return res.status(400).json({ error: 'CSV file is empty.' });
+
+      const { matched, unmatched, noGatherings } = await matchAndBuildRecords(rows, req.user.church_id);
+
+      let sessionsCreated = 0;
+      let recordsWritten = 0;
+
+      await Database.transaction(async (conn) => {
+        for (const person of matched) {
+          for (const entry of person.entries) {
+            for (const gathering of person.gatherings) {
+              // Upsert attendance session
+              const existing = await conn.query(
+                `SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?`,
+                [gathering.id, entry.date, req.user.church_id]
+              );
+              let sessionId;
+              if (existing.length > 0) {
+                sessionId = existing[0].id;
+              } else {
+                const ins = await conn.query(
+                  `INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id) VALUES (?, ?, ?, ?)`,
+                  [gathering.id, entry.date, req.user.id, req.user.church_id]
+                );
+                sessionId = ins.insertId;
+                sessionsCreated++;
+              }
+
+              // Upsert attendance record
+              await conn.query(
+                `INSERT INTO attendance_records (session_id, individual_id, present, church_id, people_type_at_time)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(session_id, individual_id) DO UPDATE SET
+                   present = excluded.present,
+                   people_type_at_time = excluded.people_type_at_time,
+                   updated_at = CURRENT_TIMESTAMP`,
+                [sessionId, person.individualId, entry.present, req.user.church_id, person.peopleType]
+              );
+              recordsWritten++;
+            }
+          }
+
+          // Update last_attendance_date to latest TRUE date
+          if (person.trueCount > 0) {
+            const latestPresent = person.entries
+              .filter(e => e.present)
+              .map(e => e.date)
+              .sort()
+              .pop();
+            if (latestPresent) {
+              await conn.query(
+                `UPDATE individuals SET last_attendance_date = ?
+                 WHERE id = ? AND church_id = ?
+                   AND (last_attendance_date IS NULL OR last_attendance_date < ?)`,
+                [latestPresent, person.individualId, req.user.church_id, latestPresent]
+              );
+            }
+          }
+        }
+      });
+
+      res.json({
+        success: true,
+        sessionsCreated,
+        recordsWritten,
+        matchedCount: matched.length,
+        unmatched,
+        noGatherings
+      });
+    } catch (err) {
+      logger.error('Historical CSV execute error:', err);
+      res.status(500).json({ error: 'Failed to import attendance.', details: err.message });
+    } finally {
+      fs.unlink(filePath, () => {});
+    }
+  }
+);
 
 module.exports = router;

@@ -1037,65 +1037,51 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     const results = {};
 
     try {
-      // PARALLEL BATCH 1: Fetch all church people (doesn't depend on anything)
+      // PARALLEL BATCH 1: Fetch all church people (single JOIN query instead of N+1)
       const allPeoplePromise = (async () => {
-        const allFamilies = await Database.query(`
-          SELECT DISTINCT
-            f.id as family_id,
-            f.family_name,
-            f.family_notes,
-            f.family_type,
+        const allMembers = await Database.query(`
+          SELECT
+            i.id, i.first_name, i.last_name, i.people_type, i.is_child,
+            f.id as family_id, f.family_name, f.family_notes, f.family_type,
             COALESCE(f.last_attended, f.created_at) as last_activity
-          FROM families f
-          JOIN individuals i ON f.id = i.family_id
+          FROM individuals i
+          JOIN families f ON i.family_id = f.id
           WHERE i.is_active = 1
-            AND f.church_id = ?
-          GROUP BY f.id
-          ORDER BY last_activity DESC, f.family_name
+            AND i.church_id = ?
+          ORDER BY f.family_name, i.first_name
         `, [req.user.church_id]);
 
-        const processedPeople = [];
-        for (const family of allFamilies) {
-          const familyMembers = await Database.query(`
-            SELECT id, first_name, last_name, people_type, is_child
-            FROM individuals
-            WHERE family_id = ? AND is_active = 1 AND church_id = ?
-            ORDER BY first_name
-          `, [family.family_id, req.user.church_id]);
-
-          for (const member of familyMembers) {
-            const isVisitor = ['local_visitor', 'traveller_visitor'].includes(member.people_type);
-            processedPeople.push({
-              id: member.id,
-              name: `${member.first_name} ${member.last_name}`,
-              isChild: Boolean(member.is_child),
-              visitorType: isVisitor ? (member.people_type === 'local_visitor' ? 'potential_regular' : 'temporary_other') : 'regular',
-              visitorFamilyGroup: family.family_id.toString(),
-              notes: family.family_notes,
-              lastAttended: family.last_activity,
-              familyId: family.family_id,
-              familyName: family.family_name
-            });
-          }
-        }
-        return processedPeople;
+        return allMembers.map(member => {
+          const isVisitor = ['local_visitor', 'traveller_visitor'].includes(member.people_type);
+          return {
+            id: member.id,
+            name: `${member.first_name} ${member.last_name}`,
+            isChild: Boolean(member.is_child),
+            visitorType: isVisitor ? (member.people_type === 'local_visitor' ? 'potential_regular' : 'temporary_other') : 'regular',
+            visitorFamilyGroup: member.family_id.toString(),
+            notes: member.family_notes,
+            lastAttended: member.last_activity,
+            familyId: member.family_id,
+            familyName: member.family_name
+          };
+        });
       })();
 
       // PARALLEL BATCH 2: Fetch recent visitors (doesn't depend on main attendance)
       const recentVisitorsPromise = (async () => {
         const visitorConfig = await getVisitorConfig(req.user.church_id);
-        const result = await getRecentVisitors(gatheringTypeId, req.user.church_id, date, visitorConfig);
-        return result.visitors;
+        return await getRecentVisitors(gatheringTypeId, req.user.church_id, date, visitorConfig);
       })();
 
       // Wait for parallel operations
-      const [allChurchPeople, recentVisitors] = await Promise.all([
+      const [allChurchPeople, recentVisitorsResult] = await Promise.all([
         allPeoplePromise,
         recentVisitorsPromise
       ]);
 
       results.allChurchPeople = allChurchPeople;
-      results.recentVisitors = recentVisitors;
+      results.recentVisitors = recentVisitorsResult.visitors;
+      results.recentlyPresentIds = recentVisitorsResult.recentlyPresentIds;
 
     } catch (parallelError) {
       console.error('Error in parallel data fetch:', parallelError);
@@ -1136,8 +1122,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     let rosterSnapshotted = false;
     let visitors = [];
 
-    const visitorConfig = await getVisitorConfig(req.user.church_id);
-    const { recentlyPresentIds } = await getRecentVisitors(gatheringTypeId, req.user.church_id, date, visitorConfig);
+    // Reuse recentlyPresentIds from the parallel batch above (avoids duplicate DB call)
+    const recentlyPresentIds = results.recentlyPresentIds || new Set();
 
     if (sessions.length > 0) {
       sessionId = sessions[0].id;
