@@ -76,7 +76,7 @@ type SourceTab = 'elvanto' | 'planning-center' | 'historical-csv';
 
 const ImportPage: React.FC = () => {
   // Source tab state (top-level)
-  const [sourceTab, setSourceTab] = useState<SourceTab>('historical-csv');
+  const [sourceTab, setSourceTab] = useState<SourceTab>(import.meta.env.DEV ? 'historical-csv' : 'elvanto');
 
   // Elvanto tab state
   const [activeTab, setActiveTab] = useState<TabType>('people');
@@ -1002,6 +1002,7 @@ const ImportPage: React.FC = () => {
                 Planning Center
               </button>
               )}
+              {import.meta.env.DEV && (
               <button
                 onClick={() => setSourceTab('historical-csv')}
                 className={`${
@@ -1013,6 +1014,7 @@ const ImportPage: React.FC = () => {
                 <CalendarDaysIcon className="h-5 w-5 mr-2" />
                 Historical CSV
               </button>
+              )}
             </nav>
           </div>
         </div>
@@ -2244,8 +2246,8 @@ const ImportPage: React.FC = () => {
         document.body
       )}
 
-      {/* Historical CSV Tab Content */}
-      {sourceTab === 'historical-csv' && (
+      {/* Historical CSV Tab Content — dev only */}
+      {import.meta.env.DEV && sourceTab === 'historical-csv' && (
         <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-1">Historical Attendance Import</h2>
