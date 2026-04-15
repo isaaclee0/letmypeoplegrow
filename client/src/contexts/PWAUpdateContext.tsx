@@ -58,31 +58,28 @@ export const PWAUpdateProvider: React.FC<PWAUpdateProviderProps> = ({ children }
       onUpdate: (registration) => {
         setUpdateAvailable(true);
         setShowUpdateNotification(true);
-        
-        // Store the waiting worker for later use
+
+        // Show loading overlay immediately — the controllerchange listener in
+        // serviceWorker.ts handles the reload for the normal case where the SW
+        // called skipWaiting() during install and has already activated.
+        console.log('PWA update detected - showing loading overlay');
+        showLoading('Updating app...', false);
+
+        // Fallback: if the SW is still in the waiting state (skipWaiting failed
+        // during install), send the message manually and force a reload.
         if (registration.waiting) {
           setWaitingWorker(registration.waiting);
-          
-          // Show loading overlay and apply the update after a short delay
           setTimeout(() => {
-            console.log('Auto-applying PWA update...');
-            showLoading('Updating app...', false);
-            
+            console.log('Auto-applying PWA update via waiting worker...');
             if (registration.waiting) {
-              // Send message to service worker to skip waiting and activate
               registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-              
-              // Add a small delay to let the service worker process the message
               setTimeout(() => {
                 console.log('Reloading page after service worker update');
-                // Force a hard refresh to bypass all caches
                 window.location.reload();
               }, 500);
             }
-          }, 1000); // Reduced delay to 1 second for faster updates
+          }, 1000);
         }
-        
-        console.log('PWA update available - auto-applying in 2 seconds');
       },
       onSuccess: (registration) => {
         console.log('PWA content is cached for offline use.');

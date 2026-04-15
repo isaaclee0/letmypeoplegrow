@@ -77,10 +77,21 @@ export function register(config?: Config) {
 
 function registerValidSW(swUrl: string, config?: Config) {
   // Force cache bypass for all platforms
-  const swOptions = { 
+  const swOptions = {
     updateViaCache: 'none',
     scope: '/'
   };
+
+  // Listen for controller changes so we can reload when the new SW activates.
+  // hadController ensures we only reload on updates, not on first-ever install.
+  const hadController = !!navigator.serviceWorker.controller;
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
+  });
 
   navigator.serviceWorker
     .register(swUrl, swOptions)
