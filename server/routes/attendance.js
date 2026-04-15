@@ -1281,7 +1281,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       )`;
     }
 
-    attendanceListQuery += ` ORDER BY f.family_name, i.first_name`;
+    attendanceListQuery += ` ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)`;
 
     let attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
 
@@ -1305,7 +1305,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
           AND (f.family_type = 'regular' OR f.family_type IS NULL)
-        ORDER BY i.last_name, i.first_name
+        ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)
       `, [sessionId, req.user.church_id]);
 
       for (const record of orphanedRecords) {
@@ -1464,7 +1464,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
         snapshotAttendanceParams.push(searchTerm, searchTerm, searchTerm);
       }
 
-      snapshotAttendanceQuery += ` ORDER BY i.last_name, i.first_name`;
+      snapshotAttendanceQuery += ` ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)`;
       const attendanceList = await Database.query(snapshotAttendanceQuery, snapshotAttendanceParams);
 
       // Visitor families from the snapshot
@@ -1819,7 +1819,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
       )`;
     }
 
-    attendanceListQuery += ` ORDER BY i.last_name, i.first_name`;
+    attendanceListQuery += ` ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)`;
 
     let attendanceList = await Database.query(attendanceListQuery, attendanceListParams);
 
@@ -1843,7 +1843,7 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
           AND ar.church_id = ?
           AND COALESCE(ar.people_type_at_time, i.people_type, 'regular') = 'regular'
           AND (f.family_type = 'regular' OR f.family_type IS NULL)
-        ORDER BY i.last_name, i.first_name
+        ORDER BY LOWER(COALESCE(f.family_name, '')), LOWER(i.first_name)
       `, [sessionId, req.user.church_id]);
 
       for (const record of orphanedRecords) {

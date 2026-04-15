@@ -891,10 +891,17 @@ const PeoplePage: React.FC = () => {
       const aChild = a.isChild ? 1 : 0;
       const bChild = b.isChild ? 1 : 0;
       if (aChild !== bChild) return aChild - bChild;
-      const lastNameComparison = a.lastName.localeCompare(b.lastName);
+      const lastNameComparison = a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' });
       if (lastNameComparison !== 0) return lastNameComparison;
-      return a.firstName.localeCompare(b.firstName);
+      return a.firstName.localeCompare(b.firstName, undefined, { sensitivity: 'base' });
     });
+  });
+
+  // Sort groups by family name, case-insensitive (so "de Puit" sorts before "Zimmerman")
+  filteredGroupedPeople.sort((a: any, b: any) => {
+    const nameA = (a.familyName || '').toLowerCase();
+    const nameB = (b.familyName || '').toLowerCase();
+    return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
   });
 
   // Build visitor groups filtered by selected gathering and search term
@@ -941,11 +948,19 @@ const PeoplePage: React.FC = () => {
         const aChild = a.isChild ? 1 : 0;
         const bChild = b.isChild ? 1 : 0;
         if (aChild !== bChild) return aChild - bChild;
-        const ln = a.lastName.localeCompare(b.lastName);
+        const ln = a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' });
         if (ln !== 0) return ln;
-        return a.firstName.localeCompare(b.firstName);
+        return a.firstName.localeCompare(b.firstName, undefined, { sensitivity: 'base' });
       });
     });
+
+    // Sort visitor groups by family name, case-insensitive
+    result.sort((a: any, b: any) => {
+      const nameA = (a.familyName || '').toLowerCase();
+      const nameB = (b.familyName || '').toLowerCase();
+      return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+    });
+
     return result;
   }, [groupedVisitors, selectedGathering, searchTerm]);
 
@@ -1100,9 +1115,9 @@ const PeoplePage: React.FC = () => {
     const aChild = a.isChild ? 1 : 0;
     const bChild = b.isChild ? 1 : 0;
     if (aChild !== bChild) return aChild - bChild;
-    const lastNameComparison = a.lastName.localeCompare(b.lastName);
+    const lastNameComparison = a.lastName.localeCompare(b.lastName, undefined, { sensitivity: 'base' });
     if (lastNameComparison !== 0) return lastNameComparison;
-    return a.firstName.localeCompare(b.firstName);
+    return a.firstName.localeCompare(b.firstName, undefined, { sensitivity: 'base' });
   });
 
   // Calculate people count for display
