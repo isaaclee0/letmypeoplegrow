@@ -489,6 +489,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   };
 
   const handleAddPeople = async () => {
+    let createdFamilyId: number | null = null;
+    let createdIndividualIds: number[] = [];
+
     try {
       setIsLoading(true);
       setError('');
@@ -519,6 +522,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         const familyResponse = await familiesAPI.create({
           familyName: familyName
         });
+        createdFamilyId = familyResponse.data.id;
 
         const individualPromises = people.map(person =>
           individualsAPI.create({
@@ -530,7 +534,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
         );
 
         const individualResponses = await Promise.all(individualPromises);
-        const individualIds = individualResponses.map(response => response.data.id);
+        createdIndividualIds = individualResponses.map(response => response.data.id);
 
         const selectedGatheringIds = Object.keys(addPeopleForm.selectedGatherings)
           .filter(gatheringId => addPeopleForm.selectedGatherings[parseInt(gatheringId)])
@@ -538,7 +542,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
         if (selectedGatheringIds.length > 0) {
           for (const gatheringId of selectedGatheringIds) {
-            await csvImportAPI.massAssign(gatheringId, individualIds);
+            await csvImportAPI.massAssign(gatheringId, createdIndividualIds);
           }
         }
       } else {
@@ -569,6 +573,13 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
 
     } catch (err: any) {
       console.error('Failed to add people:', err);
+      // Roll back created individuals and family to avoid orphaned duplicates
+      for (const id of createdIndividualIds) {
+        try { await individualsAPI.delete(id); } catch { /* best effort */ }
+      }
+      if (createdFamilyId !== null) {
+        try { await familiesAPI.delete(createdFamilyId); } catch { /* best effort */ }
+      }
       setError(err.response?.data?.error || 'Failed to add people');
     } finally {
       setIsLoading(false);
@@ -576,6 +587,9 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
   };
 
   const handleAddIndividuals = async () => {
+    const createdFamilyIds: number[] = [];
+    const createdIndividualIds: number[] = [];
+
     try {
       setIsLoading(true);
       setError('');
@@ -610,6 +624,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           lastUnknown: false,
         })));
         const familyResponse = await familiesAPI.create({ familyName });
+        createdFamilyIds.push(familyResponse.data.id);
         const individuals = await Promise.all(
           cards.map(card =>
             individualsAPI.create({
@@ -621,6 +636,7 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
           )
         );
         const ids = individuals.map(r => r.data.id);
+        createdIndividualIds.push(...ids);
         for (const gId of selectedGatheringIds) {
           await csvImportAPI.massAssign(gId, ids);
         }
@@ -636,6 +652,14 @@ const AddPeopleModal: React.FC<AddPeopleModalProps> = ({
       await onSuccess();
       onClose();
     } catch (err: any) {
+      console.error('Failed to add individuals:', err);
+      // Roll back created individuals and families to avoid orphaned duplicates
+      for (const id of createdIndividualIds) {
+        try { await individualsAPI.delete(id); } catch { /* best effort */ }
+      }
+      for (const id of createdFamilyIds) {
+        try { await familiesAPI.delete(id); } catch { /* best effort */ }
+      }
       setError(err.response?.data?.error || 'Failed to add people');
     } finally {
       setIsLoading(false);
