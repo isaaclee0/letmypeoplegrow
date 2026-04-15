@@ -105,7 +105,7 @@ const requireGatheringAccess = async (req, res, next) => {
       userRole: req.user?.role
     });
 
-    const { gatheringTypeId } = req.params;
+    const gatheringTypeId = req.params.gatheringTypeId || req.params.gatheringId;
     const userId = req.user.id;
     const userRole = req.user.role;
 
