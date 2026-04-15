@@ -75,34 +75,27 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // ── HTML / Navigation: stale-while-revalidate ──
-  // Serve cached index.html instantly, update in background.
-  // Safe because HTML only references hashed JS/CSS — stale HTML still works.
+  // ── HTML / Navigation: network-first ──
+  // Always fetch fresh HTML so Vite asset hashes are correct after a deploy.
+  // Stale-while-revalidate would serve the HTML cached at install time (old hashes)
+  // on the first load after an update, causing 404s for the new hashed assets.
+  // Falls back to cached HTML only when offline.
   if (request.destination === 'document' || request.mode === 'navigate') {
     event.respondWith(
-      caches.match('/').then((cached) => {
-        const networkFetch = fetch(request).then((response) => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('/', clone));
-            // Check for SW updates on navigation (replaces duplicate listener)
-            self.registration.update();
-          }
-          return response;
-        }).catch(() => cached);
-
-        // Return cached immediately if available, otherwise wait for network
-        return cached || networkFetch;
-      }).then((response) => {
-        // If both cache and network failed, serve an inline offline page
-        // This prevents the white screen on iOS when the PWA is reopened offline
-        if (!response) {
-          return new Response(OFFLINE_HTML, {
+      fetch(request).then((response) => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('/', clone));
+          self.registration.update();
+        }
+        return response;
+      }).catch(() => {
+        return caches.match('/').then((cached) => {
+          return cached || new Response(OFFLINE_HTML, {
             status: 200,
             headers: { 'Content-Type': 'text/html' },
           });
-        }
-        return response;
+        });
       })
     );
     return;
@@ -159,7 +152,7 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
       }
       return response;
-    }).catch(() => caches.match(request))
+    }).catch(() => caches.match(request).then((cached) => cached || new Response('', { status: 504, statusText: 'Offline' })))
   );
 });
 
