@@ -111,28 +111,13 @@ const ReportsPage: React.FC = () => {
     (selectedGatherings.length === 1 && selectedGatherings[0].attendanceType === 'standard') ||
     (!hasMultipleGatherings && selectedGathering?.attendanceType === 'standard');
 
-  // Initialize default date range (last 4 weeks) and load from preferences
+  // Initialize default date range to last 4 weeks on every open
   useEffect(() => {
-    const initializeReportsData = async () => {
-      // Try to load from preferences first
-      const lastViewed = await userPreferences.getReportsLastViewed();
-      
-      if (lastViewed) {
-        setStartDate(lastViewed.startDate);
-        setEndDate(lastViewed.endDate);
-        // selectedGatherings will be set after gatherings are loaded
-      } else {
-        // Default to last 4 weeks
-        const today = new Date();
-        const fourWeeksAgo = new Date(today);
-        fourWeeksAgo.setDate(today.getDate() - 28);
-        
-        setEndDate(today.toISOString().split('T')[0]);
-        setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
-      }
-    };
-    
-    initializeReportsData();
+    const today = new Date();
+    const fourWeeksAgo = new Date(today);
+    fourWeeksAgo.setDate(today.getDate() - 28);
+    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(fourWeeksAgo.toISOString().split('T')[0]);
   }, []);
 
   // Save current reports state to preferences
@@ -579,14 +564,17 @@ const ReportsPage: React.FC = () => {
 
   const visitorsChartData = useMemo(() => {
     if (!metrics?.attendanceData) return { labels: [], datasets: [] };
-    const local = metrics.attendanceData
-      .slice()
-      .sort((a: any, b: any) => a.date.localeCompare(b.date))
-      .map((s: any) => s.visitorsLocal || 0);
-    const traveller = metrics.attendanceData
-      .slice()
-      .sort((a: any, b: any) => a.date.localeCompare(b.date))
-      .map((s: any) => s.visitorsTraveller || 0);
+    // Aggregate visitor counts by date so multiple gatherings on the same date
+    // don't produce mismatched array lengths vs visitorsChartLabels (unique dates).
+    const byDate: Record<string, { local: number; traveller: number }> = {};
+    metrics.attendanceData.forEach((s: any) => {
+      if (!byDate[s.date]) byDate[s.date] = { local: 0, traveller: 0 };
+      byDate[s.date].local += s.visitorsLocal || 0;
+      byDate[s.date].traveller += s.visitorsTraveller || 0;
+    });
+    const uniqueDates = [...new Set(metrics.attendanceData.map((s: any) => s.date as string))].sort((a, b) => a.localeCompare(b));
+    const local = uniqueDates.map(d => byDate[d]?.local ?? 0);
+    const traveller = uniqueDates.map(d => byDate[d]?.traveller ?? 0);
     return {
       labels: visitorsChartLabels,
       datasets: [
@@ -1125,16 +1113,10 @@ const ReportsPage: React.FC = () => {
                   <div className="ml-5 w-0 flex-1">
                     <dl>
                       <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
-                        Total Regular Attenders
+                        Unique Visitors
                       </dt>
                       <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                        {isLoading ? '...' : (metrics?.totalRegulars ?? metrics?.totalIndividuals ?? 0)}
-                      </dd>
-                      <dt className="mt-1 text-xs font-medium text-gray-500 dark:text-gray-400 truncate">
-                        Added in selected period
-                      </dt>
-                      <dd className="text-sm text-gray-700 dark:text-gray-300">
-                        {isLoading ? '...' : (metrics?.addedRegularsInPeriod || 0)}
+                        {isLoading ? '...' : (metrics?.totalVisitors ?? 0)}
                       </dd>
                     </dl>
                   </div>
@@ -1145,15 +1127,29 @@ const ReportsPage: React.FC = () => {
               <div className="p-5">
                 <div className="flex items-center">
                   <div className="shrink-0">
-                    <UsersIcon className="h-6 w-6 text-gray-400" />
+                    <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
                   </div>
                   <div className="ml-5 w-0 flex-1">
                     <dl>
                       <dt className="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
-                        Total Absences
+                        Local Visitor Return Rate
                       </dt>
                       <dd className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                        {isLoading ? '...' : (metrics?.totalAbsent || 0)}
+                        {isLoading ? '...' : (
+                          metrics?.totalLocalVisitors > 0
+                            ? `${Math.round((metrics.returningLocalVisitors / metrics.totalLocalVisitors) * 100)}%`
+                            : '—'
+                        )}
+                      </dd>
+                      <dt className="mt-1 text-xs font-medium text-gray-500 dark:text-gray-400 truncate">
+                        Returned at least once
+                      </dt>
+                      <dd className="text-sm text-gray-700 dark:text-gray-300">
+                        {isLoading ? '...' : (
+                          metrics?.totalLocalVisitors > 0
+                            ? `${metrics.returningLocalVisitors} of ${metrics.totalLocalVisitors}`
+                            : '—'
+                        )}
                       </dd>
                     </dl>
                   </div>

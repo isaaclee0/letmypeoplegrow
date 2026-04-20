@@ -466,6 +466,53 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
     const totalVisitorsCombined = (totalVisitors[0]?.total || 0);
     console.log('Total visitors combined:', totalVisitorsCombined);
 
+    // Returning local visitor rate: local visitors who attended 2+ times in the period
+    let totalLocalVisitors = 0;
+    let returningLocalVisitors = 0;
+    if (!isHeadcountGathering || hasMixedGatheringTypes) {
+      try {
+        const placeholders = gatheringIds.map(() => '?').join(',');
+        const localVisitorRows = await Database.query(`
+          SELECT COUNT(*) as total
+          FROM (
+            SELECT ar.individual_id
+            FROM attendance_records ar
+            JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+            JOIN individuals i ON ar.individual_id = i.id
+            WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+              AND i.people_type = 'local_visitor'
+              AND ar.present = 1
+              AND as_table.gathering_type_id IN (${placeholders})
+              AND as_table.church_id = ?
+              AND as_table.excluded_from_stats = 0
+            GROUP BY ar.individual_id
+          ) sub
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+        totalLocalVisitors = localVisitorRows[0]?.total || 0;
+
+        const returningRows = await Database.query(`
+          SELECT COUNT(*) as total
+          FROM (
+            SELECT ar.individual_id
+            FROM attendance_records ar
+            JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+            JOIN individuals i ON ar.individual_id = i.id
+            WHERE as_table.session_date >= ? AND as_table.session_date <= ?
+              AND i.people_type = 'local_visitor'
+              AND ar.present = 1
+              AND as_table.gathering_type_id IN (${placeholders})
+              AND as_table.church_id = ?
+              AND as_table.excluded_from_stats = 0
+            GROUP BY ar.individual_id
+            HAVING COUNT(*) >= 2
+          ) sub
+        `, [startDate, endDate, ...gatheringIds, req.user.church_id]);
+        returningLocalVisitors = returningRows[0]?.total || 0;
+      } catch (err) {
+        console.error('Error querying returning local visitors:', err);
+      }
+    }
+
     // visitorsBySession and visitorCountsByDate already built above
 
     const metrics = {
@@ -478,6 +525,8 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
       totalRegulars: totalRegularIndividuals[0]?.total || 0,
       addedRegularsInPeriod: addedRegularsInPeriod[0]?.total || 0,
       totalVisitors: totalVisitorsCombined,
+      totalLocalVisitors,
+      returningLocalVisitors,
       attendanceData: attendanceDataFiltered.map(session => {
         const key = normalizeDateKey(session.session_date);
         const vc = visitorCountsByDate.get(key) || { local: 0, traveller: 0 };
