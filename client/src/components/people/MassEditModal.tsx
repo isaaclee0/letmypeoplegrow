@@ -134,9 +134,10 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Family</label>
-              <input 
-                list="family-options" 
-                value={massEdit.familyInput} 
+              <input
+                type="text"
+                list="family-options"
+                value={massEdit.familyInput}
                 onChange={(e) => {
                   const value = e.target.value;
                   const match = families.find(f => f.familyName.toLowerCase() === value.toLowerCase());
@@ -151,7 +152,7 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 ))}
               </datalist>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Leave blank to keep existing families. Enter family name to move all selected to that family.
+                Changing the family name will change the family name for all selected people.
               </div>
               
               {/* Apply to whole family checkbox */}
