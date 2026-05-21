@@ -260,5 +260,5 @@ async function runNow() {
 
 module.exports = {
   start, stop, runNow, syncChurch,
-  getAccessTokenForChurch, computePlanForChurch, applyForChurch,
+  getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
 };

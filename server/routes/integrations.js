@@ -7,6 +7,7 @@ const Database = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
+const { tallyMembership } = require('../services/planningCenter/summary');
 
 const router = express.Router();
 
@@ -1740,11 +1741,20 @@ router.get('/planning-center/status', async (req, res) => {
 
       if (response.status === 200) {
         const accountName = response.data?.data?.attributes?.name || 'Connected';
+        let lastSyncResult = null;
+        try {
+          const rows = await Database.query(
+            `SELECT planning_center_last_sync_result AS r FROM church_settings WHERE church_id = ? LIMIT 1`,
+            [req.user.church_id]
+          );
+          if (rows.length && rows[0].r) lastSyncResult = JSON.parse(rows[0].r);
+        } catch (_) { lastSyncResult = null; }
         return res.json({
           enabled: true,
           configured: true,
           connected: true,
-          planningCenterAccount: accountName
+          planningCenterAccount: accountName,
+          lastSyncResult
         });
       } else {
         return res.json({
@@ -2362,6 +2372,21 @@ router.get('/planning-center/sync/plan', async (req, res) => {
   } catch (error) {
     logger.error('PCO sync plan error:', error);
     res.status(500).json({ error: 'Failed to compute sync plan.' });
+  }
+});
+
+// Membership distribution for the allow-list editor (person counts only, no check-ins)
+router.get('/planning-center/membership-summary', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const people = await pcoSync.fetchAllPcoPeople(accessToken);
+    res.json({ success: true, ...tallyMembership(people) });
+  } catch (error) {
+    logger.error('PCO membership summary error:', error);
+    res.status(500).json({ error: 'Failed to load membership summary.' });
   }
 });
 
