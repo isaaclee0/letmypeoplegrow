@@ -2325,7 +2325,10 @@ router.put('/planning-center/membership-filter', async (req, res) => {
   try {
     const churchId = req.user.church_id;
     const { enabled, allowlist } = req.body;
-    if (!Array.isArray(allowlist)) return res.status(400).json({ error: 'allowlist must be an array.' });
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean.' });
+    if (!Array.isArray(allowlist) || !allowlist.every((v) => typeof v === 'string')) {
+      return res.status(400).json({ error: 'allowlist must be an array of strings.' });
+    }
     await Database.query(
       `UPDATE church_settings
           SET planning_center_sync_enabled = ?, planning_center_membership_allowlist = ?
@@ -2357,7 +2360,7 @@ router.get('/planning-center/sync/plan', async (req, res) => {
     });
   } catch (error) {
     logger.error('PCO sync plan error:', error);
-    res.status(500).json({ error: 'Failed to compute sync plan.', details: error.message });
+    res.status(500).json({ error: 'Failed to compute sync plan.' });
   }
 });
 
@@ -2408,7 +2411,7 @@ router.post('/planning-center/sync/apply', async (req, res) => {
     res.json({ success: true, result, summary });
   } catch (error) {
     logger.error('PCO sync apply error:', error);
-    res.status(500).json({ error: 'Failed to apply sync.', details: error.message });
+    res.status(500).json({ error: 'Failed to apply sync.' });
   }
 });
 
