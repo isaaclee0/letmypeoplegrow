@@ -87,3 +87,28 @@ test('ambiguous candidate is not added', () => {
   assert.strictEqual(plan.ambiguous.length, 1);
   assert.deepStrictEqual(plan.add, []);
 });
+
+test('linked person absent from PCO fetch is left alone', () => {
+  const plan = computePlan({
+    pcoPeople: [],  // PCO returned nothing for this linked person
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'gone', isActive: true })],
+    families: [], allowlist: ALLOW,
+  });
+  assert.deepStrictEqual(plan.archive, []);
+  assert.deepStrictEqual(plan.update, []);
+  assert.deepStrictEqual(plan.reactivate, []);
+});
+
+test('empty allowlist: no adds, no reactivates, but archive still applies', () => {
+  const plan = computePlan({
+    pcoPeople: [
+      pco('p1', 'New', 'Person', { membership: 'Church Members', status: 'active' }),
+      pco('p2', 'Old', 'Member', { membership: 'Church Members', status: 'inactive' }),
+    ],
+    individuals: [ind(2, 'Old', 'Member', { planningCenterId: 'p2', isActive: true })],
+    families: [], allowlist: [],
+  });
+  assert.deepStrictEqual(plan.add, []);
+  assert.deepStrictEqual(plan.reactivate, []);
+  assert.deepStrictEqual(plan.archive, [{ individualId: 2, pcoId: 'p2' }]);
+});

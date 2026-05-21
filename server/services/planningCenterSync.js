@@ -127,7 +127,11 @@ async function getAccessTokenForChurch(churchId) {
 async function fetchAllPcoPeople(accessToken) {
   const people = [];
   let next = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households';
+  let pages = 0;
   while (next) {
+    if (++pages > 1000) {
+      throw new Error('PCO people fetch exceeded 1000 pages — aborting to avoid an unbounded loop');
+    }
     const resp = await httpsGet(next, accessToken);
     if (resp.status !== 200) {
       throw new Error(`PCO people fetch failed (status ${resp.status})`);
@@ -200,7 +204,8 @@ async function syncChurch(church) {
       const summary = {
         at: new Date().toISOString(),
         added: result.added, updated: result.updated, archived: result.archived,
-        reactivated: result.reactivated, ambiguous: plan.ambiguous.length,
+        reactivated: result.reactivated, linked: result.linked,
+        ambiguous: plan.ambiguous.length,
         unmatched: plan.unmatched.length, errors: result.errors.length,
       };
       await Database.query(

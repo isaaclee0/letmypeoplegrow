@@ -61,3 +61,33 @@ test('a pco person is not linked to two individuals', () => {
 test('nameKey is stable for first+last', () => {
   assert.strictEqual(nameKey('John', 'Smith'), 'john|smith');
 });
+
+test('child-flag fallback: when no candidate matches the child flag, still considers all', () => {
+  // Two same-name PCO adults; the individual is marked child, but neither candidate is a child.
+  // byChild is empty, so it must fall back to the full candidate pool and (lacking family
+  // corroboration) report ambiguous rather than dropping the person.
+  const people = [pco('a1', 'Pat', 'Ray', { child: false }), pco('a2', 'Pat', 'Ray', { child: false })];
+  const r = matchIndividuals([ind(1, 'Pat', 'Ray', { isChild: true })], people, new Map());
+  assert.strictEqual(r.links.length, 0);
+  assert.strictEqual(r.ambiguous.length, 1);
+  assert.deepStrictEqual(r.ambiguous[0].candidates.sort(), ['a1', 'a2']);
+});
+
+test('family corroboration tie -> ambiguous (overlap cannot decide)', () => {
+  // Two "John Smith", each in a household that shares exactly one family member name -> equal score -> ambiguous.
+  const people = [
+    pco('j1', 'John', 'Smith', { householdId: 'hA' }),
+    pco('j2', 'John', 'Smith', { householdId: 'hB' }),
+    pco('jane', 'Jane', 'Smith', { householdId: 'hA' }),
+    pco('jake', 'Jake', 'Smith', { householdId: 'hB' }),
+  ];
+  const familyMembers = new Map([[10, [
+    { firstName: 'John', lastName: 'Smith' },
+    { firstName: 'Jane', lastName: 'Smith' },
+    { firstName: 'Jake', lastName: 'Smith' },
+  ]]]);
+  const r = matchIndividuals([ind(1, 'John', 'Smith', { familyId: 10 })], people, familyMembers);
+  assert.strictEqual(r.links.length, 0);
+  assert.strictEqual(r.ambiguous.length, 1);
+  assert.deepStrictEqual(r.ambiguous[0].candidates.sort(), ['j1', 'j2']);
+});
