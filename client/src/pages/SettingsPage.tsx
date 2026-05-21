@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import MembershipAllowlistEditor from '../components/planningCenter/MembershipAllowlistEditor';
 import { usersAPI, integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
@@ -25,6 +27,7 @@ import Modal from '../components/Modal';
 
 const SettingsPage: React.FC = () => {
   const { user, updateUser } = useAuth();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'notifications' | 'integrations' | 'data'>('general');
 
   // My Info (profile) state
@@ -81,9 +84,15 @@ const SettingsPage: React.FC = () => {
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
   const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
-  const [pcAutoArchive, setPcAutoArchive] = useState(false);
-  const [pcLastSync, setPcLastSync] = useState<string | null>(null);
-  const [pcLastSyncArchived, setPcLastSyncArchived] = useState(0);
+  const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
+  const [pcAllowlist, setPcAllowlist] = useState<string[]>([]);
+  const [pcSummary, setPcSummary] = useState<{ membership: string; count: number }[]>([]);
+  const [pcSummaryLoading, setPcSummaryLoading] = useState(false);
+  const [pcSummaryError, setPcSummaryError] = useState<string | null>(null);
+  const [pcConfigDirty, setPcConfigDirty] = useState(false);
+  const [pcConfigSaving, setPcConfigSaving] = useState(false);
+  const [pcLastSync, setPcLastSync] = useState<any>(null);
+  const [pcSyncRunning, setPcSyncRunning] = useState(false);
 
   // Location state
   const [locationName, setLocationName] = useState<string | null>(null);
@@ -237,9 +246,28 @@ const SettingsPage: React.FC = () => {
         connected: response.data.connected === true,
         loading: false
       });
+      setPcLastSync(response.data.lastSyncResult || null);
     } catch (error) {
       logger.error('Failed to fetch Planning Center status:', error);
       setPlanningCenterStatus(prev => ({ ...prev, loading: false }));
+    }
+  }, []);
+
+  const loadPcSyncConfig = useCallback(async () => {
+    try {
+      const filter = await integrationsAPI.getPlanningCenterMembershipFilter();
+      setPcSyncEnabled(!!filter.data.enabled);
+      setPcAllowlist(Array.isArray(filter.data.allowlist) ? filter.data.allowlist : []);
+    } catch (e) { logger.error('Failed to load PCO sync filter', e); }
+    setPcSummaryLoading(true);
+    setPcSummaryError(null);
+    try {
+      const sum = await integrationsAPI.getPlanningCenterMembershipSummary();
+      setPcSummary(sum.data.values || []);
+    } catch (e: any) {
+      setPcSummaryError(e.response?.data?.error || 'Failed to load membership categories.');
+    } finally {
+      setPcSummaryLoading(false);
     }
   }, []);
 
@@ -253,13 +281,27 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const handlePcAutoArchiveToggle = async (value: boolean) => {
-    setPcAutoArchive(value);
+  const savePcSyncConfig = async () => {
+    setPcConfigSaving(true);
     try {
-      await settingsAPI.updateIntegrationSettings({ planningCenterAutoArchive: value });
-    } catch (error) {
-      logger.error('Failed to update auto-archive setting:', error);
-      setPcAutoArchive(!value); // revert
+      await integrationsAPI.savePlanningCenterMembershipFilter({ enabled: pcSyncEnabled, allowlist: pcAllowlist });
+      setPcConfigDirty(false);
+    } catch (e: any) {
+      setPlanningCenterError(e.response?.data?.error || 'Failed to save sync settings.');
+    } finally {
+      setPcConfigSaving(false);
+    }
+  };
+
+  const runPcSyncNow = async () => {
+    setPcSyncRunning(true);
+    try {
+      const res = await integrationsAPI.applyPlanningCenterSync({});
+      setPcLastSync(res.data.summary || null);
+    } catch (e: any) {
+      setPlanningCenterError(e.response?.data?.error || 'Sync failed.');
+    } finally {
+      setPcSyncRunning(false);
     }
   };
 
@@ -802,11 +844,10 @@ const SettingsPage: React.FC = () => {
     fetchLocation();
     settingsAPI.getIntegrationSettings().then(r => {
       setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
-      setPcAutoArchive(!!r.data.planningCenterAutoArchive);
-      setPcLastSync(r.data.planningCenterLastSync || null);
-      setPcLastSyncArchived(r.data.planningCenterLastSyncArchived || 0);
     }).catch(() => {});
   }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus, fetchLocation]);
+
+  useEffect(() => { if (planningCenterStatus.connected) loadPcSyncConfig(); }, [planningCenterStatus.connected, loadPcSyncConfig]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -1927,26 +1968,69 @@ const SettingsPage: React.FC = () => {
                           </button>
                         </div>
 
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Auto-archive from PCO</h5>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                              Automatically archive people in LMPG when they are marked inactive in Planning Center. Runs daily.
-                            </p>
-                            {pcLastSync && (
-                              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                                Last sync: {new Date(pcLastSync).toLocaleDateString()}{pcLastSyncArchived > 0 ? ` — ${pcLastSyncArchived} archived` : ''}
+                        {/* Full people sync configuration */}
+                        <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">
+                                Treat Planning Center as the source of truth: add eligible people, sync names, archive when inactive (runs nightly).
                               </p>
-                            )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { setPcSyncEnabled(!pcSyncEnabled); setPcConfigDirty(true); }}
+                              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                              role="switch"
+                              aria-checked={pcSyncEnabled}
+                            >
+                              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => handlePcAutoArchiveToggle(!pcAutoArchive)}
-                            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcAutoArchive ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                            role="switch"
-                            aria-checked={pcAutoArchive}
-                          >
-                            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcAutoArchive ? 'translate-x-5' : 'translate-x-0'}`} />
-                          </button>
+
+                          <div className="mt-4">
+                            <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Sync these membership categories</p>
+                            <MembershipAllowlistEditor
+                              values={pcSummary}
+                              loading={pcSummaryLoading}
+                              error={pcSummaryError}
+                              selected={pcAllowlist}
+                              onChange={(next) => { setPcAllowlist(next); setPcConfigDirty(true); }}
+                              onReload={loadPcSyncConfig}
+                            />
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={savePcSyncConfig}
+                              disabled={!pcConfigDirty || pcConfigSaving}
+                              className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                            >
+                              {pcConfigSaving ? 'Saving…' : 'Save sync settings'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={runPcSyncNow}
+                              disabled={pcSyncRunning}
+                              className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                            >
+                              {pcSyncRunning ? 'Syncing…' : 'Sync now'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => navigate('/app/import?source=planning-center')}
+                              className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                            >
+                              Review &amp; sync
+                            </button>
+                          </div>
+
+                          {pcLastSync && (
+                            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                              Last sync {pcLastSync.at ? new Date(pcLastSync.at).toLocaleString() : ''}: {pcLastSync.added ?? 0} added, {pcLastSync.updated ?? 0} updated, {pcLastSync.archived ?? 0} archived, {pcLastSync.reactivated ?? 0} reactivated, {pcLastSync.linked ?? 0} linked{typeof pcLastSync.ambiguous === 'number' ? `, ${pcLastSync.ambiguous} need review` : ''}.
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
