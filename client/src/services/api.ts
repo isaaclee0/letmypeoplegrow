@@ -821,13 +821,21 @@ export const integrationsAPI = {
   getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
   authorizePlanningCenter: () => api.get('/integrations/planning-center/authorize'),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
-  getPlanningCenterPeople: () => api.get('/integrations/planning-center/people'),
   getPlanningCenterCheckins: (params: { startDate: string; endDate: string }) =>
-    api.get('/integrations/planning-center/checkins', { params }),
-  linkPlanningCenterFamily: (data: { householdId: string; familyId: number }) => api.post('/integrations/planning-center/link-family', data),
-  importPeopleFromPlanningCenter: (data?: { householdIds?: string[] }) => api.post('/integrations/planning-center/import-people', data || {}),
+    api.get('/integrations/planning-center/checkins', { params, timeout: 120000 }),
+  // People sync (replaces the old browse/import flow)
+  getPlanningCenterMembershipSummary: () =>
+    api.get('/integrations/planning-center/membership-summary', { timeout: 120000 }),
+  getPlanningCenterMembershipFilter: () =>
+    api.get('/integrations/planning-center/membership-filter'),
+  savePlanningCenterMembershipFilter: (data: { enabled: boolean; allowlist: string[] }) =>
+    api.put('/integrations/planning-center/membership-filter', data),
+  getPlanningCenterSyncPlan: () =>
+    api.get('/integrations/planning-center/sync/plan', { timeout: 120000 }),
+  applyPlanningCenterSync: (data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[] } }) =>
+    api.post('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
   importCheckinsFromPlanningCenter: (data: { startDate: string; endDate: string; eventId?: string }) =>
-    api.post('/integrations/planning-center/import-checkins', data),
+    api.post('/integrations/planning-center/import-checkins', data, { timeout: 120000 }),
 
   // Historical CSV attendance backfill
   previewHistoricalCsv: (file: File) => {
