@@ -108,6 +108,29 @@ services:
     networks:
       - app-network-dev
 
+  # Planning Center People Sampler (one-off tool, profile-gated)
+  # Run with:  docker-compose -f docker-compose.dev.yml --profile sampler up pco-sampler
+  # Then open: http://localhost:8088
+  pco-sampler:
+    build:
+      context: .
+      dockerfile: Dockerfile.server.dev
+    container_name: church_attendance_pco_sampler_dev
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: development
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    networks:
+      - app-network-dev
+    command: node scripts/sample-pco-people.js
+    profiles:
+      - sampler
+
   # Cloudflare Tunnel - exposes local dev to dev.letmypeoplegrow.com.au
   cloudflared:
     image: cloudflare/cloudflared:latest
