@@ -1,7 +1,10 @@
 const https = require('https');
 const cron = require('node-cron');
 const Database = require('../config/database');
-const logger = require('../utils/logger');
+const logger = require('../config/logger');
+const { projectPerson } = require('./planningCenter/projection');
+const { computePlan } = require('./planningCenter/diffEngine');
+const { applyPlan } = require('./planningCenter/apply');
 
 let cronJob = null;
 
@@ -111,92 +114,104 @@ async function getValidAccessToken(churchId, userId, tokens) {
   return accessToken;
 }
 
-// ─── PCO status check ────────────────────────────────────────────────────────
+// ─── Reconcile pipeline helpers ──────────────────────────────────────────────
 
-async function getPcoPersonStatus(pcoPersonId, accessToken) {
-  const url = `https://api.planningcenteronline.com/people/v2/people/${pcoPersonId}?fields[Person]=status`;
-  const response = await httpsGet(url, accessToken);
-  if (response.status !== 200) return null;
-  return response.data?.data?.attributes?.status ?? null;
+// Token accessor for endpoints/cron (wraps existing helpers).
+async function getAccessTokenForChurch(churchId) {
+  const tokenData = await getTokensForChurch(churchId);
+  if (!tokenData) return null;
+  return getValidAccessToken(churchId, tokenData.userId, tokenData.tokens);
 }
 
-// Run up to `concurrency` promises at a time
-async function batchRun(items, concurrency, fn) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const slice = items.slice(i, i + concurrency);
-    const batch = await Promise.all(slice.map(fn));
-    results.push(...batch);
+// Memory-efficient: project each page, discard raw JSON + included resources.
+async function fetchAllPcoPeople(accessToken) {
+  const people = [];
+  let next = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households';
+  while (next) {
+    const resp = await httpsGet(next, accessToken);
+    if (resp.status !== 200) {
+      throw new Error(`PCO people fetch failed (status ${resp.status})`);
+    }
+    const data = resp.data;
+    for (const raw of data.data || []) people.push(projectPerson(raw));
+    next = (data.links && data.links.next) || null;
   }
-  return results;
+  return people;
+}
+
+// Load the minimal LMPG state for the current church context.
+async function loadChurchState(churchId) {
+  const individuals = await Database.query(
+    `SELECT id, first_name AS firstName, last_name AS lastName, is_child AS isChild,
+            family_id AS familyId, is_active AS isActive, planning_center_id AS planningCenterId
+       FROM individuals WHERE church_id = ?`,
+    [churchId]
+  );
+  const families = await Database.query(
+    `SELECT id, planning_center_id AS planningCenterId FROM families WHERE church_id = ?`,
+    [churchId]
+  );
+  for (const i of individuals) { i.isChild = !!i.isChild; i.isActive = !!i.isActive; }
+  return { individuals, families };
+}
+
+// Compute a plan for a church (current church context must be set by caller).
+async function computePlanForChurch(churchId, accessToken) {
+  const pcoPeople = await fetchAllPcoPeople(accessToken);
+  const { individuals, families } = await loadChurchState(churchId);
+  const settings = await Database.query(
+    `SELECT planning_center_membership_allowlist FROM church_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  let allowlist = [];
+  if (settings.length && settings[0].planning_center_membership_allowlist) {
+    try { allowlist = JSON.parse(settings[0].planning_center_membership_allowlist); } catch (_) { allowlist = []; }
+  }
+  return computePlan({ pcoPeople, individuals, families, allowlist });
+}
+
+// Apply a plan for a church (current church context must be set by caller).
+async function applyForChurch(churchId, plan, userId, selections) {
+  return applyPlan(churchId, plan, userId, selections);
 }
 
 // ─── Per-church sync ─────────────────────────────────────────────────────────
 
 async function syncChurch(church) {
   const churchId = church.church_id;
-
   await Database.setChurchContext(churchId, async () => {
     try {
-      // Only run if auto-archive is enabled
       const settings = await Database.query(
-        `SELECT planning_center_auto_archive FROM church_settings WHERE church_id = ? LIMIT 1`,
-        [churchId]
+        `SELECT planning_center_sync_enabled, planning_center_auto_archive,
+                (SELECT user_id FROM user_preferences WHERE church_id = ? AND preference_key = 'planning_center_tokens' LIMIT 1) AS token_user
+           FROM church_settings WHERE church_id = ? LIMIT 1`,
+        [churchId, churchId]
       );
-      if (!settings.length || !settings[0].planning_center_auto_archive) return;
+      const enabled = settings.length && (settings[0].planning_center_sync_enabled || settings[0].planning_center_auto_archive);
+      if (!enabled) return;
 
-      // Get PCO tokens
-      const tokenData = await getTokensForChurch(churchId);
-      if (!tokenData) return;
-      const { userId, tokens } = tokenData;
+      const accessToken = await getAccessTokenForChurch(churchId);
+      if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
 
-      const accessToken = await getValidAccessToken(churchId, userId, tokens);
-      if (!accessToken) {
-        logger.warn(`PCO sync: could not get valid token for church ${churchId}`);
-        return;
-      }
+      const userId = settings[0].token_user || null;
+      const plan = await computePlanForChurch(churchId, accessToken);
+      const result = await applyForChurch(churchId, plan, userId, {});
 
-      // Get all active LMPG individuals linked to PCO
-      const linked = await Database.query(
-        `SELECT id, first_name, last_name, planning_center_id
-         FROM individuals
-         WHERE church_id = ? AND is_active = 1 AND planning_center_id IS NOT NULL`,
-        [churchId]
-      );
-
-      if (!linked.length) return;
-
-      logger.info(`PCO sync: checking ${linked.length} linked people for church ${churchId}`);
-
-      // Check each person's status in PCO (5 concurrent)
-      let archivedCount = 0;
-      await batchRun(linked, 5, async (person) => {
-        try {
-          const status = await getPcoPersonStatus(person.planning_center_id, accessToken);
-          if (status === 'inactive') {
-            await Database.query(
-              `UPDATE individuals SET is_active = 0, updated_at = datetime('now')
-               WHERE id = ? AND church_id = ?`,
-              [person.id, churchId]
-            );
-            archivedCount++;
-            logger.info(`PCO sync: archived ${person.first_name} ${person.last_name} (PCO id ${person.planning_center_id})`);
-          }
-        } catch (err) {
-          logger.warn(`PCO sync: error checking person ${person.planning_center_id}: ${err.message}`);
-        }
-      });
-
-      // Record sync result
+      const summary = {
+        at: new Date().toISOString(),
+        added: result.added, updated: result.updated, archived: result.archived,
+        reactivated: result.reactivated, ambiguous: plan.ambiguous.length,
+        unmatched: plan.unmatched.length, errors: result.errors.length,
+      };
       await Database.query(
         `UPDATE church_settings
-         SET planning_center_last_sync = datetime('now'),
-             planning_center_last_sync_archived = ?
-         WHERE church_id = ?`,
-        [archivedCount, churchId]
+            SET planning_center_last_sync = datetime('now'),
+                planning_center_last_sync_archived = ?,
+                planning_center_last_sync_result = ?
+          WHERE church_id = ?`,
+        [result.archived, JSON.stringify(summary), churchId]
       );
-
-      logger.info(`PCO sync: church ${churchId} done — ${archivedCount} archived`);
+      logger.info(`PCO sync: church ${churchId} done — ${JSON.stringify(summary)}`);
     } catch (err) {
       logger.error(`PCO sync: error for church ${churchId}: ${err.message}`);
     }
@@ -238,4 +253,7 @@ async function runNow() {
   }
 }
 
-module.exports = { start, stop, runNow };
+module.exports = {
+  start, stop, runNow, syncChurch,
+  getAccessTokenForChurch, computePlanForChurch, applyForChurch,
+};
