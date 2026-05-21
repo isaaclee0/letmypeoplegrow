@@ -6,6 +6,7 @@ const csv = require('csv-parser');
 const Database = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
+const pcoSync = require('../services/planningCenterSync');
 
 const router = express.Router();
 
@@ -2298,6 +2299,116 @@ router.post('/planning-center/import-people', async (req, res) => {
       error: 'Failed to import people from Planning Center.',
       details: error.message
     });
+  }
+});
+
+// Read sync config (allow-list + enabled flag)
+router.get('/planning-center/membership-filter', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const rows = await Database.query(
+      `SELECT planning_center_sync_enabled AS enabled, planning_center_membership_allowlist AS allowlist
+         FROM church_settings WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    let allowlist = [];
+    if (rows.length && rows[0].allowlist) { try { allowlist = JSON.parse(rows[0].allowlist); } catch (_) {} }
+    res.json({ enabled: !!(rows.length && rows[0].enabled), allowlist });
+  } catch (error) {
+    logger.error('Get PCO membership filter error:', error);
+    res.status(500).json({ error: 'Failed to read sync config.' });
+  }
+});
+
+// Write sync config
+router.put('/planning-center/membership-filter', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const { enabled, allowlist } = req.body;
+    if (!Array.isArray(allowlist)) return res.status(400).json({ error: 'allowlist must be an array.' });
+    await Database.query(
+      `UPDATE church_settings
+          SET planning_center_sync_enabled = ?, planning_center_membership_allowlist = ?
+        WHERE church_id = ?`,
+      [enabled ? 1 : 0, JSON.stringify(allowlist), churchId]
+    );
+    res.json({ success: true, enabled: !!enabled, allowlist });
+  } catch (error) {
+    logger.error('Set PCO membership filter error:', error);
+    res.status(500).json({ error: 'Failed to save sync config.' });
+  }
+});
+
+// Dry-run: compute the reconcile plan without writing anything
+router.get('/planning-center/sync/plan', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const plan = await pcoSync.computePlanForChurch(churchId, accessToken);
+    res.json({
+      success: true,
+      summary: {
+        link: plan.link.length, ambiguous: plan.ambiguous.length, unmatched: plan.unmatched.length,
+        add: plan.add.length, update: plan.update.length, archive: plan.archive.length, reactivate: plan.reactivate.length,
+      },
+      plan,
+    });
+  } catch (error) {
+    logger.error('PCO sync plan error:', error);
+    res.status(500).json({ error: 'Failed to compute sync plan.', details: error.message });
+  }
+});
+
+// Apply: recompute the plan and apply it. Body may include { selections } for review choices.
+// With no selections, applies everything except ambiguous (auto mode).
+router.post('/planning-center/sync/apply', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const userId = req.user.id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const plan = await pcoSync.computePlanForChurch(churchId, accessToken);
+
+    // Sanitize caller selections against the freshly-computed plan so a client can only:
+    //  - resolve an ambiguous individual to one of ITS offered candidate pcoIds
+    //  - opt out of pcoIds that are actually in the add bucket
+    const rawSel = (req.body && req.body.selections) || {};
+    const candidatesByIndividual = new Map(
+      plan.ambiguous.map((a) => [a.individualId, new Set(a.candidates)])
+    );
+    const ambiguous = {};
+    for (const [individualId, pcoId] of Object.entries(rawSel.ambiguous || {})) {
+      const allowed = candidatesByIndividual.get(Number(individualId));
+      if (allowed && pcoId && allowed.has(pcoId)) ambiguous[individualId] = pcoId;
+    }
+    const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
+    const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
+      .filter((id) => addPcoIds.has(id));
+    const selections = { ambiguous, skipAddPcoIds };
+
+    const result = await pcoSync.applyForChurch(churchId, plan, userId, selections);
+
+    const summary = {
+      at: new Date().toISOString(),
+      added: result.added, updated: result.updated, archived: result.archived,
+      reactivated: result.reactivated, linked: result.linked,
+      ambiguous: plan.ambiguous.length, unmatched: plan.unmatched.length, errors: result.errors.length,
+    };
+    await Database.query(
+      `UPDATE church_settings
+          SET planning_center_last_sync = datetime('now'),
+              planning_center_last_sync_archived = ?,
+              planning_center_last_sync_result = ?
+        WHERE church_id = ?`,
+      [result.archived, JSON.stringify(summary), churchId]
+    );
+    res.json({ success: true, result, summary });
+  } catch (error) {
+    logger.error('PCO sync apply error:', error);
+    res.status(500).json({ error: 'Failed to apply sync.', details: error.message });
   }
 });
 
