@@ -2331,7 +2331,8 @@ router.put('/planning-center/membership-filter', async (req, res) => {
     }
     await Database.query(
       `UPDATE church_settings
-          SET planning_center_sync_enabled = ?, planning_center_membership_allowlist = ?
+          SET planning_center_sync_enabled = ?, planning_center_membership_allowlist = ?,
+              planning_center_auto_archive = 0
         WHERE church_id = ?`,
       [enabled ? 1 : 0, JSON.stringify(allowlist), churchId]
     );
