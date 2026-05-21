@@ -140,6 +140,15 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_last_sync_archived')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync_archived INTEGER DEFAULT 0');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_sync_enabled')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_sync_enabled INTEGER DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_membership_allowlist')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_membership_allowlist TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_last_sync_result')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync_result TEXT');
+      }
 
       // Migrate families: add planning_center_id if missing
       const familiesCols = db.prepare('PRAGMA table_info(families)').all();
