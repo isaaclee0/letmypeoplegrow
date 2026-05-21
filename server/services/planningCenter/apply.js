@@ -88,24 +88,31 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
 
   for (const g of groupAdds(adds)) {
     try {
-      let familyId = g.householdId ? familyByHousehold.get(g.householdId) : null;
-      if (!familyId) {
-        const famRes = await Database.query(
-          `INSERT INTO families (church_id, family_name, planning_center_id, created_by, created_at) VALUES (?, ?, ?, ?, datetime('now'))`,
-          [churchId, buildFamilyName(g.members), g.householdId || null, userId]
-        );
-        familyId = famRes.insertId;
-        if (g.householdId) familyByHousehold.set(g.householdId, familyId);
-      }
-      for (const m of g.members) {
-        await Database.query(
-          `INSERT INTO individuals (church_id, family_id, first_name, last_name, people_type, is_child, is_active, created_by, created_at, planning_center_id)
-           VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'), ?)`,
-          [churchId, familyId, m.firstName, m.lastName, m.isChild ? 1 : 0, userId, m.pcoId]
-        );
-        result.added++;
-      }
-    } catch (e) { result.errors.push({ type: 'add', household: g.householdId, error: e.message }); }
+      const createdHouseholdFamilyId = await Database.transaction(async (conn) => {
+        let familyId = g.householdId ? familyByHousehold.get(g.householdId) : null;
+        let created = null;
+        if (!familyId) {
+          const famRes = await conn.query(
+            `INSERT INTO families (church_id, family_name, planning_center_id, created_by, created_at) VALUES (?, ?, ?, ?, datetime('now'))`,
+            [churchId, buildFamilyName(g.members), g.householdId || null, userId]
+          );
+          familyId = famRes.insertId;
+          if (g.householdId) created = familyId;
+        }
+        for (const m of g.members) {
+          await conn.query(
+            `INSERT INTO individuals (church_id, family_id, first_name, last_name, people_type, is_child, is_active, created_by, created_at, planning_center_id)
+             VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'), ?)`,
+            [churchId, familyId, m.firstName, m.lastName, m.isChild ? 1 : 0, userId, m.pcoId]
+          );
+        }
+        return created;
+      });
+      if (createdHouseholdFamilyId) familyByHousehold.set(g.householdId, createdHouseholdFamilyId);
+      result.added += g.members.length;
+    } catch (e) {
+      result.errors.push({ type: 'add', household: g.householdId, error: e.message });
+    }
   }
 
   return result;

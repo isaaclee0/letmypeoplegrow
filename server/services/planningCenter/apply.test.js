@@ -28,3 +28,12 @@ test('groupAdds groups by household, solo for null household', () => {
   const solo = groups.find((g) => g.householdId === null);
   assert.strictEqual(solo.members.length, 1);
 });
+
+test('groupAdds keeps two null-household people as separate solo groups', () => {
+  const groups = groupAdds([
+    { pcoId: 'x', householdId: null, firstName: 'X', lastName: 'One', isChild: false },
+    { pcoId: 'y', householdId: null, firstName: 'Y', lastName: 'Two', isChild: false },
+  ]);
+  assert.strictEqual(groups.length, 2);
+  assert.ok(groups.every((g) => g.householdId === null && g.members.length === 1));
+});
