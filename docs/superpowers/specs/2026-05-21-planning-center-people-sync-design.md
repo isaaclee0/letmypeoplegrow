@@ -130,6 +130,19 @@ No new work required. Archiving sets `is_active=0` and never deletes `attendance
 - `applyPlan` captures per-item failures into `result.errors` without aborting the whole run.
 - Dry-run (`/sync/plan`) never writes; apply is idempotent.
 
+## Efficiency & Scaling (multi-church cron)
+
+The nightly cron processes churches **sequentially** (`for (const church of churches) await syncChurch(church)`), so only one church's data is resident at a time and is GC'd before the next. **Peak memory is bounded by the largest single church, not the church count** — 100 churches cost more wall-clock time, not more memory.
+
+Rules to keep per-church memory flat:
+
+- **Minimal projection while paginating — do NOT buffer raw PCO JSON.** As each people page arrives, map each person to only what the engine needs (`{id, firstName, lastName, status, membership, child, householdId}`, ~200–300 B) and **discard the raw page and its `included` resources**. (Contrast: the existing browse/import code does `allPeople.concat(data.data)` + `allIncluded.concat(data.included)`, holding every full object — ~5–10 MB for 1383 people, ~50–80 MB for 10k. Projection keeps 1383 people at ~0.4 MB and 50k at ~15 MB.)
+- **Indexes, not in-loop scans.** Build a `normalizedName → [pcoPerson]` index and a `householdId → family` map up front; the existing import's `allIncluded.find(...)` inside loops (O(n·m)) must not be copied. Matching should be ~O(n).
+- **No check-ins in the sync.** Only the People endpoint is swept; the heavy ~14k check-in sweep is never run during sync.
+- **Function-local scope + per-church try/catch.** Each church's projected data is reclaimed between iterations, and one church's failure does not abort the run (errors recorded per church).
+
+Wall-clock cost scales with church count (~100 churches × ~14 pages × ~300 ms ≈ 7 min) — acceptable at 2 AM. If throughput ever matters, add **bounded** concurrency across churches; this trades memory for speed, so the cron stays **sequential by default**.
+
 ## Testing
 
 - **Matcher unit tests:** tiers 1–4, name normalization, family corroboration, child tiebreak, double-link guard.
