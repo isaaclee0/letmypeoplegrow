@@ -112,3 +112,21 @@ test('empty allowlist: no adds, no reactivates, but archive still applies', () =
   assert.deepStrictEqual(plan.reactivate, []);
   assert.deepStrictEqual(plan.archive, [{ individualId: 2, pcoId: 'p2' }]);
 });
+
+test('ambiguous entries are enriched with individual + candidate names', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'John', 'Smith', { membership: 'Church Members' }), pco('p2', 'John', 'Smith', { membership: 'New People' })],
+    individuals: [ind(7, 'John', 'Smith', { planningCenterId: null })],
+    families: [], allowlist: ALLOW,
+  });
+  assert.strictEqual(plan.ambiguous.length, 1);
+  const a = plan.ambiguous[0];
+  assert.strictEqual(a.individualId, 7);
+  assert.strictEqual(a.firstName, 'John');
+  assert.strictEqual(a.lastName, 'Smith');
+  assert.deepStrictEqual(a.candidates.sort(), ['p1', 'p2']); // bare ids preserved
+  const byId = Object.fromEntries(a.candidateDetails.map((c) => [c.pcoId, c]));
+  assert.strictEqual(byId.p1.firstName, 'John');
+  assert.strictEqual(byId.p1.membership, 'Church Members');
+  assert.strictEqual(byId.p2.membership, 'New People');
+});

@@ -51,7 +51,22 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     }
   }
 
-  return { link: links, ambiguous, unmatched, add, update, archive, reactivate };
+  const individualsById = new Map(individuals.map((i) => [i.id, i]));
+  const ambiguousEnriched = ambiguous.map((a) => {
+    const ind = individualsById.get(a.individualId);
+    return {
+      individualId: a.individualId,
+      firstName: ind ? ind.firstName : '',
+      lastName: ind ? ind.lastName : '',
+      candidates: a.candidates, // bare PCO ids (kept for apply-side validation)
+      candidateDetails: a.candidates.map((id) => {
+        const p = pcoById.get(id);
+        return { pcoId: id, firstName: p ? p.firstName : '', lastName: p ? p.lastName : '', membership: p ? p.membership : null };
+      }),
+    };
+  });
+
+  return { link: links, ambiguous: ambiguousEnriched, unmatched, add, update, archive, reactivate };
 }
 
 module.exports = { computePlan };

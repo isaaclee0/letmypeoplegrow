@@ -4,7 +4,8 @@ import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import { buildSelections } from './syncSelections';
 
-interface AmbiguousEntry { individualId: number; firstName?: string; lastName?: string; candidates: string[]; }
+interface CandidateDetail { pcoId: string; firstName: string; lastName: string; membership: string | null; }
+interface AmbiguousEntry { individualId: number; firstName: string; lastName: string; candidates: string[]; candidateDetails: CandidateDetail[]; }
 interface Plan {
   link: { individualId: number; pcoId: string }[];
   ambiguous: AmbiguousEntry[];
@@ -88,11 +89,11 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
               <li key={a.individualId} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
                 <p className="text-sm text-gray-900 dark:text-gray-100 mb-2">{a.firstName} {a.lastName} — choose the Planning Center match:</p>
                 <div className="space-y-1">
-                  {a.candidates.map((pcoId) => (
-                    <label key={pcoId} className="flex items-center gap-2 text-sm">
-                      <input type="radio" name={`amb-${a.individualId}`} checked={ambiguousChoices[a.individualId] === pcoId}
-                        onChange={() => setAmbiguousChoices((p) => ({ ...p, [a.individualId]: pcoId }))} />
-                      <span>PCO #{pcoId}</span>
+                  {a.candidateDetails.map((c) => (
+                    <label key={c.pcoId} className="flex items-center gap-2 text-sm">
+                      <input type="radio" name={`amb-${a.individualId}`} checked={ambiguousChoices[a.individualId] === c.pcoId}
+                        onChange={() => setAmbiguousChoices((p) => ({ ...p, [a.individualId]: c.pcoId }))} />
+                      <span>{c.firstName} {c.lastName}{c.membership ? ` — ${c.membership}` : ''}</span>
                     </label>
                   ))}
                   <label className="flex items-center gap-2 text-sm">
