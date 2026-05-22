@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { integrationsAPI, gatheringsAPI, familiesAPI } from '../services/api';
+import { integrationsAPI, gatheringsAPI } from '../services/api';
 import logger from '../utils/logger';
+import PlanningCenterSyncReview from '../components/planningCenter/PlanningCenterSyncReview';
 import {
   MagnifyingGlassIcon,
   ArrowRightIcon,
@@ -158,24 +159,12 @@ const ImportPage: React.FC = () => {
     loading: boolean;
   }>({ enabled: false, connected: false, loading: true });
   const [pcActiveTab, setPcActiveTab] = useState<'people' | 'checkins'>('people');
-  const [pcPeople, setPcPeople] = useState<any[]>([]);
-  const [pcPeopleLoading, setPcPeopleLoading] = useState(false);
-  const [pcPeopleLoaded, setPcPeopleLoaded] = useState(false);
   const [pcCheckins, setPcCheckins] = useState<any[]>([]);
   const [pcCheckinsLoading, setPcCheckinsLoading] = useState(false);
   const [pcCheckinsLoaded, setPcCheckinsLoaded] = useState(false);
   const [pcCheckinsStartDate, setPcCheckinsStartDate] = useState('');
   const [pcCheckinsEndDate, setPcCheckinsEndDate] = useState('');
   const [pcError, setPcError] = useState<string | null>(null);
-  const [pcImporting, setPcImporting] = useState(false);
-  const [pcExpandedFamilies, setPcExpandedFamilies] = useState<Set<string>>(new Set());
-  const [pcSearchTerm, setPcSearchTerm] = useState('');
-  const [pcSelectedFamilies, setPcSelectedFamilies] = useState<Set<string>>(new Set());
-  const [pcAlreadyImportedCount, setPcAlreadyImportedCount] = useState(0);
-  const [lmpgFamilies, setLmpgFamilies] = useState<any[]>([]);
-  const [linkModal, setLinkModal] = useState<{ householdId: string; familyName: string } | null>(null);
-  const [linkSearch, setLinkSearch] = useState('');
-  const [linking, setLinking] = useState(false);
 
   // Historical CSV backfill state
   type HCsvStep = 'upload' | 'preview' | 'done';
@@ -198,7 +187,7 @@ const ImportPage: React.FC = () => {
     fetchPlanningCenterStatus();
   }, []);
 
-  // Once both status checks complete: set default tab and auto-load PC people
+  // Once both status checks complete: set default tab
   useEffect(() => {
     if (checkingConnection || planningCenterStatus.loading) return;
 
@@ -206,11 +195,6 @@ const ImportPage: React.FC = () => {
       setSourceTab('elvanto');
     } else if (planningCenterStatus.connected) {
       setSourceTab('planning-center');
-    }
-
-    if (planningCenterStatus.connected && !pcPeopleLoaded && !pcPeopleLoading) {
-      loadPcPeople();
-      familiesAPI.getAll().then(r => setLmpgFamilies(r.data.families || [])).catch(() => {});
     }
   }, [checkingConnection, planningCenterStatus.loading]);
 
@@ -245,25 +229,6 @@ const ImportPage: React.FC = () => {
     }
   };
 
-  const loadPcPeople = async () => {
-    try {
-      setPcPeopleLoading(true);
-      setPcError(null);
-      const response = await integrationsAPI.getPlanningCenterPeople();
-      const families = response.data.families || [];
-      setPcPeople(families);
-      setPcAlreadyImportedCount(response.data.alreadyImportedCount || 0);
-      // Pre-select all families that are NOT already imported
-      setPcSelectedFamilies(new Set(families.filter((f: any) => !f.alreadyImported).map((f: any) => f.householdId)));
-      setPcPeopleLoaded(true);
-    } catch (error: any) {
-      logger.error('Failed to fetch Planning Center people:', error);
-      setPcError(error.response?.data?.error || 'Failed to fetch people from Planning Center.');
-    } finally {
-      setPcPeopleLoading(false);
-    }
-  };
-
   const loadPcCheckins = async () => {
     if (!pcCheckinsStartDate || !pcCheckinsEndDate) {
       setPcError('Please select both start and end dates.');
@@ -283,72 +248,6 @@ const ImportPage: React.FC = () => {
       setPcError(error.response?.data?.error || 'Failed to fetch check-ins from Planning Center.');
     } finally {
       setPcCheckinsLoading(false);
-    }
-  };
-
-  const handlePcImportPeople = async () => {
-    try {
-      setPcImporting(true);
-      setPcError(null);
-      const householdIds = pcSelectedFamilies.size > 0 ? Array.from(pcSelectedFamilies) : undefined;
-      const response = await integrationsAPI.importPeopleFromPlanningCenter({ householdIds });
-      const data = response.data;
-      alert(`Successfully imported ${data.imported?.families || 0} families and ${data.imported?.individuals || 0} people from Planning Center!`);
-      // Reload to update already-imported flags
-      loadPcPeople();
-    } catch (error: any) {
-      logger.error('Failed to import people from Planning Center:', error);
-      setPcError(error.response?.data?.error || 'Failed to import people.');
-    } finally {
-      setPcImporting(false);
-    }
-  };
-
-  const togglePcFamily = (householdId: string) => {
-    setPcExpandedFamilies(prev => {
-      const next = new Set(prev);
-      if (next.has(householdId)) { next.delete(householdId); } else { next.add(householdId); }
-      return next;
-    });
-  };
-
-  const togglePcFamilySelected = (householdId: string) => {
-    setPcSelectedFamilies(prev => {
-      const next = new Set(prev);
-      if (next.has(householdId)) { next.delete(householdId); } else { next.add(householdId); }
-      return next;
-    });
-  };
-
-  const pcSelectAll = () => {
-    setPcSelectedFamilies(new Set(pcPeople.filter(f => !f.alreadyImported).map(f => f.householdId)));
-  };
-
-  const pcDeselectAll = () => {
-    setPcSelectedFamilies(new Set());
-  };
-
-  const handleLinkFamily = async (familyId: number) => {
-    if (!linkModal) return;
-    setLinking(true);
-    try {
-      await integrationsAPI.linkPlanningCenterFamily({ householdId: linkModal.householdId, familyId });
-      // Mark the PCO family as already imported in local state
-      setPcPeople(prev => prev.map(f =>
-        f.householdId === linkModal.householdId ? { ...f, alreadyImported: true } : f
-      ));
-      setPcSelectedFamilies(prev => {
-        const next = new Set(prev);
-        next.delete(linkModal.householdId);
-        return next;
-      });
-      setPcAlreadyImportedCount(c => c + 1);
-      setLinkModal(null);
-      setLinkSearch('');
-    } catch {
-      // silent — user can retry
-    } finally {
-      setLinking(false);
     }
   };
 
@@ -1897,175 +1796,7 @@ const ImportPage: React.FC = () => {
           {pcActiveTab === 'people' && (
             <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">People from Planning Center</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                      {pcPeopleLoaded
-                        ? `${pcPeople.reduce((sum, f) => sum + f.members.length, 0)} people in ${pcPeople.length} families`
-                        : pcPeopleLoading ? 'Loading people from Planning Center...' : ''}
-                    </p>
-                  </div>
-                  <div className="flex space-x-2">
-                    {pcPeopleLoaded && pcPeople.length > 0 && (
-                      <>
-                        <button
-                          onClick={pcSelectedFamilies.size === pcPeople.filter(f => !f.alreadyImported).length ? pcDeselectAll : pcSelectAll}
-                          className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
-                        >
-                          {pcSelectedFamilies.size === pcPeople.filter(f => !f.alreadyImported).length ? 'Deselect All' : 'Select All'}
-                        </button>
-                        <button
-                          onClick={handlePcImportPeople}
-                          disabled={pcImporting || pcSelectedFamilies.size === 0}
-                          className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                        >
-                          {pcImporting ? (
-                            <>
-                              <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                              Importing...
-                            </>
-                          ) : (
-                            <>
-                              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                              Import{pcSelectedFamilies.size > 0 ? ` (${pcSelectedFamilies.size})` : ''}
-                            </>
-                          )}
-                        </button>
-                      </>
-                    )}
-                    <button
-                      onClick={loadPcPeople}
-                      disabled={pcPeopleLoading}
-                      className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
-                    >
-                      <ArrowPathIcon className={`h-4 w-4 mr-2 ${pcPeopleLoading ? 'animate-spin' : ''}`} />
-                      Refresh
-                    </button>
-                  </div>
-                </div>
-
-                {pcError && (
-                  <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-                    <div className="flex">
-                      <XCircleIcon className="h-5 w-5 text-red-400 shrink-0" />
-                      <div className="ml-2">
-                        <p className="text-sm text-red-700 dark:text-red-400">{pcError}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {pcPeopleLoading && (
-                  <div className="flex items-center justify-center py-12">
-                    <ArrowPathIcon className="w-8 h-8 animate-spin text-gray-400" />
-                    <span className="ml-3 text-gray-500 dark:text-gray-400">Loading people from Planning Center...</span>
-                  </div>
-                )}
-
-                {pcPeopleLoaded && !pcPeopleLoading && (
-                  <>
-                    {/* Search */}
-                    {pcPeople.length > 0 && (
-                      <div className="mb-4">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            value={pcSearchTerm}
-                            onChange={(e) => setPcSearchTerm(e.target.value)}
-                            placeholder="Filter families..."
-                            className="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm pl-10"
-                          />
-                          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Family list */}
-                    <div className="space-y-2 max-h-[600px] overflow-y-auto">
-                      {pcPeople.length === 0 ? (
-                        <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-8">No people found in Planning Center.</p>
-                      ) : (
-                        pcPeople
-                          .filter(family => {
-                            if (!pcSearchTerm) return true;
-                            const term = pcSearchTerm.toLowerCase();
-                            return family.familyName.toLowerCase().includes(term) ||
-                              family.members.some((m: any) =>
-                                `${m.firstName} ${m.lastName}`.toLowerCase().includes(term)
-                              );
-                          })
-                          .map((family) => (
-                            <div key={family.householdId} className={`border rounded-lg ${family.alreadyImported ? 'border-gray-200 dark:border-gray-700 opacity-60' : 'border-gray-200 dark:border-gray-700'}`}>
-                              <div className="flex items-center px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700">
-                                {/* Checkbox */}
-                                <input
-                                  type="checkbox"
-                                  checked={pcSelectedFamilies.has(family.householdId)}
-                                  disabled={family.alreadyImported}
-                                  onChange={() => togglePcFamilySelected(family.householdId)}
-                                  onClick={e => e.stopPropagation()}
-                                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 mr-3 shrink-0 disabled:opacity-40"
-                                />
-                                {/* Expand toggle */}
-                                <button
-                                  onClick={() => togglePcFamily(family.householdId)}
-                                  className="flex-1 flex items-center justify-between min-w-0"
-                                >
-                                  <div className="flex items-center min-w-0">
-                                    {pcExpandedFamilies.has(family.householdId) ? (
-                                      <ChevronDownIcon className="h-4 w-4 text-gray-400 mr-2 shrink-0" />
-                                    ) : (
-                                      <ChevronRightIcon className="h-4 w-4 text-gray-400 mr-2 shrink-0" />
-                                    )}
-                                    <UserGroupIcon className="h-5 w-5 text-gray-400 mr-2 shrink-0" />
-                                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{family.familyName}</span>
-                                    {family.alreadyImported && (
-                                      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 shrink-0">
-                                        <CheckCircleIcon className="h-3 w-3 mr-1" />
-                                        Already Imported
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 ml-2 shrink-0">{family.members.length} member{family.members.length !== 1 ? 's' : ''}</span>
-                                </button>
-                                {!family.alreadyImported && (
-                                  <button
-                                    onClick={e => { e.stopPropagation(); setLinkModal({ householdId: family.householdId, familyName: family.familyName }); setLinkSearch(''); }}
-                                    className="ml-2 shrink-0 inline-flex items-center px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
-                                    title="Link to existing family in LMPG"
-                                  >
-                                    <LinkIcon className="h-3 w-3 mr-1" />
-                                    Link
-                                  </button>
-                                )}
-                              </div>
-                              {pcExpandedFamilies.has(family.householdId) && (
-                                <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-2 bg-gray-50 dark:bg-gray-700/50">
-                                  {family.members.map((member: any) => (
-                                    <div key={member.id} className="flex items-center justify-between py-1.5">
-                                      <div className="flex items-center">
-                                        <span className="text-sm text-gray-700 dark:text-gray-300">
-                                          {member.firstName} {member.lastName}
-                                        </span>
-                                        {member.child && (
-                                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
-                                            Child
-                                          </span>
-                                        )}
-                                      </div>
-                                      <span className="text-xs text-gray-400">{member.email || member.phone || ''}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ))
-                      )}
-                    </div>
-                  </>
-                )}
-
+                <PlanningCenterSyncReview connected={planningCenterStatus.connected} />
               </div>
             </div>
           )}
@@ -2187,63 +1918,6 @@ const ImportPage: React.FC = () => {
           </>
         )}
         </>
-      )}
-
-      {/* Link to existing family modal */}
-      {linkModal && createPortal(
-        <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-[10000]">
-          <div className="flex items-center justify-center min-h-screen p-4">
-            <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Link to existing family</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    Choose which LMPG family represents <strong>{linkModal.familyName}</strong> in Planning Center.
-                  </p>
-                </div>
-                <button onClick={() => { setLinkModal(null); setLinkSearch(''); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 ml-4 shrink-0">
-                  <XCircleIcon className="h-6 w-6" />
-                </button>
-              </div>
-
-              <div className="mb-3">
-                <div className="relative">
-                  <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search families..."
-                    value={linkSearch}
-                    onChange={e => setLinkSearch(e.target.value)}
-                    autoFocus
-                    className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </div>
-              </div>
-
-              <div className="max-h-72 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700 border border-gray-200 dark:border-gray-600 rounded-md">
-                {lmpgFamilies
-                  .filter(f => !linkSearch || f.familyName.toLowerCase().includes(linkSearch.toLowerCase()))
-                  .map(f => (
-                    <button
-                      key={f.id}
-                      onClick={() => handleLinkFamily(f.id)}
-                      disabled={linking}
-                      className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-                    >
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{f.familyName}</span>
-                      {f.planningCenterId && (
-                        <span className="ml-2 text-xs text-green-600 dark:text-green-400">Already linked to PCO</span>
-                      )}
-                    </button>
-                  ))}
-                {lmpgFamilies.filter(f => !linkSearch || f.familyName.toLowerCase().includes(linkSearch.toLowerCase())).length === 0 && (
-                  <div className="px-4 py-6 text-center text-sm text-gray-400">No families found</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
       )}
 
       {/* Historical CSV Tab Content — dev only */}
