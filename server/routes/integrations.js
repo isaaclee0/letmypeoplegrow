@@ -2364,8 +2364,16 @@ router.get('/planning-center/sync/plan', async (req, res) => {
     res.json({
       success: true,
       summary: {
-        link: plan.link.length, ambiguous: plan.ambiguous.length, unmatched: plan.unmatched.length,
-        add: plan.add.length, update: plan.update.length, archive: plan.archive.length, reactivate: plan.reactivate.length,
+        link: plan.link.length,
+        restore: (plan.restore || []).length,
+        ambiguous: plan.ambiguous.length,
+        visitorMatches: (plan.visitorMatches || []).length,
+        archiveExtras: (plan.archiveExtras || []).length,
+        unmatchedVisitors: (plan.unmatchedVisitors || []).length,
+        add: plan.add.length,
+        update: plan.update.length,
+        archive: plan.archive.length,
+        reactivate: plan.reactivate.length,
       },
       plan,
     });
@@ -2416,7 +2424,21 @@ router.post('/planning-center/sync/apply', async (req, res) => {
     const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
     const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
       .filter((id) => addPcoIds.has(id));
-    const selections = { ambiguous, skipAddPcoIds };
+    // Same shape, individualIds — only honour ids actually in the archiveExtras bucket.
+    const extraIds = new Set((plan.archiveExtras || []).map((x) => Number(x.individualId)));
+    const skipArchiveExtraIds = (Array.isArray(rawSel.skipArchiveExtraIds) ? rawSel.skipArchiveExtraIds : [])
+      .map(Number)
+      .filter((id) => extraIds.has(id));
+    // Visitor decisions: only honour ids actually in the visitorMatches bucket and valid choices.
+    const visitorOfferIds = new Set((plan.visitorMatches || []).map((v) => Number(v.individualId)));
+    const visitorChoices = {};
+    for (const [rawId, choice] of Object.entries(rawSel.visitorChoices || {})) {
+      const id = Number(rawId);
+      if (visitorOfferIds.has(id) && (choice === 'promote' || choice === 'keep')) {
+        visitorChoices[id] = choice;
+      }
+    }
+    const selections = { ambiguous, skipAddPcoIds, skipArchiveExtraIds, visitorChoices };
 
     const result = await pcoSync.applyForChurch(churchId, plan, userId, selections);
 
@@ -2424,7 +2446,11 @@ router.post('/planning-center/sync/apply', async (req, res) => {
       at: new Date().toISOString(),
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
-      ambiguous: plan.ambiguous.length, unmatched: plan.unmatched.length, errors: result.errors.length,
+      ambiguous: plan.ambiguous.length,
+      visitorMatches: (plan.visitorMatches || []).length,
+      archiveExtras: (plan.archiveExtras || []).length,
+      unmatchedVisitors: (plan.unmatchedVisitors || []).length,
+      errors: result.errors.length,
     };
     await Database.query(
       `UPDATE church_settings

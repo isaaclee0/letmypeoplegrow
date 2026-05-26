@@ -13,6 +13,7 @@ import NotesModal from '../components/people/NotesModal';
 import DataSecurityInfo from '../components/people/DataSecurityInfo';
 import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
+import { isPcoLocked } from '../utils/pcoLock';
 import SampleDataBanner from '../components/SampleDataBanner';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import logger from '../utils/logger';
@@ -44,6 +45,7 @@ interface Person {
   badgeIcon?: string | null;
   familyId?: number;
   familyName?: string;
+  planningCenterId?: string;
   lastAttendanceDate?: string;
   createdAt?: string;
   gatheringAssignments?: Array<{
@@ -1449,6 +1451,15 @@ const PeoplePage: React.FC = () => {
         families={families}
         gatheringTypes={gatheringTypes}
         allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
+        lockedCount={selectedPeople.reduce((n, id) => {
+          const p = people.find(pp => pp.id === id);
+          return n + (isPcoLocked(p, planningCenterSyncEnabled) ? 1 : 0);
+        }, 0)}
+        lockNameAge={modalSelectedCount === 1 && (() => {
+          const id = selectedPeople[0];
+          const p = id !== undefined ? people.find(pp => pp.id === id) : undefined;
+          return isPcoLocked(p, planningCenterSyncEnabled);
+        })()}
         onSave={async () => {
           try {
             setIsLoading(true);
@@ -1808,11 +1819,6 @@ const PeoplePage: React.FC = () => {
                            </>
                          );
                        })()}
-                        {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            PCO
-                          </span>
-                        )}
                         <button
                           onClick={() => handleOpenNotes(group)}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -1911,6 +1917,8 @@ const PeoplePage: React.FC = () => {
 
                                                        variant="grouped"
 
+                                                       planningCenterSyncEnabled={planningCenterSyncEnabled}
+
                                                      />
 
                                                    );
@@ -1952,6 +1960,8 @@ const PeoplePage: React.FC = () => {
                                            getBadgeInfo={getBadgeInfo}
 
                                            variant="individual"
+
+                                           planningCenterSyncEnabled={planningCenterSyncEnabled}
 
                                          />
 
@@ -2013,11 +2023,6 @@ const PeoplePage: React.FC = () => {
                                     </>
                                   );
                                 })()}
-                                {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                    PCO
-                                  </span>
-                                )}
                                 <button
                                   onClick={() => handleOpenNotes(group)}
                                   className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -2097,6 +2102,8 @@ const PeoplePage: React.FC = () => {
 
                                   variant="grouped"
 
+                                  planningCenterSyncEnabled={planningCenterSyncEnabled}
+
                                 />
 
                               );
@@ -2134,6 +2141,11 @@ const PeoplePage: React.FC = () => {
                                 />
                                 <div className="flex items-center space-x-2">
                                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                                  {planningCenterSyncEnabled && person.planningCenterId && (
+                                    <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                                      PCO
+                                    </span>
+                                  )}
                                   {(() => {
                                     const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
                                     return standardGatherings.length > 0 && (
@@ -2190,11 +2202,6 @@ const PeoplePage: React.FC = () => {
                                       return group.familyName;
                                     })()}
                                   </h4>
-                                  {planningCenterSyncEnabled && families.find(f => f.id === group.familyId)?.planningCenterId && (
-                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                      PCO
-                                    </span>
-                                  )}
                                   <button
                                     onClick={() => handleOpenNotes(group)}
                                     className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
@@ -2273,6 +2280,8 @@ const PeoplePage: React.FC = () => {
                                     getBadgeInfo={getBadgeInfo}
 
                                     variant="grouped"
+
+                                    planningCenterSyncEnabled={planningCenterSyncEnabled}
 
                                   />
 
@@ -2800,7 +2809,8 @@ const PeoplePage: React.FC = () => {
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
-           {/* Archive Button - Always shown when people are selected */}
+           {/* Archive Button - hidden when any selected person is PCO-linked (lifecycle owned by sync) */}
+           {!selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncEnabled)) && (
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
@@ -2818,9 +2828,10 @@ const PeoplePage: React.FC = () => {
                <TrashIcon className="h-6 w-6" />
              </button>
            </div>
-           
-           {/* Merge Button - Only shown for 2+ people and admin users */}
-           {isAdmin && selectedPeople.length >= 2 && (
+           )}
+
+           {/* Merge Button - Only shown for 2+ people, admin users, and only when no selected person is PCO-linked */}
+           {isAdmin && selectedPeople.length >= 2 && !selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncEnabled)) && (
                <div className="flex items-center justify-end space-x-3">
                  <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge
@@ -2851,7 +2862,7 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
          </div>
-        ) : (
+        ) : !planningCenterSyncEnabled ? (
          <>
            <button
              onClick={() => openAddModal()}
@@ -2867,7 +2878,7 @@ const PeoplePage: React.FC = () => {
              </div>
            )}
          </>
-       )}
+       ) : null}
 
        {/* Merge Modal */}
       <MergeModal

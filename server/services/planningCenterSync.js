@@ -144,10 +144,13 @@ async function fetchAllPcoPeople(accessToken) {
 }
 
 // Load the minimal LMPG state for the current church context.
+// Includes archived (is_active = 0) rows so the diff engine can detect "restore"
+// candidates (previously archived individuals whose name now matches a PCO person).
 async function loadChurchState(churchId) {
   const individuals = await Database.query(
     `SELECT id, first_name AS firstName, last_name AS lastName, is_child AS isChild,
-            family_id AS familyId, is_active AS isActive, planning_center_id AS planningCenterId
+            family_id AS familyId, is_active AS isActive, planning_center_id AS planningCenterId,
+            people_type AS peopleType, pco_link_declined AS pcoLinkDeclined
        FROM individuals WHERE church_id = ?`,
     [churchId]
   );
@@ -206,7 +209,10 @@ async function syncChurch(church) {
         added: result.added, updated: result.updated, archived: result.archived,
         reactivated: result.reactivated, linked: result.linked,
         ambiguous: plan.ambiguous.length,
-        unmatched: plan.unmatched.length, errors: result.errors.length,
+        visitorMatches: (plan.visitorMatches || []).length,
+        archiveExtras: (plan.archiveExtras || []).length,
+        unmatchedVisitors: (plan.unmatchedVisitors || []).length,
+        errors: result.errors.length,
       };
       await Database.query(
         `UPDATE church_settings

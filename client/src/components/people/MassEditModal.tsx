@@ -42,6 +42,10 @@ interface MassEditModalProps {
   error?: string;
   isLoading?: boolean;
   allSameAgeGroup?: boolean; // true when all selected people are either all adults or all children
+  // PCO source-of-truth lock. When true on a single-person edit, name/age inputs
+  // are disabled. For bulk edits, lockedCount drives an informational note.
+  lockNameAge?: boolean;
+  lockedCount?: number;
 }
 
 const MassEditModal: React.FC<MassEditModalProps> = ({
@@ -55,7 +59,9 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
   onSave,
   error,
   isLoading = false,
-  allSameAgeGroup = false
+  allSameAgeGroup = false,
+  lockNameAge = false,
+  lockedCount = 0
 }) => {
   // Determine if this is a child (for showing badge editor)
   const isEditingChild = massEdit.isChild === 'true';
@@ -93,27 +99,34 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
           <div className="space-y-4">
             {/* Show firstName field only when editing single person */}
             {selectedCount === 1 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
-                  <input 
-                    type="text" 
-                    value={massEdit.firstName} 
-                    onChange={(e) => setMassEdit(d => ({ ...d, firstName: e.target.value }))} 
-                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
-                    placeholder="Enter first name" 
-                  />
+              <div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">First Name</label>
+                    <input
+                      type="text"
+                      value={massEdit.firstName}
+                      onChange={(e) => setMassEdit(d => ({ ...d, firstName: e.target.value }))}
+                      disabled={lockNameAge}
+                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      placeholder="Enter first name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
+                    <input
+                      type="text"
+                      value={massEdit.lastName}
+                      onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))}
+                      disabled={lockNameAge}
+                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      placeholder="Leave blank to keep current last name"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
-                  <input 
-                    type="text" 
-                    value={massEdit.lastName} 
-                    onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} 
-                    className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
-                    placeholder="Leave blank to keep current last name" 
-                  />
-                </div>
+                {lockNameAge && (
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Name and age are managed by Planning Center for this person.</p>
+                )}
               </div>
             )}
 
@@ -121,14 +134,19 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
             {selectedCount > 1 && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Last Name</label>
-                <input 
-                  type="text" 
-                  value={massEdit.lastName} 
-                  onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))} 
-                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
-                  placeholder="Leave blank to keep current last names" 
+                <input
+                  type="text"
+                  value={massEdit.lastName}
+                  onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))}
+                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  placeholder="Leave blank to keep current last names"
                 />
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enter a last name to set it for all selected people</div>
+                {lockedCount > 0 && (
+                  <div className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                    {lockedCount} Planning Center–linked {lockedCount === 1 ? 'person' : 'people'} won't have their name or age changed.
+                  </div>
+                )}
               </div>
             )}
 
@@ -187,16 +205,19 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Adult / Child</label>
-                <select 
-                  value={massEdit.isChild} 
-                  onChange={(e) => setMassEdit(d => ({ ...d, isChild: e.target.value as '' | 'true' | 'false' }))} 
-                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                <select
+                  value={massEdit.isChild}
+                  onChange={(e) => setMassEdit(d => ({ ...d, isChild: e.target.value as '' | 'true' | 'false' }))}
+                  disabled={lockNameAge}
+                  className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
                   <option value="">Do not change</option>
                   <option value="false">Adult</option>
                   <option value="true">Child</option>
                 </select>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Set adult or child status for selected people</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {lockNameAge ? 'Managed by Planning Center' : 'Set adult or child status for selected people'}
+                </div>
               </div>
             </div>
 

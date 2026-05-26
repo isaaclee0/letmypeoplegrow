@@ -2,10 +2,22 @@ const { matchIndividuals } = require('./matcher');
 
 // Inputs:
 //   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, householdId}]
-//   individuals: [{id, firstName, lastName, isChild, familyId, isActive(bool), planningCenterId}]
+//   individuals: [{id, firstName, lastName, isChild, familyId, isActive(bool),
+//                  planningCenterId, peopleType, pcoLinkDeclined}]
 //   families:    [{id, planningCenterId}]   (not used directly here; reserved for callers)
 //   allowlist:   string[] of allowed membership values
-// Output buckets: { link, ambiguous, unmatched, add, update, archive, reactivate }
+//
+// Output buckets:
+//   link              — unlinked active individuals matched to a PCO person (set planning_center_id)
+//   restore           — unlinked **archived** individuals matched to a PCO person (link + reactivate)
+//   ambiguous         — needs reviewer decision (multiple PCO candidates for one LMPG individual)
+//   visitorMatches    — needs reviewer decision: a visitor's name matches a PCO person (promote-to-regular or keep-as-visitor)
+//   archiveExtras     — active 'regular' individuals that did NOT match PCO (manual/unmatched regulars to archive on review)
+//   unmatchedVisitors — visitors that did NOT match PCO (informational; LMPG owns them)
+//   add               — allow-listed active PCO people not consumed by a link/ambiguous/visitorMatch candidate (new regulars to create)
+//   update            — linked individuals whose name/age differs from PCO (sync these fields down)
+//   archive           — linked individuals whose PCO status went 'inactive'
+//   reactivate        — linked individuals whose PCO status is 'active' again (allowlisted)
 function computePlan({ pcoPeople, individuals, families, allowlist }) {
   const allow = new Set(allowlist || []);
   const linked = individuals.filter((i) => i.planningCenterId);
@@ -22,8 +34,52 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     familyMembers.get(i.familyId).push({ firstName: i.firstName, lastName: i.lastName });
   }
 
-  const { links, ambiguous, unmatched } = matchIndividuals(unlinked, availablePco, familyMembers);
+  // Hide visitors with pco_link_declined = 1 from the matcher entirely. They've
+  // already been told "no, not a member" — no point re-prompting.
+  const unlinkedForMatcher = unlinked.filter((i) => !i.pcoLinkDeclined);
+  const declinedVisitorIds = new Set(
+    unlinked.filter((i) => i.pcoLinkDeclined).map((i) => i.id)
+  );
 
+  const { links: matchedLinks, ambiguous, unmatched } = matchIndividuals(unlinkedForMatcher, availablePco, familyMembers);
+
+  const individualsById = new Map(individuals.map((i) => [i.id, i]));
+
+  // Split matched links by row state:
+  //   - visitor    -> visitorMatches (decision required; no auto-link)
+  //   - archived   -> restore (link + reactivate)
+  //   - active     -> link (just attach pcoId)
+  const link = [];
+  const restore = [];
+  const visitorMatches = [];
+  for (const m of matchedLinks) {
+    const ind = individualsById.get(m.individualId);
+    const type = (ind && ind.peopleType) || 'regular';
+    const isVisitor = type === 'local_visitor' || type === 'traveller_visitor';
+    if (isVisitor) {
+      const pco = pcoById.get(m.pcoId);
+      visitorMatches.push({
+        individualId: m.individualId,
+        firstName: ind ? ind.firstName : '',
+        lastName: ind ? ind.lastName : '',
+        peopleType: type,
+        candidate: {
+          pcoId: m.pcoId,
+          firstName: pco ? pco.firstName : '',
+          lastName: pco ? pco.lastName : '',
+          membership: pco ? pco.membership : null,
+        },
+      });
+      continue;
+    }
+    if (ind && ind.isActive === false) {
+      restore.push({ individualId: m.individualId, pcoId: m.pcoId });
+    } else {
+      link.push({ individualId: m.individualId, pcoId: m.pcoId });
+    }
+  }
+
+  // Update / archive / reactivate for already-linked rows (unchanged from before).
   const update = [];
   const archive = [];
   const reactivate = [];
@@ -40,8 +96,47 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     }
   }
 
-  // add: allow-listed active people not consumed by a link or ambiguous candidate
-  const usedPco = new Set(links.map((l) => l.pcoId));
+  // Re-bucket the matcher's "unmatched" by peopleType + isActive:
+  //   active + regular  -> archiveExtras  (manual regulars not in PCO)
+  //   visitor (any)     -> unmatchedVisitors (informational)
+  //   archived + regular -> silent (already archived; nothing to do)
+  const archiveExtras = [];
+  const unmatchedVisitors = [];
+  for (const id of unmatched) {
+    const ind = individualsById.get(id);
+    if (!ind) continue;
+    const type = ind.peopleType || 'regular';
+    const isVisitor = type === 'local_visitor' || type === 'traveller_visitor';
+    if (isVisitor) {
+      unmatchedVisitors.push({ individualId: id, firstName: ind.firstName, lastName: ind.lastName, peopleType: type });
+      continue;
+    }
+    if (ind.isActive) {
+      archiveExtras.push({ individualId: id, firstName: ind.firstName, lastName: ind.lastName });
+    }
+    // else: archived + regular + unmatched — silent no-op.
+  }
+
+  // Visitors with pco_link_declined = 1 were excluded from the matcher to suppress
+  // re-prompting; they still belong in the informational unmatchedVisitors list so
+  // the reviewer can see them.
+  for (const id of declinedVisitorIds) {
+    const ind = individualsById.get(id);
+    if (!ind) continue;
+    unmatchedVisitors.push({
+      individualId: id,
+      firstName: ind.firstName,
+      lastName: ind.lastName,
+      peopleType: ind.peopleType,
+    });
+  }
+
+  // adds: allow-listed active PCO people not consumed by a link/restore/visitor-match/ambiguous candidate.
+  const usedPco = new Set([
+    ...link.map((l) => l.pcoId),
+    ...restore.map((r) => r.pcoId),
+    ...visitorMatches.map((v) => v.candidate.pcoId),
+  ]);
   for (const a of ambiguous) for (const c of a.candidates) usedPco.add(c);
   const add = [];
   for (const p of availablePco) {
@@ -51,7 +146,6 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     }
   }
 
-  const individualsById = new Map(individuals.map((i) => [i.id, i]));
   const ambiguousEnriched = ambiguous.map((a) => {
     const ind = individualsById.get(a.individualId);
     return {
@@ -66,7 +160,18 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     };
   });
 
-  return { link: links, ambiguous: ambiguousEnriched, unmatched, add, update, archive, reactivate };
+  return {
+    link,
+    restore,
+    ambiguous: ambiguousEnriched,
+    visitorMatches,
+    archiveExtras,
+    unmatchedVisitors,
+    add,
+    update,
+    archive,
+    reactivate,
+  };
 }
 
 module.exports = { computePlan };

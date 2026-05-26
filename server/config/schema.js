@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   badge_color TEXT,
   badge_icon TEXT,
   planning_center_id TEXT,
+  pco_link_declined INTEGER DEFAULT 0,
   FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );

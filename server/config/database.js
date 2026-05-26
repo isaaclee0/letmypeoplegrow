@@ -161,6 +161,9 @@ class Database {
       if (!individualsCols.some(c => c.name === 'planning_center_id')) {
         db.exec('ALTER TABLE individuals ADD COLUMN planning_center_id TEXT');
       }
+      if (!individualsCols.some(c => c.name === 'pco_link_declined')) {
+        db.exec('ALTER TABLE individuals ADD COLUMN pco_link_declined INTEGER DEFAULT 0');
+      }
     }
 
     churchDbs.set(churchId, db);

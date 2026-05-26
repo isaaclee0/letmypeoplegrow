@@ -2,14 +2,26 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
-import { buildSelections } from './syncSelections';
+import { buildSelections, VisitorChoice } from './syncSelections';
 
 interface CandidateDetail { pcoId: string; firstName: string; lastName: string; membership: string | null; }
 interface AmbiguousEntry { individualId: number; firstName: string; lastName: string; candidates: string[]; candidateDetails: CandidateDetail[]; }
+interface ExtraEntry { individualId: number; firstName: string; lastName: string; }
+interface UnmatchedVisitorEntry { individualId: number; firstName: string; lastName: string; peopleType: string; }
+interface VisitorMatchEntry {
+  individualId: number;
+  firstName: string;
+  lastName: string;
+  peopleType: string;
+  candidate: { pcoId: string; firstName: string; lastName: string; membership: string | null };
+}
 interface Plan {
   link: { individualId: number; pcoId: string }[];
+  restore: { individualId: number; pcoId: string }[];
   ambiguous: AmbiguousEntry[];
-  unmatched: number[];
+  visitorMatches: VisitorMatchEntry[];
+  archiveExtras: ExtraEntry[];
+  unmatchedVisitors: UnmatchedVisitorEntry[];
   add: { pcoId: string; firstName: string; lastName: string; isChild: boolean; householdId: string | null; membership: string | null }[];
   update: { individualId: number; firstName: string; lastName: string }[];
   archive: { individualId: number; pcoId: string }[];
@@ -25,6 +37,8 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
   const [result, setResult] = useState<any>(null);
   const [ambiguousChoices, setAmbiguousChoices] = useState<Record<string, string | null>>({});
   const [skipAdd, setSkipAdd] = useState<Set<string>>(new Set());
+  const [skipArchiveExtras, setSkipArchiveExtras] = useState<Set<number>>(new Set());
+  const [visitorChoices, setVisitorChoices] = useState<Record<string, VisitorChoice | null>>({});
 
   const loadPlan = useCallback(async () => {
     setLoading(true); setError(null); setResult(null);
@@ -33,6 +47,8 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
       setPlan(res.data.plan);
       setAmbiguousChoices({});
       setSkipAdd(new Set());
+      setSkipArchiveExtras(new Set());
+      setVisitorChoices({});
     } catch (e: any) {
       logger.error('Failed to compute PCO sync plan', e);
       setError(e.response?.data?.error || 'Failed to compute sync plan.');
@@ -46,7 +62,7 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
   const apply = async () => {
     setApplying(true); setError(null);
     try {
-      const selections = buildSelections(ambiguousChoices, skipAdd);
+      const selections = buildSelections(ambiguousChoices, skipAdd, skipArchiveExtras, visitorChoices);
       const res = await integrationsAPI.applyPlanningCenterSync({ selections });
       setResult(res.data.result);
     } catch (e: any) {
@@ -73,10 +89,29 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
     setSkipAdd((prev) => { const n = new Set(prev); if (n.has(pcoId)) n.delete(pcoId); else n.add(pcoId); return n; });
   };
 
+  const toggleSkipExtra = (individualId: number) => {
+    setSkipArchiveExtras((prev) => {
+      const n = new Set(prev);
+      if (n.has(individualId)) n.delete(individualId); else n.add(individualId);
+      return n;
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3 text-sm">
-        {([['Link', plan.link.length], ['Add', plan.add.length], ['Update', plan.update.length], ['Archive', plan.archive.length], ['Reactivate', plan.reactivate.length], ['Ambiguous', plan.ambiguous.length], ['Unmatched', plan.unmatched.length]] as [string, number][]).map(([label, n]) => (
+        {([
+          ['Link', plan.link.length],
+          ['Restore', plan.restore.length],
+          ['Add', plan.add.length],
+          ['Update', plan.update.length],
+          ['Archive', plan.archive.length],
+          ['Reactivate', plan.reactivate.length],
+          ['Ambiguous', plan.ambiguous.length],
+          ['Visitor matches', plan.visitorMatches.length],
+          ['Archive extras', plan.archiveExtras.length],
+          ['Unmatched visitors', plan.unmatchedVisitors.length],
+        ] as [string, number][]).map(([label, n]) => (
           <span key={label} className="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100">{label}: {n}</span>
         ))}
       </div>
@@ -108,6 +143,55 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
         </section>
       )}
 
+      {plan.visitorMatches.length > 0 && (
+        <section>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+            Visitors found in Planning Center — promote or keep? ({plan.visitorMatches.length})
+          </h4>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+            These visitors share a name with someone in Planning Center. Promoting links them and makes them a regular member (Planning Center takes ownership). Keeping leaves them as a visitor and won't ask again.
+          </p>
+          <ul className="space-y-3">
+            {plan.visitorMatches.map((v) => (
+              <li key={v.individualId} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
+                <p className="text-sm text-gray-900 dark:text-gray-100 mb-2">
+                  {v.firstName} {v.lastName} ({v.peopleType === 'local_visitor' ? 'local visitor' : 'traveller visitor'}) — matches {v.candidate.firstName} {v.candidate.lastName}{v.candidate.membership ? ` — ${v.candidate.membership}` : ''}
+                </p>
+                <div className="space-y-1">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name={`vis-${v.individualId}`}
+                      checked={visitorChoices[v.individualId] === 'promote'}
+                      onChange={() => setVisitorChoices((p) => ({ ...p, [v.individualId]: 'promote' }))}
+                    />
+                    <span>Promote to member (link to Planning Center)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name={`vis-${v.individualId}`}
+                      checked={visitorChoices[v.individualId] === 'keep'}
+                      onChange={() => setVisitorChoices((p) => ({ ...p, [v.individualId]: 'keep' }))}
+                    />
+                    <span>Keep as visitor (don't ask again)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name={`vis-${v.individualId}`}
+                      checked={!visitorChoices[v.individualId]}
+                      onChange={() => setVisitorChoices((p) => ({ ...p, [v.individualId]: null }))}
+                    />
+                    <span>Decide later (no change this run)</span>
+                  </label>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {plan.add.length > 0 && (
         <section>
           <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">New people to add ({plan.add.length - skipAdd.size} selected)</h4>
@@ -122,8 +206,38 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
         </section>
       )}
 
+      {plan.archiveExtras.length > 0 && (
+        <section>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+            Not in Planning Center — will be archived ({plan.archiveExtras.length - skipArchiveExtras.size} selected)
+          </h4>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+            Active members in Let My People Grow that don't match anyone in Planning Center. Uncheck any you want to keep active.
+          </p>
+          <ul className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-100 dark:divide-gray-700">
+            {plan.archiveExtras.map((x) => (
+              <li key={x.individualId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                <input type="checkbox" checked={!skipArchiveExtras.has(x.individualId)} onChange={() => toggleSkipExtra(x.individualId)} />
+                <span>{x.firstName} {x.lastName}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {plan.unmatchedVisitors.length > 0 && (
+        <details className="text-sm text-gray-600 dark:text-gray-300">
+          <summary className="cursor-pointer">Unmatched visitors ({plan.unmatchedVisitors.length}) — no action; visitors are managed in Let My People Grow</summary>
+          <ul className="mt-2 pl-4 list-disc">
+            {plan.unmatchedVisitors.map((v) => (
+              <li key={v.individualId}>{v.firstName} {v.lastName}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       <details className="text-sm text-gray-600 dark:text-gray-300">
-        <summary className="cursor-pointer">Auto-applied: {plan.link.length} link, {plan.update.length} update, {plan.archive.length} archive, {plan.reactivate.length} reactivate; {plan.unmatched.length} unmatched (stay unlinked)</summary>
+        <summary className="cursor-pointer">Auto-applied: {plan.link.length} link, {plan.restore.length} restore, {plan.update.length} update, {plan.archive.length} archive, {plan.reactivate.length} reactivate</summary>
       </details>
 
       <div className="flex items-center gap-3">

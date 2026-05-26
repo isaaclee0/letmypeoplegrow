@@ -12,6 +12,7 @@ interface Person {
   badgeIcon?: string | null;
   familyId?: number;
   familyName?: string;
+  planningCenterId?: string;
   gatheringAssignments?: Array<{
     id: number;
     name: string;
@@ -38,6 +39,7 @@ interface PersonCardProps {
   getStandardGatheringAssignments: (assignments?: Array<{ id: number; name: string }>) => Array<{ id: number; name: string }>;
   getBadgeInfo: (person: { isChild?: boolean; badgeText?: string | null; badgeColor?: string | null; badgeIcon?: string | null }) => BadgeInfo | null;
   variant?: 'grouped' | 'individual'; // grouped has more spacing, individual is compact
+  planningCenterSyncEnabled?: boolean;
 }
 
 const PersonCard: React.FC<PersonCardProps> = ({
@@ -49,7 +51,8 @@ const PersonCard: React.FC<PersonCardProps> = ({
   getGatheringColor,
   getStandardGatheringAssignments,
   getBadgeInfo,
-  variant = 'grouped'
+  variant = 'grouped',
+  planningCenterSyncEnabled = false
 }) => {
   const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
   const isGrouped = variant === 'grouped';
@@ -80,6 +83,11 @@ const PersonCard: React.FC<PersonCardProps> = ({
             <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {displayName}
             </span>
+            {planningCenterSyncEnabled && person.planningCenterId && (
+              <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                PCO
+              </span>
+            )}
             <div className="flex items-center space-x-1 shrink-0">
               {standardGatherings.map(gathering => (
                 <div

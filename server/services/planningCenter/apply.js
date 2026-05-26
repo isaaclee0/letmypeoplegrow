@@ -21,15 +21,21 @@ function groupAdds(adds) {
 }
 
 // Apply a plan within the CURRENT church DB context (caller sets context).
-// selections: { ambiguous?: {individualId: pcoId}, skipAddPcoIds?: string[] }
+// selections:
+//   { ambiguous?: {individualId: pcoId},
+//     skipAddPcoIds?: string[],
+//     skipArchiveExtraIds?: number[],
+//     visitorChoices?: {individualId: 'promote' | 'keep'} }
 // Returns counts + per-item errors (never throws on item failure).
 async function applyPlan(churchId, plan, userId, selections = {}) {
   const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, errors: [] };
   const skipAdd = new Set(selections.skipAddPcoIds || []);
+  const skipArchiveExtras = new Set((selections.skipArchiveExtraIds || []).map(Number));
   const ambiguousChoices = selections.ambiguous || {};
+  const visitorChoices = selections.visitorChoices || {};
 
-  // links (high-confidence + any ambiguous resolved by the reviewer)
-  const links = [...plan.link];
+  // links (high-confidence active matches + any ambiguous resolved by the reviewer)
+  const links = [...(plan.link || [])];
   for (const [individualId, pcoId] of Object.entries(ambiguousChoices)) {
     if (pcoId) links.push({ individualId: Number(individualId), pcoId });
   }
@@ -41,6 +47,60 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
       );
       result.linked++;
     } catch (e) { result.errors.push({ type: 'link', id: l.individualId, error: e.message }); }
+  }
+
+  // restore: archived LMPG individual whose name matches a PCO person -> link + reactivate.
+  for (const r of (plan.restore || [])) {
+    try {
+      await Database.query(
+        `UPDATE individuals SET planning_center_id = ?, is_active = 1, updated_at = datetime('now')
+           WHERE id = ? AND church_id = ?`,
+        [r.pcoId, r.individualId, churchId]
+      );
+      result.linked++;
+      result.reactivated++;
+    } catch (e) { result.errors.push({ type: 'restore', id: r.individualId, error: e.message }); }
+  }
+
+  // archiveExtras: active 'regular' rows that didn't match PCO -> archive (is_active = 0).
+  // Per-item skip honoured via selections.skipArchiveExtraIds (mirrors skipAddPcoIds).
+  for (const x of (plan.archiveExtras || [])) {
+    if (skipArchiveExtras.has(Number(x.individualId))) continue;
+    try {
+      await Database.query(
+        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [x.individualId, churchId]
+      );
+      result.archived++;
+    } catch (e) { result.errors.push({ type: 'archiveExtra', id: x.individualId, error: e.message }); }
+  }
+
+  // visitorMatches: reviewer decides per-person. Validate against the plan so a
+  // client can only promote/keep visitors actually offered by this plan, and
+  // only to the PCO id this plan associates with them.
+  const visitorByIndividual = new Map((plan.visitorMatches || []).map((v) => [Number(v.individualId), v]));
+  for (const [rawId, choice] of Object.entries(visitorChoices)) {
+    const id = Number(rawId);
+    const offer = visitorByIndividual.get(id);
+    if (!offer) continue;
+    try {
+      if (choice === 'promote') {
+        await Database.query(
+          `UPDATE individuals
+             SET planning_center_id = ?, people_type = 'regular', updated_at = datetime('now')
+             WHERE id = ? AND church_id = ?`,
+          [offer.candidate.pcoId, id, churchId]
+        );
+        result.linked++;
+      } else if (choice === 'keep') {
+        await Database.query(
+          `UPDATE individuals
+             SET pco_link_declined = 1, updated_at = datetime('now')
+             WHERE id = ? AND church_id = ?`,
+          [id, churchId]
+        );
+      }
+    } catch (e) { result.errors.push({ type: 'visitorChoice', id, error: e.message }); }
   }
 
   for (const u of plan.update) {

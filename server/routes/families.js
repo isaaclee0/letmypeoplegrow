@@ -2,6 +2,11 @@ const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
+const {
+  isPcoModeActive,
+  isIndividualLocked,
+  lockedResponse,
+} = require('../services/planningCenter/mode');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -267,7 +272,23 @@ router.post('/merge', requireRole(['admin']), auditLog('MERGE_FAMILIES'), async 
     if (!keepFamilyId || !mergeFamilyIds || !Array.isArray(mergeFamilyIds)) {
       return res.status(400).json({ error: 'Invalid request. Must provide keepFamilyId and mergeFamilyIds array.' });
     }
-    
+
+    // PCO source-of-truth lock: refuse if any individual in any involved family is PCO-linked.
+    if (await isPcoModeActive(req.user.church_id)) {
+      const familyIds = [Number(keepFamilyId), ...mergeFamilyIds.map(Number)];
+      const placeholders = familyIds.map(() => '?').join(',');
+      const lockedRows = await Database.query(
+        `SELECT id FROM individuals
+           WHERE church_id = ? AND family_id IN (${placeholders})
+             AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+           LIMIT 1`,
+        [req.user.church_id, ...familyIds]
+      );
+      if (lockedRows.length) {
+        return res.status(403).json(lockedResponse('Cannot merge families containing Planning Center–linked people. Manage households in PCO.'));
+      }
+    }
+
     // Start a transaction
     await Database.transaction(async (conn) => {
       // Update the family name and type if provided
@@ -328,7 +349,22 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
     if (!individualIds || !Array.isArray(individualIds) || individualIds.length === 0) {
       return res.status(400).json({ error: 'Invalid request. Must provide individualIds array.' });
     }
-    
+
+    // PCO source-of-truth lock: refuse if any involved individual is PCO-linked.
+    if (await isPcoModeActive(req.user.church_id)) {
+      const placeholders = individualIds.map(() => '?').join(',');
+      const lockedRows = await Database.query(
+        `SELECT id FROM individuals
+           WHERE church_id = ? AND id IN (${placeholders})
+             AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+           LIMIT 1`,
+        [req.user.church_id, ...individualIds]
+      );
+      if (lockedRows.length) {
+        return res.status(403).json(lockedResponse('Cannot merge Planning Center–linked people into a new family. Manage households in PCO.'));
+      }
+    }
+
     if (!familyName) {
       return res.status(400).json({ error: 'Family name is required.' });
     }
