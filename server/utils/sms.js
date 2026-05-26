@@ -9,6 +9,16 @@ const getCrazytelConfig = () => ({
   fromNumber: process.env.CRAZYTEL_FROM_NUMBER,
 });
 
+// Dev SMS redirect: if DEV_SMS_ALLOWLIST is set, route all SMS to the first listed number
+const applyDevSmsRedirect = (phoneNumber) => {
+  const allowlist = process.env.DEV_SMS_ALLOWLIST;
+  if (!allowlist) return phoneNumber;
+  const redirectTo = allowlist.split(',').map(n => n.trim()).filter(Boolean)[0];
+  if (!redirectTo || phoneNumber === redirectTo) return phoneNumber;
+  console.log(`[DEV] Redirecting SMS from ${maskPhoneNumber(phoneNumber)} to ${maskPhoneNumber(redirectTo)}`);
+  return redirectTo;
+};
+
 // Configure Twilio with validation - TEMPORARILY DISABLED
 // const accountSid = process.env.TWILIO_ACCOUNT_SID;
 // const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -86,6 +96,8 @@ const sendOTCSMS = async (phoneNumber, code) => {
     return { success: false, error: 'SMS service not configured' };
   }
 
+  phoneNumber = applyDevSmsRedirect(phoneNumber);
+
   try {
     const countryCode = await getChurchCountry();
     const internationalNumber = getInternationalFormat(phoneNumber, countryCode);
@@ -130,6 +142,8 @@ const sendInvitationSMS = async (phoneNumber, firstName, lastName, role, invitat
     console.warn('⚠️ Crazytel not configured. Skipping SMS invitation send.');
     return { success: false, error: 'SMS service not configured' };
   }
+
+  phoneNumber = applyDevSmsRedirect(phoneNumber);
 
   try {
     const countryCode = await getChurchCountry();
@@ -177,6 +191,8 @@ const sendNotificationSMS = async (phoneNumber, subject, message) => {
     console.warn('⚠️ Crazytel not configured. Skipping SMS notification send.');
     return { success: false, error: 'SMS service not configured' };
   }
+
+  phoneNumber = applyDevSmsRedirect(phoneNumber);
 
   try {
     const countryCode = await getChurchCountry();
