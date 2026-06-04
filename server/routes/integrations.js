@@ -1788,11 +1788,17 @@ router.get('/planning-center/authorize', (req, res) => {
 
   console.log('🔐 Planning Center OAuth - redirect_uri:', redirectUri);
 
+  // Optional post-OAuth redirect target. Only app-relative '/app/...' paths are
+  // allowed (prevents open redirect). Falls back to Settings when absent/invalid.
+  const rawReturnTo = typeof req.query.returnTo === 'string' ? req.query.returnTo : '';
+  const returnTo = /^\/app\//.test(rawReturnTo) ? rawReturnTo : '';
+
   // Generate state parameter for security (optional but recommended)
   const state = Buffer.from(JSON.stringify({
     userId: req.user.id,
     churchId: req.user.church_id,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    returnTo,
   })).toString('base64');
 
   const authUrl = `https://api.planningcenteronline.com/oauth/authorize?` +
@@ -1817,11 +1823,12 @@ router.get('/planning-center/callback', async (req, res) => {
     }
 
     // Decode state to get user info
-    let userId, churchId;
+    let userId, churchId, returnTo;
     try {
       const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
       userId = stateData.userId;
       churchId = stateData.churchId;
+      returnTo = stateData.returnTo; // may be undefined for older flows
     } catch (e) {
       return res.status(400).send('Invalid state parameter');
     }
@@ -1852,8 +1859,13 @@ router.get('/planning-center/callback', async (req, res) => {
     // Save tokens to database
     await savePlanningCenterTokens(userId, churchId, tokens);
 
-    // Redirect to settings page with success message
-    res.redirect('/app/settings?tab=integrations&pco_success=true');
+    // Re-validate returnTo on the way out (defense in depth).
+    if (returnTo && /^\/app\//.test(returnTo)) {
+      const sep = returnTo.includes('?') ? '&' : '?';
+      res.redirect(`${returnTo}${sep}pco=connected`);
+    } else {
+      res.redirect('/app/settings?tab=integrations&pco_success=true');
+    }
   } catch (error) {
     console.error('Planning Center OAuth callback error:', error);
     res.status(500).send('OAuth callback failed');
@@ -2020,6 +2032,59 @@ router.get('/planning-center/people', async (req, res) => {
   }
 });
 
+const checkinsImport = require('../services/planningCenter/checkinsImport');
+
+// Fetches ALL check-ins for a range (paginated) and returns the merged
+// { data, included } payload plus the church timezone.
+async function fetchAllCheckins({ tokens, userId, churchId, startDate, endDate }) {
+  let url = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
+    `filter=checked_in_at&where[checked_in_at][gte]=${startDate}&where[checked_in_at][lte]=${endDate}&` +
+    `per_page=100&include=event,person`;
+
+  let data = [];
+  let included = [];
+  let nextUrl = url;
+  while (nextUrl) {
+    const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
+    if (response.status !== 200) {
+      throw new Error('Failed to fetch check-ins from Planning Center');
+    }
+    data = data.concat(response.data.data || []);
+    included = included.concat(response.data.included || []);
+    nextUrl = response.data.links?.next || null;
+  }
+
+  const settings = await Database.query(
+    `SELECT timezone FROM church_settings WHERE church_id = ? LIMIT 1`, [churchId]
+  );
+  const timezone = (settings[0] && settings[0].timezone) || 'Australia/Sydney';
+  return { payload: { data, included }, timezone };
+}
+
+// Resolves the effective date range. If either bound is missing, default to
+// all available history: earliest check-in (PCO has data from ~2010) to today.
+// Earliest date we will request check-in history from PCO when no start date is given.
+const PCO_HISTORY_FLOOR = '2010-01-01';
+// Arbitrary non-null sentinel id used only when counting records in the preview
+// path. Its numeric value is irrelevant — it must simply be non-null so that
+// buildRecordWrites includes the row in its output.
+const PREVIEW_PLACEHOLDER_ID = -1;
+
+function resolveRange(startDate, endDate) {
+  const range = {
+    startDate: startDate || PCO_HISTORY_FLOOR,
+    endDate: endDate || new Date().toISOString().slice(0, 10),
+  };
+  // Both dates flow into the PCO request URL — validate format (FIX 4).
+  const dateFormat = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateFormat.test(range.startDate) || !dateFormat.test(range.endDate)) {
+    const err = new Error('Start and end dates must be in YYYY-MM-DD format.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return range;
+}
+
 // Browse check-ins from Planning Center (without importing)
 router.get('/planning-center/checkins', async (req, res) => {
   try {
@@ -2101,6 +2166,29 @@ router.get('/planning-center/checkins', async (req, res) => {
       error: 'Failed to fetch check-ins from Planning Center.',
       details: error.message
     });
+  }
+});
+
+// List distinct PCO events that have check-ins in range (for the mapping screen).
+router.get('/planning-center/checkins/events', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
+    const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate);
+
+    const tokens = await getPlanningCenterTokens(userId, churchId);
+    if (!tokens || !tokens.access_token) {
+      return res.status(400).json({ error: 'Planning Center not connected.' });
+    }
+
+    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate });
+    const normalized = checkinsImport.normalizeCheckIns(payload, timezone);
+    const events = checkinsImport.summarizeEvents(normalized);
+
+    res.json({ success: true, startDate, endDate, events });
+  } catch (error) {
+    logger.error('PCO check-in events error:', error);
+    res.status(500).json({ success: false, error: 'Failed to list Planning Center check-in events.', details: error.message });
   }
 });
 
@@ -2468,76 +2556,219 @@ router.post('/planning-center/sync/apply', async (req, res) => {
 });
 
 // Import check-ins from Planning Center
-router.post('/planning-center/import-checkins', async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const churchId = req.user.church_id;
-    const { startDate, endDate, eventId } = req.body;
+// Shared core: fetch, normalize, resolve people, and (optionally) write.
+async function runCheckinImport({ req, commit }) {
+  const userId = req.user.id;
+  const churchId = req.user.church_id;
+  const { startDate, endDate } = resolveRange(req.body.startDate, req.body.endDate);
+  const mappings = Array.isArray(req.body.mappings) ? req.body.mappings : [];
 
-    const tokens = await getPlanningCenterTokens(userId, churchId);
+  // Onboarding-only: also populate gathering_lists for active, recent attendees.
+  const assignToGatherings = req.body.assignToGatherings === true;
+  let recencyWeeks = parseInt(req.body.recencyWeeks, 10);
+  if (!Number.isInteger(recencyWeeks) || recencyWeeks < 1) recencyWeeks = 8; // default 8-week recency window for treating an attendee as a current regular
 
-    if (!tokens || !tokens.access_token) {
-      return res.status(400).json({ error: 'Planning Center not connected.' });
+  // Validate every mapping up front (applies to both preview and execute).
+  // The frontend only ever sends entries with target 'existing' or 'new', so
+  // this is a safety net against malformed input.
+  for (const m of mappings) {
+    if (m.target === 'new') {
+      if (!m.newGatheringName || !String(m.newGatheringName).trim()) {
+        const err = new Error(`Mapping for event ${m.pcoEventId} is set to 'new' but has no gathering name.`);
+        err.statusCode = 400;
+        throw err;
+      }
+    } else if (m.target === 'existing') {
+      if (!m.gatheringTypeId) {
+        const err = new Error(`Mapping for event ${m.pcoEventId} is set to 'existing' but has no gatheringTypeId.`);
+        err.statusCode = 400;
+        throw err;
+      }
+    } else {
+      const err = new Error(`Mapping for event ${m.pcoEventId} has an invalid target '${m.target}'.`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  const tokens = await getPlanningCenterTokens(userId, churchId);
+  if (!tokens || !tokens.access_token) {
+    const err = new Error('Planning Center not connected.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate });
+  const normalized = checkinsImport.normalizeCheckIns(payload, timezone);
+
+  // Existing individuals keyed by planning_center_id (active OR archived).
+  const existingRows = await Database.query(
+    `SELECT id, planning_center_id AS pcoId, is_active AS isActive
+       FROM individuals WHERE church_id = ? AND planning_center_id IS NOT NULL`,
+    [churchId]
+  );
+  const existingByPcoId = new Map(existingRows.map((r) => [r.pcoId, { id: r.id, isActive: r.isActive }]));
+
+  const people = checkinsImport.resolvePeople(normalized, existingByPcoId);
+
+  // Build the event->gathering map. For preview, "new" events have no id yet.
+  const mappingByEvent = new Map(mappings.map((m) => [m.pcoEventId, m]));
+
+  const summary = {
+    startDate, endDate, timezone,
+    matchedPeople: people.matched.length,
+    peopleToCreate: people.toCreate.length,
+    events: checkinsImport.summarizeEvents(normalized)
+      .filter((e) => mappingByEvent.has(e.pcoEventId))
+      .map((e) => ({ ...e, mapping: mappingByEvent.get(e.pcoEventId) })),
+  };
+
+  if (!commit) {
+    // Preview: compute counts using a placeholder gathering id per mapped event.
+    const eventToGathering = new Map();
+    for (const m of mappings) eventToGathering.set(m.pcoEventId, m.gatheringTypeId || PREVIEW_PLACEHOLDER_ID);
+    const personToIndividual = new Map(people.matched.map((p) => [p.pcoPersonId, p.individualId]));
+    // include to-create people with a placeholder so record count is accurate
+    for (const c of people.toCreate) personToIndividual.set(c.pcoPersonId, PREVIEW_PLACEHOLDER_ID);
+    const writes = checkinsImport.buildRecordWrites(normalized, personToIndividual, eventToGathering);
+
+    summary.recordsToWrite = writes.length;
+    summary.sessionsInvolved = new Set(writes.map((w) => `${w.gatheringTypeId}|${w.date}`)).size;
+    return summary;
+  }
+
+  // Commit: everything inside one transaction.
+  let createdPeople = 0, gatheringsCreated = 0, sessionsCreated = 0, recordsWritten = 0, recordsSkipped = 0, assignmentsCreated = 0;
+
+  await Database.transaction(async (conn) => {
+    // 1) Create missing (inactive) people, capture ids.
+    const personToIndividual = new Map(people.matched.map((p) => [p.pcoPersonId, p.individualId]));
+    for (const c of people.toCreate) {
+      const ins = await conn.query(
+        `INSERT INTO individuals (first_name, last_name, people_type, is_active, planning_center_id, created_by, church_id)
+         VALUES (?, ?, 'regular', 0, ?, ?, ?)`,
+        [c.firstName, c.lastName, c.pcoPersonId, userId, churchId]
+      );
+      personToIndividual.set(c.pcoPersonId, ins.insertId);
+      createdPeople++;
     }
 
-    if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'Start date and end date are required.' });
+    // 2) Resolve event -> gathering, creating new gatherings where requested.
+    const eventToGathering = new Map();
+    for (const m of mappings) {
+      if (m.target === 'new') {
+        const ins = await conn.query(
+          `INSERT INTO gathering_types (name, attendance_type, created_by, church_id)
+           VALUES (?, 'standard', ?, ?)`,
+          [m.newGatheringName, userId, churchId]
+        );
+        eventToGathering.set(m.pcoEventId, ins.insertId);
+        gatheringsCreated++;
+      } else if (m.gatheringTypeId) {
+        eventToGathering.set(m.pcoEventId, m.gatheringTypeId);
+      }
     }
 
-    logger.info('Starting Planning Center check-ins import', {
-      userId,
-      churchId,
-      startDate,
-      endDate,
-      eventId
-    });
+    // 3) Build writes and apply, upserting sessions and DO NOTHING on records.
+    const writes = checkinsImport.buildRecordWrites(normalized, personToIndividual, eventToGathering);
+    const sessionCache = new Map(); // `${gid}|${date}` -> sessionId
+    const latestPresent = new Map(); // individualId -> max date
 
-    // Fetch check-ins from Planning Center
-    let url = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
-      `filter=checked_in_at&where[checked_in_at][gte]=${startDate}&where[checked_in_at][lte]=${endDate}&` +
-      `per_page=100&include=event,person`;
-
-    if (eventId) {
-      url += `&where[event_id]=${eventId}`;
-    }
-
-    let allCheckIns = [];
-    let nextUrl = url;
-
-    while (nextUrl) {
-      const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
-
-      if (response.status !== 200) {
-        throw new Error('Failed to fetch check-ins from Planning Center');
+    for (const w of writes) {
+      const sKey = `${w.gatheringTypeId}|${w.date}`;
+      let sessionId = sessionCache.get(sKey);
+      if (sessionId == null) {
+        const existing = await conn.query(
+          `SELECT id FROM attendance_sessions WHERE gathering_type_id = ? AND session_date = ? AND church_id = ?`,
+          [w.gatheringTypeId, w.date, churchId]
+        );
+        if (existing.length > 0) {
+          sessionId = existing[0].id;
+        } else {
+          const ins = await conn.query(
+            `INSERT INTO attendance_sessions (gathering_type_id, session_date, created_by, church_id) VALUES (?, ?, ?, ?)`,
+            [w.gatheringTypeId, w.date, userId, churchId]
+          );
+          sessionId = ins.insertId;
+          sessionsCreated++;
+        }
+        sessionCache.set(sKey, sessionId);
       }
 
-      const data = response.data;
-      allCheckIns = allCheckIns.concat(data.data || []);
+      // NOTE: We intentionally do NOT add imported individuals to gathering_lists.
+      // Present attendance is surfaced by reports directly from attendance_records
+      // (reports.js: COUNT(... ar.present = 1 ...) with WHERE i.is_active=1 OR ar.present=1),
+      // so historical/inactive attendees count in stats without cluttering the live roster.
+      const result = await conn.query(
+        `INSERT INTO attendance_records (session_id, individual_id, present, people_type_at_time, church_id)
+         VALUES (?, ?, 1, 'regular', ?)
+         ON CONFLICT(session_id, individual_id) DO NOTHING`,
+        [sessionId, w.individualId, churchId]
+      );
+      // This codebase's DB layer maps better-sqlite3's `result.changes` to
+      // `affectedRows`; a DO NOTHING no-op returns 0, a fresh insert returns 1.
+      if (result.affectedRows && result.affectedRows > 0) recordsWritten++; else recordsSkipped++;
 
-      nextUrl = data.links?.next || null;
-
-      logger.info(`Fetched ${allCheckIns.length} check-ins so far...`);
+      const prev = latestPresent.get(w.individualId);
+      if (!prev || prev < w.date) latestPresent.set(w.individualId, w.date);
     }
 
-    logger.info(`Total check-ins fetched: ${allCheckIns.length}`);
+    // 4) Move last_attendance_date forward only.
+    for (const [individualId, date] of latestPresent) {
+      await conn.query(
+        `UPDATE individuals SET last_attendance_date = ?
+           WHERE id = ? AND church_id = ? AND (last_attendance_date IS NULL OR last_attendance_date < ?)`,
+        [date, individualId, churchId, date]
+      );
+    }
 
-    // TODO: Map check-ins to gatherings and create attendance records
-    // This requires mapping Planning Center events to your gathering_types
-    // and Planning Center people to your individuals table
+    // Onboarding auto-assignment: add active, recently-attending people to the
+    // roll of each gathering they attended. Only runs when assignToGatherings is
+    // set (the Settings importer leaves this false and never touches gathering_lists).
+    if (assignToGatherings) {
+      const activeRows = await conn.query(
+        `SELECT id FROM individuals WHERE church_id = ? AND is_active = 1`,
+        [churchId]
+      );
+      const activeIndividualIds = new Set(activeRows.map((r) => r.id));
+      const today = new Date().toISOString().slice(0, 10);
+      const adds = checkinsImport.buildGatheringListAdds(
+        normalized, activeIndividualIds, personToIndividual, eventToGathering, recencyWeeks, today
+      );
+      for (const a of adds) {
+        const r = await conn.query(
+          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
+          [a.gatheringTypeId, a.individualId, userId, churchId]
+        );
+        if (r.affectedRows && r.affectedRows > 0) assignmentsCreated++;
+      }
+    }
+  });
 
-    res.json({
-      success: true,
-      message: `Fetched ${allCheckIns.length} check-ins from Planning Center.`,
-      checkIns: allCheckIns.length,
-      note: 'Check-in mapping to attendance records is not yet implemented. Manual mapping required.'
-    });
+  return { ...summary, createdPeople, gatheringsCreated, sessionsCreated, recordsWritten, recordsSkipped, assignmentsCreated };
+}
+
+// Preview — no writes.
+router.post('/planning-center/import-checkins/preview', async (req, res) => {
+  try {
+    const summary = await runCheckinImport({ req, commit: false });
+    res.json({ success: true, ...summary });
   } catch (error) {
-    console.error('Import Planning Center check-ins error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to import check-ins from Planning Center.',
-      details: error.message
-    });
+    logger.error('PCO check-in preview error:', error);
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
+  }
+});
+
+// Execute — writes inside a transaction.
+router.post('/planning-center/import-checkins/execute', async (req, res) => {
+  try {
+    const summary = await runCheckinImport({ req, commit: true });
+    res.json({ success: true, ...summary });
+  } catch (error) {
+    logger.error('PCO check-in execute error:', error);
+    res.status(error.statusCode || 500).json({ success: false, error: error.message });
   }
 });
 

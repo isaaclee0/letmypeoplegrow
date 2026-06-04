@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import MembershipAllowlistEditor from '../components/planningCenter/MembershipAllowlistEditor';
+import PCOCheckinImport from '../components/PCOCheckinImport';
 import { usersAPI, integrationsAPI, aiAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
@@ -2031,6 +2032,11 @@ const SettingsPage: React.FC = () => {
                               Last sync {pcLastSync.at ? new Date(pcLastSync.at).toLocaleString() : ''}: {pcLastSync.added ?? 0} added, {pcLastSync.updated ?? 0} updated, {pcLastSync.archived ?? 0} archived, {pcLastSync.reactivated ?? 0} reactivated, {pcLastSync.linked ?? 0} linked{typeof pcLastSync.ambiguous === 'number' ? `, ${pcLastSync.ambiguous} need review` : ''}.
                             </p>
                           )}
+                        </div>
+
+                        {/* Check-in attendance import */}
+                        <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                          <PCOCheckinImport />
                         </div>
                       </div>
                     )}

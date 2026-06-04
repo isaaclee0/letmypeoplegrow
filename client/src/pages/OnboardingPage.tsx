@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { authAPI, onboardingAPI } from '../services/api';
+import { authAPI, onboardingAPI, integrationsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { CheckIcon, MapPinIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import MembershipAllowlistEditor from '../components/planningCenter/MembershipAllowlistEditor';
+import PCOCheckinImport from '../components/PCOCheckinImport';
 
 interface SetupForm {
   churchName: string;
@@ -21,7 +23,7 @@ interface LocationResult {
 }
 
 const OnboardingPage: React.FC = () => {
-  const [step, setStep] = useState<'form' | 'code'>('form');
+  const [step, setStep] = useState<'form' | 'code' | 'choose-path' | 'pco-people' | 'pco-gatherings'>('form');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -31,6 +33,12 @@ const OnboardingPage: React.FC = () => {
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [locationSearching, setLocationSearching] = useState(false);
+  const [membershipValues, setMembershipValues] = useState<{ membership: string; count: number }[]>([]);
+  const [membershipLoading, setMembershipLoading] = useState(false);
+  const [membershipError, setMembershipError] = useState<string | null>(null);
+  const [allowlist, setAllowlist] = useState<string[]>([]);
+  const [importingPeople, setImportingPeople] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
   const { login, refreshOnboardingStatus, updateUser, user } = useAuth();
@@ -49,6 +57,22 @@ const OnboardingPage: React.FC = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Resume onboarding after the PCO OAuth round-trip.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('pco') === 'connected') {
+      setStep('pco-people');
+      // clean the query so a refresh doesn't re-trigger
+      window.history.replaceState({}, '', '/app/onboarding');
+    }
+  }, []);
+
+  // Trigger the membership loader when entering the people step.
+  useEffect(() => {
+    if (step === 'pco-people') loadMembershipSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   // Location search - call Open-Meteo directly (no auth needed)
   const handleLocationSearchChange = (value: string) => {
@@ -144,11 +168,47 @@ const OnboardingPage: React.FC = () => {
         updateUser({ ...user, isFirstLogin: false });
       }
       
-      navigate('/app/gatherings');
+      setStep('choose-path');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to verify code');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const finishOnboarding = () => {
+    navigate('/app/gatherings');
+  };
+
+  const loadMembershipSummary = async () => {
+    setMembershipLoading(true); setMembershipError(null);
+    try {
+      const r = await integrationsAPI.getPlanningCenterMembershipSummary();
+      const values = r.data.values || [];
+      setMembershipValues(values);
+      const defaults = values
+        .map((v: any) => v.membership)
+        .filter((m: string) => m && m !== '(none)' && !/archiv|inactive/i.test(m));
+      setAllowlist(defaults);
+    } catch (e: any) {
+      setMembershipError(e.response?.data?.error || 'Failed to load membership categories.');
+    } finally {
+      setMembershipLoading(false);
+    }
+  };
+
+  const importPeople = async () => {
+    setImportingPeople(true); setError('');
+    try {
+      // Save the chosen allowlist (one-time import; ongoing sync stays off).
+      await integrationsAPI.savePlanningCenterMembershipFilter({ enabled: false, allowlist });
+      // Apply the additive sync to import matching people + households.
+      await integrationsAPI.applyPlanningCenterSync({});
+      setStep('pco-gatherings');
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Failed to import people from Planning Center.');
+    } finally {
+      setImportingPeople(false);
     }
   };
 
@@ -282,6 +342,79 @@ const OnboardingPage: React.FC = () => {
                   </button>
                 </div>
               </form>
+          ) : step === 'choose-path' ? (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                Do you use Planning Center? We can set up your members, gatherings and attendance history from it.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  setConnecting(true);
+                  try {
+                    const res = await integrationsAPI.authorizePlanningCenter('/app/onboarding');
+                    window.location.href = res.data.authUrl;
+                  } catch (err: any) {
+                    setError(err.response?.data?.error || 'Could not start Planning Center connection.');
+                    setConnecting(false);
+                  }
+                }}
+                disabled={connecting}
+                className="w-full inline-flex justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
+              >
+                {connecting ? 'Connecting…' : 'Set up from Planning Center'}
+              </button>
+              <button
+                type="button"
+                onClick={finishOnboarding}
+                className="w-full inline-flex justify-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Start fresh
+              </button>
+            </div>
+          ) : step === 'pco-people' ? (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">Choose which Planning Center people to import.</p>
+              <MembershipAllowlistEditor
+                values={membershipValues}
+                loading={membershipLoading}
+                error={membershipError}
+                selected={allowlist}
+                onChange={setAllowlist}
+                onReload={loadMembershipSummary}
+              />
+              <div className="flex justify-between">
+                <button
+                  type="button"
+                  onClick={() => setStep('pco-gatherings')}
+                  className="text-gray-600 underline text-sm"
+                >
+                  Skip
+                </button>
+                <button
+                  type="button"
+                  disabled={importingPeople || allowlist.length === 0}
+                  onClick={importPeople}
+                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {importingPeople ? 'Importing…' : 'Import people'}
+                </button>
+              </div>
+            </div>
+          ) : step === 'pco-gatherings' ? (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                Create your gatherings from Planning Center events and import attendance history.
+                People who attended recently will be added to each gathering automatically.
+              </p>
+              <PCOCheckinImport
+                assignToGatherings
+                defaultRecencyWeeks={8}
+                showSkip
+                onSkip={finishOnboarding}
+                onComplete={finishOnboarding}
+              />
+            </div>
           ) : (
             <form className="space-y-6" onSubmit={codeForm.handleSubmit(handleCodeSubmit)}>
             <div>

@@ -819,7 +819,8 @@ export const integrationsAPI = {
 
   // Planning Center integration - OAuth based
   getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
-  authorizePlanningCenter: () => api.get('/integrations/planning-center/authorize'),
+  authorizePlanningCenter: (returnTo?: string) =>
+    api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
   getPlanningCenterCheckins: (params: { startDate: string; endDate: string }) =>
     api.get('/integrations/planning-center/checkins', { params, timeout: 120000 }),
@@ -834,8 +835,31 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/sync/plan', { timeout: 120000 }),
   applyPlanningCenterSync: (data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[] } }) =>
     api.post('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
-  importCheckinsFromPlanningCenter: (data: { startDate: string; endDate: string; eventId?: string }) =>
-    api.post('/integrations/planning-center/import-checkins', data, { timeout: 120000 }),
+  // Check-in attendance import (events discovery + preview + execute)
+  getCheckinEvents: (params: { startDate?: string; endDate?: string }) =>
+    api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),
+  previewCheckinImport: (body: {
+    startDate?: string;
+    endDate?: string;
+    mappings: Array<{
+      pcoEventId: string;
+      target: 'existing' | 'new';
+      gatheringTypeId?: number;
+      newGatheringName?: string;
+    }>;
+  }) => api.post('/integrations/planning-center/import-checkins/preview', body, { timeout: 120000 }),
+  executeCheckinImport: (body: {
+    startDate?: string;
+    endDate?: string;
+    mappings: Array<{
+      pcoEventId: string;
+      target: 'existing' | 'new';
+      gatheringTypeId?: number;
+      newGatheringName?: string;
+    }>;
+    assignToGatherings?: boolean;
+    recencyWeeks?: number;
+  }) => api.post('/integrations/planning-center/import-checkins/execute', body, { timeout: 120000 }),
 
   // Historical CSV attendance backfill
   previewHistoricalCsv: (file: File) => {
