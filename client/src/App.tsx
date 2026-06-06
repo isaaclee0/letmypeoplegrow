@@ -22,7 +22,6 @@ import TokenClearPage from './pages/TokenClearPage';
 import Layout from './components/Layout';
 // ProfilePage retired: content moved to Settings > My Info tab
 import WebSocketTestPage from './pages/WebSocketTestPage';
-import ImportPage from './pages/ImportPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import CheckInsPage from './pages/CheckInsPage';
 import PendingApprovalPage from './pages/PendingApprovalPage';
@@ -197,14 +196,6 @@ function App() {
                   />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="profile" element={<Navigate to="/app/settings?tab=myinfo" replace />} />
-                  <Route
-                    path="import"
-                    element={
-                      <RoleProtectedRoute allowedRoles={['admin']}>
-                        <ImportPage />
-                      </RoleProtectedRoute>
-                    }
-                  />
                   <Route
                     path="ai-insights"
                     element={

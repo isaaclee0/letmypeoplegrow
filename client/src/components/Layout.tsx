@@ -20,7 +20,6 @@ import {
   PencilIcon,
   ArrowRightOnRectangleIcon,
   ArrowPathIcon,
-  ArrowDownTrayIcon,
   SparklesIcon,
   ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
@@ -146,9 +145,6 @@ const Layout: React.FC = () => {
     ] : []),
     ...(checkInsAvailable ? [
       { name: 'Check-ins', href: '/app/checkins', icon: ClipboardDocumentCheckIcon }
-    ] : []),
-    ...(user?.role === 'admin' ? [
-      { name: 'Import', href: '/app/import', icon: ArrowDownTrayIcon }
     ] : []),
     { name: 'Settings', href: '/app/settings', icon: PencilIcon },
   ];
