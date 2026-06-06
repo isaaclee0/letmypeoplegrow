@@ -17,6 +17,8 @@ function localDateInTz(isoString, tz) {
 function buildIncludedMaps(included = []) {
   const events = {};
   const people = {};
+  const periods = {};
+  const times = {};
   for (const item of included) {
     if (item.type === 'Event') {
       events[item.id] = item.attributes.name || UNKNOWN_EVENT_NAME;
@@ -25,37 +27,142 @@ function buildIncludedMaps(included = []) {
         firstName: item.attributes.first_name || '',
         lastName: item.attributes.last_name || '',
       };
+    } else if (item.type === 'EventPeriod') {
+      // starts_at is the actual service occurrence date/time (e.g. the Sunday).
+      periods[item.id] = item.attributes.starts_at || null;
+    } else if (item.type === 'EventTime') {
+      // hour/minute are the service's local clock time — lets us tell an AM service
+      // apart from a PM one within the same PCO event.
+      times[item.id] = { hour: item.attributes.hour, minute: item.attributes.minute };
     }
   }
-  return { events, people };
+  return { events, people, periods, times };
 }
 
-// payload = { data, included }; returns flat, de-duped rows.
-function normalizeCheckIns(payload, tz) {
-  const { events, people } = buildIncludedMaps(payload.included);
-  const seen = new Set();
-  const out = [];
+// Local clock time "HH:MM" from a PCO EventTime, or null if no hour.
+function hhmm(hour, minute) {
+  if (!Number.isInteger(hour)) return null;
+  const m = Number.isInteger(minute) ? minute : 0;
+  return `${String(hour).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// payload = { data, included }; tz = church timezone; range (optional) =
+// { startDate, endDate } in YYYY-MM-DD — rows whose service date falls outside it
+// are dropped (the fetch widens the created_at window to absorb data-entry lag, so
+// the precise filtering happens here against the true service date).
+//
+// When a single PCO event has 2+ distinct service times in the data (e.g. a 10:00
+// and a 16:30 Sunday service), its rows are split per time so each can map to a
+// different LMPG gathering. The split rows carry a composite `pcoEventId` of
+// `${id}@${HH:MM}`, a time-suffixed `eventName`, and a `serviceTime`. Single-time
+// events are unchanged.
+function normalizeCheckIns(payload, tz, range) {
+  const { events, people, periods, times } = buildIncludedMaps(payload.included);
+
+  // Pass 1: flatten to raw rows, carrying each row's service time, with range filter.
+  const raw = [];
   for (const ci of payload.data || []) {
     const pcoEventId = ci.relationships?.event?.data?.id;
     const pcoPersonId = ci.relationships?.person?.data?.id;
-    const checkedInAt = ci.attributes?.checked_in_at;
-    if (!pcoEventId || !pcoPersonId || !checkedInAt) continue;
-    const date = localDateInTz(checkedInAt, tz);
+    // The attendance date is the EventPeriod's starts_at (the actual service date),
+    // NOT created_at — Kingston (and others) often enter check-ins days/weeks later.
+    const periodId = ci.relationships?.event_period?.data?.id;
+    const startsAt = periodId ? periods[periodId] : null;
+    if (!pcoEventId || !pcoPersonId || !startsAt) continue;
+    const date = localDateInTz(startsAt, tz);
     if (!date) continue;
-    const key = `${pcoEventId}|${pcoPersonId}|${date}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (range && ((range.startDate && date < range.startDate) || (range.endDate && date > range.endDate))) continue;
+    const etId = ci.relationships?.event_times?.data?.[0]?.id;
+    const et = etId ? times[etId] : null;
+    const serviceTime = et ? hhmm(et.hour, et.minute) : null;
     const person = people[pcoPersonId] || { firstName: '', lastName: '' };
-    out.push({
-      pcoEventId,
-      eventName: events[pcoEventId] || UNKNOWN_EVENT_NAME,
-      pcoPersonId,
-      firstName: person.firstName,
-      lastName: person.lastName,
-      date,
+    raw.push({
+      pcoEventId, eventName: events[pcoEventId] || UNKNOWN_EVENT_NAME,
+      pcoPersonId, firstName: person.firstName, lastName: person.lastName, date, serviceTime,
     });
   }
+
+  // Which events have 2+ distinct service times? Only those get split.
+  const timesByEvent = new Map();
+  for (const r of raw) {
+    if (!r.serviceTime) continue;
+    if (!timesByEvent.has(r.pcoEventId)) timesByEvent.set(r.pcoEventId, new Set());
+    timesByEvent.get(r.pcoEventId).add(r.serviceTime);
+  }
+
+  // Pass 2: assign group key + label, dedupe person-per-slot-per-date.
+  const seen = new Set();
+  const out = [];
+  for (const r of raw) {
+    const distinct = timesByEvent.get(r.pcoEventId);
+    const split = r.serviceTime && distinct && distinct.size >= 2;
+    const groupKey = split ? `${r.pcoEventId}@${r.serviceTime}` : r.pcoEventId;
+    const key = `${groupKey}|${r.pcoPersonId}|${r.date}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const row = {
+      pcoEventId: groupKey,
+      eventName: split ? `${r.eventName} — ${r.serviceTime}` : r.eventName,
+      pcoPersonId: r.pcoPersonId,
+      firstName: r.firstName,
+      lastName: r.lastName,
+      date: r.date,
+    };
+    if (split) row.serviceTime = r.serviceTime;
+    out.push(row);
+  }
   return out;
+}
+
+// Loose name key for matching a PCO event name to a gathering name: lowercase,
+// alphanumerics only, single-spaced. "Sunday AM Kids Ministries!" -> "sunday am kids ministries".
+function normalizeNameKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Match a name to a gathering: exact normalized match wins, else first containment
+// match (either direction). Returns gatheringTypeId or null.
+function matchGatheringByName(name, gatherings) {
+  const target = normalizeNameKey(name);
+  if (!target) return null;
+  let contains = null;
+  for (const g of gatherings) {
+    const key = normalizeNameKey(g.name);
+    if (!key) continue;
+    if (key === target) return g.id;
+    if (contains == null && (key.includes(target) || target.includes(key))) contains = g.id;
+  }
+  return contains;
+}
+
+// Suggest an existing gathering for a PCO event. gatherings: [{ id, name }].
+// First tries a direct name match (ignoring any "— HH:MM" time suffix). For a
+// split slot (serviceTime given) with no name match, falls back to time-of-day:
+// a morning slot prefers an AM/morning gathering, evening prefers PM/evening —
+// preferring one that also shares a word with the event name (e.g. "Sunday").
+function suggestGatheringId(eventName, gatherings = [], serviceTime = null) {
+  const baseName = String(eventName).replace(/\s*[—-]\s*\d{1,2}:\d{2}\s*$/, '');
+  const byName = matchGatheringByName(baseName, gatherings);
+  if (byName != null) return byName;
+
+  if (serviceTime) {
+    const hour = parseInt(serviceTime.slice(0, 2), 10);
+    const wantPm = hour >= 12;
+    const eventWords = new Set(normalizeNameKey(baseName).split(' ').filter(Boolean));
+    let fallback = null;
+    for (const g of gatherings) {
+      const words = new Set(normalizeNameKey(g.name).split(' ').filter(Boolean));
+      const isAm = words.has('am') || words.has('morning');
+      const isPm = words.has('pm') || words.has('evening') || words.has('night');
+      if ((wantPm && isPm) || (!wantPm && isAm)) {
+        const sharesWord = [...eventWords].some((w) => w.length > 2 && words.has(w));
+        if (sharesWord) return g.id;
+        if (fallback == null) fallback = g.id;
+      }
+    }
+    return fallback;
+  }
+  return null;
 }
 
 function summarizeEvents(normalized) {
@@ -63,7 +170,7 @@ function summarizeEvents(normalized) {
   for (const row of normalized) {
     let e = byEvent.get(row.pcoEventId);
     if (!e) {
-      e = { pcoEventId: row.pcoEventId, eventName: row.eventName, checkinCount: 0, dates: new Set() };
+      e = { pcoEventId: row.pcoEventId, eventName: row.eventName, serviceTime: row.serviceTime, checkinCount: 0, dates: new Set() };
       byEvent.set(row.pcoEventId, e);
     }
     e.checkinCount += 1;
@@ -71,7 +178,7 @@ function summarizeEvents(normalized) {
   }
   return Array.from(byEvent.values()).map((e) => {
     const sorted = Array.from(e.dates).sort();
-    return {
+    const summary = {
       pcoEventId: e.pcoEventId,
       eventName: e.eventName,
       checkinCount: e.checkinCount,
@@ -79,6 +186,8 @@ function summarizeEvents(normalized) {
       firstDate: sorted[0] || null,
       lastDate: sorted[sorted.length - 1] || null,
     };
+    if (e.serviceTime) summary.serviceTime = e.serviceTime;
+    return summary;
   });
 }
 
@@ -162,4 +271,5 @@ function buildGatheringListAdds(normalized, activeIndividualIds, personToIndivid
 
 module.exports = {
   localDateInTz, normalizeCheckIns, summarizeEvents, resolvePeople, buildRecordWrites, buildGatheringListAdds,
+  suggestGatheringId,
 };

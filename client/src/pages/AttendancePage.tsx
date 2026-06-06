@@ -60,6 +60,9 @@ const AttendancePage: React.FC = () => {
   });
   const [selectedGathering, setSelectedGathering] = useState<GatheringType | null>(null);
   const [gatherings, setGatherings] = useState<GatheringType[]>([]);
+  // Existing session dates per gathering (e.g. imported history) so the date picker
+  // can reach beyond the rolling schedule window. Keyed by gathering id.
+  const [sessionDatesByGathering, setSessionDatesByGathering] = useState<Record<number, string[]>>({});
   const [isLoadingGatherings, setIsLoadingGatherings] = useState(true);
   const [attendanceList, setAttendanceList] = useState<Individual[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
@@ -546,11 +549,27 @@ const AttendancePage: React.FC = () => {
     return dates.sort((a, b) => b.localeCompare(a));
   }, []);
 
-  // validDates memo uses the extracted function
+  // Fetch the dates that already have a session for the selected gathering, so
+  // imported/historical attendance (older than the rolling window) stays reachable.
+  useEffect(() => {
+    if (!selectedGathering) return;
+    const gatheringId = selectedGathering.id;
+    if (sessionDatesByGathering[gatheringId]) return; // already loaded
+    let cancelled = false;
+    attendanceAPI.getSessionDates(gatheringId)
+      .then((r) => { if (!cancelled) setSessionDatesByGathering((prev) => ({ ...prev, [gatheringId]: r.data.dates || [] })); })
+      .catch(() => { if (!cancelled) setSessionDatesByGathering((prev) => ({ ...prev, [gatheringId]: [] })); });
+    return () => { cancelled = true; };
+  }, [selectedGathering, sessionDatesByGathering]);
+
+  // validDates = the rolling schedule window UNION any dates that already have a
+  // session (imported history), newest-first and de-duplicated.
   const validDates = useMemo(() => {
     if (!selectedGathering) return [];
-    return computeValidDatesForGathering(selectedGathering);
-  }, [selectedGathering, computeValidDatesForGathering]);
+    const scheduled = computeValidDatesForGathering(selectedGathering);
+    const existing = sessionDatesByGathering[selectedGathering.id] || [];
+    return Array.from(new Set([...scheduled, ...existing])).sort((a, b) => b.localeCompare(a));
+  }, [selectedGathering, computeValidDatesForGathering, sessionDatesByGathering]);
 
   // Navigation functions for gathering dates
   const navigateToNextDate = useCallback(() => {

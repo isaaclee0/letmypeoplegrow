@@ -8,6 +8,36 @@ const { applyPlan } = require('./planningCenter/apply');
 
 let cronJob = null;
 
+// ─── PCO people cache ─────────────────────────────────────────────────────────
+// Fetching every person from Planning Center is the slow part of a sync — several
+// seconds of paginated HTTPS. That data only changes when PCO itself changes, so we
+// cache the projected people per church for a short TTL. Plan computation and the
+// membership summary both reuse it. Callers pass { force: true } to bypass the cache
+// (the "Refresh from Planning Center" button and the scheduled daily sync).
+//
+// We deliberately do NOT invalidate after an apply: applying mutates local LMPG data,
+// not PCO, so recomputing the plan against the same snapshot is both cheaper and more
+// correct (you diff against exactly what was reviewed). Local state is always read
+// fresh from the DB in computePlanForChurch.
+const PCO_PEOPLE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const pcoPeopleCache = new Map(); // churchId -> { people, fetchedAt }
+
+async function getCachedPcoPeople(churchId, accessToken, { force = false } = {}) {
+  const cached = pcoPeopleCache.get(churchId);
+  if (!force && cached && (Date.now() - cached.fetchedAt) < PCO_PEOPLE_TTL_MS) {
+    return cached;
+  }
+  const people = await fetchAllPcoPeople(accessToken);
+  const entry = { people, fetchedAt: Date.now() };
+  pcoPeopleCache.set(churchId, entry);
+  return entry;
+}
+
+function invalidatePcoPeopleCache(churchId) {
+  if (churchId) pcoPeopleCache.delete(churchId);
+  else pcoPeopleCache.clear();
+}
+
 // ─── HTTP helper ────────────────────────────────────────────────────────────
 
 function httpsGet(url, accessToken) {
@@ -163,8 +193,8 @@ async function loadChurchState(churchId) {
 }
 
 // Compute a plan for a church (current church context must be set by caller).
-async function computePlanForChurch(churchId, accessToken) {
-  const pcoPeople = await fetchAllPcoPeople(accessToken);
+async function computePlanForChurch(churchId, accessToken, { force = false } = {}) {
+  const { people: pcoPeople, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
   const { individuals, families } = await loadChurchState(churchId);
   const settings = await Database.query(
     `SELECT planning_center_membership_allowlist FROM church_settings WHERE church_id = ? LIMIT 1`,
@@ -174,7 +204,9 @@ async function computePlanForChurch(churchId, accessToken) {
   if (settings.length && settings[0].planning_center_membership_allowlist) {
     try { allowlist = JSON.parse(settings[0].planning_center_membership_allowlist); } catch (_) { allowlist = []; }
   }
-  return computePlan({ pcoPeople, individuals, families, allowlist });
+  const plan = computePlan({ pcoPeople, individuals, families, allowlist });
+  plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
+  return plan;
 }
 
 // Apply a plan for a church (current church context must be set by caller).
@@ -201,7 +233,8 @@ async function syncChurch(church) {
       if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
 
       const userId = settings[0].token_user || null;
-      const plan = await computePlanForChurch(churchId, accessToken);
+      // Scheduled run: always pull fresh from PCO so we never auto-apply a stale diff.
+      const plan = await computePlanForChurch(churchId, accessToken, { force: true });
       const result = await applyForChurch(churchId, plan, userId, {});
 
       const summary = {
@@ -267,4 +300,5 @@ async function runNow() {
 module.exports = {
   start, stop, runNow, syncChurch,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
+  getCachedPcoPeople, invalidatePcoPeopleCache,
 };

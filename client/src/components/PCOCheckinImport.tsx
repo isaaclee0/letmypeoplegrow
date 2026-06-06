@@ -8,6 +8,10 @@ interface PcoEvent {
   sessionCount: number;
   firstDate: string | null;
   lastDate: string | null;
+  /** Local service time "HH:MM" when this row is a split (multi-time event); else absent. */
+  serviceTime?: string;
+  /** Server-suggested existing gathering matched by name/time; null if no match. */
+  suggestedGatheringTypeId?: number | null;
 }
 
 interface Gathering { id: number; name: string; }
@@ -83,7 +87,11 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
       setEndDate(r.data.endDate ?? '');
       const defaults: Record<string, Mapping> = {};
       for (const e of r.data.events || []) {
-        defaults[e.pcoEventId] = { target: 'new', newGatheringName: e.eventName };
+        // Pre-select a name-matched existing gathering when the server found one;
+        // otherwise default to creating a new gathering named after the PCO event.
+        defaults[e.pcoEventId] = e.suggestedGatheringTypeId
+          ? { target: 'existing', gatheringTypeId: e.suggestedGatheringTypeId }
+          : { target: 'new', newGatheringName: e.eventName };
       }
       setMappings(defaults);
     } catch (e: any) {

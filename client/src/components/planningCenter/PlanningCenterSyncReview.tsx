@@ -26,6 +26,7 @@ interface Plan {
   update: { individualId: number; firstName: string; lastName: string }[];
   archive: { individualId: number; pcoId: string }[];
   reactivate: { individualId: number; pcoId: string }[];
+  pcoFetchedAt?: string;
 }
 
 export default function PlanningCenterSyncReview({ connected }: { connected: boolean }) {
@@ -40,10 +41,13 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
   const [skipArchiveExtras, setSkipArchiveExtras] = useState<Set<number>>(new Set());
   const [visitorChoices, setVisitorChoices] = useState<Record<string, VisitorChoice | null>>({});
 
-  const loadPlan = useCallback(async () => {
-    setLoading(true); setError(null); setResult(null);
+  // force: bypass the server-side PCO cache (explicit "Refresh from Planning Center").
+  // preserveResult: keep the "Applied: …" message visible when reloading after an apply.
+  const loadPlan = useCallback(async (opts?: { force?: boolean; preserveResult?: boolean }) => {
+    setLoading(true); setError(null);
+    if (!opts?.preserveResult) setResult(null);
     try {
-      const res = await integrationsAPI.getPlanningCenterSyncPlan();
+      const res = await integrationsAPI.getPlanningCenterSyncPlan({ force: opts?.force });
       setPlan(res.data.plan);
       setAmbiguousChoices({});
       setSkipAdd(new Set());
@@ -65,6 +69,9 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
       const selections = buildSelections(ambiguousChoices, skipAdd, skipArchiveExtras, visitorChoices);
       const res = await integrationsAPI.applyPlanningCenterSync({ selections });
       setResult(res.data.result);
+      // Refresh the plan so the lists reflect the post-apply DB state instead of
+      // showing the rows we just acted on. PCO is unchanged, so this is a cache hit.
+      await loadPlan({ preserveResult: true });
     } catch (e: any) {
       logger.error('Failed to apply PCO sync', e);
       setError(e.response?.data?.error || 'Failed to apply sync.');
@@ -240,13 +247,20 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
         <summary className="cursor-pointer">Auto-applied: {plan.link.length} link, {plan.restore.length} restore, {plan.update.length} update, {plan.archive.length} archive, {plan.reactivate.length} reactivate</summary>
       </details>
 
-      <div className="flex items-center gap-3">
-        <button onClick={apply} disabled={applying}
+      <div className="flex flex-wrap items-center gap-3">
+        <button onClick={apply} disabled={applying || loading}
           className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50">
           {applying ? 'Applying…' : 'Apply sync'}
         </button>
-        <button onClick={loadPlan} disabled={applying} className="text-sm underline text-gray-600 dark:text-gray-300">Re-run plan</button>
+        <button onClick={() => loadPlan()} disabled={applying || loading} className="text-sm underline text-gray-600 dark:text-gray-300">Re-run plan</button>
+        <button onClick={() => loadPlan({ force: true })} disabled={applying || loading} className="text-sm underline text-gray-600 dark:text-gray-300">Refresh from Planning Center</button>
       </div>
+
+      {plan.pcoFetchedAt && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Planning Center data as of {new Date(plan.pcoFetchedAt).toLocaleTimeString()}. Re-run plan reuses this snapshot; use “Refresh from Planning Center” to pull the latest.
+        </p>
+      )}
 
       {result && (
         <div className="text-sm text-green-700 dark:text-green-400">

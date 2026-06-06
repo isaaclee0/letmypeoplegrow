@@ -2245,6 +2245,26 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
   }
 });
 
+// Distinct dates that already have an attendance session for this gathering.
+// Lets the attendance view surface historical/imported dates beyond its rolling
+// schedule window (e.g. check-ins imported from Planning Center going back a year+).
+// 3-segment path so it doesn't collide with GET /:gatheringTypeId/:date.
+router.get('/:gatheringTypeId/sessions/dates', disableCache, requireGatheringAccess, async (req, res) => {
+  try {
+    const { gatheringTypeId } = req.params;
+    const rows = await Database.query(
+      `SELECT DISTINCT session_date FROM attendance_sessions
+        WHERE gathering_type_id = ? AND church_id = ?
+        ORDER BY session_date DESC`,
+      [gatheringTypeId, req.user.church_id]
+    );
+    res.json({ dates: rows.map((r) => r.session_date) });
+  } catch (error) {
+    console.error('Get session dates error:', error);
+    res.status(500).json({ error: 'Failed to retrieve session dates.' });
+  }
+});
+
 // Church-wide visitors (all gatherings, all time)
 router.get('/visitors/all', async (req, res) => {
   try {

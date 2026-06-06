@@ -57,15 +57,20 @@ function makeHttpsRequest(url, options = {}) {
       res.on('end', () => {
         try {
           const parsedData = JSON.parse(data);
-          resolve({ status: res.statusCode, data: parsedData });
+          resolve({ status: res.statusCode, data: parsedData, headers: res.headers });
         } catch (e) {
-          resolve({ status: res.statusCode, data });
+          resolve({ status: res.statusCode, data, headers: res.headers });
         }
       });
     });
 
     req.on('error', (error) => {
       reject(error);
+    });
+
+    // Guard against a stalled connection hanging the whole pagination loop.
+    req.setTimeout(options.timeout || 30000, () => {
+      req.destroy(new Error('Planning Center request timed out'));
     });
 
     if (options.method === 'POST' && options.data) {
@@ -1669,6 +1674,42 @@ async function refreshPlanningCenterToken(refreshToken) {
   }
 }
 
+// Proactively refresh the access token if it's expired or expiring soon, ONCE,
+// before any fan-out of parallel requests. PCO rotates the refresh token on use, so
+// letting concurrent requests each refresh causes a race that invalidates the token.
+// A single-flight guard coalesces concurrent callers onto one refresh.
+const PCO_TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000; // refresh if <10 min of life left
+const pcoRefreshInFlight = new Map(); // `${userId}|${churchId}` -> Promise<tokens>
+
+async function ensureValidPlanningCenterTokens(userId, churchId, tokens) {
+  if (!tokens || !tokens.refresh_token) return tokens;
+  const expiringSoon = tokens.expires_at && Date.now() >= (tokens.expires_at - PCO_TOKEN_REFRESH_MARGIN_MS);
+  if (!expiringSoon) return tokens;
+
+  const key = `${userId}|${churchId}`;
+  if (pcoRefreshInFlight.has(key)) return pcoRefreshInFlight.get(key);
+
+  const refreshPromise = (async () => {
+    const fresh = await refreshPlanningCenterToken(tokens.refresh_token);
+    if (!fresh || !fresh.access_token) {
+      // Refresh failed (e.g. refresh token revoked) — return existing tokens so the
+      // caller surfaces a clear 401/Not connected rather than crashing here.
+      return tokens;
+    }
+    const saved = {
+      ...tokens,
+      ...fresh, // new access_token AND rotated refresh_token
+      expires_at: Date.now() + ((fresh.expires_in || 7200) * 1000),
+    };
+    await savePlanningCenterTokens(userId, churchId, saved);
+    return saved;
+  })();
+
+  pcoRefreshInFlight.set(key, refreshPromise);
+  try { return await refreshPromise; }
+  finally { pcoRefreshInFlight.delete(key); }
+}
+
 // Helper function to make authenticated Planning Center API requests
 async function makePlanningCenterRequest(url, tokens, userId, churchId) {
   try {
@@ -1679,22 +1720,29 @@ async function makePlanningCenterRequest(url, tokens, userId, churchId) {
       const newTokens = await refreshPlanningCenterToken(tokens.refresh_token);
       if (newTokens) {
         accessToken = newTokens.access_token;
-        // Save new tokens
         newTokens.expires_at = Date.now() + (newTokens.expires_in * 1000);
-        newTokens.refresh_token = tokens.refresh_token; // Keep original refresh token
+        // PCO ROTATES the refresh token on every refresh — persist the NEW one.
+        // Keeping the old token (the previous bug) breaks the next refresh.
+        if (!newTokens.refresh_token) newTokens.refresh_token = tokens.refresh_token;
         await savePlanningCenterTokens(userId, churchId, newTokens);
       }
     }
 
-    const response = await makeHttpsRequest(url, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    return response;
+    // Retry on PCO rate limiting (429), honouring Retry-After. Matters when we
+    // fan out paginated requests concurrently.
+    for (let attempt = 0; ; attempt++) {
+      const response = await makeHttpsRequest(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (response.status !== 429 || attempt >= 4) return response;
+      const retryAfter = parseInt(response.headers?.['retry-after'], 10);
+      const waitMs = (Number.isFinite(retryAfter) ? retryAfter : 2 ** attempt) * 1000;
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
   } catch (error) {
     console.error('Error making Planning Center request:', error);
     throw error;
@@ -2036,22 +2084,95 @@ const checkinsImport = require('../services/planningCenter/checkinsImport');
 
 // Fetches ALL check-ins for a range (paginated) and returns the merged
 // { data, included } payload plus the church timezone.
-async function fetchAllCheckins({ tokens, userId, churchId, startDate, endDate }) {
-  let url = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
-    `filter=checked_in_at&where[checked_in_at][gte]=${startDate}&where[checked_in_at][lte]=${endDate}&` +
-    `per_page=100&include=event,person`;
+// PCO check-ins can only be queried by created_at — but created_at is when the
+// record was *entered*, which can lag the actual service by days/weeks (Kingston
+// enters the week after). So we widen the created_at fetch window by this buffer on
+// each side and then filter precisely by the EventPeriod's starts_at (the true
+// service date) in normalizeCheckIns.
+const CHECKIN_CREATED_BUFFER_DAYS = 21;
 
-  let data = [];
-  let included = [];
-  let nextUrl = url;
-  while (nextUrl) {
-    const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
+function shiftDate(yyyyMmDd, days) {
+  const d = new Date(`${yyyyMmDd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Concurrency for paginated PCO fetches. PCO's limit is ~100 requests / 20s; at
+// ~1s/request this keeps us comfortably under it while cutting a long sequential
+// crawl (a year of check-ins is ~160 pages) down by roughly this factor.
+const PCO_PAGE_CONCURRENCY = 4;
+
+// Fetching a wide range of check-ins is many PCO pages (a year ≈ 160). The data is
+// stable over short windows, so we cache the raw fetch per church + date range and
+// reuse it for repeat loads (events list, preview, browse). Importing writes to LMPG,
+// not PCO, so an import never invalidates this. Callers pass { force: true } to refresh.
+const CHECKINS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const CHECKINS_CACHE_MAX_ENTRIES = 20;
+const checkinsCache = new Map(); // `${churchId}|${startDate}|${endDate}` -> { payload, timezone, fetchedAt }
+
+function fetchAllCheckins(args) {
+  const { churchId, startDate, endDate, force = false } = args;
+  const key = `${churchId}|${startDate}|${endDate}`;
+  const cached = checkinsCache.get(key);
+  if (!force && cached && (Date.now() - cached.fetchedAt) < CHECKINS_CACHE_TTL_MS) {
+    return Promise.resolve({ payload: cached.payload, timezone: cached.timezone, fetchedAt: cached.fetchedAt });
+  }
+  return fetchAllCheckinsUncached(args).then((result) => {
+    const fetchedAt = Date.now();
+    checkinsCache.set(key, { ...result, fetchedAt });
+    // Bound memory: drop the oldest entry once over the cap.
+    if (checkinsCache.size > CHECKINS_CACHE_MAX_ENTRIES) {
+      let oldestKey = null;
+      let oldest = Infinity;
+      for (const [k, v] of checkinsCache) if (v.fetchedAt < oldest) { oldest = v.fetchedAt; oldestKey = k; }
+      if (oldestKey) checkinsCache.delete(oldestKey);
+    }
+    return { ...result, fetchedAt };
+  });
+}
+
+async function fetchAllCheckinsUncached({ tokens, userId, churchId, startDate, endDate }) {
+  // Refresh up-front (single-flight) so the parallel page fetches below all use a
+  // fresh, long-lived token and never race on refreshing a token that expires
+  // mid-fetch — the cause of the intermittent 401 -> 500 on large ranges.
+  tokens = await ensureValidPlanningCenterTokens(userId, churchId, tokens);
+  const createdGte = shiftDate(startDate, -CHECKIN_CREATED_BUFFER_DAYS);
+  const createdLte = shiftDate(endDate, CHECKIN_CREATED_BUFFER_DAYS);
+  // include event_period (real service date) and event_times (service time of day,
+  // to split a single event into AM/PM gatherings).
+  const base = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
+    `where[created_at][gte]=${createdGte}T00:00:00Z&where[created_at][lte]=${createdLte}T23:59:59Z&` +
+    `per_page=100&include=event,person,event_period,event_times`;
+
+  const fetchPage = async (offset) => {
+    const url = offset ? `${base}&offset=${offset}` : base;
+    const response = await makePlanningCenterRequest(url, tokens, userId, churchId);
     if (response.status !== 200) {
       throw new Error('Failed to fetch check-ins from Planning Center');
     }
-    data = data.concat(response.data.data || []);
-    included = included.concat(response.data.included || []);
-    nextUrl = response.data.links?.next || null;
+    return response.data;
+  };
+
+  // First page gives us the total; PCO pagination is offset-based, so the rest can
+  // be fetched in parallel batches instead of one slow sequential crawl.
+  const firstPage = await fetchPage(0);
+  let data = firstPage.data || [];
+  let included = firstPage.included || [];
+  const total = firstPage.meta?.total_count ?? data.length;
+
+  const offsets = [];
+  for (let o = 100; o < total; o += 100) offsets.push(o);
+  if (offsets.length > 1000) {
+    throw new Error('PCO check-ins fetch exceeded 1000 pages — aborting to avoid an unbounded loop');
+  }
+
+  for (let i = 0; i < offsets.length; i += PCO_PAGE_CONCURRENCY) {
+    const batch = offsets.slice(i, i + PCO_PAGE_CONCURRENCY);
+    const pages = await Promise.all(batch.map(fetchPage));
+    for (const p of pages) {
+      data = data.concat(p.data || []);
+      included = included.concat(p.included || []);
+    }
   }
 
   const settings = await Database.query(
@@ -2102,30 +2223,17 @@ router.get('/planning-center/checkins', async (req, res) => {
       return res.status(400).json({ error: 'Start date and end date are required.' });
     }
 
-    let url = `https://api.planningcenteronline.com/check-ins/v2/check_ins?` +
-      `filter=checked_in_at&where[checked_in_at][gte]=${startDate}&where[checked_in_at][lte]=${endDate}&` +
-      `per_page=100&include=event,person`;
-
-    let allCheckIns = [];
-    let included = [];
-    let nextUrl = url;
-
-    while (nextUrl) {
-      const response = await makePlanningCenterRequest(nextUrl, tokens, userId, churchId);
-
-      if (response.status !== 200) {
-        throw new Error('Failed to fetch check-ins from Planning Center');
-      }
-
-      const data = response.data;
-      allCheckIns = allCheckIns.concat(data.data || []);
-      included = included.concat(data.included || []);
-      nextUrl = data.links?.next || null;
-    }
+    // Reuse the shared fetch: it buffers the created_at window and includes
+    // event_period so we can show the real service date (starts_at), not the
+    // data-entry date. See fetchAllCheckins / normalizeCheckIns.
+    const force = req.query.refresh === '1';
+    const { payload } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, force });
+    const { data: allCheckIns, included } = payload;
 
     // Build lookup maps for included resources
     const people = {};
     const events = {};
+    const periodStartsAt = {};
     for (const item of included) {
       if (item.type === 'Person') {
         people[item.id] = {
@@ -2137,22 +2245,28 @@ router.get('/planning-center/checkins', async (req, res) => {
           id: item.id,
           name: item.attributes.name || 'Unknown Event',
         };
+      } else if (item.type === 'EventPeriod') {
+        periodStartsAt[item.id] = item.attributes.starts_at || null;
       }
     }
 
-    // Format check-ins
+    // Format check-ins, dating each by its EventPeriod (the actual service), and
+    // keep only those whose service date falls in the requested range.
     const checkIns = allCheckIns.map(ci => {
       const personId = ci.relationships?.person?.data?.id;
       const eventId = ci.relationships?.event?.data?.id;
+      const periodId = ci.relationships?.event_period?.data?.id;
+      const startsAt = periodId ? periodStartsAt[periodId] : null;
 
       return {
         id: ci.id,
-        checkedInAt: ci.attributes.checked_in_at,
+        checkedInAt: startsAt || ci.attributes.created_at,
+        date: startsAt ? startsAt.slice(0, 10) : null,
         kind: ci.attributes.kind,
         person: personId ? people[personId] : null,
         event: eventId ? events[eventId] : null,
       };
-    });
+    }).filter((c) => c.date && c.date >= startDate && c.date <= endDate);
 
     res.json({
       success: true,
@@ -2181,11 +2295,21 @@ router.get('/planning-center/checkins/events', async (req, res) => {
       return res.status(400).json({ error: 'Planning Center not connected.' });
     }
 
-    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate });
-    const normalized = checkinsImport.normalizeCheckIns(payload, timezone);
+    const force = req.query.refresh === '1';
+    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, force });
+    const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
     const events = checkinsImport.summarizeEvents(normalized);
 
-    res.json({ success: true, startDate, endDate, events });
+    // Pre-fill the mapping screen by matching each PCO event name to a gathering.
+    const gatherings = await Database.query(
+      `SELECT id, name FROM gathering_types WHERE church_id = ?`, [churchId]
+    );
+    const withSuggestions = events.map((e) => ({
+      ...e,
+      suggestedGatheringTypeId: checkinsImport.suggestGatheringId(e.eventName, gatherings, e.serviceTime),
+    }));
+
+    res.json({ success: true, startDate, endDate, events: withSuggestions });
   } catch (error) {
     logger.error('PCO check-in events error:', error);
     res.status(500).json({ success: false, error: 'Failed to list Planning Center check-in events.', details: error.message });
@@ -2448,7 +2572,9 @@ router.get('/planning-center/sync/plan', async (req, res) => {
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    const plan = await pcoSync.computePlanForChurch(churchId, accessToken);
+    // The "Refresh from Planning Center" button sends ?refresh=1 to bypass the cache.
+    const force = req.query.refresh === '1' || req.query.force === '1';
+    const plan = await pcoSync.computePlanForChurch(churchId, accessToken, { force });
     res.json({
       success: true,
       summary: {
@@ -2478,7 +2604,7 @@ router.get('/planning-center/membership-summary', async (req, res) => {
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    const people = await pcoSync.fetchAllPcoPeople(accessToken);
+    const { people } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
     res.json({ success: true, ...tallyMembership(people) });
   } catch (error) {
     logger.error('PCO membership summary error:', error);
@@ -2599,7 +2725,7 @@ async function runCheckinImport({ req, commit }) {
   }
 
   const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate });
-  const normalized = checkinsImport.normalizeCheckIns(payload, timezone);
+  const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
 
   // Existing individuals keyed by planning_center_id (active OR archived).
   const existingRows = await Database.query(

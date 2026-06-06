@@ -363,6 +363,11 @@ export const attendanceAPI = {
   get: (gatheringTypeId: number, date: string) =>
     api.get(`/attendance/${gatheringTypeId}/${date}`),
 
+  // Dates that already have a session for this gathering (e.g. imported history),
+  // so the date picker can reach beyond its rolling schedule window.
+  getSessionDates: (gatheringTypeId: number) =>
+    api.get(`/attendance/${gatheringTypeId}/sessions/dates`),
+
   // OPTIMIZED: Get all attendance data in one call (replaces 5 separate calls)
   getFull: (gatheringTypeId: number, date: string) =>
     api.get(`/attendance/${gatheringTypeId}/${date}/full`),
@@ -831,8 +836,11 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/membership-filter'),
   savePlanningCenterMembershipFilter: (data: { enabled: boolean; allowlist: string[] }) =>
     api.put('/integrations/planning-center/membership-filter', data),
-  getPlanningCenterSyncPlan: () =>
-    api.get('/integrations/planning-center/sync/plan', { timeout: 120000 }),
+  getPlanningCenterSyncPlan: (opts?: { force?: boolean }) =>
+    api.get('/integrations/planning-center/sync/plan', {
+      params: opts?.force ? { refresh: 1 } : undefined,
+      timeout: 120000,
+    }),
   applyPlanningCenterSync: (data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[] } }) =>
     api.post('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
