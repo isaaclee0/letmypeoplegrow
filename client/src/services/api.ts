@@ -891,7 +891,7 @@ export const integrationsAPI = {
 // AI Insights API
 export const aiAPI = {
   getStatus: () => api.get('/ai/status'),
-  configure: (data: { apiKey: string; provider: 'openai' | 'anthropic'; model?: string }) =>
+  configure: (data: { apiKey: string; provider: 'openai' | 'anthropic' | 'grok'; model?: string }) =>
     api.post('/ai/configure', data),
   disconnect: () => api.post('/ai/disconnect'),
   ask: (question: string, conversationId?: number | null) =>
