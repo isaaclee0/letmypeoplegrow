@@ -123,7 +123,7 @@ const AiIntegrationPanel: React.FC<PanelProps<AiStatus>> = ({ status, refreshSta
         {/* AI Config Form - Only show when not connected */}
         {!status.configured && !status.loading && (
           <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-            <h5 className="text-md font-medium text-gray-900 dark:text-gray-100 mb-4">Connect your AI provider</h5>
+            <h5 className="text-base font-medium text-gray-900 dark:text-gray-100 mb-4">Connect your AI provider</h5>
             <div className="space-y-4">
               <div>
                 <label htmlFor="ai-provider" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -149,7 +149,7 @@ const AiIntegrationPanel: React.FC<PanelProps<AiStatus>> = ({ status, refreshSta
                   id="ai-api-key"
                   value={aiApiKey}
                   onChange={(e) => setAiApiKey(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleAiConnect()}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAiConnect()}
                   className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm"
                   placeholder={aiProvider === 'openai' ? 'sk-...' : aiProvider === 'anthropic' ? 'sk-ant-...' : 'xai-...'}
                 />
