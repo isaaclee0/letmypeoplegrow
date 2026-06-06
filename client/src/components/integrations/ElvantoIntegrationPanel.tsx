@@ -196,10 +196,10 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
     setShowDisconnectModal(false);
 
     try {
-      console.log('🔌 [CLIENT] Starting Elvanto disconnect...');
+      logger.debug('🔌 [CLIENT] Starting Elvanto disconnect...');
 
       // CRITICAL: Clear all Elvanto-related localStorage items to prevent re-sync
-      console.log('🔌 [CLIENT] Clearing Elvanto localStorage items...');
+      logger.debug('🔌 [CLIENT] Clearing Elvanto localStorage items...');
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -208,7 +208,7 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
         }
       }
       keysToRemove.forEach(key => {
-        console.log(`🔌 [CLIENT] Removing localStorage key: ${key}`);
+        logger.debug(`🔌 [CLIENT] Removing localStorage key: ${key}`);
         localStorage.removeItem(key);
       });
 
@@ -216,9 +216,9 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
       localStorage.setItem('elvanto_connected', 'false');
 
       // Perform the disconnect
-      console.log('🔌 [CLIENT] Calling disconnectElvanto API...');
+      logger.debug('🔌 [CLIENT] Calling disconnectElvanto API...');
       const disconnectResponse = await integrationsAPI.disconnectElvanto();
-      console.log('🔌 [CLIENT] Disconnect API response:', disconnectResponse);
+      logger.debug('🔌 [CLIENT] Disconnect API response:', disconnectResponse);
 
       // Verify the disconnect by checking status after a brief delay
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -227,7 +227,7 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
       const statusResponse = await integrationsAPI.getElvantoStatus();
       const connected = statusResponse.data.connected === true;
 
-      console.log('🔌 [CLIENT] Status check after disconnect:', {
+      logger.debug('🔌 [CLIENT] Status check after disconnect:', {
         connected,
         configured: statusResponse.data.configured,
         fullResponse: statusResponse.data
@@ -236,18 +236,18 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
       localStorage.setItem('elvanto_connected', connected.toString());
 
       if (connected) {
-        console.error('🔌 [CLIENT] ERROR: Status still shows connected after disconnect!', statusResponse.data);
+        logger.error('🔌 [CLIENT] ERROR: Status still shows connected after disconnect!', statusResponse.data);
         logger.error('Elvanto disconnect may have failed - status still shows connected', statusResponse.data);
         localStorage.setItem('elvanto_connected', 'false');
         await refreshStatus();
       } else {
-        console.log('🔌 [CLIENT] Successfully disconnected - status confirmed');
+        logger.debug('🔌 [CLIENT] Successfully disconnected - status confirmed');
         // Refresh the page to remove the "Import from Elvanto" menu option
         window.location.reload();
       }
     } catch (error: any) {
-      console.error('🔌 [CLIENT] Disconnect error:', error);
-      console.error('🔌 [CLIENT] Error details:', {
+      logger.error('🔌 [CLIENT] Disconnect error:', error);
+      logger.error('🔌 [CLIENT] Error details:', {
         message: error.message,
         response: error.response?.data,
         status: error.response?.status,
@@ -682,17 +682,27 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
       });
     } else {
       setShowGatheringEditModal(false);
-      performGatheringImport();
+      performGatheringImport(updated);
     }
   };
 
-  const performGatheringImport = async () => {
+  const performGatheringImport = async (overrideInfo?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    type: 'group' | 'service';
+    dayOfWeek: string;
+    startTime: string;
+    frequency: string;
+    isDuplicate?: boolean;
+  }>) => {
     try {
       setImporting(true);
       setImportResult(null);
 
+      const infoSource = overrideInfo ?? gatheringsNeedingInfo;
       const gatheringInfo: Record<string, { name?: string; description?: string; dayOfWeek: string; startTime: string; frequency: string }> = {};
-      gatheringsNeedingInfo.forEach(g => {
+      infoSource.forEach(g => {
         gatheringInfo[g.id] = {
           name: g.name,
           description: g.description,
@@ -719,6 +729,7 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, 
       setImportResult(response.data);
       setSelectedGroups(new Set());
       setSelectedServiceTypes(new Set());
+      setNameOverrides({});
       setGatheringsNeedingInfo([]);
 
       if (response.data.success) {
