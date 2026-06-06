@@ -43,11 +43,9 @@ const IntegrationsTab: React.FC = () => {
         elvantoAccount: response.data.elvantoAccount ?? null,
         loading: false,
       });
-      localStorage.setItem('elvanto_connected', connected.toString());
     } catch (error) {
       logger.error('Failed to fetch Elvanto status:', error);
       setElvantoStatus(prev => ({ ...prev, loading: false }));
-      localStorage.setItem('elvanto_connected', 'false');
     }
   }, []);
 

@@ -165,7 +165,6 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
 
   // Name overrides for renamed gatherings
   const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
-  const [skippedGatherings, setSkippedGatherings] = useState<Set<string>>(new Set());
 
   // ---------------------------------------------------------------------------
   // Handlers: connect / disconnect
@@ -186,7 +185,6 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
     } catch (error: any) {
       logger.error('Failed to connect Elvanto:', error);
       setConnectionError(error.response?.data?.error || 'Failed to connect. Please check your API key.');
-      localStorage.setItem('elvanto_connected', 'false');
     } finally {
       setSavingConfig(false);
     }
@@ -216,9 +214,6 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
         localStorage.removeItem(key);
       });
 
-      // Also clear the elvanto_connected status
-      localStorage.setItem('elvanto_connected', 'false');
-
       // Perform the disconnect
       logger.debug('🔌 [CLIENT] Calling disconnectElvanto API...');
       const disconnectResponse = await integrationsAPI.disconnectElvanto();
@@ -237,12 +232,9 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
         fullResponse: statusResponse.data
       });
 
-      localStorage.setItem('elvanto_connected', connected.toString());
-
       if (connected) {
         logger.error('🔌 [CLIENT] ERROR: Status still shows connected after disconnect!', statusResponse.data);
         logger.error('Elvanto disconnect may have failed - status still shows connected', statusResponse.data);
-        localStorage.setItem('elvanto_connected', 'false');
         await refreshStatus();
       } else {
         logger.debug('🔌 [CLIENT] Successfully disconnected - status confirmed');
@@ -258,7 +250,6 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
         config: error.config
       });
       logger.error('Failed to disconnect Elvanto:', error);
-      localStorage.setItem('elvanto_connected', 'false');
       await refreshStatus();
     }
   };
@@ -520,23 +511,14 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
     setSelectedServiceTypes(newSelected);
   };
 
-  const clearGatheringsSelection = () => {
-    setSelectedGroups(new Set());
-    setSelectedServiceTypes(new Set());
-  };
-
   const handleImportGatherings = async () => {
     if (selectedGroups.size === 0 && selectedServiceTypes.size === 0) {
       alert('Please select at least one group or service type to import.');
       return;
     }
 
-    try {
-      await checkAndShowEditModal();
-    } catch (error: any) {
-      logger.error('Failed to check gatherings:', error);
-      await checkAndShowEditModal();
-    }
+    // checkAndShowEditModal handles its own duplicate-check failures internally.
+    await checkAndShowEditModal();
   };
 
   const checkAndShowEditModal = async () => {
@@ -556,8 +538,6 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
     const allGatherings: Array<{ id: string; name: string; description?: string; type: 'group' | 'service'; dayOfWeek: string; startTime: string; frequency: string; isDuplicate?: boolean }> = [];
 
     for (const groupId of selectedGroups) {
-      if (skippedGatherings.has(groupId)) continue;
-
       const group = groups.find(g => g.id === groupId);
       if (!group) continue;
 
@@ -615,14 +595,15 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
     }
 
     for (const serviceTypeId of selectedServiceTypes) {
-      if (skippedGatherings.has(serviceTypeId)) continue;
-
       const serviceType = serviceTypes.find(st => st.id === serviceTypeId);
       if (!serviceType) continue;
 
       const isDuplicate = duplicateIds.has(serviceTypeId);
 
-      if (isDuplicate || true) {
+      // Service types always need scheduling info (Elvanto doesn't supply a
+      // day/time for a service type), so every selected one goes through the
+      // edit modal regardless of whether it's a duplicate.
+      {
         allGatherings.push({
           id: serviceTypeId,
           name: nameOverrides[serviceTypeId] || serviceType.name,
@@ -717,10 +698,10 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
       });
 
       const groupsToImport = selectedGroups.size > 0
-        ? Array.from(selectedGroups).filter(id => !skippedGatherings.has(id))
+        ? Array.from(selectedGroups)
         : undefined;
       const servicesToImport = selectedServiceTypes.size > 0
-        ? Array.from(selectedServiceTypes).filter(id => !skippedGatherings.has(id))
+        ? Array.from(selectedServiceTypes)
         : undefined;
 
       const response = await integrationsAPI.importGatheringsFromElvanto({
@@ -1088,7 +1069,7 @@ const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAct
                             key={family.id}
                             className={`border rounded-lg overflow-hidden ${
                               isFamilySelected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                                : isPartiallySelected ? 'border-primary-300 bg-primary-25 dark:bg-primary-900/10'
+                                : isPartiallySelected ? 'border-primary-300 bg-primary-50/50 dark:bg-primary-900/10'
                                 : 'border-gray-200 dark:border-gray-700'
                             }`}
                           >
