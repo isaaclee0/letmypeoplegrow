@@ -48,7 +48,6 @@ const AiIntegrationPanel: React.FC<PanelProps<AiStatus>> = ({ status, refreshSta
   const confirmAiDisconnect = async () => {
     setShowAiDisconnectModal(false);
     try {
-      await refreshStatus(); // signal loading state via parent
       await aiAPI.disconnect();
       // Clear cached preference so sync doesn't re-insert it
       localStorage.removeItem('preference_ai_config');
