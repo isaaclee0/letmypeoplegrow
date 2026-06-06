@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { integrationsAPI, aiAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import IntegrationCard from './IntegrationCard';
@@ -43,7 +43,8 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
       const response = await integrationsAPI.getElvantoStatus();
       const connected = response.data.connected === true;
       setElvantoStatus({
-        ...response.data,
+        connected,
+        elvantoAccount: response.data.elvantoAccount ?? null,
         loading: false,
       });
       localStorage.setItem('elvanto_connected', connected.toString());
@@ -85,9 +86,11 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
     fetchPlanningCenterStatus();
   }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus]);
 
-  // Handle autoOpen prop
+  // Handle autoOpen prop — consume once so the user can still navigate back to the list
+  const autoOpenFired = useRef(false);
   useEffect(() => {
-    if (autoOpen) {
+    if (autoOpen && !autoOpenFired.current) {
+      autoOpenFired.current = true;
       setSelected(autoOpen);
     }
   }, [autoOpen]);
@@ -163,7 +166,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
           description="Import people and families from your Elvanto account."
           icon={
             <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-              <svg className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
               </svg>
             </div>
@@ -184,7 +187,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
           description="Ask questions about your attendance data in plain language."
           icon={
             <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
-              <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
             </div>
@@ -205,7 +208,7 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
             description="Connect to Planning Center Online to import people and check-ins."
             icon={
               <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                 </svg>
               </div>
