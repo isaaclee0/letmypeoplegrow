@@ -88,13 +88,17 @@ type TabType = 'people' | 'gatherings';
 // Component
 // ---------------------------------------------------------------------------
 
-const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus>> = ({ status, refreshStatus, onBack }) => {
+const ElvantoIntegrationPanel: React.FC<PanelProps<ElvantoStatus> & { initialAction?: 'disconnect' }> = ({ status, refreshStatus, onBack, initialAction }) => {
   // --- Connect / disconnect state ---
   const [elvantoApiKey, setElvantoApiKey] = useState('');
   const [savingConfig, setSavingConfig] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [showApiKeyGuide, setShowApiKeyGuide] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
+
+  useEffect(() => {
+    if (initialAction === 'disconnect') setShowDisconnectModal(true);
+  }, [initialAction]);
 
   // --- Import: people tab state ---
   const [activeTab, setActiveTab] = useState<TabType>('people');

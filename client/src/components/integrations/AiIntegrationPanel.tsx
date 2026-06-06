@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -16,12 +16,16 @@ import Modal from '../Modal';
 import logger from '../../utils/logger';
 import { AiStatus, PanelProps } from './types';
 
-const AiIntegrationPanel: React.FC<PanelProps<AiStatus>> = ({ status, refreshStatus, onBack }) => {
+const AiIntegrationPanel: React.FC<PanelProps<AiStatus> & { initialAction?: 'disconnect' }> = ({ status, refreshStatus, onBack, initialAction }) => {
   const [aiApiKey, setAiApiKey] = useState('');
   const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic' | 'grok'>('openai');
   const [aiSaving, setAiSaving] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [showAiDisconnectModal, setShowAiDisconnectModal] = useState(false);
+
+  useEffect(() => {
+    if (initialAction === 'disconnect') setShowAiDisconnectModal(true);
+  }, [initialAction]);
 
   // Handle AI connect
   const handleAiConnect = async () => {

@@ -19,14 +19,19 @@ import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import { PlanningCenterStatus, PanelProps } from './types';
 
-const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus>> = ({
+const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & { initialAction?: 'disconnect' }> = ({
   status,
   refreshStatus,
   onBack,
+  initialAction,
 }) => {
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
+
+  useEffect(() => {
+    if (initialAction === 'disconnect') setShowPlanningCenterDisconnectModal(true);
+  }, [initialAction]);
   const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
   const [pcAllowlist, setPcAllowlist] = useState<string[]>([]);
