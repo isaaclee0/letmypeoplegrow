@@ -23,7 +23,6 @@ import Modal from '../components/Modal';
 const SettingsPage: React.FC = () => {
   const { user, updateUser } = useAuth();
   const [activeTab, setActiveTab] = useState<'general' | 'myinfo' | 'notifications' | 'integrations' | 'data'>('general');
-  const [pcoAutoOpen, setPcoAutoOpen] = useState<'planning-center' | null>(null);
 
   // My Info (profile) state
   const [profileFirstName, setProfileFirstName] = useState('');
@@ -271,15 +270,10 @@ const SettingsPage: React.FC = () => {
       setActiveTab(tabParam as 'general' | 'myinfo' | 'notifications' | 'integrations' | 'data');
     }
 
-    // Handle Planning Center OAuth callback — IntegrationsTab reads the params and handles cleanup
-    const pcoSuccess = urlParams.get('pco_success');
-    const pcoError = urlParams.get('pco_error');
-    if (pcoSuccess === 'true') {
+    // Handle Planning Center OAuth callback: just open the Integrations tab.
+    // IntegrationsTab reads pco_success/pco_error itself, opens the panel, and cleans the URL.
+    if (urlParams.get('pco_success') === 'true' || urlParams.get('pco_error')) {
       setActiveTab('integrations');
-      setPcoAutoOpen('planning-center');
-    } else if (pcoError) {
-      setActiveTab('integrations');
-      setPcoAutoOpen('planning-center');
     }
   }, []);
 
@@ -1191,7 +1185,7 @@ const SettingsPage: React.FC = () => {
           )}
 
           {activeTab === 'integrations' && user?.role === 'admin' && (
-            <IntegrationsTab autoOpen={pcoAutoOpen} />
+            <IntegrationsTab />
           )}
 
           {activeTab === 'data' && user?.role === 'admin' && (

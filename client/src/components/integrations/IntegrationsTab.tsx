@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { integrationsAPI, aiAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import IntegrationCard from './IntegrationCard';
@@ -12,11 +12,7 @@ import {
   IntegrationKey,
 } from './types';
 
-interface IntegrationsTabProps {
-  autoOpen?: IntegrationKey | null;
-}
-
-const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
+const IntegrationsTab: React.FC = () => {
   const [elvantoStatus, setElvantoStatus] = useState<ElvantoStatus>({
     connected: false,
     loading: true,
@@ -85,15 +81,6 @@ const IntegrationsTab: React.FC<IntegrationsTabProps> = ({ autoOpen }) => {
     fetchAiStatus();
     fetchPlanningCenterStatus();
   }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus]);
-
-  // Handle autoOpen prop — consume once so the user can still navigate back to the list
-  const autoOpenFired = useRef(false);
-  useEffect(() => {
-    if (autoOpen && !autoOpenFired.current) {
-      autoOpenFired.current = true;
-      setSelected(autoOpen);
-    }
-  }, [autoOpen]);
 
   // Handle Planning Center OAuth callback
   useEffect(() => {
