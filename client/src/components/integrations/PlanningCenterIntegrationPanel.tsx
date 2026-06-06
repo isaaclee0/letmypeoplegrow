@@ -109,7 +109,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus>>
   const confirmPlanningCenterDisconnect = async () => {
     setShowPlanningCenterDisconnectModal(false);
     try {
-      refreshStatus();
       await integrationsAPI.disconnectPlanningCenter();
       refreshStatus();
     } catch (error: any) {
@@ -257,6 +256,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus>>
                   </p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => handlePcSyncIndicatorToggle(!pcSyncIndicator)}
                   className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                   role="switch"
@@ -277,7 +277,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus>>
                   </div>
                   <button
                     type="button"
-                    onClick={() => { setPcSyncEnabled(!pcSyncEnabled); setPcConfigDirty(true); }}
+                    onClick={() => { setPcSyncEnabled(prev => !prev); setPcConfigDirty(true); }}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                     role="switch"
                     aria-checked={pcSyncEnabled}
