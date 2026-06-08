@@ -149,6 +149,9 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_last_sync_result')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync_result TEXT');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_checkin_import_state')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_checkin_import_state TEXT');
+      }
 
       // Migrate families: add planning_center_id if missing
       const familiesCols = db.prepare('PRAGMA table_info(families)').all();

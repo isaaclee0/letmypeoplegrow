@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   planning_center_sync_enabled INTEGER DEFAULT 0,
   planning_center_membership_allowlist TEXT,
   planning_center_last_sync_result TEXT,
+  planning_center_checkin_import_state TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
