@@ -844,8 +844,10 @@ export const integrationsAPI = {
   applyPlanningCenterSync: (data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[] } }) =>
     api.post('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
-  getCheckinEvents: (params: { startDate?: string; endDate?: string }) =>
+  getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),
+  getCheckinImportState: () =>
+    api.get('/integrations/planning-center/checkin-import-state'),
   previewCheckinImport: (body: {
     startDate?: string;
     endDate?: string;
@@ -859,11 +861,14 @@ export const integrationsAPI = {
   executeCheckinImport: (body: {
     startDate?: string;
     endDate?: string;
+    jobId?: string;
     mappings: Array<{
       pcoEventId: string;
       target: 'existing' | 'new';
       gatheringTypeId?: number;
       newGatheringName?: string;
+      schedule?: { dayOfWeek: string | null; startTime: string | null; frequency: string | null; irregular: boolean };
+      userAssignment?: { mode: 'none' | 'me' | 'copy'; sourceGatheringTypeId?: number };
     }>;
     assignToGatherings?: boolean;
     recencyWeeks?: number;
