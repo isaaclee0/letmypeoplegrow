@@ -165,6 +165,70 @@ function suggestGatheringId(eventName, gatherings = [], serviceTime = null) {
   return null;
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function weekdayOf(dateStr) {
+  return WEEKDAYS[new Date(`${dateStr}T00:00:00Z`).getUTCDay()];
+}
+
+function median(nums) {
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function classifyFrequency(medGap) {
+  if (medGap >= 6 && medGap <= 8) return 'weekly';
+  if (medGap >= 12 && medGap <= 16) return 'biweekly';
+  if (medGap >= 26 && medGap <= 35) return 'monthly';
+  return null;
+}
+
+// Infer a gathering schedule from an event's service dates.
+// dates: array of 'YYYY-MM-DD'; serviceTime: 'HH:MM' or null.
+// Returns { dayOfWeek, startTime, frequency, irregular }. When the dates don't
+// fit a consistent weekday + regular cadence (e.g. annual Good Friday), it
+// returns irregular:true with dayOfWeek/frequency null (startTime is kept).
+function deriveSchedule(dates, serviceTime = null) {
+  const startTime = serviceTime || null;
+  const uniq = [...new Set(dates)].sort();
+  if (uniq.length < 2) {
+    return { dayOfWeek: null, startTime, frequency: null, irregular: true };
+  }
+  const counts = {};
+  for (const d of uniq) {
+    const w = weekdayOf(d);
+    counts[w] = (counts[w] || 0) + 1;
+  }
+  let topDay = null;
+  let topCount = 0;
+  for (const [w, c] of Object.entries(counts)) {
+    if (c > topCount) { topCount = c; topDay = w; }
+  }
+  const weekdayConsistent = topCount / uniq.length >= 0.6;
+  const gaps = [];
+  for (let i = 1; i < uniq.length; i++) {
+    gaps.push((new Date(`${uniq[i]}T00:00:00Z`) - new Date(`${uniq[i - 1]}T00:00:00Z`)) / 86400000);
+  }
+  const frequency = classifyFrequency(median(gaps));
+  if (weekdayConsistent && frequency) {
+    return { dayOfWeek: topDay, startTime, frequency, irregular: false };
+  }
+  return { dayOfWeek: null, startTime, frequency: null, irregular: true };
+}
+
+// Merges a new import result into the persisted check-in import state.
+// prev may be null or a parsed state object. Per-event mappings/imported markers
+// are overlaid (new wins), other events are preserved. lastRange is replaced.
+function mergeCheckinImportState(prev, { lastRange, mappings, imported }) {
+  const base = prev && typeof prev === 'object' ? prev : {};
+  return {
+    lastRange: lastRange || base.lastRange || null,
+    mappings: { ...(base.mappings || {}), ...(mappings || {}) },
+    imported: { ...(base.imported || {}), ...(imported || {}) },
+  };
+}
+
 function summarizeEvents(normalized) {
   const byEvent = new Map();
   for (const row of normalized) {
@@ -185,6 +249,7 @@ function summarizeEvents(normalized) {
       sessionCount: sorted.length,
       firstDate: sorted[0] || null,
       lastDate: sorted[sorted.length - 1] || null,
+      suggestedSchedule: deriveSchedule(sorted, e.serviceTime || null),
     };
     if (e.serviceTime) summary.serviceTime = e.serviceTime;
     return summary;
@@ -271,5 +336,5 @@ function buildGatheringListAdds(normalized, activeIndividualIds, personToIndivid
 
 module.exports = {
   localDateInTz, normalizeCheckIns, summarizeEvents, resolvePeople, buildRecordWrites, buildGatheringListAdds,
-  suggestGatheringId,
+  suggestGatheringId, deriveSchedule, mergeCheckinImportState,
 };

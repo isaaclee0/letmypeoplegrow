@@ -163,6 +163,7 @@ test('summarizeEvents groups by event with counts and date span', () => {
   assert.deepStrictEqual(e1, {
     pcoEventId: 'e1', eventName: 'Sunday Gathering',
     checkinCount: 2, sessionCount: 2, firstDate: '2025-02-09', lastDate: '2025-02-16',
+    suggestedSchedule: { dayOfWeek: 'Sunday', startTime: null, frequency: 'weekly', irregular: false },
   });
   const e2 = events.find((e) => e.pcoEventId === 'e2');
   assert.strictEqual(e2.checkinCount, 1);
@@ -276,4 +277,107 @@ test('buildGatheringListAdds returns empty for empty input', () => {
     buildGatheringListAdds([], new Set(), new Map(), new Map(), 8, '2025-06-04'),
     []
   );
+});
+
+// ── Task 1: deriveSchedule ────────────────────────────────────────────────────
+
+const { deriveSchedule } = require('./checkinsImport');
+
+// Helper: build N consecutive weekly Sundays starting 2025-01-05 (a Sunday).
+function weeklySundays(n) {
+  const out = [];
+  const d = new Date('2025-01-05T00:00:00Z');
+  for (let i = 0; i < n; i++) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 7);
+  }
+  return out;
+}
+
+test('deriveSchedule detects a weekly Sunday service', () => {
+  const s = deriveSchedule(weeklySundays(6), '10:00');
+  assert.deepStrictEqual(s, { dayOfWeek: 'Sunday', startTime: '10:00', frequency: 'weekly', irregular: false });
+});
+
+test('deriveSchedule detects biweekly', () => {
+  const dates = ['2025-01-05', '2025-01-19', '2025-02-02', '2025-02-16'];
+  const s = deriveSchedule(dates, null);
+  assert.strictEqual(s.frequency, 'biweekly');
+  assert.strictEqual(s.dayOfWeek, 'Sunday');
+  assert.strictEqual(s.irregular, false);
+});
+
+test('deriveSchedule detects monthly', () => {
+  const dates = ['2025-01-05', '2025-02-02', '2025-03-02', '2025-03-30'];
+  const s = deriveSchedule(dates, null);
+  assert.strictEqual(s.frequency, 'monthly');
+  assert.strictEqual(s.irregular, false);
+});
+
+test('deriveSchedule flags annual/irregular (Good Friday-style) as irregular with blank schedule', () => {
+  const dates = ['2023-04-07', '2024-03-29', '2025-04-18'];
+  const s = deriveSchedule(dates, null);
+  assert.strictEqual(s.irregular, true);
+  assert.strictEqual(s.dayOfWeek, null);
+  assert.strictEqual(s.frequency, null);
+});
+
+test('deriveSchedule flags a single occurrence as irregular but keeps startTime', () => {
+  const s = deriveSchedule(['2025-06-01'], '09:30');
+  assert.deepStrictEqual(s, { dayOfWeek: null, startTime: '09:30', frequency: null, irregular: true });
+});
+
+test('deriveSchedule flags inconsistent weekday as irregular', () => {
+  const dates = ['2025-01-06', '2025-01-14', '2025-01-20', '2025-01-29']; // Mon, Tue, Mon, Wed
+  const s = deriveSchedule(dates, null);
+  assert.strictEqual(s.irregular, true);
+});
+
+// ── Task 2: summarizeEvents attaches suggestedSchedule ────────────────────────
+
+test('summarizeEvents attaches a suggestedSchedule per event', () => {
+  const normalized = [
+    { pcoEventId: 'e1', eventName: 'Sunday', pcoPersonId: 'p1', firstName: 'A', lastName: 'B', date: '2025-01-05' },
+    { pcoEventId: 'e1', eventName: 'Sunday', pcoPersonId: 'p2', firstName: 'C', lastName: 'D', date: '2025-01-12' },
+    { pcoEventId: 'e1', eventName: 'Sunday', pcoPersonId: 'p1', firstName: 'A', lastName: 'B', date: '2025-01-19' },
+  ];
+  const [e] = summarizeEvents(normalized);
+  assert.deepStrictEqual(e.suggestedSchedule, {
+    dayOfWeek: 'Sunday', startTime: null, frequency: 'weekly', irregular: false,
+  });
+});
+
+// ── Task 3: mergeCheckinImportState ───────────────────────────────────────────
+
+const { mergeCheckinImportState } = require('./checkinsImport');
+
+test('mergeCheckinImportState merges into null prev', () => {
+  const next = mergeCheckinImportState(null, {
+    lastRange: { startDate: '2025-01-01', endDate: '2025-02-01' },
+    mappings: { e1: { target: 'new', newGatheringName: 'Sunday' } },
+    imported: { e1: { lastImportedDate: '2025-01-26', gatheringTypeId: 7 } },
+  });
+  assert.deepStrictEqual(next, {
+    lastRange: { startDate: '2025-01-01', endDate: '2025-02-01' },
+    mappings: { e1: { target: 'new', newGatheringName: 'Sunday' } },
+    imported: { e1: { lastImportedDate: '2025-01-26', gatheringTypeId: 7 } },
+  });
+});
+
+test('mergeCheckinImportState preserves prior events and overlays new ones', () => {
+  const prev = {
+    lastRange: { startDate: '2024-01-01', endDate: '2024-06-01' },
+    mappings: { e1: { target: 'existing', gatheringTypeId: 1 } },
+    imported: { e1: { lastImportedDate: '2024-05-26', gatheringTypeId: 1 } },
+  };
+  const next = mergeCheckinImportState(prev, {
+    lastRange: { startDate: '2025-01-01', endDate: '2025-02-01' },
+    mappings: { e2: { target: 'new', newGatheringName: 'Friday' } },
+    imported: { e2: { lastImportedDate: '2025-01-31', gatheringTypeId: 9 } },
+  });
+  assert.strictEqual(next.lastRange.startDate, '2025-01-01');
+  assert.ok(next.mappings.e1, 'keeps e1 mapping');
+  assert.ok(next.mappings.e2, 'adds e2 mapping');
+  assert.strictEqual(next.imported.e1.lastImportedDate, '2024-05-26');
+  assert.strictEqual(next.imported.e2.gatheringTypeId, 9);
 });
