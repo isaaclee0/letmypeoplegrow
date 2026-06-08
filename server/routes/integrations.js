@@ -2118,11 +2118,12 @@ const checkinsCache = new Map(); // `${churchId}|${startDate}|${endDate}` -> { p
 // unconditionally.
 function makeImportProgressEmitter(churchId, jobId, phase) {
   if (!jobId) return undefined;
+  const safeJobId = String(jobId).slice(0, 64);
   return ({ fetched, total }) => {
     const percent = total > 0 ? Math.min(100, Math.round((fetched / total) * 100)) : 0;
     try {
       webSocketService.broadcastToChurch(churchId, 'pco:import_progress', {
-        jobId, phase, percent, fetched, total,
+        jobId: safeJobId, phase, percent, fetched, total,
       });
     } catch (e) {
       logger.warn('Failed to emit pco:import_progress', { error: e.message });
@@ -2749,7 +2750,6 @@ async function runCheckinImport({ req, commit }) {
   let userAssignmentsCreated = 0;
 
   // Onboarding-only: also populate gathering_lists for active, recent attendees.
-  const assignToGatherings = req.body.assignToGatherings === true;
   let recencyWeeks = parseInt(req.body.recencyWeeks, 10);
   if (!Number.isInteger(recencyWeeks) || recencyWeeks < 1) recencyWeeks = 8; // default 8-week recency window for treating an attendee as a current regular
 
@@ -2800,11 +2800,13 @@ async function runCheckinImport({ req, commit }) {
   // Build the event->gathering map. For preview, "new" events have no id yet.
   const mappingByEvent = new Map(mappings.map((m) => [m.pcoEventId, m]));
 
+  const allEventSummaries = checkinsImport.summarizeEvents(normalized);
+
   const summary = {
     startDate, endDate, timezone,
     matchedPeople: people.matched.length,
     peopleToCreate: people.toCreate.length,
-    events: checkinsImport.summarizeEvents(normalized)
+    events: allEventSummaries
       .filter((e) => mappingByEvent.has(e.pcoEventId))
       .map((e) => ({ ...e, mapping: mappingByEvent.get(e.pcoEventId) })),
   };
@@ -2914,6 +2916,7 @@ async function runCheckinImport({ req, commit }) {
         writeProgress({ fetched: writeIndex, total: totalWrites });
       }
     }
+    if (writeProgress && totalWrites === 0) writeProgress({ fetched: 0, total: 0 });
 
     // 4) Move last_attendance_date forward only.
     for (const [individualId, date] of latestPresent) {
@@ -2984,7 +2987,7 @@ async function runCheckinImport({ req, commit }) {
 
   // Persist settings so a future import can skip re-deciding mappings.
   try {
-    const eventSummaries = checkinsImport.summarizeEvents(normalized);
+    const eventSummaries = allEventSummaries;
     const summaryByEvent = new Map(eventSummaries.map((e) => [e.pcoEventId, e]));
     const mappingsToSave = {};
     const importedToSave = {};
