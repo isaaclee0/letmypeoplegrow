@@ -43,6 +43,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [pcLastSync, setPcLastSync] = useState<any>(null);
   const [pcSyncRunning, setPcSyncRunning] = useState(false);
   const [showSyncReview, setShowSyncReview] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [checkinAvailable, setCheckinAvailable] = useState(false);
 
   const loadPcSyncConfig = useCallback(async () => {
     try {
@@ -130,6 +132,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
       }).catch(() => {});
+      // Cheap probe: nudge to import check-ins only if data exists and none has
+      // been imported yet.
+      integrationsAPI.getCheckinAvailability()
+        .then(r => setCheckinAvailable(!!r.data.available && !r.data.hasImported))
+        .catch(() => setCheckinAvailable(false));
     }
   }, [status.connected, loadPcSyncConfig]);
 
@@ -143,7 +150,21 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
         Back to integrations
       </button>
 
-      {status.enabled && (
+      {showImport && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+          <button
+            type="button"
+            onClick={() => setShowImport(false)}
+            className="inline-flex items-center text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 mb-4"
+          >
+            <ArrowLeftIcon className="h-4 w-4 mr-1.5" />
+            Back to Planning Center
+          </button>
+          <PCOCheckinImport onComplete={() => setCheckinAvailable(false)} />
+        </div>
+      )}
+
+      {!showImport && status.enabled && (
         <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-4">
@@ -344,7 +365,27 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
               {/* Check-in attendance import */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
-                <PCOCheckinImport />
+                {checkinAvailable && (
+                  <div className="mb-3 rounded-md bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 px-4 py-3 flex items-center justify-between gap-3">
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      Check-in data is available in Planning Center — would you like to import it?
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setShowImport(true)}
+                      className="shrink-0 inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                    >
+                      Import now
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowImport(true)}
+                  className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Import attendance history
+                </button>
               </div>
             </div>
           )}

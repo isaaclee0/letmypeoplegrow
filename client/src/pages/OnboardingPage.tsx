@@ -39,6 +39,8 @@ const OnboardingPage: React.FC = () => {
   const [allowlist, setAllowlist] = useState<string[]>([]);
   const [importingPeople, setImportingPeople] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [checkinProbe, setCheckinProbe] = useState<'probing' | 'available' | 'unavailable'>('probing');
+  const [showCheckinImport, setShowCheckinImport] = useState(false);
   const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const locationDropdownRef = useRef<HTMLDivElement>(null);
   const { login, refreshOnboardingStatus, updateUser, user } = useAuth();
@@ -67,6 +69,31 @@ const OnboardingPage: React.FC = () => {
       window.history.replaceState({}, '', '/app/onboarding');
     }
   }, []);
+
+  // On entering the gatherings step, cheaply probe whether check-in data exists.
+  // If there's none (or it's already been imported), skip straight past the step.
+  useEffect(() => {
+    if (step !== 'pco-gatherings') return;
+    let cancelled = false;
+    setCheckinProbe('probing');
+    integrationsAPI.getCheckinAvailability()
+      .then((r: any) => {
+        if (cancelled) return;
+        if (r.data?.available && !r.data?.hasImported) {
+          setCheckinProbe('available');
+        } else {
+          setCheckinProbe('unavailable');
+          finishOnboarding();
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCheckinProbe('unavailable');
+        finishOnboarding();
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   // Trigger the membership loader when entering the people step.
   useEffect(() => {
@@ -407,13 +434,41 @@ const OnboardingPage: React.FC = () => {
                 Create your gatherings from Planning Center events and import attendance history.
                 People who attended recently will be added to each gathering automatically.
               </p>
-              <PCOCheckinImport
-                assignToGatherings
-                defaultRecencyWeeks={8}
-                showSkip
-                onSkip={finishOnboarding}
-                onComplete={finishOnboarding}
-              />
+              {checkinProbe === 'probing' && (
+                <p className="text-sm text-gray-500">Checking for check-in data…</p>
+              )}
+              {checkinProbe === 'available' && !showCheckinImport && (
+                <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 space-y-3">
+                  <p className="text-sm text-blue-800">
+                    Check-in data is available — would you like to import it?
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowCheckinImport(true)}
+                      className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Import
+                    </button>
+                    <button
+                      type="button"
+                      onClick={finishOnboarding}
+                      className="text-gray-600 underline text-sm"
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )}
+              {showCheckinImport && (
+                <PCOCheckinImport
+                  assignToGatherings
+                  defaultRecencyWeeks={8}
+                  showSkip
+                  onSkip={finishOnboarding}
+                  onComplete={finishOnboarding}
+                />
+              )}
             </div>
           ) : (
             <form className="space-y-6" onSubmit={codeForm.handleSubmit(handleCodeSubmit)}>
