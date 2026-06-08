@@ -2993,13 +2993,26 @@ async function runCheckinImport({ req, commit }) {
     const importedToSave = {};
     for (const m of mappings) {
       const gid = committedEventToGathering.get(m.pcoEventId);
-      mappingsToSave[m.pcoEventId] = {
-        target: m.target,
-        gatheringTypeId: gid || m.gatheringTypeId || null,
-        newGatheringName: m.newGatheringName || null,
-        schedule: m.schedule || null,
-        userAssignment: m.userAssignment || null,
-      };
+      // A 'new' mapping that successfully created a gathering is persisted as
+      // 'existing' pointing at that gathering, so a later re-import reuses it
+      // (attendance is idempotent via ON CONFLICT) instead of creating a duplicate.
+      if (m.target === 'new' && gid) {
+        mappingsToSave[m.pcoEventId] = {
+          target: 'existing',
+          gatheringTypeId: gid,
+          newGatheringName: null,
+          schedule: null,
+          userAssignment: null,
+        };
+      } else {
+        mappingsToSave[m.pcoEventId] = {
+          target: m.target,
+          gatheringTypeId: gid || m.gatheringTypeId || null,
+          newGatheringName: m.newGatheringName || null,
+          schedule: m.schedule || null,
+          userAssignment: m.userAssignment || null,
+        };
+      }
       const s = summaryByEvent.get(m.pcoEventId);
       if (s && gid) importedToSave[m.pcoEventId] = { lastImportedDate: s.lastDate, gatheringTypeId: gid };
     }
