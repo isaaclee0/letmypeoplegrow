@@ -8,6 +8,7 @@ const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
 const { tallyMembership } = require('../services/planningCenter/summary');
+const webSocketService = require('../services/websocket');
 
 const router = express.Router();
 
@@ -2110,11 +2111,34 @@ const CHECKINS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const CHECKINS_CACHE_MAX_ENTRIES = 20;
 const checkinsCache = new Map(); // `${churchId}|${startDate}|${endDate}` -> { payload, timezone, fetchedAt }
 
+// Builds an onProgress callback that emits fetch/write progress to the church's
+// sockets. The client filters by jobId. Emission is best-effort: failures are
+// swallowed so progress reporting never breaks an import. Returns undefined when no
+// jobId is supplied (e.g. server-internal calls), so callers can pass it through
+// unconditionally.
+function makeImportProgressEmitter(churchId, jobId, phase) {
+  if (!jobId) return undefined;
+  return ({ fetched, total }) => {
+    const percent = total > 0 ? Math.min(100, Math.round((fetched / total) * 100)) : 0;
+    try {
+      webSocketService.broadcastToChurch(churchId, 'pco:import_progress', {
+        jobId, phase, percent, fetched, total,
+      });
+    } catch (e) {
+      logger.warn('Failed to emit pco:import_progress', { error: e.message });
+    }
+  };
+}
+
 function fetchAllCheckins(args) {
-  const { churchId, startDate, endDate, force = false } = args;
+  const { churchId, startDate, endDate, force = false, onProgress } = args;
   const key = `${churchId}|${startDate}|${endDate}`;
   const cached = checkinsCache.get(key);
   if (!force && cached && (Date.now() - cached.fetchedAt) < CHECKINS_CACHE_TTL_MS) {
+    if (onProgress) {
+      const n = (cached.payload.data || []).length;
+      onProgress({ fetched: n, total: n });
+    }
     return Promise.resolve({ payload: cached.payload, timezone: cached.timezone, fetchedAt: cached.fetchedAt });
   }
   return fetchAllCheckinsUncached(args).then((result) => {
@@ -2131,7 +2155,7 @@ function fetchAllCheckins(args) {
   });
 }
 
-async function fetchAllCheckinsUncached({ tokens, userId, churchId, startDate, endDate }) {
+async function fetchAllCheckinsUncached({ tokens, userId, churchId, startDate, endDate, onProgress }) {
   // Refresh up-front (single-flight) so the parallel page fetches below all use a
   // fresh, long-lived token and never race on refreshing a token that expires
   // mid-fetch — the cause of the intermittent 401 -> 500 on large ranges.
@@ -2159,6 +2183,7 @@ async function fetchAllCheckinsUncached({ tokens, userId, churchId, startDate, e
   let data = firstPage.data || [];
   let included = firstPage.included || [];
   const total = firstPage.meta?.total_count ?? data.length;
+  if (onProgress) onProgress({ fetched: data.length, total });
 
   const offsets = [];
   for (let o = 100; o < total; o += 100) offsets.push(o);
@@ -2173,6 +2198,7 @@ async function fetchAllCheckinsUncached({ tokens, userId, churchId, startDate, e
       data = data.concat(p.data || []);
       included = included.concat(p.included || []);
     }
+    if (onProgress) onProgress({ fetched: data.length, total });
   }
 
   const settings = await Database.query(
@@ -2190,6 +2216,16 @@ const PCO_HISTORY_FLOOR = '2010-01-01';
 // path. Its numeric value is irrelevant — it must simply be non-null so that
 // buildRecordWrites includes the row in its output.
 const PREVIEW_PLACEHOLDER_ID = -1;
+
+// Reads and parses the persisted check-in import state for a church, or null.
+async function loadCheckinImportState(churchId) {
+  const rows = await Database.query(
+    `SELECT planning_center_checkin_import_state AS s FROM church_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  if (!rows[0] || !rows[0].s) return null;
+  try { return JSON.parse(rows[0].s); } catch { return null; }
+}
 
 function resolveRange(startDate, endDate) {
   const range = {
@@ -2296,7 +2332,8 @@ router.get('/planning-center/checkins/events', async (req, res) => {
     }
 
     const force = req.query.refresh === '1';
-    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, force });
+    const onProgress = makeImportProgressEmitter(churchId, req.query.jobId, 'fetching');
+    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, force, onProgress });
     const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
     const events = checkinsImport.summarizeEvents(normalized);
 
@@ -2304,15 +2341,31 @@ router.get('/planning-center/checkins/events', async (req, res) => {
     const gatherings = await Database.query(
       `SELECT id, name FROM gathering_types WHERE church_id = ?`, [churchId]
     );
+    const state = await loadCheckinImportState(churchId);
+    const savedMappings = (state && state.mappings) || {};
+    const importedMarkers = (state && state.imported) || {};
     const withSuggestions = events.map((e) => ({
       ...e,
       suggestedGatheringTypeId: checkinsImport.suggestGatheringId(e.eventName, gatherings, e.serviceTime),
+      savedMapping: savedMappings[e.pcoEventId] || null,
+      alreadyImportedThrough: (importedMarkers[e.pcoEventId] && importedMarkers[e.pcoEventId].lastImportedDate) || null,
     }));
 
     res.json({ success: true, startDate, endDate, events: withSuggestions });
   } catch (error) {
     logger.error('PCO check-in events error:', error);
     res.status(500).json({ success: false, error: 'Failed to list Planning Center check-in events.', details: error.message });
+  }
+});
+
+// Returns persisted import settings so the client can pre-fill the date range.
+router.get('/planning-center/checkin-import-state', async (req, res) => {
+  try {
+    const state = await loadCheckinImportState(req.user.church_id);
+    res.json({ success: true, lastRange: (state && state.lastRange) || null });
+  } catch (error) {
+    logger.error('PCO checkin import-state error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load import state.' });
   }
 });
 
@@ -2689,6 +2742,12 @@ async function runCheckinImport({ req, commit }) {
   const { startDate, endDate } = resolveRange(req.body.startDate, req.body.endDate);
   const mappings = Array.isArray(req.body.mappings) ? req.body.mappings : [];
 
+  const jobId = req.body.jobId;
+  // Captured inside the transaction, read afterwards to persist import state.
+  let committedEventToGathering = new Map();
+  const newGatheringIds = new Set();
+  let userAssignmentsCreated = 0;
+
   // Onboarding-only: also populate gathering_lists for active, recent attendees.
   const assignToGatherings = req.body.assignToGatherings === true;
   let recencyWeeks = parseInt(req.body.recencyWeeks, 10);
@@ -2724,7 +2783,8 @@ async function runCheckinImport({ req, commit }) {
     throw err;
   }
 
-  const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate });
+  const onProgress = makeImportProgressEmitter(churchId, jobId, 'fetching');
+  const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, onProgress });
   const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
 
   // Existing individuals keyed by planning_center_id (active OR archived).
@@ -2781,14 +2841,22 @@ async function runCheckinImport({ req, commit }) {
 
     // 2) Resolve event -> gathering, creating new gatherings where requested.
     const eventToGathering = new Map();
+    const userAssignmentJobs = []; // { gatheringTypeId, userAssignment }
     for (const m of mappings) {
       if (m.target === 'new') {
+        const sched = m.schedule || {};
+        const irregular = sched.irregular === true;
+        const dayOfWeek = irregular ? null : (sched.dayOfWeek || null);
+        const frequency = irregular ? null : (sched.frequency || null);
+        const startTime = sched.startTime || null;
         const ins = await conn.query(
-          `INSERT INTO gathering_types (name, attendance_type, created_by, church_id)
-           VALUES (?, 'standard', ?, ?)`,
-          [m.newGatheringName, userId, churchId]
+          `INSERT INTO gathering_types (name, attendance_type, day_of_week, start_time, frequency, created_by, church_id)
+           VALUES (?, 'standard', ?, ?, ?, ?, ?)`,
+          [m.newGatheringName, dayOfWeek, startTime, frequency, userId, churchId]
         );
         eventToGathering.set(m.pcoEventId, ins.insertId);
+        newGatheringIds.add(ins.insertId);
+        userAssignmentJobs.push({ gatheringTypeId: ins.insertId, userAssignment: m.userAssignment });
         gatheringsCreated++;
       } else if (m.gatheringTypeId) {
         eventToGathering.set(m.pcoEventId, m.gatheringTypeId);
@@ -2800,6 +2868,9 @@ async function runCheckinImport({ req, commit }) {
     const sessionCache = new Map(); // `${gid}|${date}` -> sessionId
     const latestPresent = new Map(); // individualId -> max date
 
+    const writeProgress = makeImportProgressEmitter(churchId, jobId, 'writing');
+    const totalWrites = writes.length;
+    let writeIndex = 0;
     for (const w of writes) {
       const sKey = `${w.gatheringTypeId}|${w.date}`;
       let sessionId = sessionCache.get(sKey);
@@ -2837,6 +2908,11 @@ async function runCheckinImport({ req, commit }) {
 
       const prev = latestPresent.get(w.individualId);
       if (!prev || prev < w.date) latestPresent.set(w.individualId, w.date);
+
+      writeIndex++;
+      if (writeProgress && (writeIndex % 50 === 0 || writeIndex === totalWrites)) {
+        writeProgress({ fetched: writeIndex, total: totalWrites });
+      }
     }
 
     // 4) Move last_attendance_date forward only.
@@ -2848,10 +2924,15 @@ async function runCheckinImport({ req, commit }) {
       );
     }
 
-    // Onboarding auto-assignment: add active, recently-attending people to the
-    // roll of each gathering they attended. Only runs when assignToGatherings is
-    // set (the Settings importer leaves this false and never touches gathering_lists).
-    if (assignToGatherings) {
+    // Member roster auto-fill: add active, recently-attending people to the roll
+    // of each NEWLY CREATED gathering they attended. Existing gatherings are left
+    // untouched. (Onboarding maps everything to new gatherings, so its prior
+    // behaviour is preserved.)
+    const newEventToGathering = new Map();
+    for (const [evId, gid] of eventToGathering) {
+      if (newGatheringIds.has(gid)) newEventToGathering.set(evId, gid);
+    }
+    if (newEventToGathering.size > 0) {
       const activeRows = await conn.query(
         `SELECT id FROM individuals WHERE church_id = ? AND is_active = 1`,
         [churchId]
@@ -2859,7 +2940,7 @@ async function runCheckinImport({ req, commit }) {
       const activeIndividualIds = new Set(activeRows.map((r) => r.id));
       const today = new Date().toISOString().slice(0, 10);
       const adds = checkinsImport.buildGatheringListAdds(
-        normalized, activeIndividualIds, personToIndividual, eventToGathering, recencyWeeks, today
+        normalized, activeIndividualIds, personToIndividual, newEventToGathering, recencyWeeks, today
       );
       for (const a of adds) {
         const r = await conn.query(
@@ -2871,9 +2952,69 @@ async function runCheckinImport({ req, commit }) {
         if (r.affectedRows && r.affectedRows > 0) assignmentsCreated++;
       }
     }
+
+    // Staff-user assignment for new gatherings: none / me / copy-from-source.
+    for (const job of userAssignmentJobs) {
+      const ua = job.userAssignment || { mode: 'none' };
+      if (ua.mode === 'me') {
+        const r = await conn.query(
+          `INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
+           VALUES (?, ?, ?, ?) ON CONFLICT(user_id, gathering_type_id) DO NOTHING`,
+          [userId, job.gatheringTypeId, userId, churchId]
+        );
+        if (r.affectedRows && r.affectedRows > 0) userAssignmentsCreated++;
+      } else if (ua.mode === 'copy' && ua.sourceGatheringTypeId) {
+        const src = await conn.query(
+          `SELECT user_id FROM user_gathering_assignments WHERE gathering_type_id = ? AND church_id = ?`,
+          [ua.sourceGatheringTypeId, churchId]
+        );
+        for (const s of src) {
+          const r = await conn.query(
+            `INSERT INTO user_gathering_assignments (user_id, gathering_type_id, assigned_by, church_id)
+             VALUES (?, ?, ?, ?) ON CONFLICT(user_id, gathering_type_id) DO NOTHING`,
+            [s.user_id, job.gatheringTypeId, userId, churchId]
+          );
+          if (r.affectedRows && r.affectedRows > 0) userAssignmentsCreated++;
+        }
+      }
+    }
+
+    committedEventToGathering = eventToGathering;
   });
 
-  return { ...summary, createdPeople, gatheringsCreated, sessionsCreated, recordsWritten, recordsSkipped, assignmentsCreated };
+  // Persist settings so a future import can skip re-deciding mappings.
+  try {
+    const eventSummaries = checkinsImport.summarizeEvents(normalized);
+    const summaryByEvent = new Map(eventSummaries.map((e) => [e.pcoEventId, e]));
+    const mappingsToSave = {};
+    const importedToSave = {};
+    for (const m of mappings) {
+      const gid = committedEventToGathering.get(m.pcoEventId);
+      mappingsToSave[m.pcoEventId] = {
+        target: m.target,
+        gatheringTypeId: gid || m.gatheringTypeId || null,
+        newGatheringName: m.newGatheringName || null,
+        schedule: m.schedule || null,
+        userAssignment: m.userAssignment || null,
+      };
+      const s = summaryByEvent.get(m.pcoEventId);
+      if (s && gid) importedToSave[m.pcoEventId] = { lastImportedDate: s.lastDate, gatheringTypeId: gid };
+    }
+    const prevState = await loadCheckinImportState(churchId);
+    const nextState = checkinsImport.mergeCheckinImportState(prevState, {
+      lastRange: { startDate, endDate },
+      mappings: mappingsToSave,
+      imported: importedToSave,
+    });
+    await Database.query(
+      `UPDATE church_settings SET planning_center_checkin_import_state = ? WHERE church_id = ?`,
+      [JSON.stringify(nextState), churchId]
+    );
+  } catch (e) {
+    logger.warn('Failed to persist checkin import state', { error: e.message });
+  }
+
+  return { ...summary, createdPeople, gatheringsCreated, sessionsCreated, recordsWritten, recordsSkipped, assignmentsCreated, userAssignmentsCreated };
 }
 
 // Preview — no writes.
