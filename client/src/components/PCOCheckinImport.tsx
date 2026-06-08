@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { integrationsAPI, gatheringsAPI } from '../services/api';
+import { useWebSocket } from '../contexts/WebSocketContext';
+
+interface ScheduleSuggestion {
+  dayOfWeek: string | null;
+  startTime: string | null;
+  frequency: string | null;
+  irregular: boolean;
+}
 
 interface PcoEvent {
   pcoEventId: string;
@@ -8,18 +16,23 @@ interface PcoEvent {
   sessionCount: number;
   firstDate: string | null;
   lastDate: string | null;
-  /** Local service time "HH:MM" when this row is a split (multi-time event); else absent. */
   serviceTime?: string;
-  /** Server-suggested existing gathering matched by name/time; null if no match. */
   suggestedGatheringTypeId?: number | null;
+  suggestedSchedule?: ScheduleSuggestion;
+  savedMapping?: Mapping | null;
+  alreadyImportedThrough?: string | null;
 }
 
 interface Gathering { id: number; name: string; }
+
+type UserAssignment = { mode: 'none' | 'me' | 'copy'; sourceGatheringTypeId?: number };
 
 type Mapping = {
   target: 'skip' | 'existing' | 'new';
   gatheringTypeId?: number;
   newGatheringName?: string;
+  schedule?: ScheduleSuggestion;
+  userAssignment?: UserAssignment;
 };
 
 interface PCOCheckinImportProps {
@@ -55,11 +68,42 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const [recencyWeeks, setRecencyWeeks] = useState(defaultRecencyWeeks);
   const autoLoadStarted = useRef(false);
 
+  const { socket } = useWebSocket();
+  const [progress, setProgress] = useState<{ phase: string; percent: number } | null>(null);
+  const jobIdRef = useRef<string>('');
+
+  const newJobId = () => {
+    const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      ? crypto.randomUUID()
+      : `job_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    jobIdRef.current = id;
+    return id;
+  };
+
   useEffect(() => {
     gatheringsAPI.getAll()
       .then((r: any) => setGatherings(r.data.gatherings || r.data || []))
       .catch(() => setGatherings([]));
   }, []);
+
+  useEffect(() => {
+    integrationsAPI.getCheckinImportState()
+      .then((r: any) => {
+        const lr = r.data?.lastRange;
+        if (lr) { setStartDate(lr.startDate || ''); setEndDate(lr.endDate || ''); }
+      })
+      .catch(() => { /* no saved state */ });
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (data: { jobId: string; phase: string; percent: number }) => {
+      if (data.jobId !== jobIdRef.current) return;
+      setProgress({ phase: data.phase, percent: data.percent });
+    };
+    socket.on('pco:import_progress', handler);
+    return () => { socket.off('pco:import_progress', handler); };
+  }, [socket]);
 
   const buildMappingsPayload = () =>
     Object.entries(mappings)
@@ -69,6 +113,8 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
         target: m.target as 'existing' | 'new',
         gatheringTypeId: m.target === 'existing' ? m.gatheringTypeId : undefined,
         newGatheringName: m.target === 'new' ? m.newGatheringName : undefined,
+        schedule: m.target === 'new' ? m.schedule : undefined,
+        userAssignment: m.target === 'new' ? m.userAssignment : undefined,
       }));
 
   const validMappings = () =>
@@ -80,23 +126,31 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const findEvents = async (range?: { startDate: string; endDate: string }) => {
     const query = range ?? { startDate, endDate };
     setLoading(true); setError(null); setPreview(null); setDone(null);
+    const jobId = newJobId(); setProgress({ phase: 'fetching', percent: 0 });
     try {
-      const r = await integrationsAPI.getCheckinEvents(query);
+      const r = await integrationsAPI.getCheckinEvents({ ...query, jobId });
       setEvents(r.data.events || []);
       setStartDate(r.data.startDate ?? '');
       setEndDate(r.data.endDate ?? '');
       const defaults: Record<string, Mapping> = {};
       for (const e of r.data.events || []) {
-        // Pre-select a name-matched existing gathering when the server found one;
-        // otherwise default to creating a new gathering named after the PCO event.
-        defaults[e.pcoEventId] = e.suggestedGatheringTypeId
-          ? { target: 'existing', gatheringTypeId: e.suggestedGatheringTypeId }
-          : { target: 'new', newGatheringName: e.eventName };
+        if (e.savedMapping) {
+          defaults[e.pcoEventId] = e.savedMapping;
+        } else if (e.suggestedGatheringTypeId) {
+          defaults[e.pcoEventId] = { target: 'existing', gatheringTypeId: e.suggestedGatheringTypeId };
+        } else {
+          defaults[e.pcoEventId] = {
+            target: 'new',
+            newGatheringName: e.eventName,
+            schedule: e.suggestedSchedule || { dayOfWeek: null, startTime: null, frequency: null, irregular: false },
+            userAssignment: { mode: 'none' },
+          };
+        }
       }
       setMappings(defaults);
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to load events.');
-    } finally { setLoading(false); }
+    } finally { setLoading(false); setProgress(null); }
   };
 
   // Auto-load all available check-ins once on mount so the user sees what's
@@ -131,8 +185,9 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const runExecute = async () => {
     if (!window.confirm('Import these check-ins as attendance? Existing LMPG records will not be changed.')) return;
     setLoading(true); setError(null);
+    const jobId = newJobId(); setProgress({ phase: 'fetching', percent: 0 });
     try {
-      const body: any = { startDate, endDate, mappings: validMappings() };
+      const body: any = { startDate, endDate, jobId, mappings: validMappings() };
       if (assignToGatherings) {
         body.assignToGatherings = true;
         body.recencyWeeks = recencyWeeks;
@@ -143,11 +198,85 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
       if (onComplete) onComplete(r.data);
     } catch (e: any) {
       setError(e.response?.data?.error || 'Import failed.');
-    } finally { setLoading(false); }
+    } finally { setLoading(false); setProgress(null); }
   };
 
   const setMap = (id: string, patch: Partial<Mapping>) =>
     setMappings((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const setSchedule = (id: string, patch: Partial<ScheduleSuggestion>) =>
+    setMappings((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], schedule: { dayOfWeek: null, startTime: null, frequency: null, irregular: false, ...prev[id]?.schedule, ...patch } },
+    }));
+
+  const setAssignment = (id: string, patch: Partial<UserAssignment>) =>
+    setMappings((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], userAssignment: { mode: 'none', ...prev[id]?.userAssignment, ...patch } },
+    }));
+
+  const renderNewGatheringPanel = (ev: PcoEvent, m: Mapping) => {
+    const sched = m.schedule || { dayOfWeek: null, startTime: null, frequency: null, irregular: false };
+    const ua = m.userAssignment || { mode: 'none' as const };
+    const inputCls = 'border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-sm';
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm text-gray-700 dark:text-gray-300">Name
+            <input value={m.newGatheringName || ''} placeholder="Gathering name"
+              onChange={(e) => setMap(ev.pcoEventId, { newGatheringName: e.target.value })}
+              className={`block ${inputCls}`} />
+          </label>
+          <label className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1 self-center">
+            <input type="checkbox" checked={sched.irregular}
+              onChange={(e) => setSchedule(ev.pcoEventId, { irregular: e.target.checked })} />
+            Irregular (no fixed schedule)
+          </label>
+        </div>
+        {!sched.irregular && (
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-sm text-gray-700 dark:text-gray-300">Day
+              <select value={sched.dayOfWeek || ''} onChange={(e) => setSchedule(ev.pcoEventId, { dayOfWeek: e.target.value || null })}
+                className={`block ${inputCls}`}>
+                <option value="">—</option>
+                {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+            <label className="text-sm text-gray-700 dark:text-gray-300">Time
+              <input type="time" value={sched.startTime || ''} onChange={(e) => setSchedule(ev.pcoEventId, { startTime: e.target.value || null })}
+                className={`block ${inputCls}`} />
+            </label>
+            <label className="text-sm text-gray-700 dark:text-gray-300">Frequency
+              <select value={sched.frequency || ''} onChange={(e) => setSchedule(ev.pcoEventId, { frequency: e.target.value || null })}
+                className={`block ${inputCls}`}>
+                <option value="">—</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Biweekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </label>
+          </div>
+        )}
+        <label className="text-sm text-gray-700 dark:text-gray-300 block">Assign staff users
+          <select
+            value={ua.mode === 'copy' ? `copy:${ua.sourceGatheringTypeId ?? ''}` : ua.mode}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'none' || v === 'me') setAssignment(ev.pcoEventId, { mode: v, sourceGatheringTypeId: undefined });
+              else if (v.startsWith('copy:')) setAssignment(ev.pcoEventId, { mode: 'copy', sourceGatheringTypeId: Number(v.slice(5)) });
+            }}
+            className={`block ${inputCls}`}>
+            <option value="none">None</option>
+            <option value="me">Me</option>
+            {gatherings.map((g) => <option key={g.id} value={`copy:${g.id}`}>Same as {g.name}</option>)}
+          </select>
+        </label>
+      </div>
+    );
+  };
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-4">
@@ -199,6 +328,18 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
 
       {error && <div className="text-red-600 dark:text-red-400 text-sm">{error}</div>}
 
+      {progress && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-gray-600 dark:text-gray-300">
+            <span>{progress.phase === 'writing' ? 'Writing attendance…' : 'Fetching from Planning Center…'}</span>
+            <span>{progress.percent}%</span>
+          </div>
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded h-2 overflow-hidden">
+            <div className="bg-primary-600 h-2 transition-all duration-300" style={{ width: `${progress.percent}%` }} />
+          </div>
+        </div>
+      )}
+
       {events.length > 0 && (
         <div className="space-y-3">
           <table className="w-full text-sm">
@@ -211,33 +352,44 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
               {events.map((ev) => {
                 const m = mappings[ev.pcoEventId] || { target: 'skip' };
                 return (
-                  <tr key={ev.pcoEventId} className="border-t border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100">
-                    <td className="py-2">{ev.eventName}</td>
-                    <td>{ev.checkinCount} ({ev.sessionCount} dates)</td>
-                    <td>{ev.firstDate ?? '—'} → {ev.lastDate ?? '—'}</td>
-                    <td className="space-x-2">
-                      <select value={m.target}
-                        onChange={(e) => setMap(ev.pcoEventId, { target: e.target.value as Mapping['target'] })}
-                        className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1">
-                        <option value="skip">Skip</option>
-                        <option value="new">New gathering</option>
-                        <option value="existing">Existing gathering</option>
-                      </select>
-                      {m.target === 'new' && (
-                        <input value={m.newGatheringName || ''} placeholder="Gathering name"
-                          onChange={(e) => setMap(ev.pcoEventId, { newGatheringName: e.target.value })}
-                          className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1" />
-                      )}
-                      {m.target === 'existing' && (
-                        <select value={m.gatheringTypeId || ''}
-                          onChange={(e) => setMap(ev.pcoEventId, { gatheringTypeId: Number(e.target.value) })}
+                  <React.Fragment key={ev.pcoEventId}>
+                    <tr className="border-t border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100">
+                      <td className="py-2">
+                        {ev.eventName}
+                        {ev.alreadyImportedThrough && (
+                          <span className="ml-2 inline-block text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                            Imported through {ev.alreadyImportedThrough}
+                          </span>
+                        )}
+                      </td>
+                      <td>{ev.checkinCount} ({ev.sessionCount} dates)</td>
+                      <td>{ev.firstDate ?? '—'} → {ev.lastDate ?? '—'}</td>
+                      <td className="space-x-2">
+                        <select value={m.target}
+                          onChange={(e) => setMap(ev.pcoEventId, { target: e.target.value as Mapping['target'] })}
                           className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1">
-                          <option value="">Choose…</option>
-                          {gatherings.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          <option value="skip">Skip</option>
+                          <option value="new">New gathering</option>
+                          <option value="existing">Existing gathering</option>
                         </select>
-                      )}
-                    </td>
-                  </tr>
+                        {m.target === 'existing' && (
+                          <select value={m.gatheringTypeId || ''}
+                            onChange={(e) => setMap(ev.pcoEventId, { gatheringTypeId: Number(e.target.value) })}
+                            className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1">
+                            <option value="">Choose…</option>
+                            {gatherings.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </select>
+                        )}
+                      </td>
+                    </tr>
+                    {m.target === 'new' && (
+                      <tr className="border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
+                        <td colSpan={4} className="py-3">
+                          {renderNewGatheringPanel(ev, m)}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
