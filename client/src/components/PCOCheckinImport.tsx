@@ -262,11 +262,14 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
         )}
         <label className="text-sm text-gray-700 dark:text-gray-300 block">Assign staff users
           <select
-            value={ua.mode === 'copy' ? `copy:${ua.sourceGatheringTypeId ?? ''}` : ua.mode}
+            value={ua.mode === 'copy' && ua.sourceGatheringTypeId ? `copy:${ua.sourceGatheringTypeId}` : (ua.mode === 'copy' ? 'none' : ua.mode)}
             onChange={(e) => {
               const v = e.target.value;
               if (v === 'none' || v === 'me') setAssignment(ev.pcoEventId, { mode: v, sourceGatheringTypeId: undefined });
-              else if (v.startsWith('copy:')) setAssignment(ev.pcoEventId, { mode: 'copy', sourceGatheringTypeId: Number(v.slice(5)) });
+              else if (v.startsWith('copy:')) {
+                const parsed = Number(v.slice(5));
+                if (parsed) setAssignment(ev.pcoEventId, { mode: 'copy', sourceGatheringTypeId: parsed });
+              }
             }}
             className={`block ${inputCls}`}>
             <option value="none">None</option>
