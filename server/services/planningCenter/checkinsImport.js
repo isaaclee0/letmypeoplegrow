@@ -177,6 +177,7 @@ function median(nums) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+// Gaps of 9-11 or 17-25 days return null: the cadence is ambiguous, so we treat it as irregular.
 function classifyFrequency(medGap) {
   if (medGap >= 6 && medGap <= 8) return 'weekly';
   if (medGap >= 12 && medGap <= 16) return 'biweekly';

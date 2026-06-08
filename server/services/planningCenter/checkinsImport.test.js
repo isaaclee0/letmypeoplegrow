@@ -333,6 +333,13 @@ test('deriveSchedule flags inconsistent weekday as irregular', () => {
   assert.strictEqual(s.irregular, true);
 });
 
+test('deriveSchedule deduplicates same-day dates before analysis', () => {
+  const s = deriveSchedule(['2025-01-05', '2025-01-05', '2025-01-12', '2025-01-19'], null);
+  assert.strictEqual(s.frequency, 'weekly');
+  assert.strictEqual(s.dayOfWeek, 'Sunday');
+  assert.strictEqual(s.irregular, false);
+});
+
 // ── Task 2: summarizeEvents attaches suggestedSchedule ────────────────────────
 
 test('summarizeEvents attaches a suggestedSchedule per event', () => {
