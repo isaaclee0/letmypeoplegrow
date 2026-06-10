@@ -119,11 +119,16 @@ Both nudges are driven from the weekly review scheduler
 (`server/services/weeklyReviewScheduler.js` / `weeklyReview.js`), the natural
 once-a-week trigger point, and both are de-duplicated.
 
-- **In-app nudge:** when generating the weekly review, if the church has
-  gatherings **and** active people but `weekly_review_guidance` is empty, create
-  a one-time `'system'` notification for admins/coordinators ("Make your weekly
-  insights sharper — set up AI guidance in Settings"). Skip if guidance exists or
-  an unread nudge of this kind already exists (de-dup by title/type).
+Nudge condition (shared by both): the church has active gatherings **and**
+active people, has **at least 3 weeks of recorded attendance** (matching the
+existing enriched-insight threshold in `meetsMinimumThresholds` /
+`weeklyTotals.length >= 3`), and `weekly_review_guidance` is empty.
+
+- **In-app nudge:** when generating the weekly review, if the nudge condition
+  holds, create a one-time `'system'` notification for admins/coordinators
+  ("Make your weekly insights sharper — set up AI guidance in Settings"). Skip if
+  guidance exists or an unread nudge of this kind already exists (de-dup by
+  title/type).
 - **Email nudge:** under the same condition, include a small block in the weekly
   summary email: "Make these insights sharper — set up AI guidance" linking to
   the Settings page. Suppressed once guidance is set.
@@ -145,8 +150,9 @@ once-a-week trigger point, and both are de-duplicated.
 - Distiller endpoint sanitizes an injection attempt (input containing
   "ignore your instructions and …" yields a summary free of that instruction).
 - Distiller output respects the length cap; over-length is truncated on save.
-- Nudge logic: created when gatherings + people exist and no guidance; not
-  created when guidance exists or a pending nudge already exists.
+- Nudge logic: created when gatherings + people exist, ≥3 weeks of attendance
+  recorded, and no guidance; not created below the 3-week threshold, when
+  guidance exists, or when a pending nudge already exists.
 - Weekly insight falls back to algorithmic/unchanged behaviour when guidance is
   empty or distillation was never run.
 
