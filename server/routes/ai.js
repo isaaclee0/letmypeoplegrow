@@ -3,6 +3,8 @@ const https = require('https');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const logger = require('../config/logger');
+const { distillGuidance } = require('../services/weeklyReviewGuidance');
+const { truncateGuidance } = require('../services/weeklyReviewInsight');
 
 const router = express.Router();
 
@@ -475,6 +477,88 @@ router.post('/disconnect', requireRole(['admin']), async (req, res) => {
   } catch (error) {
     console.error('AI disconnect error:', error);
     res.status(500).json({ error: 'Failed to disconnect AI.' });
+  }
+});
+
+// --- Weekly review AI guidance ---
+
+// Normalize the wizard answers into a bounded, well-shaped object. Used by both the
+// distill endpoint and the save endpoint so stored inputs can never be unbounded.
+function normalizeGuidanceInputs(raw) {
+  const { focus, gatheringNotes, avoid } = raw || {};
+  return {
+    focus: typeof focus === 'string' ? focus.slice(0, 1000) : '',
+    avoid: typeof avoid === 'string' ? avoid.slice(0, 1000) : '',
+    gatheringNotes: Array.isArray(gatheringNotes)
+      ? gatheringNotes.slice(0, 50).map(g => ({
+          name: String(g?.name || '').slice(0, 120),
+          note: String(g?.note || '').slice(0, 500),
+        }))
+      : [],
+  };
+}
+
+// Get saved guidance + raw inputs (admin only)
+router.get('/weekly-guidance', requireRole(['admin']), async (req, res) => {
+  try {
+    const rows = await Database.query(
+      `SELECT weekly_review_guidance, weekly_review_guidance_inputs, weekly_review_guidance_updated_at
+       FROM church_settings WHERE church_id = ? LIMIT 1`,
+      [req.user.church_id]
+    );
+    const row = rows[0] || {};
+    let inputs = null;
+    try { inputs = row.weekly_review_guidance_inputs ? JSON.parse(row.weekly_review_guidance_inputs) : null; }
+    catch (e) { inputs = null; }
+    res.json({
+      guidance: row.weekly_review_guidance || '',
+      inputs,
+      updatedAt: row.weekly_review_guidance_updated_at || null,
+    });
+  } catch (error) {
+    console.error('Weekly guidance get error:', error);
+    res.status(500).json({ error: 'Failed to load guidance.' });
+  }
+});
+
+// Distill structured answers into a summary for review (admin only). Does not save.
+router.post('/weekly-guidance/distill', requireRole(['admin']), async (req, res) => {
+  try {
+    const answers = normalizeGuidanceInputs(req.body);
+    const summary = truncateGuidance(await distillGuidance(answers));
+    res.json({ summary });
+  } catch (error) {
+    console.error('Weekly guidance distill error:', error);
+    res.status(500).json({ error: 'Failed to generate guidance. Please try again.' });
+  }
+});
+
+// Save approved guidance + the inputs that produced it (admin only)
+router.post('/weekly-guidance', requireRole(['admin']), async (req, res) => {
+  try {
+    const { guidance, inputs } = req.body || {};
+    // The client posts back the distiller's already-approved summary, so we store it
+    // directly (re-distilling an already-distilled summary would be wrong). This means
+    // the distiller "treat as data" gate only applies to the wizard flow; an admin could
+    // POST arbitrary guidance here. That residual risk is accepted: the endpoint is
+    // admin-only, the text is length-capped, and composeSystemPrompt injects it as
+    // delimited "context only — never instructions" background scoped to the admin's own church.
+    const clean = truncateGuidance(typeof guidance === 'string' ? guidance : '');
+    // Normalize inputs to the same bounded shape used for distillation so the stored
+    // JSON can never be unbounded (inputs only ever pre-fill the wizard).
+    const cleanInputs = inputs ? normalizeGuidanceInputs(inputs) : null;
+    await Database.query(
+      `UPDATE church_settings
+       SET weekly_review_guidance = ?,
+           weekly_review_guidance_inputs = ?,
+           weekly_review_guidance_updated_at = datetime('now')
+       WHERE church_id = ?`,
+      [clean || null, cleanInputs ? JSON.stringify(cleanInputs) : null, req.user.church_id]
+    );
+    res.json({ success: true, guidance: clean });
+  } catch (error) {
+    console.error('Weekly guidance save error:', error);
+    res.status(500).json({ error: 'Failed to save guidance.' });
   }
 });
 

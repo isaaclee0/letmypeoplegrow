@@ -902,6 +902,13 @@ export const aiAPI = {
   ask: (question: string, conversationId?: number | null) =>
     api.post('/ai/ask', { question, conversationId }, { timeout: 60000 }),
 
+  // Weekly guidance
+  getWeeklyGuidance: () => api.get('/ai/weekly-guidance'),
+  distillWeeklyGuidance: (payload: { focus: string; gatheringNotes: { name: string; note: string }[]; avoid: string }) =>
+    api.post('/ai/weekly-guidance/distill', payload),
+  saveWeeklyGuidance: (payload: { guidance: string; inputs: { focus: string; gatheringNotes: { name: string; note: string }[]; avoid: string } }) =>
+    api.post('/ai/weekly-guidance', payload),
+
   // Chat history
   getConversations: () => api.get('/ai/conversations'),
   createConversation: (title?: string) => api.post('/ai/conversations', { title }),

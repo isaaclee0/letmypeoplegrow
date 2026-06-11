@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import IntegrationsTab from '../components/integrations/IntegrationsTab';
-import { usersAPI, settingsAPI, visitorConfigAPI, takeoutAPI } from '../services/api';
+import { usersAPI, settingsAPI, visitorConfigAPI, takeoutAPI, aiAPI } from '../services/api';
+import WeeklyReviewGuidanceWizard from '../components/WeeklyReviewGuidanceWizard';
 import logger from '../utils/logger';
 import { getChildBadgeStyles } from '../utils/colorUtils';
 import BadgeIcon, { BADGE_ICON_OPTIONS, BadgeIconType } from '../components/icons/BadgeIcon';
@@ -67,6 +68,8 @@ const SettingsPage: React.FC = () => {
   const [weeklyReviewTestSending, setWeeklyReviewTestSending] = useState(false);
   const [weeklyReviewSuccess, setWeeklyReviewSuccess] = useState('');
   const [weeklyReviewError, setWeeklyReviewError] = useState('');
+  const [guidanceWizardOpen, setGuidanceWizardOpen] = useState(false);
+  const [guidanceSet, setGuidanceSet] = useState(false);
   const [caregiverDigestTestSending, setCaregiverDigestTestSending] = useState(false);
   const [caregiverDigestSuccess, setCaregiverDigestSuccess] = useState('');
   const [caregiverDigestError, setCaregiverDigestError] = useState('');
@@ -317,6 +320,11 @@ const SettingsPage: React.FC = () => {
         logger.error('Failed to load weekly review settings:', err);
       }).finally(() => {
         setWeeklyReviewLoading(false);
+      });
+      aiAPI.getWeeklyGuidance().then(res => {
+        setGuidanceSet(!!res.data?.guidance);
+      }).catch(() => {
+        // Non-critical — ignore errors loading guidance status
       });
     }
   }, [activeTab, user?.role]);
@@ -1100,6 +1108,25 @@ const SettingsPage: React.FC = () => {
                       </button>
                     </div>
 
+                    {/* AI insight guidance */}
+                    <div className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-700">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">AI insight guidance</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                          {guidanceSet
+                            ? 'Configured — the weekly insight uses your church context.'
+                            : 'Not set up yet — help the AI understand your gatherings.'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setGuidanceWizardOpen(true)}
+                        className="ml-4 shrink-0 inline-flex items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
+                      >
+                        {guidanceSet ? 'Edit' : 'Set up'}
+                      </button>
+                    </div>
+
                     {/* Caregiver absence threshold */}
                     <div className="flex items-center justify-between py-3 border-t border-gray-100 dark:border-gray-700">
                       <div>
@@ -1298,6 +1325,12 @@ const SettingsPage: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      <WeeklyReviewGuidanceWizard
+        isOpen={guidanceWizardOpen}
+        onClose={() => setGuidanceWizardOpen(false)}
+        onSaved={() => setGuidanceSet(true)}
+      />
 
     </div>
   );
