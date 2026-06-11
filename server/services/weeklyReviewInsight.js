@@ -186,7 +186,8 @@ async function generateInsight(reviewData, options = {}) {
       );
       guidance = rows[0]?.weekly_review_guidance || '';
     } catch (e) {
-      // Non-fatal: fall back to base prompt
+      // Non-fatal: fall back to base prompt (distinguish a real DB error from "no guidance set")
+      console.warn('Weekly review: failed to load guidance, using base prompt:', e.message);
     }
     const systemPrompt = composeSystemPrompt(guidance);
 
