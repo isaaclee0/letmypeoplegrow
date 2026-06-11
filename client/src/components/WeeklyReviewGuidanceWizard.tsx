@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import { aiAPI, gatheringsAPI } from '../services/api';
+import { aiAPI, gatheringsAPI, GatheringType } from '../services/api';
 
 interface GatheringNote {
   name: string;
@@ -25,10 +25,12 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
   const [answers, setAnswers] = useState<Answers>({ focus: '', gatheringNotes: [], avoid: '' });
   const [summary, setSummary] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
     setStage('edit');
     setError('');
     setSummary('');
@@ -39,8 +41,9 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
           gatheringsAPI.getAll(),
           aiAPI.getWeeklyGuidance(),
         ]);
+        if (cancelled) return;
         const gatherings = (gRes.data?.gatherings || []).filter(
-          (g: any) => g.isActive === true || g.isActive === undefined
+          (g: GatheringType) => g.isActive
         );
         const savedInputs = gdRes.data?.inputs as Answers | null;
         const noteByName = new Map<string, string>(
@@ -49,17 +52,19 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
         setAnswers({
           focus: savedInputs?.focus || '',
           avoid: savedInputs?.avoid || '',
-          gatheringNotes: gatherings.map((g: any) => ({
+          gatheringNotes: gatherings.map((g: GatheringType) => ({
             name: g.name,
             note: noteByName.get(g.name) || '',
           })),
         });
       } catch {
+        if (cancelled) return;
         setError('Could not load your gatherings. Please try again.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [isOpen]);
 
   const updateNote = (idx: number, note: string) =>
@@ -90,12 +95,15 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
   };
 
   const handleSave = async () => {
+    setSaving(true);
     try {
       await aiAPI.saveWeeklyGuidance({ guidance: summary, inputs: answers });
       onSaved?.(summary);
       onClose();
     } catch {
       setError('Failed to save. Please try again.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -114,6 +122,7 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
             </h3>
             <button
               onClick={onClose}
+              aria-label="Close"
               className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               <XMarkIcon className="h-6 w-6" />
@@ -224,10 +233,11 @@ const WeeklyReviewGuidanceWizard: React.FC<Props> = ({ isOpen, onClose, onSaved 
                   Back to answers
                 </button>
                 <button
-                  className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={handleSave}
+                  disabled={saving}
                 >
-                  Save guidance
+                  {saving ? 'Saving…' : 'Save guidance'}
                 </button>
               </div>
             </div>
