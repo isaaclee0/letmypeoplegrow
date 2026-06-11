@@ -152,6 +152,15 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_checkin_import_state')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_checkin_import_state TEXT');
       }
+      if (!settingsCols.some(c => c.name === 'weekly_review_guidance')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN weekly_review_guidance TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'weekly_review_guidance_inputs')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN weekly_review_guidance_inputs TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'weekly_review_guidance_updated_at')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN weekly_review_guidance_updated_at TEXT');
+      }
 
       // Migrate families: add planning_center_id if missing
       const familiesCols = db.prepare('PRAGMA table_info(families)').all();
