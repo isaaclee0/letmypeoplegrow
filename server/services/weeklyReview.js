@@ -220,6 +220,7 @@ async function generateWeeklyReviewData(churchId) {
   }
 
   return {
+    churchId,
     churchName,
     timezone,
     weekStartDate: startDate,
