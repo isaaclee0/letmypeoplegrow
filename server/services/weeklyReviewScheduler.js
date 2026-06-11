@@ -188,26 +188,31 @@ async function processChurch(church) {
       );
       const hasGuidance = !!(guidanceRow[0]?.weekly_review_guidance || '').trim();
 
-      const peopleRow = await Database.query(
-        `SELECT COUNT(*) as cnt FROM individuals WHERE is_active = 1 AND church_id = ?`,
-        [churchId]
-      );
-      const peopleCount = peopleRow[0]?.cnt || 0;
+      // Only run the extra people/pending lookups when a nudge is even possible
+      // (guidance not yet set). Established churches short-circuit here.
+      let nudgeGuidance = false;
+      if (!hasGuidance) {
+        const peopleRow = await Database.query(
+          `SELECT COUNT(*) as cnt FROM individuals WHERE is_active = 1 AND church_id = ?`,
+          [churchId]
+        );
+        const peopleCount = peopleRow[0]?.cnt || 0;
 
-      const pendingRow = await Database.query(
-        `SELECT COUNT(*) as cnt FROM notifications
-         WHERE church_id = ? AND notification_type = 'system' AND title = ? AND is_read = 0`,
-        [churchId, NUDGE_TITLE]
-      );
-      const pendingNudge = (pendingRow[0]?.cnt || 0) > 0;
+        const pendingRow = await Database.query(
+          `SELECT COUNT(*) as cnt FROM notifications
+           WHERE church_id = ? AND notification_type = 'system' AND title = ? AND is_read = 0`,
+          [churchId, NUDGE_TITLE]
+        );
+        const pendingNudge = (pendingRow[0]?.cnt || 0) > 0;
 
-      const nudgeGuidance = shouldNudgeForGuidance({
-        hasGuidance,
-        gatheringCount: reviewData.gatherings.length,
-        peopleCount,
-        weeksTracked: reviewData.weeklyTotals.length,
-        pendingNudge,
-      });
+        nudgeGuidance = shouldNudgeForGuidance({
+          hasGuidance,
+          gatheringCount: reviewData.gatherings.length,
+          peopleCount,
+          weeksTracked: reviewData.weeklyTotals.length,
+          pendingNudge,
+        });
+      }
 
       // Generate insight
       let insight = null;
