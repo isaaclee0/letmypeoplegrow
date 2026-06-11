@@ -4,6 +4,7 @@ const { generateWeeklyReviewData, detectSendDay } = require('./weeklyReview');
 const { generateInsight, saveInsightAsConversation } = require('./weeklyReviewInsight');
 const { sendWeeklyReviewEmail } = require('../utils/email');
 const { sendWeeklyCaregiverDigests } = require('./weeklyCaregiverEmail');
+const { shouldNudgeForGuidance } = require('./weeklyReviewGuidance');
 
 let cronJob = null;
 
@@ -179,6 +180,35 @@ async function processChurch(church) {
         }
       }
 
+      // Decide whether to nudge the church to set up AI guidance.
+      const NUDGE_TITLE = 'Sharpen your weekly insights';
+      const guidanceRow = await Database.query(
+        `SELECT weekly_review_guidance FROM church_settings WHERE church_id = ? LIMIT 1`,
+        [churchId]
+      );
+      const hasGuidance = !!(guidanceRow[0]?.weekly_review_guidance || '').trim();
+
+      const peopleRow = await Database.query(
+        `SELECT COUNT(*) as cnt FROM individuals WHERE is_active = 1 AND church_id = ?`,
+        [churchId]
+      );
+      const peopleCount = peopleRow[0]?.cnt || 0;
+
+      const pendingRow = await Database.query(
+        `SELECT COUNT(*) as cnt FROM notifications
+         WHERE church_id = ? AND notification_type = 'system' AND title = ? AND is_read = 0`,
+        [churchId, NUDGE_TITLE]
+      );
+      const pendingNudge = (pendingRow[0]?.cnt || 0) > 0;
+
+      const nudgeGuidance = shouldNudgeForGuidance({
+        hasGuidance,
+        gatheringCount: reviewData.gatherings.length,
+        peopleCount,
+        weeksTracked: reviewData.weeklyTotals.length,
+        pendingNudge,
+      });
+
       // Generate insight
       let insight = null;
       if (s.weekly_review_email_include_insight) {
@@ -190,7 +220,7 @@ async function processChurch(church) {
       const weekLabel = `${reviewData.weekStartDate} to ${reviewData.weekEndDate}`;
       for (const recipient of reviewData.recipients) {
         try {
-          await sendWeeklyReviewEmail(recipient.email, recipient.first_name, reviewData, insight);
+          await sendWeeklyReviewEmail(recipient.email, recipient.first_name, reviewData, insight, { showGuidanceNudge: nudgeGuidance });
           sentCount++;
           // Save insight as AI conversation so user can follow up
           if (insight) {
@@ -210,6 +240,25 @@ async function processChurch(church) {
 
       if (sentCount > 0) {
         console.log(`Weekly review: Sent ${sentCount} email(s) for church ${churchId} (${reviewData.churchName})`);
+      }
+
+      // One-time in-app nudge to admins/coordinators to set up AI guidance.
+      if (nudgeGuidance) {
+        const admins = await Database.query(
+          `SELECT id FROM users
+           WHERE role IN ('admin', 'coordinator') AND is_active = 1 AND church_id = ?`,
+          [churchId]
+        );
+        for (const admin of admins) {
+          await Database.query(
+            `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
+             VALUES (?, ?, ?, 'system', ?)`,
+            [admin.id, NUDGE_TITLE,
+             'Tell us a little about your gatherings so the weekly AI insight understands your context (e.g. which gatherings are youth groups). Set it up under Settings → Weekly Review Email.',
+             churchId]
+          );
+        }
+        console.log(`Weekly review: created guidance nudge for ${admins.length} user(s) in church ${churchId}`);
       }
 
       // Send caregiver digest emails on the same day

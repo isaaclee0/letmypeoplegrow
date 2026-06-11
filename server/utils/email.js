@@ -330,7 +330,7 @@ Log in to the admin panel to approve or reject this organisation: ${adminPanelUr
   });
 };
 
-const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
+const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight, options = {}) => {
   const churchName = reviewData.churchName;
   const subject = `${churchName} — Weekly Gathering Review`;
 
@@ -379,6 +379,18 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
 
   // Follow-up section
   const appUrl = process.env.CLIENT_URL || 'https://app.letmypeoplegrow.com.au';
+  const guidanceNudgeHtml = options.showGuidanceNudge ? `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 24px;">
+      <tr>
+        <td style="background: #f8fafc; border: 1px dashed #cbd5e1; padding: 16px; border-radius: 8px;">
+          <div style="font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; font-weight: 600; color: #334155; margin-bottom: 6px; font-size: 14px;">Make these insights sharper</div>
+          <div style="color: #475569; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; line-height: 1.6;">
+            Tell us a little about your gatherings (for example, which are youth groups) so this weekly insight understands your context.
+            <a href="${appUrl}/app/settings" style="color: #1e40af; font-weight: 600;">Set up AI guidance &rarr;</a>
+          </div>
+        </td>
+      </tr>
+    </table>` : '';
   let followUpHtml = '';
   if (!reviewData.gettingStarted && reviewData.followUpPeople && reviewData.followUpPeople.length > 0) {
     const peopleRows = reviewData.followUpPeople.map(p => {
@@ -501,7 +513,7 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
                     </tr>
                   </table>
 
-                  ${reviewData.gettingStarted ? gettingStartedHtml : `${followUpHtml}${visitorBreakdownHtml}${insightHtml}`}
+                  ${reviewData.gettingStarted ? gettingStartedHtml : `${followUpHtml}${visitorBreakdownHtml}${insightHtml}${guidanceNudgeHtml}`}
 
                   <p style="margin-top: 28px; color: #6b7280; font-size: 14px;">Blessings,<br><strong style="color: #374151;">${churchName}</strong></p>
                 </td>
@@ -562,6 +574,9 @@ const sendWeeklyReviewEmail = async (email, firstName, reviewData, insight) => {
   }
 
   const insightText = insight ? `\nWeekly Insight:\n${insight.replace(/<[^>]*>/g, '')}\n` : '';
+  const guidanceNudgeText = options.showGuidanceNudge
+    ? `\nMake these insights sharper: tell us about your gatherings so the weekly insight understands your context. Set up AI guidance: ${appUrl}/app/settings\n`
+    : '';
 
   // Getting started plain text
   let gettingStartedText = '';
@@ -581,7 +596,7 @@ Here's how your gatherings went this week:
 ${gatheringCardsText}
 
 Total attendance: ${reviewData.totalAttendance}${reviewData.totalVisitors > 0 ? ` | ${reviewData.totalVisitors} visitors` : ''}
-${reviewData.gettingStarted ? gettingStartedText : `${followUpText}${visitorBreakdownText}${insightText}`}
+${reviewData.gettingStarted ? gettingStartedText : `${followUpText}${visitorBreakdownText}${insightText}${guidanceNudgeText}`}
 Blessings,
 ${churchName}
 
