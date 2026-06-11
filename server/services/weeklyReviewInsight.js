@@ -177,6 +177,7 @@ async function generateInsight(reviewData, options = {}) {
   try {
     const context = buildContext(reviewData);
 
+    // Lazy require to avoid a circular dependency (database -> ... -> this module).
     const Database = require('../config/database');
     let guidance = '';
     try {
