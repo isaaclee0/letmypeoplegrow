@@ -6,7 +6,7 @@ There's no way to see a single person's full attendance record. The closest exis
 
 ## Solution
 
-On the People page, checking exactly one person reveals a "View Attendance" button in the selection toolbar. Clicking it opens a modal showing that person's full attendance history as a table (one row per session, across all their gatherings), with a summary header carried over from the old popup, and a CSV export button. The old `AttendanceInfoButton` popup is removed — this modal replaces it.
+On the People page, checking exactly one person reveals a "View Attendance" button in the floating action button bar. Clicking it opens a modal showing that person's full attendance history as a table (one row per session, across all their gatherings), with a summary header carried over from the old popup, and a CSV export button. The old `AttendanceInfoButton` popup is removed — this modal replaces it.
 
 ## Data Model
 
@@ -46,8 +46,8 @@ This is the only caller of this endpoint today (`AttendanceInfoButton`, being re
 
 ### `PeoplePage.tsx`
 
-- Remove `AttendanceInfoButton` and its per-card info icon.
-- Add a "View Attendance" button to the selection toolbar (next to "Select All" / "N selected … Clear"), visible only when `selectedPeople.length === 1`.
+- Remove `AttendanceInfoButton` and its per-card info icon (already dead code in the current file — not rendered anywhere, only present in an untracked `.backup` file).
+- Add a "View Attendance" button to the existing floating action button bar (the same bottom-right stack that already holds "Edit Selected" / "Archive Selected" / "Merge"), visible only when `selectedPeople.length === 1`.
 - Clicking it opens `AttendanceHistoryModal` with `personId={selectedPeople[0]}`.
 
 ### `AttendanceHistoryModal.tsx` (new, in `client/src/components/people/`)
