@@ -710,6 +710,25 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
       });
     }
 
+    // Get full session-level history (present and absent), all-time, across all
+    // standard-mode gatherings. Headcount-mode gatherings have no per-individual
+    // attendance_records rows, so the attendance_type filter is defensive.
+    const fullHistory = await Database.query(`
+      SELECT
+        as_table.session_date,
+        gt.name as gathering_name,
+        gt.id as gathering_id,
+        ar.present
+      FROM attendance_records ar
+      JOIN attendance_sessions as_table ON ar.session_id = as_table.id
+      JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
+      WHERE ar.individual_id = ?
+        AND ar.church_id = ?
+        AND gt.attendance_type != 'headcount'
+        AND as_table.excluded_from_stats = 0
+      ORDER BY as_table.session_date DESC
+    `, [id, req.user.church_id]);
+
     const response = {
       lastAttendance: lastAttendance.length > 0 ? {
         date: lastAttendance[0].session_date,
@@ -717,7 +736,13 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
         gatheringId: lastAttendance[0].gathering_id,
         recordedAt: lastAttendance[0].updated_at
       } : null,
-      gatheringRegularity: Array.from(gatheringRegularity.values())
+      gatheringRegularity: Array.from(gatheringRegularity.values()),
+      history: fullHistory.map(row => ({
+        date: row.session_date,
+        gatheringId: row.gathering_id,
+        gatheringName: row.gathering_name,
+        present: !!row.present
+      }))
     };
 
     res.json(response);
