@@ -31,7 +31,6 @@ import {
   DocumentTextIcon,
   CalendarDaysIcon
 } from '@heroicons/react/24/outline';
-import { format } from 'date-fns';
 import { parseISO } from 'date-fns';
 
 // Type definitions
