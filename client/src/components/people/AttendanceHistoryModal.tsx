@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { format, parseISO } from 'date-fns';
@@ -55,19 +55,23 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
 
   const isMultiPerson = people.length > 1;
+  const requestIdRef = useRef(0);
 
   const fetchHistory = useCallback(async () => {
     if (people.length === 0) return;
+    const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
     try {
       if (people.length === 1) {
         const response = await individualsAPI.getAttendanceHistory(people[0].id);
+        if (requestId !== requestIdRef.current) return;
         const data: AttendanceHistoryResponse = response.data;
         setSummary({ lastAttendance: data.lastAttendance, gatheringRegularity: data.gatheringRegularity });
         setHistory(data.history);
       } else {
         const responses = await Promise.all(people.map(p => individualsAPI.getAttendanceHistory(p.id)));
+        if (requestId !== requestIdRef.current) return;
         const merged: AttendanceHistoryEntry[] = [];
         responses.forEach((response, index) => {
           const data: AttendanceHistoryResponse = response.data;
@@ -81,11 +85,14 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
         setHistory(merged);
       }
     } catch (err: any) {
+      if (requestId !== requestIdRef.current) return;
       setError(err.response?.data?.error || 'Failed to fetch attendance history');
       setSummary(null);
       setHistory(null);
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [people]);
 
