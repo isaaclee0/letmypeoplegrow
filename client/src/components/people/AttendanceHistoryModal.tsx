@@ -1,9 +1,14 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { format, parseISO } from 'date-fns';
 import { individualsAPI } from '../../services/api';
-import { buildAttendanceHistoryCsv, filterHistoryByGathering, AttendanceHistoryEntry } from '../../utils/attendanceHistoryCsv';
+import {
+  buildAttendanceHistoryCsv,
+  filterHistoryByGathering,
+  filterHistoryByPerson,
+  AttendanceHistoryEntry
+} from '../../utils/attendanceHistoryCsv';
 
 interface AttendanceHistoryResponse {
   lastAttendance: {
@@ -23,8 +28,7 @@ interface AttendanceHistoryResponse {
 interface AttendanceHistoryModalProps {
   isOpen: boolean;
   onClose: () => void;
-  personId: number | null;
-  personName: string;
+  people: Array<{ id: number; name: string }>;
 }
 
 const formatDate = (dateString: string) => {
@@ -38,47 +42,80 @@ const formatDate = (dateString: string) => {
 const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
   isOpen,
   onClose,
-  personId,
-  personName
+  people
 }) => {
-  const [data, setData] = useState<AttendanceHistoryResponse | null>(null);
+  const [summary, setSummary] = useState<{
+    lastAttendance: AttendanceHistoryResponse['lastAttendance'];
+    gatheringRegularity: AttendanceHistoryResponse['gatheringRegularity'];
+  } | null>(null);
+  const [history, setHistory] = useState<AttendanceHistoryEntry[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedGatheringId, setSelectedGatheringId] = useState<number | null>(null);
+  const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
+
+  const isMultiPerson = people.length > 1;
+  const requestIdRef = useRef(0);
 
   const fetchHistory = useCallback(async () => {
-    if (!personId) return;
+    if (people.length === 0) return;
+    const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
     try {
-      const response = await individualsAPI.getAttendanceHistory(personId);
-      setData(response.data);
+      if (people.length === 1) {
+        const response = await individualsAPI.getAttendanceHistory(people[0].id);
+        if (requestId !== requestIdRef.current) return;
+        const data: AttendanceHistoryResponse = response.data;
+        setSummary({ lastAttendance: data.lastAttendance, gatheringRegularity: data.gatheringRegularity });
+        setHistory(data.history);
+      } else {
+        const responses = await Promise.all(people.map(p => individualsAPI.getAttendanceHistory(p.id)));
+        if (requestId !== requestIdRef.current) return;
+        const merged: AttendanceHistoryEntry[] = [];
+        responses.forEach((response, index) => {
+          const data: AttendanceHistoryResponse = response.data;
+          const person = people[index];
+          data.history.forEach(row => {
+            merged.push({ ...row, personId: person.id, personName: person.name });
+          });
+        });
+        merged.sort((a, b) => b.date.localeCompare(a.date));
+        setSummary(null);
+        setHistory(merged);
+      }
     } catch (err: any) {
+      if (requestId !== requestIdRef.current) return;
       setError(err.response?.data?.error || 'Failed to fetch attendance history');
-      setData(null);
+      setSummary(null);
+      setHistory(null);
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [personId]);
+  }, [people]);
 
   useEffect(() => {
-    if (isOpen && personId) {
+    if (isOpen && people.length > 0) {
       setSelectedGatheringId(null);
+      setSelectedPersonId(null);
       fetchHistory();
     }
-  }, [isOpen, personId, fetchHistory]);
+  }, [isOpen, people, fetchHistory]);
 
   const gatheringOptions = useMemo(() => {
-    if (!data) return [];
+    if (!history) return [];
     const seen = new Map<number, string>();
-    data.history.forEach(row => seen.set(row.gatheringId, row.gatheringName));
+    history.forEach(row => seen.set(row.gatheringId, row.gatheringName));
     return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
-  }, [data]);
+  }, [history]);
 
   const filteredHistory = useMemo(() => {
-    if (!data) return [];
-    return filterHistoryByGathering(data.history, selectedGatheringId);
-  }, [data, selectedGatheringId]);
+    if (!history) return [];
+    const byGathering = filterHistoryByGathering(history, selectedGatheringId);
+    return filterHistoryByPerson(byGathering, selectedPersonId);
+  }, [history, selectedGatheringId, selectedPersonId]);
 
   const handleExportCsv = () => {
     const csv = buildAttendanceHistoryCsv(filteredHistory);
@@ -86,21 +123,28 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance-${personName.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.csv`;
+    const dateSuffix = new Date().toISOString().split('T')[0];
+    a.download = isMultiPerson
+      ? `attendance-${people.length}-people-${dateSuffix}.csv`
+      : `attendance-${people[0].name.replace(/\s+/g, '-').toLowerCase()}-${dateSuffix}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  if (!isOpen || !personId) return null;
+  if (!isOpen || people.length === 0) return null;
+
+  const title = isMultiPerson
+    ? `Attendance History: ${people.length} people`
+    : `Attendance History: ${people[0].name}`;
 
   return createPortal(
     <div className="fixed inset-0 bg-gray-600/50 overflow-y-auto h-full w-full z-50">
       <div className="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white dark:bg-gray-800">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-            Attendance History: {personName}
+            {title}
           </h3>
           <button
             onClick={onClose}
@@ -122,41 +166,64 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
               Retry
             </button>
           </div>
-        ) : data ? (
+        ) : history ? (
           <div className="space-y-4">
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-sm text-gray-700 dark:text-gray-300">
-              {data.lastAttendance ? (
-                <div>Last attended {formatDate(data.lastAttendance.date)} at {data.lastAttendance.gatheringName}</div>
-              ) : (
-                <div>No attendance records</div>
+            {!isMultiPerson && summary && (
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-sm text-gray-700 dark:text-gray-300">
+                {summary.lastAttendance ? (
+                  <div>Last attended {formatDate(summary.lastAttendance.date)} at {summary.lastAttendance.gatheringName}</div>
+                ) : (
+                  <div>No attendance records</div>
+                )}
+                {summary.gatheringRegularity.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-x-4">
+                    {summary.gatheringRegularity.map(g => (
+                      <span key={g.name}>{g.name}: {g.regularity} ({g.attendanceCount}x)</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-4">
+              {isMultiPerson && (
+                <div>
+                  <label htmlFor="personFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Person
+                  </label>
+                  <select
+                    id="personFilter"
+                    value={selectedPersonId ?? ''}
+                    onChange={(e) => setSelectedPersonId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full sm:w-64 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="">All people</option>
+                    {people.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
               )}
-              {data.gatheringRegularity.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-x-4">
-                  {data.gatheringRegularity.map(g => (
-                    <span key={g.name}>{g.name}: {g.regularity} ({g.attendanceCount}x)</span>
-                  ))}
+
+              {gatheringOptions.length > 1 && (
+                <div>
+                  <label htmlFor="gatheringFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Gathering
+                  </label>
+                  <select
+                    id="gatheringFilter"
+                    value={selectedGatheringId ?? ''}
+                    onChange={(e) => setSelectedGatheringId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full sm:w-64 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="">All gatherings</option>
+                    {gatheringOptions.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>
-
-            {gatheringOptions.length > 1 && (
-              <div>
-                <label htmlFor="gatheringFilter" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Gathering
-                </label>
-                <select
-                  id="gatheringFilter"
-                  value={selectedGatheringId ?? ''}
-                  onChange={(e) => setSelectedGatheringId(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full sm:w-64 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                >
-                  <option value="">All gatherings</option>
-                  {gatheringOptions.map(g => (
-                    <option key={g.id} value={g.id}>{g.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-md">
               {filteredHistory.length === 0 ? (
@@ -166,14 +233,20 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
                   <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
                     <tr>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Date</th>
+                      {isMultiPerson && (
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Person</th>
+                      )}
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Gathering</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {filteredHistory.map((row, index) => (
-                      <tr key={`${row.gatheringId}-${row.date}-${index}`}>
+                      <tr key={`${row.personId ?? ''}-${row.gatheringId}-${row.date}-${index}`}>
                         <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{formatDate(row.date)}</td>
+                        {isMultiPerson && (
+                          <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{row.personName}</td>
+                        )}
                         <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{row.gatheringName}</td>
                         <td className="px-4 py-2 text-sm">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${row.present ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -192,7 +265,7 @@ const AttendanceHistoryModal: React.FC<AttendanceHistoryModalProps> = ({
         <div className="mt-6 flex justify-end space-x-3">
           <button
             onClick={handleExportCsv}
-            disabled={!data || filteredHistory.length === 0}
+            disabled={!history || filteredHistory.length === 0}
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
           >
             Export CSV

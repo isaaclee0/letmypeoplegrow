@@ -1216,9 +1216,12 @@ const PeoplePage: React.FC = () => {
     }
   };
 
-  const selectedPersonForHistory = selectedPeople.length === 1
-    ? people.find(person => person.id === selectedPeople[0])
-    : undefined;
+  const selectedPeopleForHistory = useMemo(() => {
+    return selectedPeople
+      .map(id => people.find(person => person.id === id))
+      .filter((p): p is Person => !!p)
+      .map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
+  }, [selectedPeople, people]);
 
   if (isLoading) {
     return (
@@ -2650,7 +2653,7 @@ const PeoplePage: React.FC = () => {
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
-           {selectedPeople.length === 1 && (
+           {selectedPeople.length >= 1 && selectedPeople.length <= 15 && (
              <div className="flex items-center justify-end space-x-3">
                <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   View Attendance
@@ -2915,8 +2918,7 @@ const PeoplePage: React.FC = () => {
       <AttendanceHistoryModal
         isOpen={showAttendanceHistoryModal}
         onClose={() => setShowAttendanceHistoryModal(false)}
-        personId={selectedPersonForHistory?.id ?? null}
-        personName={selectedPersonForHistory ? `${selectedPersonForHistory.firstName} ${selectedPersonForHistory.lastName}` : ''}
+        people={selectedPeopleForHistory}
       />
    </div>
  );
