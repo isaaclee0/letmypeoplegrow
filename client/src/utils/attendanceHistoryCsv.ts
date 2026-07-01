@@ -34,6 +34,7 @@ function csvEscape(value: string): string {
   return value;
 }
 
+// Assumes rows are homogeneous: either all entries carry personName or none do.
 export function buildAttendanceHistoryCsv(rows: AttendanceHistoryEntry[]): string {
   const isMultiPerson = rows.some(row => row.personName !== undefined);
   const headers = isMultiPerson
