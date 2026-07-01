@@ -76,4 +76,5 @@ Client-side, no new dependency. Reuses the exact pattern from `downloadPeopleTSV
 - All-time history, no date-range picker.
 - Combined view across all of a person's gatherings by default, with a `Gathering` column and a filter dropdown to narrow to one gathering.
 - Headcount-mode gatherings never appear in the history (no individual-level data exists for them).
+- The old popup's "Added to System" date (`createdAt`) is intentionally dropped — it's not attendance history, and the new modal's summary only carries over `lastAttendance` and `gatheringRegularity`.
 - No new tests surfaced an existing pattern to extend for `individuals.js` routes during design research; verified manually via the Docker dev stack per project convention, not local builds.
