@@ -10,6 +10,7 @@ import FamilyEditorModal from '../components/people/FamilyEditorModal';
 import AddPeopleModal from '../components/people/AddPeopleModal';
 import MergeModal from '../components/people/MergeModal';
 import NotesModal from '../components/people/NotesModal';
+import AttendanceHistoryModal from '../components/people/AttendanceHistoryModal';
 import DataSecurityInfo from '../components/people/DataSecurityInfo';
 import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
@@ -28,7 +29,7 @@ import {
   XMarkIcon,
   ArrowPathIcon,
   DocumentTextIcon,
-  InformationCircleIcon
+  CalendarDaysIcon
 } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import { parseISO } from 'date-fns';
@@ -98,170 +99,6 @@ interface VisitorConfig {
   localVisitorServiceLimit: number;
   travellerVisitorServiceLimit: number;
 }
-
-// Custom hook for attendance data
-const useAttendanceData = (personId: number | null) => {
-  const [attendanceData, setAttendanceData] = useState<{
-    lastAttendance: {
-      date: string;
-      gatheringName: string;
-      gatheringId: number;
-      recordedAt: string;
-    } | null;
-    gatheringRegularity: Array<{
-      name: string;
-      regularity: string;
-      attendanceCount: number;
-    }>;
-  } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchAttendanceData = useCallback(async () => {
-    if (!personId) {
-      setAttendanceData(null);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const response = await individualsAPI.getAttendanceHistory(personId);
-      setAttendanceData(response.data || response); // Handle both response.data and direct response
-    } catch (err: any) {
-      console.error('Attendance API error:', err); // Debug log
-      setError(err.response?.data?.error || 'Failed to fetch attendance data');
-      setAttendanceData(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [personId]);
-
-  useEffect(() => {
-    if (personId) {
-      fetchAttendanceData();
-    }
-  }, [personId, fetchAttendanceData]);
-
-    return { attendanceData, isLoading, error, refetch: fetchAttendanceData };
-};
-
-// Attendance Info Button Component
-const AttendanceInfoButton: React.FC<{
-  personId: number;
-  createdAt?: string;
-}> = ({ personId, createdAt }) => {
-  const { attendanceData, isLoading, error } = useAttendanceData(personId);
-  const [showModal, setShowModal] = useState(false);
-
-  const formatDate = (dateString: string) => {
-    try {
-      return format(parseISO(dateString), 'MMM d, yyyy');
-    } catch {
-      return dateString;
-    }
-  };
-
-  return (
-    <>
-      <button
-        onClick={() => setShowModal(true)}
-        className="ml-2 text-gray-400 hover:text-blue-500 transition-colors"
-        title="View attendance info"
-      >
-        <InformationCircleIcon className="h-4 w-4" />
-      </button>
-
-      {showModal ? createPortal(
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Attendance Information</h3>
-              <button
-                onClick={() => setShowModal(false)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <XMarkIcon className="h-6 w-6" />
-              </button>
-            </div>
-            
-            {isLoading ? (
-              <div className="text-center py-8">
-                <div className="text-gray-500">Loading attendance data...</div>
-              </div>
-            ) : attendanceData ? (
-              <div className="space-y-4">
-                {attendanceData.lastAttendance ? (
-                  <div>
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Attendance</div>
-                    <div className="text-lg text-gray-900">
-                      {formatDate(attendanceData.lastAttendance.date)} at {attendanceData.lastAttendance.gatheringName}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Attendance</div>
-                    <div className="text-lg text-gray-900 text-gray-500">No attendance records</div>
-                  </div>
-                )}
-                
-                {attendanceData.gatheringRegularity.length > 0 ? (
-                  <div>
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Regularity by Gathering</div>
-                    <div className="space-y-3">
-                      {attendanceData.gatheringRegularity.map((gathering, index) => (
-                                                             <div key={index} className="bg-gray-50 rounded-lg p-3">
-                                       <div className="flex items-center justify-between mb-1">
-                                         <span className="font-medium text-gray-900">{gathering.name}</span>
-                                       </div>
-                                       <div className="flex items-center justify-between">
-                                         <span className="text-sm text-gray-600 dark:text-gray-400 capitalize">{gathering.regularity}</span>
-                                         <span className="text-sm text-gray-600 dark:text-gray-400">{gathering.attendanceCount} times</span>
-                                       </div>
-                                     </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Regularity</div>
-                    <div className="text-lg text-gray-900 text-gray-500">No attendance data available</div>
-                  </div>
-                )}
-                
-                                           {createdAt && (
-                             <div>
-                               <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Added to System</div>
-                               <div className="text-lg text-gray-900">{formatDate(createdAt)}</div>
-                             </div>
-                           )}
-              </div>
-            ) : error ? (
-              <div className="text-center py-8">
-                <div className="text-red-500">Error loading attendance data: {error}</div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-gray-500">No attendance data found</div>
-              </div>
-            )}
-            
-            <div className="mt-6 flex justify-end">
-              <button
-                onClick={() => setShowModal(false)}
-                className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ) : null}
-    </>
-  );
-};
 
 const PeoplePage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -381,6 +218,7 @@ const PeoplePage: React.FC = () => {
   
   // Notes modal state
   const [showNotesModal, setShowNotesModal] = useState(false);
+  const [showAttendanceHistoryModal, setShowAttendanceHistoryModal] = useState(false);
   const [selectedFamilyForNotes, setSelectedFamilyForNotes] = useState<any>(null);
 
   // Visitor configuration state
@@ -1378,6 +1216,10 @@ const PeoplePage: React.FC = () => {
       setError('Failed to export people data');
     }
   };
+
+  const selectedPersonForHistory = selectedPeople.length === 1
+    ? people.find(person => person.id === selectedPeople[0])
+    : undefined;
 
   if (isLoading) {
     return (
@@ -2809,6 +2651,20 @@ const PeoplePage: React.FC = () => {
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
+           {selectedPeople.length === 1 && (
+             <div className="flex items-center justify-end space-x-3">
+               <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                  View Attendance
+               </div>
+               <button
+                  onClick={() => setShowAttendanceHistoryModal(true)}
+                 className="w-14 h-14 bg-green-600 hover:bg-green-700 text-white rounded-lg shadow-lg flex items-center justify-center transition-colors duration-200"
+                  title="View Attendance"
+               >
+                 <CalendarDaysIcon className="h-6 w-6" />
+               </button>
+             </div>
+           )}
            {/* Archive Button - hidden when any selected person is PCO-linked (lifecycle owned by sync) */}
            {!selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncEnabled)) && (
            <div className="flex items-center justify-end space-x-3">
@@ -3055,6 +2911,13 @@ const PeoplePage: React.FC = () => {
           showSuccess(message);
         }}
         family={selectedFamilyForNotes}
+      />
+
+      <AttendanceHistoryModal
+        isOpen={showAttendanceHistoryModal}
+        onClose={() => setShowAttendanceHistoryModal(false)}
+        personId={selectedPersonForHistory?.id ?? null}
+        personName={selectedPersonForHistory ? `${selectedPersonForHistory.firstName} ${selectedPersonForHistory.lastName}` : ''}
       />
    </div>
  );
