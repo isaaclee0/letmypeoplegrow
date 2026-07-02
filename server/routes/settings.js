@@ -504,7 +504,8 @@ router.get('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const rows = await Database.query(
       `SELECT planning_center_sync_indicator, planning_center_auto_archive,
-              planning_center_last_sync, planning_center_last_sync_archived
+              planning_center_last_sync, planning_center_last_sync_archived,
+              planning_center_sync_frequency, planning_center_sync_day
        FROM church_settings WHERE church_id = ? LIMIT 1`,
       [req.user.church_id]
     );
@@ -514,15 +515,19 @@ router.get('/integrations', requireRole(['admin']), async (req, res) => {
       planningCenterAutoArchive: !!(row.planning_center_auto_archive),
       planningCenterLastSync: row.planning_center_last_sync || null,
       planningCenterLastSyncArchived: row.planning_center_last_sync_archived || 0,
+      planningCenterSyncFrequency: row.planning_center_sync_frequency || 'weekly',
+      planningCenterSyncDay: typeof row.planning_center_sync_day === 'number' ? row.planning_center_sync_day : 1,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve integration settings.' });
   }
 });
 
+const PCO_SYNC_FREQUENCIES = ['daily', 'weekly', 'monthly'];
+
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
-    const { planningCenterSyncIndicator, planningCenterAutoArchive } = req.body;
+    const { planningCenterSyncIndicator, planningCenterAutoArchive, planningCenterSyncFrequency, planningCenterSyncDay } = req.body;
     const updates = [];
     const params = [];
     if (typeof planningCenterSyncIndicator === 'boolean') {
@@ -532,6 +537,20 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     if (typeof planningCenterAutoArchive === 'boolean') {
       updates.push('planning_center_auto_archive = ?');
       params.push(planningCenterAutoArchive ? 1 : 0);
+    }
+    if (planningCenterSyncFrequency !== undefined) {
+      if (!PCO_SYNC_FREQUENCIES.includes(planningCenterSyncFrequency)) {
+        return res.status(400).json({ error: 'planningCenterSyncFrequency must be one of daily, weekly, monthly.' });
+      }
+      updates.push('planning_center_sync_frequency = ?');
+      params.push(planningCenterSyncFrequency);
+    }
+    if (planningCenterSyncDay !== undefined) {
+      if (!Number.isInteger(planningCenterSyncDay) || planningCenterSyncDay < 0 || planningCenterSyncDay > 6) {
+        return res.status(400).json({ error: 'planningCenterSyncDay must be an integer between 0 and 6.' });
+      }
+      updates.push('planning_center_sync_day = ?');
+      params.push(planningCenterSyncDay);
     }
     if (updates.length) {
       params.push(req.user.church_id);
