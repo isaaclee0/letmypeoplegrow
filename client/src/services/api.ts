@@ -792,8 +792,12 @@ export const settingsAPI = {
   sendTestWeeklyReview: () => api.post('/settings/weekly-review/test'),
   sendTestCaregiverDigest: () => api.post('/settings/caregiver-digest/test'),
   getIntegrationSettings: () => api.get('/settings/integrations'),
-  updateIntegrationSettings: (data: { planningCenterSyncIndicator?: boolean; planningCenterAutoArchive?: boolean }) =>
-    api.put('/settings/integrations', data),
+  updateIntegrationSettings: (data: {
+    planningCenterSyncIndicator?: boolean;
+    planningCenterAutoArchive?: boolean;
+    planningCenterSyncFrequency?: 'daily' | 'weekly' | 'monthly';
+    planningCenterSyncDay?: number;
+  }) => api.put('/settings/integrations', data),
 };
 
 // Integrations API
