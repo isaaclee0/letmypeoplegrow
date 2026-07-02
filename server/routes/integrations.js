@@ -7,7 +7,8 @@ const Database = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
-const { tallyMembership } = require('../services/planningCenter/summary');
+const { tallyMembership, tallyField } = require('../services/planningCenter/summary');
+const { fetchFieldDefinitions } = require('../services/planningCenter/fieldDefinitions');
 const webSocketService = require('../services/websocket');
 
 const router = express.Router();
@@ -2578,43 +2579,85 @@ router.post('/planning-center/import-people', async (req, res) => {
   }
 });
 
-// Read sync config (allow-list + enabled flag)
-router.get('/planning-center/membership-filter', async (req, res) => {
+// Read sync config (both filter sources + enabled flag)
+router.get('/planning-center/sync-filter', async (req, res) => {
   try {
     const churchId = req.user.church_id;
     const rows = await Database.query(
-      `SELECT planning_center_sync_enabled AS enabled, planning_center_membership_allowlist AS allowlist
+      `SELECT planning_center_sync_enabled AS enabled,
+              planning_center_membership_filter_enabled AS membershipFilterEnabled,
+              planning_center_membership_allowlist AS membershipAllowlistRaw,
+              planning_center_field_filter_enabled AS fieldFilterEnabled,
+              planning_center_field_filters AS fieldFiltersRaw
          FROM church_settings WHERE church_id = ? LIMIT 1`,
       [churchId]
     );
-    let allowlist = [];
-    if (rows.length && rows[0].allowlist) { try { allowlist = JSON.parse(rows[0].allowlist); } catch (_) {} }
-    res.json({ enabled: !!(rows.length && rows[0].enabled), allowlist });
+    let membershipAllowlist = [];
+    let fieldFilters = [];
+    if (rows.length) {
+      if (rows[0].membershipAllowlistRaw) { try { membershipAllowlist = JSON.parse(rows[0].membershipAllowlistRaw); } catch (_) {} }
+      if (rows[0].fieldFiltersRaw) { try { fieldFilters = JSON.parse(rows[0].fieldFiltersRaw); } catch (_) {} }
+    }
+    res.json({
+      enabled: !!(rows.length && rows[0].enabled),
+      membershipFilterEnabled: rows.length ? !!rows[0].membershipFilterEnabled : true,
+      membershipAllowlist,
+      fieldFilterEnabled: !!(rows.length && rows[0].fieldFilterEnabled),
+      fieldFilters,
+    });
   } catch (error) {
-    logger.error('Get PCO membership filter error:', error);
+    logger.error('Get PCO sync filter error:', error);
     res.status(500).json({ error: 'Failed to read sync config.' });
   }
 });
 
 // Write sync config
-router.put('/planning-center/membership-filter', async (req, res) => {
+router.put('/planning-center/sync-filter', async (req, res) => {
   try {
     const churchId = req.user.church_id;
-    const { enabled, allowlist } = req.body;
+    const { enabled, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters } = req.body;
     if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean.' });
-    if (!Array.isArray(allowlist) || !allowlist.every((v) => typeof v === 'string')) {
-      return res.status(400).json({ error: 'allowlist must be an array of strings.' });
+    if (typeof membershipFilterEnabled !== 'boolean') return res.status(400).json({ error: 'membershipFilterEnabled must be a boolean.' });
+    if (typeof fieldFilterEnabled !== 'boolean') return res.status(400).json({ error: 'fieldFilterEnabled must be a boolean.' });
+    if (!Array.isArray(membershipAllowlist) || !membershipAllowlist.every((v) => typeof v === 'string')) {
+      return res.status(400).json({ error: 'membershipAllowlist must be an array of strings.' });
+    }
+    if (!Array.isArray(fieldFilters)) {
+      return res.status(400).json({ error: 'fieldFilters must be an array.' });
+    }
+    for (const rule of fieldFilters) {
+      if (!rule || typeof rule.fieldDefinitionId !== 'string' || !Array.isArray(rule.values) || !rule.values.every((v) => typeof v === 'string')) {
+        return res.status(400).json({ error: 'Each field filter rule needs a fieldDefinitionId and an array of string values.' });
+      }
     }
     await Database.query(
       `UPDATE church_settings
-          SET planning_center_sync_enabled = ?, planning_center_membership_allowlist = ?,
+          SET planning_center_sync_enabled = ?,
+              planning_center_membership_filter_enabled = ?,
+              planning_center_membership_allowlist = ?,
+              planning_center_field_filter_enabled = ?,
+              planning_center_field_filters = ?,
               planning_center_auto_archive = 0
         WHERE church_id = ?`,
-      [enabled ? 1 : 0, JSON.stringify(allowlist), churchId]
+      [
+        enabled ? 1 : 0,
+        membershipFilterEnabled ? 1 : 0,
+        JSON.stringify(membershipAllowlist),
+        fieldFilterEnabled ? 1 : 0,
+        JSON.stringify(fieldFilters),
+        churchId,
+      ]
     );
-    res.json({ success: true, enabled: !!enabled, allowlist });
+    res.json({
+      success: true,
+      enabled: !!enabled,
+      membershipFilterEnabled: !!membershipFilterEnabled,
+      membershipAllowlist,
+      fieldFilterEnabled: !!fieldFilterEnabled,
+      fieldFilters,
+    });
   } catch (error) {
-    logger.error('Set PCO membership filter error:', error);
+    logger.error('Set PCO sync filter error:', error);
     res.status(500).json({ error: 'Failed to save sync config.' });
   }
 });
@@ -2663,6 +2706,40 @@ router.get('/planning-center/membership-summary', async (req, res) => {
   } catch (error) {
     logger.error('PCO membership summary error:', error);
     res.status(500).json({ error: 'Failed to load membership summary.' });
+  }
+});
+
+// Custom field definitions (select/checkbox only) for the field-filter editor
+router.get('/planning-center/field-definitions', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const definitions = await fetchFieldDefinitions(accessToken);
+    res.json({ success: true, definitions });
+  } catch (error) {
+    logger.error('PCO field definitions error:', error);
+    res.status(500).json({ error: 'Failed to load custom field definitions.' });
+  }
+});
+
+// Value distribution for one custom field (person counts only, no check-ins)
+router.get('/planning-center/field-summary', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const fieldDefinitionId = req.query.fieldDefinitionId;
+    if (!fieldDefinitionId || typeof fieldDefinitionId !== 'string') {
+      return res.status(400).json({ error: 'fieldDefinitionId is required.' });
+    }
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const { people } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
+    res.json({ success: true, ...tallyField(people, fieldDefinitionId) });
+  } catch (error) {
+    logger.error('PCO field summary error:', error);
+    res.status(500).json({ error: 'Failed to load field summary.' });
   }
 });
 
