@@ -91,7 +91,7 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
   }, [visible]);
 
   return (
-    <span ref={containerRef} className="relative inline-block">
+    <span ref={containerRef} className="relative block min-w-0">
       <span
         role="button"
         tabIndex={0}
@@ -104,7 +104,7 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
             setVisible(v => !v);
           }
         }}
-        className="cursor-pointer"
+        className="cursor-pointer block min-w-0"
       >
         {children}
       </span>
