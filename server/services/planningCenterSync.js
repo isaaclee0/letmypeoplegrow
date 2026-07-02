@@ -214,20 +214,39 @@ async function applyForChurch(churchId, plan, userId, selections) {
   return applyPlan(churchId, plan, userId, selections);
 }
 
+// ─── Scheduling ──────────────────────────────────────────────────────────────
+
+// Decides whether a church's sync is due to run "tonight" given its configured
+// frequency/day. Weekly day-of-week: 0=Sunday..6=Saturday (JS Date convention).
+function isDueToday(frequency, day, now = new Date()) {
+  if (frequency === 'daily') return true;
+  if (frequency === 'monthly') return now.getDate() === 1;
+  // weekly (default, and fallback for unrecognized frequencies)
+  const targetDay = typeof day === 'number' ? day : 1;
+  return now.getDay() === targetDay;
+}
+
 // ─── Per-church sync ─────────────────────────────────────────────────────────
 
-async function syncChurch(church) {
+async function syncChurch(church, { skipScheduleCheck = false } = {}) {
   const churchId = church.church_id;
   await Database.setChurchContext(churchId, async () => {
     try {
       const settings = await Database.query(
         `SELECT planning_center_sync_enabled, planning_center_auto_archive,
+                planning_center_sync_frequency, planning_center_sync_day,
                 (SELECT user_id FROM user_preferences WHERE church_id = ? AND preference_key = 'planning_center_tokens' LIMIT 1) AS token_user
            FROM church_settings WHERE church_id = ? LIMIT 1`,
         [churchId, churchId]
       );
       const enabled = settings.length && (settings[0].planning_center_sync_enabled || settings[0].planning_center_auto_archive);
       if (!enabled) return;
+
+      if (!skipScheduleCheck) {
+        const frequency = settings[0].planning_center_sync_frequency || 'weekly';
+        const day = settings[0].planning_center_sync_day;
+        if (!isDueToday(frequency, day)) return;
+      }
 
       const accessToken = await getAccessTokenForChurch(churchId);
       if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
@@ -289,16 +308,17 @@ function stop() {
   }
 }
 
-// Allow manual trigger for testing
+// Allow manual trigger for testing — runs unconditionally, bypassing the
+// frequency/day schedule gate (the user explicitly asked for it right now).
 async function runNow() {
   const churches = Database.listChurches();
   for (const church of churches) {
-    await syncChurch(church);
+    await syncChurch(church, { skipScheduleCheck: true });
   }
 }
 
 module.exports = {
-  start, stop, runNow, syncChurch,
+  start, stop, runNow, syncChurch, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
   getCachedPcoPeople, invalidatePcoPeopleCache,
 };

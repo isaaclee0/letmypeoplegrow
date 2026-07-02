@@ -34,6 +34,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [initialAction]);
   const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
+  const [pcSyncFrequency, setPcSyncFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
+  const [pcSyncDay, setPcSyncDay] = useState(1);
   const [pcAllowlist, setPcAllowlist] = useState<string[]>([]);
   const [pcSummary, setPcSummary] = useState<{ membership: string; count: number }[]>([]);
   const [pcSummaryLoading, setPcSummaryLoading] = useState(false);
@@ -76,6 +78,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     setPcConfigSaving(true);
     try {
       await integrationsAPI.savePlanningCenterMembershipFilter({ enabled: pcSyncEnabled, allowlist: pcAllowlist });
+      await settingsAPI.updateIntegrationSettings({
+        planningCenterSyncFrequency: pcSyncFrequency,
+        planningCenterSyncDay: pcSyncDay,
+      });
       setPcConfigDirty(false);
     } catch (e: any) {
       setPlanningCenterError(e.response?.data?.error || 'Failed to save sync settings.');
@@ -129,6 +135,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       loadPcSyncConfig();
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
+        setPcSyncFrequency(r.data.planningCenterSyncFrequency || 'weekly');
+        setPcSyncDay(typeof r.data.planningCenterSyncDay === 'number' ? r.data.planningCenterSyncDay : 1);
       }).catch(() => {});
     }
   }, [status.connected, loadPcSyncConfig]);
@@ -301,6 +309,43 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     onChange={(next) => { setPcAllowlist(next); setPcConfigDirty(true); }}
                     onReload={loadPcSyncConfig}
                   />
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Sync schedule</p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <select
+                      value={pcSyncFrequency}
+                      onChange={(e) => { setPcSyncFrequency(e.target.value as 'daily' | 'weekly' | 'monthly'); setPcConfigDirty(true); }}
+                      className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                    {pcSyncFrequency === 'weekly' && (
+                      <select
+                        value={pcSyncDay}
+                        onChange={(e) => { setPcSyncDay(Number(e.target.value)); setPcConfigDirty(true); }}
+                        className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
+                      >
+                        <option value={0}>Sunday</option>
+                        <option value={1}>Monday</option>
+                        <option value={2}>Tuesday</option>
+                        <option value={3}>Wednesday</option>
+                        <option value={4}>Thursday</option>
+                        <option value={5}>Friday</option>
+                        <option value={6}>Saturday</option>
+                      </select>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {pcSyncFrequency === 'monthly'
+                      ? 'Runs overnight on the 1st of each month.'
+                      : pcSyncFrequency === 'daily'
+                        ? 'Runs every night.'
+                        : 'Runs overnight on the selected day each week.'}
+                  </p>
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">

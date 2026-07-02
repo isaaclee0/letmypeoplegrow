@@ -143,6 +143,12 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_sync_enabled')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_sync_enabled INTEGER DEFAULT 0');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_sync_frequency')) {
+        db.exec("ALTER TABLE church_settings ADD COLUMN planning_center_sync_frequency TEXT DEFAULT 'weekly'");
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_sync_day')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_sync_day INTEGER DEFAULT 1');
+      }
       if (!settingsCols.some(c => c.name === 'planning_center_membership_allowlist')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_membership_allowlist TEXT');
       }
