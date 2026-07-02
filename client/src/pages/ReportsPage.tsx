@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI, familiesAPI, usersAPI, contactsAPI } from '../services/api';
+import AttendanceHistoryPopover from '../components/reports/AttendanceHistoryPopover';
 import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
 import logger from '../utils/logger';
 import {
@@ -1348,7 +1349,11 @@ const ReportsPage: React.FC = () => {
                       const hasCaregivers = caregivers !== null && caregivers.length > 0;
                       return (
                         <li key={g.key} className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 items-center px-3 py-2 ${color} rounded`}>
-                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{g.name}</span>
+                          <AttendanceHistoryPopover
+                            people={g.members ?? (g.individualId != null ? [{ individualId: g.individualId, name: g.name }] : [])}
+                          >
+                            <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{g.name}</span>
+                          </AttendanceHistoryPopover>
                           <span className="w-16 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">{g.streak}</span>
                           <span className="w-32 text-sm truncate">
                             {g.familyId == null ? (
