@@ -832,10 +832,19 @@ export const integrationsAPI = {
   // People sync (replaces the old browse/import flow)
   getPlanningCenterMembershipSummary: () =>
     api.get('/integrations/planning-center/membership-summary', { timeout: 120000 }),
-  getPlanningCenterMembershipFilter: () =>
-    api.get('/integrations/planning-center/membership-filter'),
-  savePlanningCenterMembershipFilter: (data: { enabled: boolean; allowlist: string[] }) =>
-    api.put('/integrations/planning-center/membership-filter', data),
+  getPlanningCenterFieldDefinitions: () =>
+    api.get('/integrations/planning-center/field-definitions', { timeout: 120000 }),
+  getPlanningCenterFieldSummary: (fieldDefinitionId: string) =>
+    api.get('/integrations/planning-center/field-summary', { params: { fieldDefinitionId }, timeout: 120000 }),
+  getPlanningCenterSyncFilter: () =>
+    api.get('/integrations/planning-center/sync-filter'),
+  savePlanningCenterSyncFilter: (data: {
+    enabled: boolean;
+    membershipFilterEnabled: boolean;
+    membershipAllowlist: string[];
+    fieldFilterEnabled: boolean;
+    fieldFilters: { fieldDefinitionId: string; tabName: string | null; fieldName: string; values: string[] }[];
+  }) => api.put('/integrations/planning-center/sync-filter', data),
   getPlanningCenterSyncPlan: (opts?: { force?: boolean }) =>
     api.get('/integrations/planning-center/sync/plan', {
       params: opts?.force ? { refresh: 1 } : undefined,
