@@ -68,7 +68,7 @@ const ReportsPage: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [absenceList, setAbsenceList] = useState<Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }>>([]);
-  const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number; familyId?: number | null }>>([]);
+  const [groupedAbsences, setGroupedAbsences] = useState<Array<{ key: string; name: string; streak: number; familyId?: number | null; individualId?: number; members?: Array<{ individualId: number; name: string }> }>>([]);
   const [recentVisitors, setRecentVisitors] = useState<Array<{ key: string; name: string; count: number; familyId?: number | null }>>([]);
   const [showAllAbsences, setShowAllAbsences] = useState(false);
   const [showAllVisitors, setShowAllVisitors] = useState(false);
@@ -324,7 +324,7 @@ const ReportsPage: React.FC = () => {
       setAbsenceList(absenceArr);
 
       // Group absences by family ONLY if every member of the family is absent (streak >= 2)
-      const grouped: Array<{ key: string; name: string; streak: number }> = [];
+      const grouped: Array<{ key: string; name: string; streak: number; familyId?: number | null; individualId?: number; members?: Array<{ individualId: number; name: string }> }> = [];
       const absentById = new Map<number, number>();
       absenceArr.forEach(a => absentById.set(a.individualId, a.streak));
 
@@ -367,14 +367,18 @@ const ReportsPage: React.FC = () => {
         }
         if (allAbsent && minStreak !== Number.MAX_SAFE_INTEGER) {
           meta.memberIds.forEach(id => groupedMemberIds.add(id));
-          grouped.push({ key: `fam:${famId}`, name: formatFamilyLabel(meta.familyName), streak: minStreak, familyId: famId });
+          const members = meta.memberIds.map(id => {
+            const entry = regularMap.get(id)!;
+            return { individualId: id, name: `${entry.firstName} ${entry.lastName}` };
+          });
+          grouped.push({ key: `fam:${famId}`, name: formatFamilyLabel(meta.familyName), streak: minStreak, familyId: famId, members });
         }
       }
 
       // Add remaining individuals who are absent but not part of a fully-absent family
       absenceArr.forEach(a => {
         if (!groupedMemberIds.has(a.individualId)) {
-          grouped.push({ key: `ind:${a.individualId}`, name: `${a.firstName} ${a.lastName}`, streak: a.streak, familyId: a.familyId ?? null });
+          grouped.push({ key: `ind:${a.individualId}`, name: `${a.firstName} ${a.lastName}`, streak: a.streak, familyId: a.familyId ?? null, individualId: a.individualId });
         }
       });
 
