@@ -2,6 +2,7 @@ const express = require('express');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { generateCaregiverDigests, sendWeeklyCaregiverDigests } = require('../services/weeklyCaregiverEmail');
+const { buildExportTable, toCsv, toTsv, toXlsx } = require('../utils/attendanceExport');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -575,14 +576,15 @@ router.get('/dashboard', requireRole(['admin', 'coordinator']), async (req, res)
 // Export data endpoint
 router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
-    const { gatheringTypeId, gatheringTypeIds, startDate, endDate } = req.query;
-    
+    const { gatheringTypeId, gatheringTypeIds, startDate, endDate, format: rawFormat } = req.query;
+    const format = ['csv', 'tsv', 'xlsx'].includes(rawFormat) ? rawFormat : 'tsv';
+
     // Handle both single gatheringTypeId and multiple gatheringTypeIds
-    const gatheringIds = gatheringTypeIds ? 
+    const gatheringIds = gatheringTypeIds ?
       (Array.isArray(gatheringTypeIds) ? gatheringTypeIds : [gatheringTypeIds]) :
       (gatheringTypeId ? [gatheringTypeId] : []);
-    
-    console.log('Exporting data:', { gatheringTypeId, gatheringTypeIds, gatheringIds, startDate, endDate });
+
+    console.log('Exporting data:', { gatheringTypeId, gatheringTypeIds, gatheringIds, startDate, endDate, format });
     
     // Validate date parameters
     if (!startDate || !endDate) {
@@ -595,14 +597,14 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     // Get all sessions in the date range to determine column headers
     const placeholders = gatheringIds.map(() => '?').join(',');
     const sessionsQuery = `
-      SELECT DISTINCT as_table.session_date, gt.name as gathering_name
+      SELECT DISTINCT as_table.session_date, as_table.gathering_type_id, gt.name as gathering_name
       FROM attendance_sessions as_table
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?
       AND as_table.gathering_type_id IN (${placeholders})
       AND as_table.church_id = ?
       AND as_table.excluded_from_stats = 0
-      ORDER BY as_table.session_date ASC
+      ORDER BY as_table.session_date ASC, gt.name ASC
     `;
     
     const sessions = await Database.query(
@@ -658,9 +660,10 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     
     // Get attendance data for all people and sessions
     const attendanceQuery = `
-      SELECT 
+      SELECT
         ar.individual_id,
         as_table.session_date,
+        as_table.gathering_type_id,
         ar.present
       FROM attendance_records ar
       JOIN attendance_sessions as_table ON ar.session_id = as_table.id
@@ -678,56 +681,33 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     // Create a map for quick attendance lookup
     const attendanceMap = new Map();
     attendanceData.forEach(record => {
-      const key = `${record.individual_id}_${record.session_date}`;
+      const key = `${record.individual_id}_${record.session_date}_${record.gathering_type_id}`;
       attendanceMap.set(key, record.present === 1 || record.present === true);
     });
     
-    // Helper function to format date as YYYY-MM-DD for column headers
-    const formatDateHeader = (dateString) => {
-      if (!dateString) return '';
-      try {
-        const date = new Date(dateString);
-        if (isNaN(date.getTime())) return '';
-        return date.toISOString().split('T')[0];
-      } catch (error) {
-        console.error('Date formatting error:', error);
-        return '';
-      }
-    };
-    
-    // Create TSV headers
-    const tsvHeaders = ['First Name', 'Last Name', 'Family Name', 'People Type', 'Adult/Child', ...sessions.map(s => formatDateHeader(s.session_date))];
-    
-    // Create TSV rows
-    const tsvRows = allPeople.map(person => {
-      const row = [
-        person.first_name || '',
-        person.last_name || '',
-        person.family_name || '',
-        person.people_type || '',
-        person.is_child ? 'Child' : 'Adult'
-      ];
-      
-      // Add attendance data for each session
-      sessions.forEach(session => {
-        const key = `${person.id}_${session.session_date}`;
-        const attended = attendanceMap.get(key) || false;
-        row.push(attended ? 'TRUE' : 'FALSE');
-      });
-      
-      return row;
+    const table = buildExportTable({
+      sessions,
+      people: allPeople,
+      attendanceMap,
+      includeGatheringInHeaders: gatheringIds.length > 1
     });
-    
-    // Convert to TSV format
-    const tsvContent = [tsvHeaders, ...tsvRows]
-      .map(row => row.join('\t'))
-      .join('\n');
 
-    console.log(`Generated TSV with ${tsvRows.length} data rows and ${sessions.length} date columns`);
+    console.log(`Generated ${format} export with ${table.rows.length} data rows and ${sessions.length} date columns`);
 
-    res.setHeader('Content-Type', 'text/tab-separated-values');
-    res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.tsv"');
-    res.send(tsvContent);
+    if (format === 'xlsx') {
+      const buffer = await toXlsx(table);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.xlsx"');
+      res.send(buffer);
+    } else if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.csv"');
+      res.send(toCsv(table));
+    } else {
+      res.setHeader('Content-Type', 'text/tab-separated-values');
+      res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.tsv"');
+      res.send(toTsv(table));
+    }
     
     console.log('Export completed successfully');
     
