@@ -11,9 +11,12 @@ a person's profile — and have no way to filter sync eligibility by those field
 
 ## Goal
 
-Let a church choose, per-sync-config, to filter PCO people either by membership
-category (existing behavior, untouched) **or** by one or more custom-tab field values
-(new). The two modes are mutually exclusive per church — not combined.
+Let a church filter PCO people by membership category (existing behavior) **and/or**
+by one or more custom-tab field values (new) — as two independently toggleable
+eligibility sources that get unioned (OR'd) together. This supports cases like: sync
+most people via membership category, plus a specific set of people (e.g. attendees of
+one gathering) identified only by a custom-tab field, who may not carry an allow-listed
+membership value at all.
 
 ## PCO API surface used
 
@@ -35,10 +38,11 @@ fetch-then-filter approach extends to custom fields.
 ## Data model
 
 New columns on `church_settings` (`server/config/schema.js`), alongside the existing
-`planning_center_membership_allowlist` (unchanged, still used in membership mode):
+`planning_center_membership_allowlist`:
 
-- `planning_center_filter_mode` — `TEXT DEFAULT 'membership'`, one of `'membership'` |
-  `'custom_fields'`
+- `planning_center_membership_filter_enabled` — `INTEGER DEFAULT 1` (defaults on so
+  existing churches keep today's behavior unchanged after migration)
+- `planning_center_field_filter_enabled` — `INTEGER DEFAULT 0`
 - `planning_center_field_filters` — `TEXT` (JSON array), shape:
   ```json
   [
@@ -46,15 +50,24 @@ New columns on `church_settings` (`server/config/schema.js`), alongside the exis
   ]
   ```
 
+The old `planning_center_filter_mode` concept from the first draft is dropped — there
+is no single mode. Each source has its own enable flag and config, and both can be on
+at once.
+
 ### Eligibility semantics
 
-- `mode = 'membership'`: unchanged — a person is eligible iff
-  `membershipAllowlist.includes(person.membership)`.
-- `mode = 'custom_fields'`: a person is eligible iff **every** configured rule matches
-  (AND across rules) — `rule.values.includes(personValueForField)` for each rule. If
-  `fieldFilters` is empty, **nobody** is eligible (mirrors today's behavior where an
-  empty membership allow-list syncs nothing — a half-configured filter never silently
-  imports everyone).
+A person is eligible iff **at least one enabled source** matches (OR across sources):
+
+- Membership source (if `membershipFilterEnabled`): eligible iff
+  `membershipAllowlist.includes(person.membership)`. Unchanged from original behavior.
+- Custom-field source (if `fieldFilterEnabled`): eligible iff **every** configured rule
+  matches (AND across rules within this source) —
+  `rule.values.includes(personValueForField)` for each rule. If `fieldFilters` is
+  empty, this source contributes no one (doesn't error, just matches nobody — same
+  "empty config means nothing from this source" convention as the membership
+  allow-list).
+- If neither source is enabled, nobody is eligible (safe default — mirrors turning
+  `planning_center_sync_enabled` off).
 - Missing/`null` field value is normalized to the sentinel `'(none)'` on both the
   tally/summary side and the eligibility-check side, so checking "(none)" in the UI
   actually works. (Note: the existing membership path has this same bug today —
@@ -65,9 +78,9 @@ New columns on `church_settings` (`server/config/schema.js`), alongside the exis
 ## Fetch & projection changes
 
 - `services/planningCenterSync.js` `fetchAllPcoPeople`: add `field_data` to the
-  people-list `include=` param (alongside `households`). Runs unconditionally in both
-  modes, keeping the cached PCO-people snapshot mode-agnostic so switching modes
-  doesn't require a fresh fetch.
+  people-list `include=` param (alongside `households`). Runs unconditionally
+  regardless of which sources are enabled, keeping the cached PCO-people snapshot
+  independent of filter config so toggling a source doesn't require a fresh fetch.
 - `services/planningCenter/projection.js` `projectPerson`: gains a
   `fieldValues: { [fieldDefinitionId]: string }` map. Caller builds a per-page
   `included`-by-id lookup (id -> `FieldDatum`) and passes it in; `projectPerson`
@@ -86,28 +99,33 @@ New `services/planningCenter/eligibility.js`:
 
 ```js
 function isEligible(person, filterConfig) {
-  if (filterConfig.mode === 'custom_fields') {
-    const rules = filterConfig.fieldFilters || [];
-    if (!rules.length) return false;
-    return rules.every(r => {
-      const val = (person.fieldValues && person.fieldValues[r.fieldDefinitionId]) ?? '(none)';
-      return r.values.includes(val);
-    });
+  if (filterConfig.membershipFilterEnabled) {
+    const allow = new Set(filterConfig.membershipAllowlist || []);
+    if (allow.has(person.membership)) return true;
   }
-  const allow = new Set(filterConfig.membershipAllowlist || []);
-  return allow.has(person.membership);
+  if (filterConfig.fieldFilterEnabled) {
+    const rules = filterConfig.fieldFilters || [];
+    if (rules.length) {
+      const matches = rules.every(r => {
+        const val = (person.fieldValues && person.fieldValues[r.fieldDefinitionId]) ?? '(none)';
+        return r.values.includes(val);
+      });
+      if (matches) return true;
+    }
+  }
+  return false;
 }
 
 module.exports = { isEligible };
 ```
 
 `services/planningCenter/diffEngine.js` `computePlan`: replace the `allowlist:
-string[]` param with `filterConfig: { mode, membershipAllowlist, fieldFilters }`. The
-two existing `allow.has(p.membership)` call sites (reactivate check, add check) become
-`isEligible(p, filterConfig)`.
+string[]` param with `filterConfig: { membershipFilterEnabled, membershipAllowlist,
+fieldFilterEnabled, fieldFilters }`. The two existing `allow.has(p.membership)` call
+sites (reactivate check, add check) become `isEligible(p, filterConfig)`.
 
 `services/planningCenterSync.js` (around the existing allow-list load at line ~199):
-load all three settings columns, build the `filterConfig` object, pass it to
+load all four settings columns, build the `filterConfig` object, pass it to
 `computePlan` in place of the bare `allowlist` array.
 
 ## API endpoints (`routes/integrations.js`)
@@ -115,9 +133,9 @@ load all three settings columns, build the `filterConfig` object, pass it to
 Internal API, no external consumers — clean rename rather than versioning:
 
 - `GET /planning-center/sync-filter` (was `/membership-filter`) — returns
-  `{ enabled, mode, membershipAllowlist, fieldFilters }`
-- `PUT /planning-center/sync-filter` — accepts the same shape, writes all three
-  `church_settings` columns
+  `{ enabled, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters }`
+- `PUT /planning-center/sync-filter` — accepts the same shape, writes all four
+  `church_settings` filter columns
 - `GET /planning-center/field-definitions` — `[{ id, name, tabName, dataType }]` from
   PCO (select/checkbox only), powers the field picker
 - `GET /planning-center/field-summary?fieldDefinitionId=...` — tallies observed values
@@ -125,7 +143,8 @@ Internal API, no external consumers — clean rename rather than versioning:
   `tallyMembership`; add `tallyField(people, fieldDefinitionId)` to
   `services/planningCenter/summary.js`. Returns `{ total, values: [{ value, count }] }`.
 
-`membership-summary` is unchanged (still needed for membership mode).
+`membership-summary` is unchanged (still needed whenever the membership source is
+enabled).
 
 ## Frontend
 
@@ -140,22 +159,30 @@ Internal API, no external consumers — clean rename rather than versioning:
   used in another row) + a checkbox value-list (from `field-summary` for that field,
   lazy-loaded on field selection) + a remove button. "Add field filter" button appends
   an empty row.
-- `components/integrations/PlanningCenterIntegrationPanel.tsx`: above the existing
-  allow-list editor, add a segmented control "Filter by: Membership category / Custom
-  fields" bound to `mode`. Renders `MembershipAllowlistEditor` or `FieldFilterEditor`
-  based on the selection. Both write into the existing save/dirty-tracking flow
-  (`pcConfigDirty`, `savePcSyncConfig`) unchanged.
+- `components/integrations/PlanningCenterIntegrationPanel.tsx`: the existing
+  `MembershipAllowlistEditor` section gets its own enable toggle
+  (`membershipFilterEnabled`) — same switch style as the existing "Enable Planning
+  Center sync" toggle already in this panel. A second, independent section below it
+  holds the new `FieldFilterEditor` behind its own `fieldFilterEnabled` toggle. Both
+  can be on simultaneously; each editor is only rendered/expanded when its toggle is
+  on, but both write into the existing save/dirty-tracking flow (`pcConfigDirty`,
+  `savePcSyncConfig`) unchanged. If a church turns both off, surface a small inline
+  warning ("No one will be synced — enable at least one filter") since that's a
+  reachable, likely-unintended state.
 - `pages/OnboardingPage.tsx` (currently calls
   `savePlanningCenterMembershipFilter({ enabled: false, allowlist })` to disable sync
   during onboarding): update to the renamed function/shape, defaulting
-  `mode: 'membership'` and `fieldFilters: []`.
+  `membershipFilterEnabled: true`, `fieldFilterEnabled: false`, `fieldFilters: []`
+  (preserves today's onboarding behavior).
 
 ## Testing
 
-- New `services/planningCenter/eligibility.test.js`: membership mode (unchanged
-  behavior, regression-covers existing diffEngine assertions), custom_fields mode
-  (single rule match/no-match, multi-rule AND, empty rules -> ineligible, `'(none)'`
-  sentinel matching for missing field value).
+- New `services/planningCenter/eligibility.test.js`: membership-only (unchanged
+  behavior, regression-covers existing diffEngine assertions), field-only (single rule
+  match/no-match, multi-rule AND, empty rules -> ineligible, `'(none)'` sentinel
+  matching for missing field value), both enabled (OR — matches membership only,
+  matches fields only, matches neither, matches both), both disabled (nobody
+  eligible).
 - `services/planningCenter/projection.test.js`: extend for `fieldValues` extraction
   from `included` `FieldDatum` entries (present, missing, multiple fields on one
   person).
@@ -163,7 +190,7 @@ Internal API, no external consumers — clean rename rather than versioning:
   `allowlist` to `filterConfig`.
 - `services/planningCenter/summary.test.js`: add cases for new `tallyField`.
 - No new automated e2e/integration test for the settings UI — verified manually against
-  the running app (start dev server, connect/mock PCO, exercise both filter modes),
+  the running app (start dev server, connect/mock PCO, exercise each toggle combination),
   per project convention for UI changes.
 
 ## Out of scope
@@ -172,6 +199,6 @@ Internal API, no external consumers — clean rename rather than versioning:
   semantics note above).
 - Supporting free-text or date-type custom fields in the filter (bounded to
   select/checkbox per the UX decision).
-- OR logic or nested rule groups across field filters (AND-only, per the UX decision).
-- Combining membership and custom-field filters simultaneously (mutually exclusive
-  modes, per the UX decision).
+- OR logic or nested rule groups *within* the custom-field rule set itself (rules
+  within that source are AND-only, per the UX decision — the OR happens only between
+  the membership source and the field source as a whole).
