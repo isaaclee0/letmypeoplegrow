@@ -644,7 +644,7 @@ export const reportsAPI = {
   getDashboard: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) => 
     api.get('/reports/dashboard', { params }),
   
-  exportData: (params?: { gatheringTypeId?: number; startDate?: string; endDate?: string }) =>
+  exportData: (params?: { gatheringTypeIds?: number[]; startDate?: string; endDate?: string; format?: 'csv' | 'tsv' | 'xlsx' }) =>
     api.get('/reports/export', { params, responseType: 'blob' }),
 
   dismissAbsence: (data: { key: string; gatheringTypeIds: number[] }) =>

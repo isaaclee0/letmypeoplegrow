@@ -7,6 +7,7 @@ export const PREFERENCE_KEYS = {
   REPORTS_LAST_VIEWED: 'reports_last_viewed', 
   PEOPLE_LAST_VIEWED: 'people_last_viewed',
   GATHERING_ORDER: 'gathering_order',
+  REPORTS_EXPORT_FORMAT: 'reports_export_format',
 } as const;
 
 // Types for preference values

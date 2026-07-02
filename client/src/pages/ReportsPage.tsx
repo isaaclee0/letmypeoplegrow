@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsAPI, gatheringsAPI, settingsAPI, GatheringType, attendanceAPI, familiesAPI, usersAPI, contactsAPI } from '../services/api';
-import { userPreferences } from '../services/userPreferences';
+import { userPreferences, PREFERENCE_KEYS } from '../services/userPreferences';
 import logger from '../utils/logger';
 import {
   ChartBarIcon,
   UsersIcon,
   ArrowTrendingUpIcon,
   ArrowDownTrayIcon,
-  XMarkIcon
+  XMarkIcon,
+  ChevronDownIcon
 } from '@heroicons/react/24/outline';
 import 'chart.js/auto';
 import { Bar } from 'react-chartjs-2';
@@ -31,6 +32,14 @@ interface CaregiverSearchResult {
   last_name: string;
   email: string | null;
 }
+
+type ExportFormat = 'csv' | 'xlsx' | 'tsv';
+
+const EXPORT_FORMATS: { id: ExportFormat; label: string; mime: string }[] = [
+  { id: 'csv', label: 'CSV', mime: 'text/csv' },
+  { id: 'xlsx', label: 'Excel (.xlsx)', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { id: 'tsv', label: 'TSV', mime: 'text/tab-separated-values' },
+];
 
 const ReportsPage: React.FC = () => {
   const { user, refreshUserData } = useAuth();
@@ -69,6 +78,24 @@ const ReportsPage: React.FC = () => {
   const [caregiverSearch, setCaregiverSearch] = useState('');
   const [allCaregiverOptions, setAllCaregiverOptions] = useState<CaregiverSearchResult[]>([]);
   const [caregiverOptionsLoading, setCaregiverOptionsLoading] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>(() => {
+    const saved = userPreferences.getLocalPreference<{ format?: ExportFormat }>(PREFERENCE_KEYS.REPORTS_EXPORT_FORMAT);
+    return saved?.format && EXPORT_FORMATS.some(f => f.id === saved.format) ? saved.format : 'csv';
+  });
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the export format menu when clicking outside (same pattern as ActionMenu)
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [exportMenuOpen]);
   // DISABLED: External data access feature is currently disabled
   // const [dataAccessEnabled, setDataAccessEnabled] = useState(false);
 
@@ -776,40 +803,48 @@ const ReportsPage: React.FC = () => {
     setEndDate(dates.end);
   };
 
-  const handleExportData = async () => {
+  const handleExportData = async (formatOverride?: ExportFormat) => {
     if (selectedGatherings.length === 0 || !startDate || !endDate) {
       setError('Please select at least one gathering and date range before exporting');
       return;
     }
 
+    const format = formatOverride ?? exportFormat;
+    const formatMeta = EXPORT_FORMATS.find(f => f.id === format)!;
+    if (format !== exportFormat) {
+      setExportFormat(format);
+    }
+    userPreferences.setLocalPreference(PREFERENCE_KEYS.REPORTS_EXPORT_FORMAT, { format });
+
     try {
       setIsLoading(true);
       setError('');
-      
+
       const params = {
         gatheringTypeIds: selectedGatherings.map(g => g.id),
         startDate,
-        endDate
+        endDate,
+        format
       };
-      
+
       logger.log('Exporting data with params:', params);
-      
+
       const response = await reportsAPI.exportData(params);
-      
+
       logger.log('Export response received:', response);
-      
+
       // Check if response has data
       if (!response.data) {
         throw new Error('No data received from server');
       }
-      
+
       // Create and download the file
-      const blob = new Blob([response.data], { type: 'text/tab-separated-values' });
+      const blob = new Blob([response.data], { type: formatMeta.mime });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       const gatheringNames = selectedGatherings.map(g => g.name).join('-');
-      a.download = `attendance-report-${gatheringNames}-${startDate}-to-${endDate}.tsv`;
+      a.download = `attendance-report-${gatheringNames}-${startDate}-to-${endDate}.${format}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -939,13 +974,37 @@ const ReportsPage: React.FC = () => {
                 </button>
               )}
               */}
-              <button 
-                onClick={handleExportData}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-              >
-                <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                Export Data
-              </button>
+              <div className="relative inline-flex rounded-md shadow-sm" ref={exportMenuRef}>
+                <button
+                  onClick={() => handleExportData()}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-l-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                >
+                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                  Export {EXPORT_FORMATS.find(f => f.id === exportFormat)?.label}
+                </button>
+                <button
+                  onClick={() => setExportMenuOpen(open => !open)}
+                  className="inline-flex items-center px-2 py-2 -ml-px border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-r-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  title="Choose export format"
+                >
+                  <ChevronDownIcon className="h-4 w-4" />
+                </button>
+                {exportMenuOpen && (
+                  <div className="absolute right-0 top-full z-50 mt-1 w-44 bg-white dark:bg-gray-800 rounded-md shadow-lg ring-1 ring-black dark:ring-gray-700 ring-opacity-5">
+                    <div className="py-1">
+                      {EXPORT_FORMATS.map(f => (
+                        <button
+                          key={f.id}
+                          onClick={() => { setExportMenuOpen(false); handleExportData(f.id); }}
+                          className={`block w-full text-left px-4 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-600 ${f.id === exportFormat ? 'font-semibold text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300'}`}
+                        >
+                          Export as {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
