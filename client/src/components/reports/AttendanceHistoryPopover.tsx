@@ -44,6 +44,7 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
   const [status, setStatus] = useState<Status>('idle');
   const [datesByPerson, setDatesByPerson] = useState<Map<number, string[]>>(new Map());
   const containerRef = useRef<HTMLSpanElement>(null);
+  const peopleKey = people.map(p => p.individualId).join(',');
 
   useEffect(() => {
     if (!visible) return;
@@ -68,7 +69,8 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
     return () => {
       cancelled = true;
     };
-  }, [visible, people]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, peopleKey]);
 
   useEffect(() => {
     if (!visible) return;
