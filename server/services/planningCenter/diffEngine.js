@@ -1,11 +1,13 @@
 const { matchIndividuals } = require('./matcher');
+const { isEligible } = require('./eligibility');
 
 // Inputs:
-//   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, householdId}]
+//   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, householdId, fieldValues}]
 //   individuals: [{id, firstName, lastName, isChild, familyId, isActive(bool),
 //                  planningCenterId, peopleType, pcoLinkDeclined}]
 //   families:    [{id, planningCenterId}]   (not used directly here; reserved for callers)
-//   allowlist:   string[] of allowed membership values
+//   filterConfig: { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters }
+//                — see eligibility.js for match semantics
 //
 // Output buckets:
 //   link              — unlinked active individuals matched to a PCO person (set planning_center_id)
@@ -14,12 +16,11 @@ const { matchIndividuals } = require('./matcher');
 //   visitorMatches    — needs reviewer decision: a visitor's name matches a PCO person (promote-to-regular or keep-as-visitor)
 //   archiveExtras     — active 'regular' individuals that did NOT match PCO (manual/unmatched regulars to archive on review)
 //   unmatchedVisitors — visitors that did NOT match PCO (informational; LMPG owns them)
-//   add               — allow-listed active PCO people not consumed by a link/ambiguous/visitorMatch candidate (new regulars to create)
+//   add               — eligible active PCO people not consumed by a link/ambiguous/visitorMatch candidate (new regulars to create)
 //   update            — linked individuals whose name/age differs from PCO (sync these fields down)
 //   archive           — linked individuals whose PCO status went 'inactive'
-//   reactivate        — linked individuals whose PCO status is 'active' again (allowlisted)
-function computePlan({ pcoPeople, individuals, families, allowlist }) {
-  const allow = new Set(allowlist || []);
+//   reactivate        — linked individuals whose PCO status is 'active' again (still eligible)
+function computePlan({ pcoPeople, individuals, families, filterConfig }) {
   const linked = individuals.filter((i) => i.planningCenterId);
   const unlinked = individuals.filter((i) => !i.planningCenterId);
   const linkedPcoIds = new Set(linked.map((i) => i.planningCenterId));
@@ -88,7 +89,7 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
     if (!p) continue; // linked person absent from PCO fetch -> leave alone
     if (i.isActive && p.status === 'inactive') {
       archive.push({ individualId: i.id, pcoId: p.id });
-    } else if (!i.isActive && p.status === 'active' && allow.has(p.membership)) {
+    } else if (!i.isActive && p.status === 'active' && isEligible(p, filterConfig)) {
       reactivate.push({ individualId: i.id, pcoId: p.id });
     }
     if (p.firstName !== i.firstName || p.lastName !== i.lastName || p.child !== !!i.isChild) {
@@ -141,7 +142,7 @@ function computePlan({ pcoPeople, individuals, families, allowlist }) {
   const add = [];
   for (const p of availablePco) {
     if (usedPco.has(p.id)) continue;
-    if (p.status === 'active' && allow.has(p.membership)) {
+    if (p.status === 'active' && isEligible(p, filterConfig)) {
       add.push({ pcoId: p.id, firstName: p.firstName, lastName: p.lastName, isChild: p.child, householdId: p.householdId, membership: p.membership });
     }
   }

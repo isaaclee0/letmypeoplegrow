@@ -12,4 +12,20 @@ function tallyMembership(people) {
   return { total: people.length, values };
 }
 
-module.exports = { tallyMembership };
+// Tally projected PCO people by their value for one custom field (by fieldDefinitionId).
+// Missing/null value -> '(none)'. Returns { total, values: [{value, count}] } sorted by
+// count desc.
+function tallyField(people, fieldDefinitionId) {
+  const counts = new Map();
+  for (const p of people) {
+    const raw = p.fieldValues && p.fieldValues[fieldDefinitionId];
+    const key = raw || '(none)';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const values = [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count);
+  return { total: people.length, values };
+}
+
+module.exports = { tallyMembership, tallyField };

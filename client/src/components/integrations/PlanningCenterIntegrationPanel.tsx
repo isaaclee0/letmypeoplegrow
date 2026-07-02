@@ -15,6 +15,7 @@ import { integrationsAPI, settingsAPI } from '../../services/api';
 import Modal from '../Modal';
 import logger from '../../utils/logger';
 import MembershipAllowlistEditor from '../planningCenter/MembershipAllowlistEditor';
+import FieldFilterEditor, { FieldFilterRule } from '../planningCenter/FieldFilterEditor';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import { PlanningCenterStatus, PanelProps } from './types';
@@ -36,10 +37,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
   const [pcSyncFrequency, setPcSyncFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
   const [pcSyncDay, setPcSyncDay] = useState(1);
+  const [pcMembershipFilterEnabled, setPcMembershipFilterEnabled] = useState(true);
   const [pcAllowlist, setPcAllowlist] = useState<string[]>([]);
   const [pcSummary, setPcSummary] = useState<{ membership: string; count: number }[]>([]);
   const [pcSummaryLoading, setPcSummaryLoading] = useState(false);
   const [pcSummaryError, setPcSummaryError] = useState<string | null>(null);
+  const [pcFieldFilterEnabled, setPcFieldFilterEnabled] = useState(false);
+  const [pcFieldFilters, setPcFieldFilters] = useState<FieldFilterRule[]>([]);
   const [pcConfigDirty, setPcConfigDirty] = useState(false);
   const [pcConfigSaving, setPcConfigSaving] = useState(false);
   const [pcLastSync, setPcLastSync] = useState<any>(null);
@@ -48,9 +52,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
   const loadPcSyncConfig = useCallback(async () => {
     try {
-      const filter = await integrationsAPI.getPlanningCenterMembershipFilter();
+      const filter = await integrationsAPI.getPlanningCenterSyncFilter();
       setPcSyncEnabled(!!filter.data.enabled);
-      setPcAllowlist(Array.isArray(filter.data.allowlist) ? filter.data.allowlist : []);
+      setPcMembershipFilterEnabled(filter.data.membershipFilterEnabled !== false);
+      setPcAllowlist(Array.isArray(filter.data.membershipAllowlist) ? filter.data.membershipAllowlist : []);
+      setPcFieldFilterEnabled(!!filter.data.fieldFilterEnabled);
+      setPcFieldFilters(Array.isArray(filter.data.fieldFilters) ? filter.data.fieldFilters : []);
     } catch (e) { logger.error('Failed to load PCO sync filter', e); }
     setPcSummaryLoading(true);
     setPcSummaryError(null);
@@ -77,7 +84,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const savePcSyncConfig = async () => {
     setPcConfigSaving(true);
     try {
-      await integrationsAPI.savePlanningCenterMembershipFilter({ enabled: pcSyncEnabled, allowlist: pcAllowlist });
+      await integrationsAPI.savePlanningCenterSyncFilter({
+        enabled: pcSyncEnabled,
+        membershipFilterEnabled: pcMembershipFilterEnabled,
+        membershipAllowlist: pcAllowlist,
+        fieldFilterEnabled: pcFieldFilterEnabled,
+        fieldFilters: pcFieldFilters,
+      });
       await settingsAPI.updateIntegrationSettings({
         planningCenterSyncFrequency: pcSyncFrequency,
         planningCenterSyncDay: pcSyncDay,
@@ -299,17 +312,57 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </button>
                 </div>
 
-                <div className="mt-4">
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Sync these membership categories</p>
-                  <MembershipAllowlistEditor
-                    values={pcSummary}
-                    loading={pcSummaryLoading}
-                    error={pcSummaryError}
-                    selected={pcAllowlist}
-                    onChange={(next) => { setPcAllowlist(next); setPcConfigDirty(true); }}
-                    onReload={loadPcSyncConfig}
-                  />
+                <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-md p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by membership category</p>
+                    <button
+                      type="button"
+                      onClick={() => { setPcMembershipFilterEnabled((prev) => !prev); setPcConfigDirty(true); }}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcMembershipFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={pcMembershipFilterEnabled}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcMembershipFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  {pcMembershipFilterEnabled && (
+                    <MembershipAllowlistEditor
+                      values={pcSummary}
+                      loading={pcSummaryLoading}
+                      error={pcSummaryError}
+                      selected={pcAllowlist}
+                      onChange={(next) => { setPcAllowlist(next); setPcConfigDirty(true); }}
+                      onReload={loadPcSyncConfig}
+                    />
+                  )}
                 </div>
+
+                <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-md p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by custom tab fields</p>
+                    <button
+                      type="button"
+                      onClick={() => { setPcFieldFilterEnabled((prev) => !prev); setPcConfigDirty(true); }}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcFieldFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={pcFieldFilterEnabled}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcFieldFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  {pcFieldFilterEnabled && (
+                    <FieldFilterEditor
+                      rules={pcFieldFilters}
+                      onChange={(next) => { setPcFieldFilters(next); setPcConfigDirty(true); }}
+                    />
+                  )}
+                </div>
+
+                {!pcMembershipFilterEnabled && !pcFieldFilterEnabled && (
+                  <div className="mt-3 text-sm text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md px-3 py-2">
+                    No one will be synced — enable at least one filter above.
+                  </div>
+                )}
 
                 <div className="mt-4">
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Sync schedule</p>

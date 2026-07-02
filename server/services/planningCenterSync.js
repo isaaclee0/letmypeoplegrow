@@ -156,7 +156,7 @@ async function getAccessTokenForChurch(churchId) {
 // Memory-efficient: project each page, discard raw JSON + included resources.
 async function fetchAllPcoPeople(accessToken) {
   const people = [];
-  let next = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households';
+  let next = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households,field_data';
   let pages = 0;
   while (next) {
     if (++pages > 1000) {
@@ -167,7 +167,11 @@ async function fetchAllPcoPeople(accessToken) {
       throw new Error(`PCO people fetch failed (status ${resp.status})`);
     }
     const data = resp.data;
-    for (const raw of data.data || []) people.push(projectPerson(raw));
+    const fieldDataById = new Map();
+    for (const inc of data.included || []) {
+      if (inc.type === 'FieldDatum') fieldDataById.set(inc.id, inc);
+    }
+    for (const raw of data.data || []) people.push(projectPerson(raw, fieldDataById));
     next = (data.links && data.links.next) || null;
   }
   return people;
@@ -197,14 +201,29 @@ async function computePlanForChurch(churchId, accessToken, { force = false } = {
   const { people: pcoPeople, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
   const { individuals, families } = await loadChurchState(churchId);
   const settings = await Database.query(
-    `SELECT planning_center_membership_allowlist FROM church_settings WHERE church_id = ? LIMIT 1`,
+    `SELECT planning_center_membership_filter_enabled AS membershipFilterEnabled,
+            planning_center_membership_allowlist AS membershipAllowlistRaw,
+            planning_center_field_filter_enabled AS fieldFilterEnabled,
+            planning_center_field_filters AS fieldFiltersRaw
+       FROM church_settings WHERE church_id = ? LIMIT 1`,
     [churchId]
   );
-  let allowlist = [];
-  if (settings.length && settings[0].planning_center_membership_allowlist) {
-    try { allowlist = JSON.parse(settings[0].planning_center_membership_allowlist); } catch (_) { allowlist = []; }
+  let membershipFilterEnabled = true;
+  let fieldFilterEnabled = false;
+  let membershipAllowlist = [];
+  let fieldFilters = [];
+  if (settings.length) {
+    membershipFilterEnabled = !!settings[0].membershipFilterEnabled;
+    fieldFilterEnabled = !!settings[0].fieldFilterEnabled;
+    if (settings[0].membershipAllowlistRaw) {
+      try { membershipAllowlist = JSON.parse(settings[0].membershipAllowlistRaw); } catch (_) { membershipAllowlist = []; }
+    }
+    if (settings[0].fieldFiltersRaw) {
+      try { fieldFilters = JSON.parse(settings[0].fieldFiltersRaw); } catch (_) { fieldFilters = []; }
+    }
   }
-  const plan = computePlan({ pcoPeople, individuals, families, allowlist });
+  const filterConfig = { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters };
+  const plan = computePlan({ pcoPeople, individuals, families, filterConfig });
   plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
   return plan;
 }
@@ -320,5 +339,5 @@ async function runNow() {
 module.exports = {
   start, stop, runNow, syncChurch, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
-  getCachedPcoPeople, invalidatePcoPeopleCache,
+  getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
 };

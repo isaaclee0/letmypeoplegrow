@@ -152,6 +152,15 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_membership_allowlist')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_membership_allowlist TEXT');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_membership_filter_enabled')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_membership_filter_enabled INTEGER DEFAULT 1');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_field_filter_enabled')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_field_filter_enabled INTEGER DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_field_filters')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_field_filters TEXT');
+      }
       if (!settingsCols.some(c => c.name === 'planning_center_last_sync_result')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_sync_result TEXT');
       }
