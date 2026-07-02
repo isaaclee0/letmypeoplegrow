@@ -24,10 +24,11 @@ export default function FieldFilterEditor({ rules, onChange }: Props) {
   const [definitions, setDefinitions] = useState<FieldDefinition[]>([]);
   const [definitionsLoading, setDefinitionsLoading] = useState(true);
   const [definitionsError, setDefinitionsError] = useState<string | null>(null);
-  // Per-rule index -> value tally state, loaded lazily when a field is chosen.
-  const [valueOptions, setValueOptions] = useState<Record<number, { value: string; count: number }[]>>({});
-  const [valueLoading, setValueLoading] = useState<Record<number, boolean>>({});
-  const [valueError, setValueError] = useState<Record<number, string | null>>({});
+  // Per-field-definition value tally state, loaded lazily when a field is chosen.
+  // Keyed by fieldDefinitionId (not array index) so it stays valid when rules are reordered/removed.
+  const [valueOptions, setValueOptions] = useState<Record<string, { value: string; count: number }[]>>({});
+  const [valueLoading, setValueLoading] = useState<Record<string, boolean>>({});
+  const [valueError, setValueError] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -40,18 +41,18 @@ export default function FieldFilterEditor({ rules, onChange }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  const loadValuesForRule = (index: number, fieldDefinitionId: string) => {
-    setValueLoading((prev) => ({ ...prev, [index]: true }));
-    setValueError((prev) => ({ ...prev, [index]: null }));
+  const loadValuesForRule = (fieldDefinitionId: string) => {
+    setValueLoading((prev) => ({ ...prev, [fieldDefinitionId]: true }));
+    setValueError((prev) => ({ ...prev, [fieldDefinitionId]: null }));
     integrationsAPI.getPlanningCenterFieldSummary(fieldDefinitionId)
       .then((res) => {
-        setValueOptions((prev) => ({ ...prev, [index]: res.data.values || [] }));
+        setValueOptions((prev) => ({ ...prev, [fieldDefinitionId]: res.data.values || [] }));
       })
       .catch((e) => {
-        setValueError((prev) => ({ ...prev, [index]: e.response?.data?.error || 'Failed to load field values.' }));
+        setValueError((prev) => ({ ...prev, [fieldDefinitionId]: e.response?.data?.error || 'Failed to load field values.' }));
       })
       .finally(() => {
-        setValueLoading((prev) => ({ ...prev, [index]: false }));
+        setValueLoading((prev) => ({ ...prev, [fieldDefinitionId]: false }));
       });
   };
 
@@ -69,7 +70,7 @@ export default function FieldFilterEditor({ rules, onChange }: Props) {
     const def = definitions.find((d) => d.id === fieldDefinitionId);
     const next = rules.map((r, i) => (i === index ? { fieldDefinitionId, tabName: def?.tabName ?? null, fieldName: def?.name ?? '', values: [] } : r));
     onChange(next);
-    if (fieldDefinitionId) loadValuesForRule(index, fieldDefinitionId);
+    if (fieldDefinitionId) loadValuesForRule(fieldDefinitionId);
   };
 
   const toggleRuleValue = (index: number, value: string) => {
@@ -95,11 +96,11 @@ export default function FieldFilterEditor({ rules, onChange }: Props) {
         A person is eligible via this filter only if every rule below matches (AND).
       </p>
       {rules.map((rule, index) => {
-        const options = valueOptions[index] || [];
-        const loadingValues = !!valueLoading[index];
-        const error = valueError[index];
+        const options = valueOptions[rule.fieldDefinitionId] || [];
+        const loadingValues = !!valueLoading[rule.fieldDefinitionId];
+        const error = valueError[rule.fieldDefinitionId];
         return (
-          <div key={index} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
+          <div key={rule.fieldDefinitionId || `empty-${index}`} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
               <select
                 value={rule.fieldDefinitionId}
