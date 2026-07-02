@@ -200,8 +200,15 @@ const OnboardingPage: React.FC = () => {
   const importPeople = async () => {
     setImportingPeople(true); setError('');
     try {
-      // Save the chosen allowlist (one-time import; ongoing sync stays off).
-      await integrationsAPI.savePlanningCenterMembershipFilter({ enabled: false, allowlist });
+      // Save the chosen allowlist (one-time import; ongoing sync stays off). Onboarding
+      // only offers membership-category selection, so the field-filter source stays off.
+      await integrationsAPI.savePlanningCenterSyncFilter({
+        enabled: false,
+        membershipFilterEnabled: true,
+        membershipAllowlist: allowlist,
+        fieldFilterEnabled: false,
+        fieldFilters: [],
+      });
       // Apply the additive sync to import matching people + households.
       await integrationsAPI.applyPlanningCenterSync({});
       setStep('pco-gatherings');
