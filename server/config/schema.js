@@ -119,6 +119,11 @@ CREATE TABLE IF NOT EXISTS church_settings (
   planning_center_field_filters TEXT,
   planning_center_last_sync_result TEXT,
   planning_center_checkin_import_state TEXT,
+  planning_center_reconciliation_schedule_enabled INTEGER DEFAULT 0,
+  planning_center_reconciliation_frequency TEXT DEFAULT 'weekly',
+  planning_center_reconciliation_day INTEGER DEFAULT 1,
+  planning_center_reconciliation_last_run_at TEXT,
+  planning_center_reconciliation_last_result TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -227,6 +232,27 @@ CREATE TABLE IF NOT EXISTS gathering_lists (
 );
 CREATE INDEX IF NOT EXISTS idx_gl_gathering ON gathering_lists(gathering_type_id);
 CREATE INDEX IF NOT EXISTS idx_gl_individual ON gathering_lists(individual_id);
+
+CREATE TABLE IF NOT EXISTS planning_center_sync_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  membership_filter_enabled INTEGER DEFAULT 0,
+  membership_allowlist TEXT,
+  field_filter_enabled INTEGER DEFAULT 0,
+  field_filters TEXT,
+  default_people_type TEXT DEFAULT 'regular' CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
+  gathering_type_id INTEGER,
+  schedule_enabled INTEGER DEFAULT 0,
+  schedule_frequency TEXT DEFAULT 'weekly',
+  schedule_day INTEGER DEFAULT 1,
+  last_sync_at TEXT,
+  last_sync_result TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pcsb_church ON planning_center_sync_batches(church_id);
 
 CREATE TABLE IF NOT EXISTS attendance_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
