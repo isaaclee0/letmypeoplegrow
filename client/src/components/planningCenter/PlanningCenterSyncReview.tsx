@@ -6,8 +6,6 @@ import { buildSelections, VisitorChoice } from './syncSelections';
 
 interface CandidateDetail { pcoId: string; firstName: string; lastName: string; membership: string | null; }
 interface AmbiguousEntry { individualId: number; firstName: string; lastName: string; candidates: string[]; candidateDetails: CandidateDetail[]; }
-interface ExtraEntry { individualId: number; firstName: string; lastName: string; }
-interface UnmatchedVisitorEntry { individualId: number; firstName: string; lastName: string; peopleType: string; }
 interface VisitorMatchEntry {
   individualId: number;
   firstName: string;
@@ -20,8 +18,6 @@ interface Plan {
   restore: { individualId: number; pcoId: string }[];
   ambiguous: AmbiguousEntry[];
   visitorMatches: VisitorMatchEntry[];
-  archiveExtras: ExtraEntry[];
-  unmatchedVisitors: UnmatchedVisitorEntry[];
   add: { pcoId: string; firstName: string; lastName: string; isChild: boolean; householdId: string | null; membership: string | null }[];
   update: { individualId: number; firstName: string; lastName: string }[];
   archive: { individualId: number; pcoId: string }[];
@@ -29,7 +25,7 @@ interface Plan {
   pcoFetchedAt?: string;
 }
 
-export default function PlanningCenterSyncReview({ connected }: { connected: boolean }) {
+export default function PlanningCenterSyncReview({ connected, batchId }: { connected: boolean; batchId: number }) {
   const navigate = useNavigate();
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,7 +34,6 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
   const [result, setResult] = useState<any>(null);
   const [ambiguousChoices, setAmbiguousChoices] = useState<Record<string, string | null>>({});
   const [skipAdd, setSkipAdd] = useState<Set<string>>(new Set());
-  const [skipArchiveExtras, setSkipArchiveExtras] = useState<Set<number>>(new Set());
   const [visitorChoices, setVisitorChoices] = useState<Record<string, VisitorChoice | null>>({});
 
   // force: bypass the server-side PCO cache (explicit "Refresh from Planning Center").
@@ -47,33 +42,32 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
     setLoading(true); setError(null);
     if (!opts?.preserveResult) setResult(null);
     try {
-      const res = await integrationsAPI.getPlanningCenterSyncPlan({ force: opts?.force });
+      const res = await integrationsAPI.getPlanningCenterBatchPlan(batchId, { force: opts?.force });
       setPlan(res.data.plan);
       setAmbiguousChoices({});
       setSkipAdd(new Set());
-      setSkipArchiveExtras(new Set());
       setVisitorChoices({});
     } catch (e: any) {
-      logger.error('Failed to compute PCO sync plan', e);
+      logger.error('Failed to compute PCO batch sync plan', e);
       setError(e.response?.data?.error || 'Failed to compute sync plan.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [batchId]);
 
-  useEffect(() => { if (connected) loadPlan(); }, [connected, loadPlan]);
+  useEffect(() => { if (connected) loadPlan(); }, [connected, batchId, loadPlan]);
 
   const apply = async () => {
     setApplying(true); setError(null);
     try {
-      const selections = buildSelections(ambiguousChoices, skipAdd, skipArchiveExtras, visitorChoices);
-      const res = await integrationsAPI.applyPlanningCenterSync({ selections });
+      const selections = buildSelections(ambiguousChoices, skipAdd, visitorChoices);
+      const res = await integrationsAPI.applyPlanningCenterBatch(batchId, { selections });
       setResult(res.data.result);
       // Refresh the plan so the lists reflect the post-apply DB state instead of
       // showing the rows we just acted on. PCO is unchanged, so this is a cache hit.
       await loadPlan({ preserveResult: true });
     } catch (e: any) {
-      logger.error('Failed to apply PCO sync', e);
+      logger.error('Failed to apply PCO batch sync', e);
       setError(e.response?.data?.error || 'Failed to apply sync.');
     } finally {
       setApplying(false);
@@ -89,19 +83,11 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
     );
   }
   if (loading) return <p className="text-sm text-gray-500 dark:text-gray-400">Computing sync plan… (fetching everyone from Planning Center)</p>;
-  if (error) return <div className="text-sm text-red-600 dark:text-red-400">{error} <button className="underline ml-1" onClick={loadPlan}>Retry</button></div>;
+  if (error) return <div className="text-sm text-red-600 dark:text-red-400">{error} <button className="underline ml-1" onClick={() => loadPlan()}>Retry</button></div>;
   if (!plan) return null;
 
   const toggleSkip = (pcoId: string) => {
     setSkipAdd((prev) => { const n = new Set(prev); if (n.has(pcoId)) n.delete(pcoId); else n.add(pcoId); return n; });
-  };
-
-  const toggleSkipExtra = (individualId: number) => {
-    setSkipArchiveExtras((prev) => {
-      const n = new Set(prev);
-      if (n.has(individualId)) n.delete(individualId); else n.add(individualId);
-      return n;
-    });
   };
 
   return (
@@ -116,8 +102,6 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
           ['Reactivate', plan.reactivate.length],
           ['Ambiguous', plan.ambiguous.length],
           ['Visitor matches', plan.visitorMatches.length],
-          ['Archive extras', plan.archiveExtras.length],
-          ['Unmatched visitors', plan.unmatchedVisitors.length],
         ] as [string, number][]).map(([label, n]) => (
           <span key={label} className="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100">{label}: {n}</span>
         ))}
@@ -211,36 +195,6 @@ export default function PlanningCenterSyncReview({ connected }: { connected: boo
             ))}
           </ul>
         </section>
-      )}
-
-      {plan.archiveExtras.length > 0 && (
-        <section>
-          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-            Not in Planning Center — will be archived ({plan.archiveExtras.length - skipArchiveExtras.size} selected)
-          </h4>
-          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
-            Active members in Let My People Grow that don't match anyone in Planning Center. Uncheck any you want to keep active.
-          </p>
-          <ul className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-100 dark:divide-gray-700">
-            {plan.archiveExtras.map((x) => (
-              <li key={x.individualId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                <input type="checkbox" checked={!skipArchiveExtras.has(x.individualId)} onChange={() => toggleSkipExtra(x.individualId)} />
-                <span>{x.firstName} {x.lastName}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {plan.unmatchedVisitors.length > 0 && (
-        <details className="text-sm text-gray-600 dark:text-gray-300">
-          <summary className="cursor-pointer">Unmatched visitors ({plan.unmatchedVisitors.length}) — no action; visitors are managed in Let My People Grow</summary>
-          <ul className="mt-2 pl-4 list-disc">
-            {plan.unmatchedVisitors.map((v) => (
-              <li key={v.individualId}>{v.firstName} {v.lastName}</li>
-            ))}
-          </ul>
-        </details>
       )}
 
       <details className="text-sm text-gray-600 dark:text-gray-300">
