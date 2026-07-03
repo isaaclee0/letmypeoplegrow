@@ -302,11 +302,9 @@ function isDueToday(frequency, day, now = new Date()) {
 
 // ─── Per-church sync ─────────────────────────────────────────────────────────
 
-async function runBatchSync(churchId, batch, userId) {
+async function runBatchSync(churchId, accessToken, batch, userId) {
   try {
-    const accessToken = await getAccessTokenForChurch(churchId);
-    if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
-    const plan = await computePlanForBatch(churchId, accessToken, batch, { force: true });
+    const plan = await computePlanForBatch(churchId, accessToken, batch, { force: false });
     const result = await applyForChurch(churchId, plan, userId, {}, {
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
@@ -329,11 +327,9 @@ async function runBatchSync(churchId, batch, userId) {
   }
 }
 
-async function runReconciliationSync(churchId, userId) {
+async function runReconciliationSync(churchId, accessToken, userId) {
   try {
-    const accessToken = await getAccessTokenForChurch(churchId);
-    if (!accessToken) return;
-    const plan = await computeReconciliationForChurch(churchId, accessToken, { force: true });
+    const plan = await computeReconciliationForChurch(churchId, accessToken, { force: false });
     const result = await applyReconciliation(churchId, plan, {});
     const summary = { at: new Date().toISOString(), archived: result.archived, errors: result.errors.length };
     await Database.query(
@@ -366,16 +362,27 @@ async function syncChurch(church, { skipScheduleCheck = false } = {}) {
       const userId = settings[0].token_user || null;
 
       const batches = await listBatches(churchId);
-      for (const batch of batches) {
-        if (!batch.scheduleEnabled) continue;
-        if (!skipScheduleCheck && !isDueToday(batch.scheduleFrequency, batch.scheduleDay)) continue;
-        await runBatchSync(churchId, batch, userId);
+      const dueBatches = batches.filter((batch) => {
+        if (!batch.scheduleEnabled) return false;
+        return skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay);
+      });
+      const reconciliationDue = !!(settings[0].reconciliationScheduleEnabled &&
+        (skipScheduleCheck || isDueToday(settings[0].reconciliationFrequency, settings[0].reconciliationDay)));
+
+      if (!dueBatches.length && !reconciliationDue) return;
+
+      const accessToken = await getAccessTokenForChurch(churchId);
+      if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
+
+      // Warm the PCO people cache once for this whole run — each due batch and
+      // reconciliation below reuse it (force: false) rather than each re-fetching.
+      await getCachedPcoPeople(churchId, accessToken, { force: true });
+
+      for (const batch of dueBatches) {
+        await runBatchSync(churchId, accessToken, batch, userId);
       }
 
-      if (settings[0].reconciliationScheduleEnabled) {
-        const due = skipScheduleCheck || isDueToday(settings[0].reconciliationFrequency, settings[0].reconciliationDay);
-        if (due) await runReconciliationSync(churchId, userId);
-      }
+      if (reconciliationDue) await runReconciliationSync(churchId, accessToken, userId);
     } catch (err) {
       logger.error(`PCO sync: error for church ${churchId}: ${err.message}`);
     }
