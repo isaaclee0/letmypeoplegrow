@@ -60,7 +60,13 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
         finalGatheringTypeId = gatheringTypeId;
       } else if (gatheringMode === 'new') {
         if (!newGatheringName.trim()) { setError('Enter a name for the new gathering.'); setSaving(false); return; }
-        const created = await gatheringsAPI.create({ name: newGatheringName.trim(), attendanceType: 'standard' });
+        const created = await gatheringsAPI.create({
+          name: newGatheringName.trim(),
+          attendanceType: 'standard',
+          dayOfWeek: 'Sunday',
+          startTime: '10:00',
+          frequency: 'weekly',
+        });
         finalGatheringTypeId = (created.data as any).id ?? null;
         if (!finalGatheringTypeId) { setError('Failed to create the new gathering.'); setSaving(false); return; }
       }
