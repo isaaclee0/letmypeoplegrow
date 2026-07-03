@@ -11,13 +11,13 @@ import {
   XMarkIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
-import { integrationsAPI, settingsAPI } from '../../services/api';
+import { integrationsAPI, settingsAPI, SyncBatch } from '../../services/api';
 import Modal from '../Modal';
 import logger from '../../utils/logger';
-import MembershipAllowlistEditor from '../planningCenter/MembershipAllowlistEditor';
-import FieldFilterEditor, { FieldFilterRule } from '../planningCenter/FieldFilterEditor';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
+import PlanningCenterReconciliationReview from '../planningCenter/PlanningCenterReconciliationReview';
+import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import { PlanningCenterStatus, PanelProps } from './types';
 
 const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & { initialAction?: 'disconnect' }> = ({
@@ -35,39 +35,29 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [initialAction]);
   const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
-  const [pcSyncFrequency, setPcSyncFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
-  const [pcSyncDay, setPcSyncDay] = useState(1);
-  const [pcMembershipFilterEnabled, setPcMembershipFilterEnabled] = useState(true);
-  const [pcAllowlist, setPcAllowlist] = useState<string[]>([]);
-  const [pcSummary, setPcSummary] = useState<{ membership: string; count: number }[]>([]);
-  const [pcSummaryLoading, setPcSummaryLoading] = useState(false);
-  const [pcSummaryError, setPcSummaryError] = useState<string | null>(null);
-  const [pcFieldFilterEnabled, setPcFieldFilterEnabled] = useState(false);
-  const [pcFieldFilters, setPcFieldFilters] = useState<FieldFilterRule[]>([]);
-  const [pcConfigDirty, setPcConfigDirty] = useState(false);
-  const [pcConfigSaving, setPcConfigSaving] = useState(false);
-  const [pcLastSync, setPcLastSync] = useState<any>(null);
-  const [pcSyncRunning, setPcSyncRunning] = useState(false);
-  const [showSyncReview, setShowSyncReview] = useState(false);
+  const [batches, setBatches] = useState<SyncBatch[]>([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesError, setBatchesError] = useState<string | null>(null);
+  const [editingBatch, setEditingBatch] = useState<SyncBatch | 'new' | null>(null);
+  const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
+  const [runningBatchId, setRunningBatchId] = useState<number | null>(null);
+  const [reconciliationScheduleEnabled, setReconciliationScheduleEnabled] = useState(false);
+  const [reconciliationFrequency, setReconciliationFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
+  const [reconciliationDay, setReconciliationDay] = useState(1);
+  const [reconciliationLastResult, setReconciliationLastResult] = useState<any>(null);
+  const [reconciliationDirty, setReconciliationDirty] = useState(false);
+  const [reconciliationSaving, setReconciliationSaving] = useState(false);
+  const [showReconciliationReview, setShowReconciliationReview] = useState(false);
 
-  const loadPcSyncConfig = useCallback(async () => {
+  const loadBatches = useCallback(async () => {
+    setBatchesLoading(true); setBatchesError(null);
     try {
-      const filter = await integrationsAPI.getPlanningCenterSyncFilter();
-      setPcSyncEnabled(!!filter.data.enabled);
-      setPcMembershipFilterEnabled(filter.data.membershipFilterEnabled !== false);
-      setPcAllowlist(Array.isArray(filter.data.membershipAllowlist) ? filter.data.membershipAllowlist : []);
-      setPcFieldFilterEnabled(!!filter.data.fieldFilterEnabled);
-      setPcFieldFilters(Array.isArray(filter.data.fieldFilters) ? filter.data.fieldFilters : []);
-    } catch (e) { logger.error('Failed to load PCO sync filter', e); }
-    setPcSummaryLoading(true);
-    setPcSummaryError(null);
-    try {
-      const sum = await integrationsAPI.getPlanningCenterMembershipSummary();
-      setPcSummary(sum.data.values || []);
+      const res = await integrationsAPI.getPlanningCenterSyncBatches();
+      setBatches(res.data.batches || []);
     } catch (e: any) {
-      setPcSummaryError(e.response?.data?.error || 'Failed to load membership categories.');
+      setBatchesError(e.response?.data?.error || 'Failed to load sync batches.');
     } finally {
-      setPcSummaryLoading(false);
+      setBatchesLoading(false);
     }
   }, []);
 
@@ -81,37 +71,50 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     }
   };
 
-  const savePcSyncConfig = async () => {
-    setPcConfigSaving(true);
+  const toggleMasterSync = async (value: boolean) => {
+    setPcSyncEnabled(value);
     try {
-      await integrationsAPI.savePlanningCenterSyncFilter({
-        enabled: pcSyncEnabled,
-        membershipFilterEnabled: pcMembershipFilterEnabled,
-        membershipAllowlist: pcAllowlist,
-        fieldFilterEnabled: pcFieldFilterEnabled,
-        fieldFilters: pcFieldFilters,
-      });
-      await settingsAPI.updateIntegrationSettings({
-        planningCenterSyncFrequency: pcSyncFrequency,
-        planningCenterSyncDay: pcSyncDay,
-      });
-      setPcConfigDirty(false);
-    } catch (e: any) {
-      setPlanningCenterError(e.response?.data?.error || 'Failed to save sync settings.');
-    } finally {
-      setPcConfigSaving(false);
+      await settingsAPI.updateIntegrationSettings({ planningCenterSyncEnabled: value });
+    } catch (error) {
+      logger.error('Failed to update master sync switch:', error);
+      setPcSyncEnabled(!value);
     }
   };
 
-  const runPcSyncNow = async () => {
-    setPcSyncRunning(true);
+  const runBatchNow = async (batchId: number) => {
+    setRunningBatchId(batchId);
     try {
-      const res = await integrationsAPI.applyPlanningCenterSync({});
-      setPcLastSync(res.data.summary || null);
+      await integrationsAPI.applyPlanningCenterBatch(batchId, {});
+      await loadBatches();
     } catch (e: any) {
       setPlanningCenterError(e.response?.data?.error || 'Sync failed.');
     } finally {
-      setPcSyncRunning(false);
+      setRunningBatchId(null);
+    }
+  };
+
+  const deleteBatch = async (batchId: number) => {
+    try {
+      await integrationsAPI.deletePlanningCenterSyncBatch(batchId);
+      await loadBatches();
+    } catch (e: any) {
+      setPlanningCenterError(e.response?.data?.error || 'Failed to delete sync batch.');
+    }
+  };
+
+  const saveReconciliationConfig = async () => {
+    setReconciliationSaving(true);
+    try {
+      await settingsAPI.updateIntegrationSettings({
+        planningCenterReconciliationScheduleEnabled: reconciliationScheduleEnabled,
+        planningCenterReconciliationFrequency: reconciliationFrequency,
+        planningCenterReconciliationDay: reconciliationDay,
+      });
+      setReconciliationDirty(false);
+    } catch (e: any) {
+      setPlanningCenterError(e.response?.data?.error || 'Failed to save reconciliation schedule.');
+    } finally {
+      setReconciliationSaving(false);
     }
   };
 
@@ -142,17 +145,20 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     }
   };
 
-  // Load sync config, summary, and sync indicator when connected
+  // Load batches, sync indicator, master switch, and reconciliation config when connected
   useEffect(() => {
     if (status.connected) {
-      loadPcSyncConfig();
+      loadBatches();
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
-        setPcSyncFrequency(r.data.planningCenterSyncFrequency || 'weekly');
-        setPcSyncDay(typeof r.data.planningCenterSyncDay === 'number' ? r.data.planningCenterSyncDay : 1);
+        setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
+        setReconciliationScheduleEnabled(!!r.data.planningCenterReconciliationScheduleEnabled);
+        setReconciliationFrequency(r.data.planningCenterReconciliationFrequency || 'weekly');
+        setReconciliationDay(typeof r.data.planningCenterReconciliationDay === 'number' ? r.data.planningCenterReconciliationDay : 1);
+        setReconciliationLastResult(r.data.planningCenterReconciliationLastResult || null);
       }).catch(() => {});
     }
-  }, [status.connected, loadPcSyncConfig]);
+  }, [status.connected, loadBatches]);
 
   return (
     <div>
@@ -292,18 +298,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 </button>
               </div>
 
-              {/* Full people sync configuration */}
+              {/* Sync batches */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Treat Planning Center as the source of truth: add eligible people, sync names, archive when inactive (runs nightly).
+                      Master switch — turns off all batches and the "check for people who left" schedule below.
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => { setPcSyncEnabled(prev => !prev); setPcConfigDirty(true); }}
+                    onClick={() => toggleMasterSync(!pcSyncEnabled)}
                     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                     role="switch"
                     aria-checked={pcSyncEnabled}
@@ -312,131 +318,128 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </button>
                 </div>
 
-                <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-md p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by membership category</p>
-                    <button
-                      type="button"
-                      onClick={() => { setPcMembershipFilterEnabled((prev) => !prev); setPcConfigDirty(true); }}
-                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcMembershipFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={pcMembershipFilterEnabled}
-                    >
-                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcMembershipFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                <div className="mt-4 flex items-center justify-between">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync batches</p>
+                  {editingBatch === null && (
+                    <button type="button" onClick={() => setEditingBatch('new')}
+                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+                      New batch
                     </button>
-                  </div>
-                  {pcMembershipFilterEnabled && (
-                    <MembershipAllowlistEditor
-                      values={pcSummary}
-                      loading={pcSummaryLoading}
-                      error={pcSummaryError}
-                      selected={pcAllowlist}
-                      onChange={(next) => { setPcAllowlist(next); setPcConfigDirty(true); }}
-                      onReload={loadPcSyncConfig}
-                    />
                   )}
                 </div>
 
-                <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-md p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by custom tab fields</p>
-                    <button
-                      type="button"
-                      onClick={() => { setPcFieldFilterEnabled((prev) => !prev); setPcConfigDirty(true); }}
-                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcFieldFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                      role="switch"
-                      aria-checked={pcFieldFilterEnabled}
-                    >
-                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcFieldFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-                  {pcFieldFilterEnabled && (
-                    <FieldFilterEditor
-                      rules={pcFieldFilters}
-                      onChange={(next) => { setPcFieldFilters(next); setPcConfigDirty(true); }}
-                    />
-                  )}
-                </div>
+                {batchesError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{batchesError}</p>}
+                {batchesLoading && <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Loading batches…</p>}
 
-                {!pcMembershipFilterEnabled && !pcFieldFilterEnabled && (
-                  <div className="mt-3 text-sm text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md px-3 py-2">
-                    No one will be synced — enable at least one filter above.
+                {editingBatch !== null && (
+                  <div className="mt-3">
+                    <PlanningCenterBatchEditor
+                      batch={editingBatch === 'new' ? null : editingBatch}
+                      onSaved={() => { setEditingBatch(null); loadBatches(); }}
+                      onCancel={() => setEditingBatch(null)}
+                    />
                   </div>
                 )}
 
-                <div className="mt-4">
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Sync schedule</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <select
-                      value={pcSyncFrequency}
-                      onChange={(e) => { setPcSyncFrequency(e.target.value as 'daily' | 'weekly' | 'monthly'); setPcConfigDirty(true); }}
-                      className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                    {pcSyncFrequency === 'weekly' && (
-                      <select
-                        value={pcSyncDay}
-                        onChange={(e) => { setPcSyncDay(Number(e.target.value)); setPcConfigDirty(true); }}
-                        className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-                      >
-                        <option value={0}>Sunday</option>
-                        <option value={1}>Monday</option>
-                        <option value={2}>Tuesday</option>
-                        <option value={3}>Wednesday</option>
-                        <option value={4}>Thursday</option>
-                        <option value={5}>Friday</option>
-                        <option value={6}>Saturday</option>
+                {!batchesLoading && batches.length === 0 && editingBatch === null && (
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No sync batches yet — create one to start importing people from Planning Center.</p>
+                )}
+
+                <ul className="mt-3 space-y-3">
+                  {batches.map((batch) => (
+                    <li key={batch.id} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{batch.name}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {batch.gatheringTypeId ? 'Assigns to a gathering · ' : ''}
+                            {batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}
+                          </p>
+                          {batch.lastSyncResult && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              Last run {new Date(batch.lastSyncResult.at).toLocaleString()}: {batch.lastSyncResult.added} added, {batch.lastSyncResult.updated} updated, {batch.lastSyncResult.linked} linked
+                              {batch.lastSyncResult.ambiguous ? `, ${batch.lastSyncResult.ambiguous} need review` : ''}.
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
+                          <button type="button" onClick={() => runBatchNow(batch.id)} disabled={runningBatchId === batch.id}
+                            className="text-sm underline text-gray-600 dark:text-gray-300 disabled:opacity-50">
+                            {runningBatchId === batch.id ? 'Syncing…' : 'Run now'}
+                          </button>
+                          <button type="button" onClick={() => setReviewingBatchId(reviewingBatchId === batch.id ? null : batch.id)}
+                            className="text-sm underline text-gray-600 dark:text-gray-300">
+                            {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
+                          </button>
+                          <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
+                        </div>
+                      </div>
+                      {reviewingBatchId === batch.id && (
+                        <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
+                          <PlanningCenterSyncReview connected={status.connected} batchId={batch.id} />
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Reconciliation: people no longer in PCO at all */}
+              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Check for people who left</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Finds active people whose name doesn't match anyone in Planning Center at all, across every saved batch.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button type="button" onClick={() => { setReconciliationScheduleEnabled((v) => !v); setReconciliationDirty(true); }}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${reconciliationScheduleEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                    role="switch" aria-checked={reconciliationScheduleEnabled}>
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${reconciliationScheduleEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                  <span className="text-sm text-gray-700 dark:text-gray-300">{reconciliationScheduleEnabled ? 'Runs automatically' : 'Manual only'}</span>
+                  {reconciliationScheduleEnabled && (
+                    <>
+                      <select value={reconciliationFrequency}
+                        onChange={(e) => { setReconciliationFrequency(e.target.value as 'daily' | 'weekly' | 'monthly'); setReconciliationDirty(true); }}
+                        className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
                       </select>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    {pcSyncFrequency === 'monthly'
-                      ? 'Runs overnight on the 1st of each month.'
-                      : pcSyncFrequency === 'daily'
-                        ? 'Runs every night.'
-                        : 'Runs overnight on the selected day each week.'}
+                      {reconciliationFrequency === 'weekly' && (
+                        <select value={reconciliationDay}
+                          onChange={(e) => { setReconciliationDay(Number(e.target.value)); setReconciliationDirty(true); }}
+                          className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
+                          <option value={0}>Sunday</option>
+                          <option value={1}>Monday</option>
+                          <option value={2}>Tuesday</option>
+                          <option value={3}>Wednesday</option>
+                          <option value={4}>Thursday</option>
+                          <option value={5}>Friday</option>
+                          <option value={6}>Saturday</option>
+                        </select>
+                      )}
+                      <button type="button" onClick={saveReconciliationConfig} disabled={!reconciliationDirty || reconciliationSaving}
+                        className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50">
+                        {reconciliationSaving ? 'Saving…' : 'Save schedule'}
+                      </button>
+                    </>
+                  )}
+                  <button type="button" onClick={() => setShowReconciliationReview((v) => !v)}
+                    className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
+                    {showReconciliationReview ? 'Hide check' : 'Check now'}
+                  </button>
+                </div>
+                {reconciliationLastResult && (
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Last checked {new Date(reconciliationLastResult.at).toLocaleString()}: {reconciliationLastResult.archived} archived.
                   </p>
-                </div>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={savePcSyncConfig}
-                    disabled={!pcConfigDirty || pcConfigSaving}
-                    className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                  >
-                    {pcConfigSaving ? 'Saving…' : 'Save sync settings'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={runPcSyncNow}
-                    disabled={pcSyncRunning}
-                    className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-                  >
-                    {pcSyncRunning ? 'Syncing…' : 'Sync now'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowSyncReview(v => !v)}
-                    className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
-                  >
-                    {showSyncReview ? 'Hide review' : 'Review & sync'}
-                  </button>
-                </div>
-
-                {showSyncReview && status.connected && (
-                  <div className="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4">
-                    <PlanningCenterSyncReview connected={status.connected} />
-                  </div>
                 )}
-
-                {pcLastSync && (
-                  <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                    Last sync {pcLastSync.at ? new Date(pcLastSync.at).toLocaleString() : ''}: {pcLastSync.added ?? 0} added, {pcLastSync.updated ?? 0} updated, {pcLastSync.archived ?? 0} archived, {pcLastSync.reactivated ?? 0} reactivated, {pcLastSync.linked ?? 0} linked{typeof pcLastSync.ambiguous === 'number' ? `, ${pcLastSync.ambiguous} need review` : ''}.
-                  </p>
+                {showReconciliationReview && (
+                  <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
+                    <PlanningCenterReconciliationReview />
+                  </div>
                 )}
               </div>
 

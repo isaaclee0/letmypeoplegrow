@@ -795,10 +795,43 @@ export const settingsAPI = {
   updateIntegrationSettings: (data: {
     planningCenterSyncIndicator?: boolean;
     planningCenterAutoArchive?: boolean;
-    planningCenterSyncFrequency?: 'daily' | 'weekly' | 'monthly';
-    planningCenterSyncDay?: number;
+    planningCenterSyncEnabled?: boolean;
+    planningCenterReconciliationScheduleEnabled?: boolean;
+    planningCenterReconciliationFrequency?: 'daily' | 'weekly' | 'monthly';
+    planningCenterReconciliationDay?: number;
   }) => api.put('/settings/integrations', data),
 };
+
+export interface SyncBatchInput {
+  name: string;
+  membershipFilterEnabled: boolean;
+  membershipAllowlist: string[];
+  fieldFilterEnabled: boolean;
+  fieldFilters: { fieldDefinitionId: string; tabName: string | null; fieldName: string; values: string[] }[];
+  defaultPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
+  gatheringTypeId: number | null;
+  scheduleEnabled: boolean;
+  scheduleFrequency: 'daily' | 'weekly' | 'monthly';
+  scheduleDay: number;
+}
+
+export interface SyncBatchLastResult {
+  at: string;
+  added: number;
+  updated: number;
+  archived: number;
+  reactivated: number;
+  linked: number;
+  ambiguous: number;
+  visitorMatches: number;
+  errors: number;
+}
+
+export interface SyncBatch extends SyncBatchInput {
+  id: number;
+  lastSyncAt: string | null;
+  lastSyncResult: SyncBatchLastResult | null;
+}
 
 // Integrations API
 export const integrationsAPI = {
@@ -840,22 +873,28 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/field-definitions', { timeout: 120000 }),
   getPlanningCenterFieldSummary: (fieldDefinitionId: string) =>
     api.get('/integrations/planning-center/field-summary', { params: { fieldDefinitionId }, timeout: 120000 }),
-  getPlanningCenterSyncFilter: () =>
-    api.get('/integrations/planning-center/sync-filter'),
-  savePlanningCenterSyncFilter: (data: {
-    enabled: boolean;
-    membershipFilterEnabled: boolean;
-    membershipAllowlist: string[];
-    fieldFilterEnabled: boolean;
-    fieldFilters: { fieldDefinitionId: string; tabName: string | null; fieldName: string; values: string[] }[];
-  }) => api.put('/integrations/planning-center/sync-filter', data),
-  getPlanningCenterSyncPlan: (opts?: { force?: boolean }) =>
-    api.get('/integrations/planning-center/sync/plan', {
+  getPlanningCenterSyncBatches: () =>
+    api.get('/integrations/planning-center/sync-batches'),
+  createPlanningCenterSyncBatch: (data: SyncBatchInput) =>
+    api.post('/integrations/planning-center/sync-batches', data),
+  updatePlanningCenterSyncBatch: (id: number, data: SyncBatchInput) =>
+    api.put(`/integrations/planning-center/sync-batches/${id}`, data),
+  deletePlanningCenterSyncBatch: (id: number) =>
+    api.delete(`/integrations/planning-center/sync-batches/${id}`),
+  getPlanningCenterBatchPlan: (id: number, opts?: { force?: boolean }) =>
+    api.get(`/integrations/planning-center/sync-batches/${id}/plan`, {
       params: opts?.force ? { refresh: 1 } : undefined,
       timeout: 120000,
     }),
-  applyPlanningCenterSync: (data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[] } }) =>
-    api.post('/integrations/planning-center/sync/apply', data, { timeout: 120000 }),
+  applyPlanningCenterBatch: (id: number, data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[]; visitorChoices?: Record<string, string> } }) =>
+    api.post(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
+  getPlanningCenterReconciliationPlan: (opts?: { force?: boolean }) =>
+    api.get('/integrations/planning-center/reconciliation/plan', {
+      params: opts?.force ? { refresh: 1 } : undefined,
+      timeout: 120000,
+    }),
+  applyPlanningCenterReconciliation: (data: { selections?: { skipArchiveExtraIds?: number[] } }) =>
+    api.post('/integrations/planning-center/reconciliation/apply', data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),

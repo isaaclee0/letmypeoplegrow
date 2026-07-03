@@ -24,15 +24,23 @@ function groupAdds(adds) {
 // selections:
 //   { ambiguous?: {individualId: pcoId},
 //     skipAddPcoIds?: string[],
-//     skipArchiveExtraIds?: number[],
 //     visitorChoices?: {individualId: 'promote' | 'keep'} }
-// Returns counts + per-item errors (never throws on item failure).
-async function applyPlan(churchId, plan, userId, selections = {}) {
+// batchConfig:
+//   { defaultPeopleType?: 'regular'|'local_visitor'|'traveller_visitor', gatheringTypeId?: number|null }
+//   — the batch's own settings; applied to every person this run creates or links.
+// Returns counts + per-item errors (never throws on item failure). Does NOT touch
+// plan.archiveExtras/unmatchedVisitors — those are whole-roster concerns handled by
+// applyArchiveExtras() below, called only from the reconciliation endpoints.
+async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = {}) {
   const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, errors: [] };
   const skipAdd = new Set(selections.skipAddPcoIds || []);
-  const skipArchiveExtras = new Set((selections.skipArchiveExtraIds || []).map(Number));
   const ambiguousChoices = selections.ambiguous || {};
   const visitorChoices = selections.visitorChoices || {};
+  const defaultPeopleType = batchConfig.defaultPeopleType || 'regular';
+  const gatheringTypeId = batchConfig.gatheringTypeId || null;
+  // Every individual this run links, restores, promotes, or creates — used to
+  // populate the batch's gathering roster (if one is configured) at the end.
+  const touchedIndividualIds = new Set();
 
   // links (high-confidence active matches + any ambiguous resolved by the reviewer)
   const links = [...(plan.link || [])];
@@ -46,6 +54,7 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
         [l.pcoId, l.individualId, churchId]
       );
       result.linked++;
+      touchedIndividualIds.add(l.individualId);
     } catch (e) { result.errors.push({ type: 'link', id: l.individualId, error: e.message }); }
   }
 
@@ -59,20 +68,8 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
       );
       result.linked++;
       result.reactivated++;
+      touchedIndividualIds.add(r.individualId);
     } catch (e) { result.errors.push({ type: 'restore', id: r.individualId, error: e.message }); }
-  }
-
-  // archiveExtras: active 'regular' rows that didn't match PCO -> archive (is_active = 0).
-  // Per-item skip honoured via selections.skipArchiveExtraIds (mirrors skipAddPcoIds).
-  for (const x of (plan.archiveExtras || [])) {
-    if (skipArchiveExtras.has(Number(x.individualId))) continue;
-    try {
-      await Database.query(
-        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-        [x.individualId, churchId]
-      );
-      result.archived++;
-    } catch (e) { result.errors.push({ type: 'archiveExtra', id: x.individualId, error: e.message }); }
   }
 
   // visitorMatches: reviewer decides per-person. Validate against the plan so a
@@ -92,6 +89,7 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
           [offer.candidate.pcoId, id, churchId]
         );
         result.linked++;
+        touchedIndividualIds.add(id);
       } else if (choice === 'keep') {
         await Database.query(
           `UPDATE individuals
@@ -133,7 +131,8 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
     } catch (e) { result.errors.push({ type: 'reactivate', id: r.individualId, error: e.message }); }
   }
 
-  // adds: resolve/create family per household, then insert individuals
+  // adds: resolve/create family per household, then insert individuals using this
+  // batch's default_people_type. Capture new individual ids for gathering assignment.
   const adds = plan.add.filter((a) => !skipAdd.has(a.pcoId));
   const householdIds = [...new Set(adds.map((a) => a.householdId).filter(Boolean))];
   const familyByHousehold = new Map();
@@ -148,7 +147,7 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
 
   for (const g of groupAdds(adds)) {
     try {
-      const createdHouseholdFamilyId = await Database.transaction(async (conn) => {
+      const { createdHouseholdFamilyId, newIds } = await Database.transaction(async (conn) => {
         let familyId = g.householdId ? familyByHousehold.get(g.householdId) : null;
         let created = null;
         if (!familyId) {
@@ -159,23 +158,58 @@ async function applyPlan(churchId, plan, userId, selections = {}) {
           familyId = famRes.insertId;
           if (g.householdId) created = familyId;
         }
+        const ids = [];
         for (const m of g.members) {
-          await conn.query(
+          const insRes = await conn.query(
             `INSERT INTO individuals (church_id, family_id, first_name, last_name, people_type, is_child, is_active, created_by, created_at, planning_center_id)
-             VALUES (?, ?, ?, ?, 'regular', ?, 1, ?, datetime('now'), ?)`,
-            [churchId, familyId, m.firstName, m.lastName, m.isChild ? 1 : 0, userId, m.pcoId]
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), ?)`,
+            [churchId, familyId, m.firstName, m.lastName, defaultPeopleType, m.isChild ? 1 : 0, userId, m.pcoId]
           );
+          ids.push(insRes.insertId);
         }
-        return created;
+        return { createdHouseholdFamilyId: created, newIds: ids };
       });
       if (createdHouseholdFamilyId) familyByHousehold.set(g.householdId, createdHouseholdFamilyId);
+      for (const id of newIds) touchedIndividualIds.add(id);
       result.added += g.members.length;
     } catch (e) {
       result.errors.push({ type: 'add', household: g.householdId, error: e.message });
     }
   }
 
+  // Gathering assignment: add everyone this run touched to the batch's gathering roster.
+  if (gatheringTypeId) {
+    for (const individualId of touchedIndividualIds) {
+      try {
+        await Database.query(
+          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+           VALUES (?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
+          [gatheringTypeId, individualId, userId, churchId]
+        );
+      } catch (e) { result.errors.push({ type: 'gatheringAssign', id: individualId, error: e.message }); }
+    }
+  }
+
   return result;
 }
 
-module.exports = { applyPlan, buildFamilyName, groupAdds };
+// Archives active 'regular' individuals whose name matched no one in PCO's full
+// people export (plan.archiveExtras from computePlan). Used only by the
+// reconciliation endpoints — never called as part of a batch's own apply.
+async function applyArchiveExtras(churchId, archiveExtras, skipArchiveExtraIds = []) {
+  const skip = new Set(skipArchiveExtraIds.map(Number));
+  const result = { archived: 0, errors: [] };
+  for (const x of archiveExtras) {
+    if (skip.has(Number(x.individualId))) continue;
+    try {
+      await Database.query(
+        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [x.individualId, churchId]
+      );
+      result.archived++;
+    } catch (e) { result.errors.push({ type: 'archiveExtra', id: x.individualId, error: e.message }); }
+  }
+  return result;
+}
+
+module.exports = { applyPlan, buildFamilyName, groupAdds, applyArchiveExtras };

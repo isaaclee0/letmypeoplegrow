@@ -4,7 +4,7 @@ const Database = require('../config/database');
 const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
-const { applyPlan } = require('./planningCenter/apply');
+const { applyPlan, applyArchiveExtras } = require('./planningCenter/apply');
 
 let cronJob = null;
 
@@ -196,41 +196,96 @@ async function loadChurchState(churchId) {
   return { individuals, families };
 }
 
-// Compute a plan for a church (current church context must be set by caller).
-async function computePlanForChurch(churchId, accessToken, { force = false } = {}) {
-  const { people: pcoPeople, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
-  const { individuals, families } = await loadChurchState(churchId);
-  const settings = await Database.query(
-    `SELECT planning_center_membership_filter_enabled AS membershipFilterEnabled,
-            planning_center_membership_allowlist AS membershipAllowlistRaw,
-            planning_center_field_filter_enabled AS fieldFilterEnabled,
-            planning_center_field_filters AS fieldFiltersRaw
-       FROM church_settings WHERE church_id = ? LIMIT 1`,
-    [churchId]
-  );
-  let membershipFilterEnabled = true;
-  let fieldFilterEnabled = false;
+// Row shape from planning_center_sync_batches -> the shape everything else expects.
+function rowToBatch(row) {
   let membershipAllowlist = [];
   let fieldFilters = [];
-  if (settings.length) {
-    membershipFilterEnabled = !!settings[0].membershipFilterEnabled;
-    fieldFilterEnabled = !!settings[0].fieldFilterEnabled;
-    if (settings[0].membershipAllowlistRaw) {
-      try { membershipAllowlist = JSON.parse(settings[0].membershipAllowlistRaw); } catch (_) { membershipAllowlist = []; }
-    }
-    if (settings[0].fieldFiltersRaw) {
-      try { fieldFilters = JSON.parse(settings[0].fieldFiltersRaw); } catch (_) { fieldFilters = []; }
-    }
-  }
-  const filterConfig = { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters };
+  let lastSyncResult = null;
+  if (row.membershipAllowlistRaw) { try { membershipAllowlist = JSON.parse(row.membershipAllowlistRaw); } catch (_) {} }
+  if (row.fieldFiltersRaw) { try { fieldFilters = JSON.parse(row.fieldFiltersRaw); } catch (_) {} }
+  if (row.lastSyncResultRaw) { try { lastSyncResult = JSON.parse(row.lastSyncResultRaw); } catch (_) {} }
+  return {
+    id: row.id,
+    name: row.name,
+    membershipFilterEnabled: !!row.membershipFilterEnabled,
+    membershipAllowlist,
+    fieldFilterEnabled: !!row.fieldFilterEnabled,
+    fieldFilters,
+    defaultPeopleType: row.defaultPeopleType || 'regular',
+    gatheringTypeId: row.gatheringTypeId || null,
+    scheduleEnabled: !!row.scheduleEnabled,
+    scheduleFrequency: row.scheduleFrequency || 'weekly',
+    scheduleDay: typeof row.scheduleDay === 'number' ? row.scheduleDay : 1,
+    lastSyncAt: row.lastSyncAt || null,
+    lastSyncResult,
+  };
+}
+
+const BATCH_SELECT = `SELECT id, name, membership_filter_enabled AS membershipFilterEnabled,
+         membership_allowlist AS membershipAllowlistRaw,
+         field_filter_enabled AS fieldFilterEnabled,
+         field_filters AS fieldFiltersRaw,
+         default_people_type AS defaultPeopleType,
+         gathering_type_id AS gatheringTypeId,
+         schedule_enabled AS scheduleEnabled,
+         schedule_frequency AS scheduleFrequency,
+         schedule_day AS scheduleDay,
+         last_sync_at AS lastSyncAt,
+         last_sync_result AS lastSyncResultRaw
+    FROM planning_center_sync_batches`;
+
+async function listBatches(churchId) {
+  const rows = await Database.query(`${BATCH_SELECT} WHERE church_id = ? ORDER BY id`, [churchId]);
+  return rows.map(rowToBatch);
+}
+
+async function getBatch(churchId, batchId) {
+  const rows = await Database.query(`${BATCH_SELECT} WHERE id = ? AND church_id = ? LIMIT 1`, [batchId, churchId]);
+  return rows.length ? rowToBatch(rows[0]) : null;
+}
+
+// Compute a plan for a church against an explicit filterConfig (current church
+// context must be set by caller). filterConfig shape:
+//   { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters }
+async function computePlanForChurch(churchId, accessToken, filterConfig, { force = false } = {}) {
+  const { people: pcoPeople, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
+  const { individuals, families } = await loadChurchState(churchId);
   const plan = computePlan({ pcoPeople, individuals, families, filterConfig });
   plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
   return plan;
 }
 
+// filterConfig for a saved batch.
+function batchFilterConfig(batch) {
+  return {
+    membershipFilterEnabled: batch.membershipFilterEnabled,
+    membershipAllowlist: batch.membershipAllowlist,
+    fieldFilterEnabled: batch.fieldFilterEnabled,
+    fieldFilters: batch.fieldFilters,
+  };
+}
+
+async function computePlanForBatch(churchId, accessToken, batch, opts) {
+  return computePlanForChurch(churchId, accessToken, batchFilterConfig(batch), opts);
+}
+
+// archiveExtras/unmatchedVisitors never consult filterConfig (they're name-matched
+// against PCO's full unfiltered people export — see diffEngine.js), so any
+// filterConfig works here; a neutral empty one keeps intent clear.
+const NEUTRAL_FILTER_CONFIG = { membershipFilterEnabled: false, membershipAllowlist: [], fieldFilterEnabled: false, fieldFilters: [] };
+
+async function computeReconciliationForChurch(churchId, accessToken, opts) {
+  const plan = await computePlanForChurch(churchId, accessToken, NEUTRAL_FILTER_CONFIG, opts);
+  return { archiveExtras: plan.archiveExtras, unmatchedVisitors: plan.unmatchedVisitors, pcoFetchedAt: plan.pcoFetchedAt };
+}
+
+async function applyReconciliation(churchId, plan, selections = {}) {
+  return applyArchiveExtras(churchId, plan.archiveExtras, selections.skipArchiveExtraIds || []);
+}
+
 // Apply a plan for a church (current church context must be set by caller).
-async function applyForChurch(churchId, plan, userId, selections) {
-  return applyPlan(churchId, plan, userId, selections);
+async function applyForChurch(churchId, plan, userId, selections, batchConfig = {}) {
+  return applyPlan(churchId, plan, userId, selections, batchConfig);
 }
 
 // ─── Scheduling ──────────────────────────────────────────────────────────────
@@ -247,53 +302,87 @@ function isDueToday(frequency, day, now = new Date()) {
 
 // ─── Per-church sync ─────────────────────────────────────────────────────────
 
+async function runBatchSync(churchId, accessToken, batch, userId) {
+  try {
+    const plan = await computePlanForBatch(churchId, accessToken, batch, { force: false });
+    const result = await applyForChurch(churchId, plan, userId, {}, {
+      defaultPeopleType: batch.defaultPeopleType,
+      gatheringTypeId: batch.gatheringTypeId,
+    });
+    const summary = {
+      at: new Date().toISOString(),
+      added: result.added, updated: result.updated, archived: result.archived,
+      reactivated: result.reactivated, linked: result.linked,
+      ambiguous: plan.ambiguous.length,
+      visitorMatches: (plan.visitorMatches || []).length,
+      errors: result.errors.length,
+    };
+    await Database.query(
+      `UPDATE planning_center_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ?`,
+      [JSON.stringify(summary), batch.id]
+    );
+    logger.info(`PCO batch sync: church ${churchId} batch ${batch.id} (${batch.name}) done — ${JSON.stringify(summary)}`);
+  } catch (err) {
+    logger.error(`PCO batch sync: error for church ${churchId} batch ${batch.id}: ${err.message}`);
+  }
+}
+
+async function runReconciliationSync(churchId, accessToken, userId) {
+  try {
+    const plan = await computeReconciliationForChurch(churchId, accessToken, { force: false });
+    const result = await applyReconciliation(churchId, plan, {});
+    const summary = { at: new Date().toISOString(), archived: result.archived, errors: result.errors.length };
+    await Database.query(
+      `UPDATE church_settings
+          SET planning_center_reconciliation_last_run_at = datetime('now'),
+              planning_center_reconciliation_last_result = ?
+        WHERE church_id = ?`,
+      [JSON.stringify(summary), churchId]
+    );
+    logger.info(`PCO reconciliation: church ${churchId} done — ${JSON.stringify(summary)}`);
+  } catch (err) {
+    logger.error(`PCO reconciliation: error for church ${churchId}: ${err.message}`);
+  }
+}
+
 async function syncChurch(church, { skipScheduleCheck = false } = {}) {
   const churchId = church.church_id;
   await Database.setChurchContext(churchId, async () => {
     try {
       const settings = await Database.query(
-        `SELECT planning_center_sync_enabled, planning_center_auto_archive,
-                planning_center_sync_frequency, planning_center_sync_day,
+        `SELECT planning_center_sync_enabled AS enabled,
+                planning_center_reconciliation_schedule_enabled AS reconciliationScheduleEnabled,
+                planning_center_reconciliation_frequency AS reconciliationFrequency,
+                planning_center_reconciliation_day AS reconciliationDay,
                 (SELECT user_id FROM user_preferences WHERE church_id = ? AND preference_key = 'planning_center_tokens' LIMIT 1) AS token_user
            FROM church_settings WHERE church_id = ? LIMIT 1`,
         [churchId, churchId]
       );
-      const enabled = settings.length && (settings[0].planning_center_sync_enabled || settings[0].planning_center_auto_archive);
-      if (!enabled) return;
+      if (!settings.length || !settings[0].enabled) return;
+      const userId = settings[0].token_user || null;
 
-      if (!skipScheduleCheck) {
-        const frequency = settings[0].planning_center_sync_frequency || 'weekly';
-        const day = settings[0].planning_center_sync_day;
-        if (!isDueToday(frequency, day)) return;
-      }
+      const batches = await listBatches(churchId);
+      const dueBatches = batches.filter((batch) => {
+        if (!batch.scheduleEnabled) return false;
+        return skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay);
+      });
+      const reconciliationDue = !!(settings[0].reconciliationScheduleEnabled &&
+        (skipScheduleCheck || isDueToday(settings[0].reconciliationFrequency, settings[0].reconciliationDay)));
+
+      if (!dueBatches.length && !reconciliationDue) return;
 
       const accessToken = await getAccessTokenForChurch(churchId);
       if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
 
-      const userId = settings[0].token_user || null;
-      // Scheduled run: always pull fresh from PCO so we never auto-apply a stale diff.
-      const plan = await computePlanForChurch(churchId, accessToken, { force: true });
-      const result = await applyForChurch(churchId, plan, userId, {});
+      // Warm the PCO people cache once for this whole run — each due batch and
+      // reconciliation below reuse it (force: false) rather than each re-fetching.
+      await getCachedPcoPeople(churchId, accessToken, { force: true });
 
-      const summary = {
-        at: new Date().toISOString(),
-        added: result.added, updated: result.updated, archived: result.archived,
-        reactivated: result.reactivated, linked: result.linked,
-        ambiguous: plan.ambiguous.length,
-        visitorMatches: (plan.visitorMatches || []).length,
-        archiveExtras: (plan.archiveExtras || []).length,
-        unmatchedVisitors: (plan.unmatchedVisitors || []).length,
-        errors: result.errors.length,
-      };
-      await Database.query(
-        `UPDATE church_settings
-            SET planning_center_last_sync = datetime('now'),
-                planning_center_last_sync_archived = ?,
-                planning_center_last_sync_result = ?
-          WHERE church_id = ?`,
-        [result.archived, JSON.stringify(summary), churchId]
-      );
-      logger.info(`PCO sync: church ${churchId} done — ${JSON.stringify(summary)}`);
+      for (const batch of dueBatches) {
+        await runBatchSync(churchId, accessToken, batch, userId);
+      }
+
+      if (reconciliationDue) await runReconciliationSync(churchId, accessToken, userId);
     } catch (err) {
       logger.error(`PCO sync: error for church ${churchId}: ${err.message}`);
     }
@@ -340,4 +429,6 @@ module.exports = {
   start, stop, runNow, syncChurch, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
+  listBatches, getBatch, batchFilterConfig, computePlanForBatch,
+  computeReconciliationForChurch, applyReconciliation,
 };

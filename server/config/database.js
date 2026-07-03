@@ -191,6 +191,87 @@ class Database {
       if (!individualsCols.some(c => c.name === 'pco_link_declined')) {
         db.exec('ALTER TABLE individuals ADD COLUMN pco_link_declined INTEGER DEFAULT 0');
       }
+
+      // Migrate church_settings: reconciliation schedule columns
+      if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_schedule_enabled')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_schedule_enabled INTEGER DEFAULT 0');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_frequency')) {
+        db.exec("ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_frequency TEXT DEFAULT 'weekly'");
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_day')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_day INTEGER DEFAULT 1');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_last_run_at')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_last_run_at TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_last_result')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_last_result TEXT');
+      }
+
+      // Create planning_center_sync_batches if missing, and seed exactly once from
+      // the legacy single-filter columns (additive-only migration — the old columns
+      // are left in place, unused, rather than dropped; this codebase's migrations
+      // never DROP COLUMN).
+      if (!existingTables.includes('planning_center_sync_batches')) {
+        db.exec(`CREATE TABLE IF NOT EXISTS planning_center_sync_batches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          church_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          membership_filter_enabled INTEGER DEFAULT 0,
+          membership_allowlist TEXT,
+          field_filter_enabled INTEGER DEFAULT 0,
+          field_filters TEXT,
+          default_people_type TEXT DEFAULT 'regular' CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
+          gathering_type_id INTEGER,
+          schedule_enabled INTEGER DEFAULT 0,
+          schedule_frequency TEXT DEFAULT 'weekly',
+          schedule_day INTEGER DEFAULT 1,
+          last_sync_at TEXT,
+          last_sync_result TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE SET NULL
+        )`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pcsb_church ON planning_center_sync_batches(church_id)`);
+
+        const legacy = db.prepare(
+          `SELECT planning_center_membership_filter_enabled AS membershipFilterEnabled,
+                  planning_center_membership_allowlist AS membershipAllowlist,
+                  planning_center_field_filter_enabled AS fieldFilterEnabled,
+                  planning_center_field_filters AS fieldFilters,
+                  planning_center_sync_frequency AS syncFrequency,
+                  planning_center_sync_day AS syncDay
+             FROM church_settings WHERE church_id = ?`
+        ).get(churchId);
+        if (legacy) {
+          let allowlistArr = [];
+          try { allowlistArr = JSON.parse(legacy.membershipAllowlist || '[]'); } catch (_) {}
+          let fieldFiltersArr = [];
+          try { fieldFiltersArr = JSON.parse(legacy.fieldFilters || '[]'); } catch (_) {}
+          const hasMembershipFilter = !!legacy.membershipFilterEnabled && allowlistArr.length > 0;
+          const hasFieldFilter = !!legacy.fieldFilterEnabled && fieldFiltersArr.length > 0;
+          // Only seed a batch when there was an actual configured filter — a church
+          // that never touched PCO sync shouldn't get a dead "Main Sync" batch just
+          // because membership_filter_enabled defaults to 1 with an empty allowlist.
+          if (hasMembershipFilter || hasFieldFilter) {
+            db.prepare(
+              `INSERT INTO planning_center_sync_batches
+                 (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
+                  default_people_type, gathering_type_id, schedule_enabled, schedule_frequency, schedule_day)
+               VALUES (?, 'Main Sync', ?, ?, ?, ?, 'regular', NULL, 1, ?, ?)`
+            ).run(
+              churchId,
+              legacy.membershipFilterEnabled ? 1 : 0,
+              legacy.membershipAllowlist || '[]',
+              legacy.fieldFilterEnabled ? 1 : 0,
+              legacy.fieldFilters || '[]',
+              legacy.syncFrequency || 'weekly',
+              typeof legacy.syncDay === 'number' ? legacy.syncDay : 1
+            );
+          }
+        }
+      }
     }
 
     churchDbs.set(churchId, db);

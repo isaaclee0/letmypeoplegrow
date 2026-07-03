@@ -503,31 +503,42 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 router.get('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const rows = await Database.query(
-      `SELECT planning_center_sync_indicator, planning_center_auto_archive,
-              planning_center_last_sync, planning_center_last_sync_archived,
-              planning_center_sync_frequency, planning_center_sync_day
+      `SELECT planning_center_sync_indicator, planning_center_auto_archive, planning_center_sync_enabled,
+              planning_center_reconciliation_schedule_enabled, planning_center_reconciliation_frequency,
+              planning_center_reconciliation_day, planning_center_reconciliation_last_run_at,
+              planning_center_reconciliation_last_result
        FROM church_settings WHERE church_id = ? LIMIT 1`,
       [req.user.church_id]
     );
     const row = rows[0] || {};
+    let reconciliationLastResult = null;
+    if (row.planning_center_reconciliation_last_result) {
+      try { reconciliationLastResult = JSON.parse(row.planning_center_reconciliation_last_result); } catch (_) {}
+    }
     res.json({
       planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
       planningCenterAutoArchive: !!(row.planning_center_auto_archive),
-      planningCenterLastSync: row.planning_center_last_sync || null,
-      planningCenterLastSyncArchived: row.planning_center_last_sync_archived || 0,
-      planningCenterSyncFrequency: row.planning_center_sync_frequency || 'weekly',
-      planningCenterSyncDay: typeof row.planning_center_sync_day === 'number' ? row.planning_center_sync_day : 1,
+      planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
+      planningCenterReconciliationScheduleEnabled: !!(row.planning_center_reconciliation_schedule_enabled),
+      planningCenterReconciliationFrequency: row.planning_center_reconciliation_frequency || 'weekly',
+      planningCenterReconciliationDay: typeof row.planning_center_reconciliation_day === 'number' ? row.planning_center_reconciliation_day : 1,
+      planningCenterReconciliationLastRunAt: row.planning_center_reconciliation_last_run_at || null,
+      planningCenterReconciliationLastResult: reconciliationLastResult,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve integration settings.' });
   }
 });
 
-const PCO_SYNC_FREQUENCIES = ['daily', 'weekly', 'monthly'];
+const PCO_RECONCILIATION_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
-    const { planningCenterSyncIndicator, planningCenterAutoArchive, planningCenterSyncFrequency, planningCenterSyncDay } = req.body;
+    const {
+      planningCenterSyncIndicator, planningCenterAutoArchive, planningCenterSyncEnabled,
+      planningCenterReconciliationScheduleEnabled, planningCenterReconciliationFrequency,
+      planningCenterReconciliationDay,
+    } = req.body;
     const updates = [];
     const params = [];
     if (typeof planningCenterSyncIndicator === 'boolean') {
@@ -538,19 +549,27 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
       updates.push('planning_center_auto_archive = ?');
       params.push(planningCenterAutoArchive ? 1 : 0);
     }
-    if (planningCenterSyncFrequency !== undefined) {
-      if (!PCO_SYNC_FREQUENCIES.includes(planningCenterSyncFrequency)) {
-        return res.status(400).json({ error: 'planningCenterSyncFrequency must be one of daily, weekly, monthly.' });
-      }
-      updates.push('planning_center_sync_frequency = ?');
-      params.push(planningCenterSyncFrequency);
+    if (typeof planningCenterSyncEnabled === 'boolean') {
+      updates.push('planning_center_sync_enabled = ?');
+      params.push(planningCenterSyncEnabled ? 1 : 0);
     }
-    if (planningCenterSyncDay !== undefined) {
-      if (!Number.isInteger(planningCenterSyncDay) || planningCenterSyncDay < 0 || planningCenterSyncDay > 6) {
-        return res.status(400).json({ error: 'planningCenterSyncDay must be an integer between 0 and 6.' });
+    if (typeof planningCenterReconciliationScheduleEnabled === 'boolean') {
+      updates.push('planning_center_reconciliation_schedule_enabled = ?');
+      params.push(planningCenterReconciliationScheduleEnabled ? 1 : 0);
+    }
+    if (planningCenterReconciliationFrequency !== undefined) {
+      if (!PCO_RECONCILIATION_FREQUENCIES.includes(planningCenterReconciliationFrequency)) {
+        return res.status(400).json({ error: 'planningCenterReconciliationFrequency must be one of daily, weekly, monthly.' });
       }
-      updates.push('planning_center_sync_day = ?');
-      params.push(planningCenterSyncDay);
+      updates.push('planning_center_reconciliation_frequency = ?');
+      params.push(planningCenterReconciliationFrequency);
+    }
+    if (planningCenterReconciliationDay !== undefined) {
+      if (!Number.isInteger(planningCenterReconciliationDay) || planningCenterReconciliationDay < 0 || planningCenterReconciliationDay > 6) {
+        return res.status(400).json({ error: 'planningCenterReconciliationDay must be an integer between 0 and 6.' });
+      }
+      updates.push('planning_center_reconciliation_day = ?');
+      params.push(planningCenterReconciliationDay);
     }
     if (updates.length) {
       params.push(req.user.church_id);
