@@ -4,8 +4,9 @@ import { useForm } from 'react-hook-form';
 import { authAPI, onboardingAPI, integrationsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { CheckIcon, MapPinIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import MembershipAllowlistEditor from '../components/planningCenter/MembershipAllowlistEditor';
+import PlanningCenterBatchEditor from '../components/planningCenter/PlanningCenterBatchEditor';
 import PCOCheckinImport from '../components/PCOCheckinImport';
+import { SyncBatch } from '../services/api';
 
 interface SetupForm {
   churchName: string;
@@ -33,10 +34,6 @@ const OnboardingPage: React.FC = () => {
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [locationSearching, setLocationSearching] = useState(false);
-  const [membershipValues, setMembershipValues] = useState<{ membership: string; count: number }[]>([]);
-  const [membershipLoading, setMembershipLoading] = useState(false);
-  const [membershipError, setMembershipError] = useState<string | null>(null);
-  const [allowlist, setAllowlist] = useState<string[]>([]);
   const [importingPeople, setImportingPeople] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const locationDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -67,12 +64,6 @@ const OnboardingPage: React.FC = () => {
       window.history.replaceState({}, '', '/app/onboarding');
     }
   }, []);
-
-  // Trigger the membership loader when entering the people step.
-  useEffect(() => {
-    if (step === 'pco-people') loadMembershipSummary();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
 
   // Location search - call Open-Meteo directly (no auth needed)
   const handleLocationSearchChange = (value: string) => {
@@ -180,37 +171,13 @@ const OnboardingPage: React.FC = () => {
     navigate('/app/gatherings');
   };
 
-  const loadMembershipSummary = async () => {
-    setMembershipLoading(true); setMembershipError(null);
-    try {
-      const r = await integrationsAPI.getPlanningCenterMembershipSummary();
-      const values = r.data.values || [];
-      setMembershipValues(values);
-      const defaults = values
-        .map((v: any) => v.membership)
-        .filter((m: string) => m && m !== '(none)' && !/archiv|inactive/i.test(m));
-      setAllowlist(defaults);
-    } catch (e: any) {
-      setMembershipError(e.response?.data?.error || 'Failed to load membership categories.');
-    } finally {
-      setMembershipLoading(false);
-    }
-  };
-
-  const importPeople = async () => {
+  // The batch is created/saved by PlanningCenterBatchEditor itself; this just
+  // runs an immediate, auto-applied import (no manual review — same one-time,
+  // no-review behaviour onboarding had before) and advances the wizard.
+  const onFirstBatchSaved = async (batch: SyncBatch) => {
     setImportingPeople(true); setError('');
     try {
-      // Save the chosen allowlist (one-time import; ongoing sync stays off). Onboarding
-      // only offers membership-category selection, so the field-filter source stays off.
-      await integrationsAPI.savePlanningCenterSyncFilter({
-        enabled: false,
-        membershipFilterEnabled: true,
-        membershipAllowlist: allowlist,
-        fieldFilterEnabled: false,
-        fieldFilters: [],
-      });
-      // Apply the additive sync to import matching people + households.
-      await integrationsAPI.applyPlanningCenterSync({});
+      await integrationsAPI.applyPlanningCenterBatch(batch.id, {});
       setStep('pco-gatherings');
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to import people from Planning Center.');
@@ -381,32 +348,17 @@ const OnboardingPage: React.FC = () => {
             </div>
           ) : step === 'pco-people' ? (
             <div className="space-y-4">
-              <p className="text-sm text-gray-700">Choose which Planning Center people to import.</p>
-              <MembershipAllowlistEditor
-                values={membershipValues}
-                loading={membershipLoading}
-                error={membershipError}
-                selected={allowlist}
-                onChange={setAllowlist}
-                onReload={loadMembershipSummary}
-              />
-              <div className="flex justify-between">
-                <button
-                  type="button"
-                  onClick={() => setStep('pco-gatherings')}
-                  className="text-gray-600 underline text-sm"
-                >
-                  Skip
-                </button>
-                <button
-                  type="button"
-                  disabled={importingPeople || allowlist.length === 0}
-                  onClick={importPeople}
-                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {importingPeople ? 'Importing…' : 'Import people'}
-                </button>
-              </div>
+              <p className="text-sm text-gray-700">Choose which Planning Center people to import, and optionally assign them to a gathering.</p>
+              {importingPeople ? (
+                <p className="text-sm text-gray-700">Importing…</p>
+              ) : (
+                <PlanningCenterBatchEditor
+                  batch={null}
+                  onSaved={onFirstBatchSaved}
+                  onCancel={() => setStep('pco-gatherings')}
+                />
+              )}
+              {error && <p className="text-sm text-red-600">{error}</p>}
             </div>
           ) : step === 'pco-gatherings' ? (
             <div className="space-y-4">
