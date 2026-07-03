@@ -2735,8 +2735,12 @@ router.get('/planning-center/field-summary', async (req, res) => {
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    const { people } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
-    res.json({ success: true, ...tallyField(people, fieldDefinitionId) });
+    const [{ people }, definitions] = await Promise.all([
+      pcoSync.getCachedPcoPeople(churchId, accessToken),
+      fetchFieldDefinitions(accessToken),
+    ]);
+    const definition = definitions.find((d) => d.id === fieldDefinitionId);
+    res.json({ success: true, ...tallyField(people, fieldDefinitionId, definition?.options || []) });
   } catch (error) {
     logger.error('PCO field summary error:', error);
     res.status(500).json({ error: 'Failed to load field summary.' });

@@ -42,3 +42,22 @@ test('tallyField handles empty input and a field id nobody has', () => {
   assert.deepStrictEqual(tallyField([], 'f1'), { total: 0, values: [] });
   assert.deepStrictEqual(tallyField([{ fieldValues: { f2: 'X' } }], 'f1'), { total: 1, values: [{ value: '(none)', count: 1 }] });
 });
+
+test('tallyField seeds canonicalOptions at count 0 so unclaimed PCO options still surface', () => {
+  const people = [
+    { fieldValues: { f1: 'Connected' } },
+    { fieldValues: { f1: 'Connected' } },
+  ];
+  const result = tallyField(people, 'f1', ['Connected', 'New', 'Lapsed']);
+  assert.strictEqual(result.total, 2);
+  assert.deepStrictEqual(result.values, [
+    { value: 'Connected', count: 2 },
+    { value: 'New', count: 0 },
+    { value: 'Lapsed', count: 0 },
+  ]);
+});
+
+test('tallyField canonicalOptions does not duplicate a value that people also have', () => {
+  const result = tallyField([{ fieldValues: { f1: 'New' } }], 'f1', ['New']);
+  assert.deepStrictEqual(result.values, [{ value: 'New', count: 1 }]);
+});
