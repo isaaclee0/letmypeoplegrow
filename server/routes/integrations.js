@@ -2371,6 +2371,43 @@ router.get('/planning-center/checkin-import-state', async (req, res) => {
   }
 });
 
+// Lightweight probe: is there any check-in data worth importing, and has this
+// church already imported check-ins before? Used to decide whether to nudge the
+// user. Costs at most a single PCO request (per_page=1, for the total count) and
+// short-circuits without any PCO call once an import has been done. Any error is
+// treated as "not available" so the UI simply doesn't prompt.
+router.get('/planning-center/checkins/availability', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const churchId = req.user.church_id;
+
+    // Once a check-in import has happened, never nudge again.
+    const state = await loadCheckinImportState(churchId);
+    const hasImported = !!(state && state.imported && Object.keys(state.imported).length > 0);
+    if (hasImported) {
+      return res.json({ success: true, hasImported: true, available: false });
+    }
+
+    const tokens = await getPlanningCenterTokens(userId, churchId);
+    if (!tokens || !tokens.access_token) {
+      return res.json({ success: true, hasImported: false, available: false });
+    }
+
+    const response = await makePlanningCenterRequest(
+      'https://api.planningcenteronline.com/check-ins/v2/check_ins?per_page=1',
+      tokens, userId, churchId
+    );
+    const total = (response && response.status === 200)
+      ? (response.data?.meta?.total_count ?? (response.data?.data?.length || 0))
+      : 0;
+    res.json({ success: true, hasImported: false, available: total > 0, total });
+  } catch (error) {
+    logger.error('PCO checkin availability error:', error);
+    // Non-fatal: the UI just won't prompt.
+    res.json({ success: true, hasImported: false, available: false });
+  }
+});
+
 router.post('/planning-center/link-family', async (req, res) => {
   try {
     const churchId = req.user.church_id;

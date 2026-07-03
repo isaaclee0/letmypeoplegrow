@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { integrationsAPI, gatheringsAPI } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
+import Modal from './Modal';
 
 interface ScheduleSuggestion {
   dayOfWeek: string | null;
@@ -65,6 +66,7 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<any>(null);
   const [autoLoaded, setAutoLoaded] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [recencyWeeks, setRecencyWeeks] = useState(defaultRecencyWeeks);
   const autoLoadStarted = useRef(false);
 
@@ -183,7 +185,7 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   };
 
   const runExecute = async () => {
-    if (!window.confirm('Import these check-ins as attendance? Existing LMPG records will not be changed.')) return;
+    setConfirmOpen(false);
     setLoading(true); setError(null);
     const jobId = newJobId(); setProgress({ phase: 'fetching', percent: 0 });
     try {
@@ -221,14 +223,14 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const renderNewGatheringPanel = (ev: PcoEvent, m: Mapping) => {
     const sched = m.schedule || { dayOfWeek: null, startTime: null, frequency: null, irregular: false };
     const ua = m.userAssignment || { mode: 'none' as const };
-    const inputCls = 'border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-sm';
+    const inputCls = 'mt-1 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-sm';
     return (
       <div className="space-y-3">
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-sm text-gray-700 dark:text-gray-300">Name
             <input value={m.newGatheringName || ''} placeholder="Gathering name"
               onChange={(e) => setMap(ev.pcoEventId, { newGatheringName: e.target.value })}
-              className={`block ${inputCls}`} />
+              className={`block w-56 ${inputCls}`} />
           </label>
           <label className="text-sm text-gray-700 dark:text-gray-300 flex items-center gap-1 self-center">
             <input type="checkbox" checked={sched.irregular}
@@ -345,58 +347,53 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
 
       {events.length > 0 && (
         <div className="space-y-3">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-gray-500 dark:text-gray-400">
-                <th className="py-1">PCO Event</th><th>Check-ins</th><th>Dates</th><th>Import as</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((ev) => {
-                const m = mappings[ev.pcoEventId] || { target: 'skip' };
-                return (
-                  <React.Fragment key={ev.pcoEventId}>
-                    <tr className="border-t border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100">
-                      <td className="py-2">
-                        {ev.eventName}
+          <div className="space-y-3">
+            {events.map((ev) => {
+              const m = mappings[ev.pcoEventId] || { target: 'skip' };
+              return (
+                <div key={ev.pcoEventId}
+                  className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-gray-900 dark:text-gray-100">{ev.eventName}</span>
                         {ev.alreadyImportedThrough && (
-                          <span className="ml-2 inline-block text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                          <span className="inline-block text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
                             Imported through {ev.alreadyImportedThrough}
                           </span>
                         )}
-                      </td>
-                      <td>{ev.checkinCount} ({ev.sessionCount} dates)</td>
-                      <td>{ev.firstDate ?? '—'} → {ev.lastDate ?? '—'}</td>
-                      <td className="space-x-2">
-                        <select value={m.target}
-                          onChange={(e) => setMap(ev.pcoEventId, { target: e.target.value as Mapping['target'] })}
-                          className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1">
-                          <option value="skip">Skip</option>
-                          <option value="new">New gathering</option>
-                          <option value="existing">Existing gathering</option>
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        {ev.checkinCount} check-ins · {ev.sessionCount} dates · {ev.firstDate ?? '—'} to {ev.lastDate ?? '—'}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select value={m.target}
+                        onChange={(e) => setMap(ev.pcoEventId, { target: e.target.value as Mapping['target'] })}
+                        className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-sm">
+                        <option value="skip">Skip</option>
+                        <option value="new">New gathering</option>
+                        <option value="existing">Existing gathering</option>
+                      </select>
+                      {m.target === 'existing' && (
+                        <select value={m.gatheringTypeId || ''}
+                          onChange={(e) => setMap(ev.pcoEventId, { gatheringTypeId: Number(e.target.value) })}
+                          className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-sm">
+                          <option value="">Choose…</option>
+                          {gatherings.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                         </select>
-                        {m.target === 'existing' && (
-                          <select value={m.gatheringTypeId || ''}
-                            onChange={(e) => setMap(ev.pcoEventId, { gatheringTypeId: Number(e.target.value) })}
-                            className="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1 py-1">
-                            <option value="">Choose…</option>
-                            {gatherings.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                          </select>
-                        )}
-                      </td>
-                    </tr>
-                    {m.target === 'new' && (
-                      <tr className="border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50">
-                        <td colSpan={4} className="py-3">
-                          {renderNewGatheringPanel(ev, m)}
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+                      )}
+                    </div>
+                  </div>
+                  {m.target === 'new' && (
+                    <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
+                      {renderNewGatheringPanel(ev, m)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
           <button onClick={runPreview} disabled={loading || validMappings().length === 0}
             className="bg-gray-700 dark:bg-gray-600 text-white rounded px-3 py-2 disabled:opacity-50">Preview import</button>
           {showSkip && (
@@ -420,12 +417,32 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
           <div>Sessions involved: {preview.sessionsInvolved}</div>
           <div>Matched people: {preview.matchedPeople}</div>
           <div>New (inactive) people to create: {preview.peopleToCreate}</div>
-          <button onClick={runExecute} disabled={loading}
+          <button onClick={() => setConfirmOpen(true)} disabled={loading}
             className="mt-2 bg-green-600 hover:bg-green-700 text-white rounded px-3 py-2 disabled:opacity-50">
             Confirm import
           </button>
         </div>
       )}
+
+      <Modal isOpen={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-5 space-y-4">
+          <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Import check-ins?</h4>
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            Import these check-ins as attendance? Existing LMPG records will not be changed.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmOpen(false)}
+              className="rounded px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
+              Cancel
+            </button>
+            <button onClick={runExecute}
+              className="rounded px-3 py-2 text-sm bg-green-600 hover:bg-green-700 text-white">
+              Import
+            </button>
+          </div>
+        </div>
+      </Modal>
+
 
       {done && (
         <div className="rounded bg-green-50 dark:bg-green-900/30 p-3 text-sm space-y-1 text-green-800 dark:text-green-200">

@@ -900,6 +900,8 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),
   getCheckinImportState: () =>
     api.get('/integrations/planning-center/checkin-import-state'),
+  getCheckinAvailability: () =>
+    api.get('/integrations/planning-center/checkins/availability'),
   previewCheckinImport: (body: {
     startDate?: string;
     endDate?: string;
