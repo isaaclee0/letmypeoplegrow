@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { buildFamilyName, groupAdds } = require('./apply');
+const { buildFamilyName, groupAdds, applyArchiveExtras } = require('./apply');
 
 test('buildFamilyName uses adults first', () => {
   const name = buildFamilyName([
@@ -36,4 +36,8 @@ test('groupAdds keeps two null-household people as separate solo groups', () => 
   ]);
   assert.strictEqual(groups.length, 2);
   assert.ok(groups.every((g) => g.householdId === null && g.members.length === 1));
+});
+
+test('applyArchiveExtras is exported as a function', () => {
+  assert.strictEqual(typeof applyArchiveExtras, 'function');
 });
