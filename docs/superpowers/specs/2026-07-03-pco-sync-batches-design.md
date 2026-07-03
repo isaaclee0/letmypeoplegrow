@@ -56,11 +56,16 @@ handled later via check-in import.
 
 - **Batches are named and saved**, not ad hoc, so a church can re-run
   "Youth Group" every month without rebuilding the filter.
-- **Archive detection unions all saved batches.** A person only gets
-  flagged as a true "extra" if they match *none* of the church's saved
-  batches — not just the one currently running. This is why archive-extra
-  detection is pulled out into its own reconciliation action (below) rather
-  than computed per-batch.
+- **Archive detection reflects whole-of-PCO existence, not any one filter.**
+  `diffEngine.js`'s `archiveExtras`/`unmatchedVisitors` buckets are computed
+  by name-matching against PCO's *entire* unfiltered people export — they
+  never consult the membership/field filter (`isEligible()` is only used by
+  the `add` and `reactivate` buckets). So there is no eligibility "union" to
+  compute across batches for this check; it's already batch-independent.
+  Archive-extra detection is still pulled into its own reconciliation action
+  (below), but the reason is to avoid showing the same whole-roster result
+  redundantly inside every batch's review, not to fix a filter-interaction
+  bug.
 - **Gathering assignment is optional, single-gathering-per-batch.** No
   per-person override; a batch either has one associated gathering (applied
   to everyone it imports/links) or none.
@@ -110,8 +115,12 @@ plus the two new fields (`default_people_type`, `gathering_type_id`).
 - `planning_center_membership_filter_enabled`,
   `planning_center_membership_allowlist`, `planning_center_field_filter_enabled`,
   `planning_center_field_filters`, `planning_center_sync_frequency`,
-  `planning_center_sync_day` — removed after the one-time migration reads
-  them (see Migration below).
+  `planning_center_sync_day` — superseded; the one-time migration reads them
+  once to seed the "Main Sync" batch (see Migration below) and the
+  application code stops reading/writing them afterward. Left in place as
+  unused columns rather than dropped — this codebase's migration pattern
+  (`database.js`) is purely additive (`ALTER TABLE ... ADD COLUMN`), with no
+  existing precedent for `DROP COLUMN`, so we don't introduce one here.
 - New columns for the reconciliation action (it's a per-church singleton,
   not a list, so it stays in `church_settings` rather than getting its own
   table):
@@ -121,9 +130,9 @@ plus the two new fields (`default_people_type`, `gathering_type_id`).
   - `planning_center_reconciliation_last_run_at TEXT`
   - `planning_center_reconciliation_last_result TEXT (JSON)`
 - `planning_center_last_sync`, `planning_center_last_sync_archived`,
-  `planning_center_last_sync_result` — removed; superseded by
-  per-batch `last_sync_at`/`last_sync_result` and the reconciliation
-  columns above.
+  `planning_center_last_sync_result` — superseded by per-batch
+  `last_sync_at`/`last_sync_result` and the reconciliation columns above;
+  left in place unused (same rationale as above).
 
 ## Batch Lifecycle & API
 
@@ -169,13 +178,15 @@ them, so no union logic is needed there.
 
 A separate, church-level action, not tied to any one batch.
 
-- `GET /planning-center/reconciliation/plan?refresh=1` — computes the union
-  of eligibility across every saved batch (a person counts as "still
-  expected" if they match *any* batch's filter). Fetches all active,
-  PCO-linked LMPG individuals and flags any whose PCO person no longer
-  matches that union — this is today's `archiveExtras` bucket, correctly
-  scoped. Also includes `unmatchedVisitors` (LMPG-owned visitors with no PCO
-  match at all), since that's likewise a whole-roster concern.
+- `GET /planning-center/reconciliation/plan?refresh=1` — re-runs the
+  existing `computePlanForChurch` machinery (any batch's filter config
+  works, or an empty one — `archiveExtras`/`unmatchedVisitors` don't consult
+  `filterConfig` at all) against the full unfiltered PCO people export, and
+  returns just those two buckets: `archiveExtras` (active, unlinked LMPG
+  regulars whose name matches no one in PCO) and `unmatchedVisitors`
+  (LMPG-owned visitors with no PCO match at all). No union-of-batches
+  computation is needed since these buckets were never filter-scoped to
+  begin with.
 - `POST /planning-center/reconciliation/apply` — same
   review-then-select-then-apply pattern, reusing
   `PlanningCenterSyncReview.tsx`'s bucket-list UI for these two buckets.
@@ -216,7 +227,8 @@ A one-time migration (`server/config/database.js`, alongside existing
    `planning_center_sync_frequency`/`planning_center_sync_day` as its
    schedule (with `schedule_enabled = 1`, `default_people_type = 'regular'`,
    `gathering_type_id = NULL`).
-4. Drop the superseded `church_settings` columns listed above.
+4. Leave the superseded `church_settings` columns in place, unused (see
+   Data Model above) — no `DROP COLUMN` step.
 
 This runs once per per-church SQLite file, consistent with how other
 `ALTER TABLE`/backfill migrations in `database.js` are applied.
@@ -246,13 +258,15 @@ This runs once per per-church SQLite file, consistent with how other
 
 - Server: unit tests for the batch-scoped `computePlanForChurch` (verify a
   person matching only Batch B never appears in Batch A's `add` bucket, and
-  appears as informational "already linked" if they match both). Unit tests
-  for reconciliation's union-eligibility logic (person matching any one of
-  N batches is excluded from `archiveExtras`). Unit test for the migration
+  appears as informational "already linked" if they match both). Unit test
+  for the reconciliation endpoint (verify it returns only
+  `archiveExtras`/`unmatchedVisitors`, ignoring whichever filter config it's
+  called with). Unit test for the migration
   script's one-time batch creation from existing global settings, run
   against a fixture per-church DB.
 - Client: no existing test harness for the integration panel (consistent
   with prior PCO specs) — manual verification: create two batches with
   different filters, run each, confirm no cross-contamination; run
-  reconciliation and confirm someone matching a second batch isn't flagged;
-  verify onboarding's first-batch flow end-to-end against a fresh church.
+  reconciliation and confirm it only surfaces unlinked/unmatched people, not
+  linked ones; verify onboarding's first-batch flow end-to-end against a
+  fresh church.
