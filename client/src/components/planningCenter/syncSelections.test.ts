@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSelections, buildReconciliationSelections } from './syncSelections';
+import { buildSelections, buildReconciliationSelections, VisitorChoice } from './syncSelections';
 
 describe('buildSelections', () => {
   it('maps ambiguous choices and skip set into the apply payload', () => {
@@ -28,7 +28,7 @@ describe('buildSelections', () => {
   });
 
   it('maps visitorChoices into the apply payload, omitting undecided entries', () => {
-    const visitorChoices = { 90: 'promote', 91: 'keep', 92: null };
+    const visitorChoices: Record<number, VisitorChoice | null> = { 90: 'promote', 91: 'keep', 92: null };
     const result = buildSelections({}, new Set(), visitorChoices);
     expect(result).toEqual({
       ambiguous: {},
