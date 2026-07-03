@@ -2579,99 +2579,131 @@ router.post('/planning-center/import-people', async (req, res) => {
   }
 });
 
-// Read sync config (both filter sources + enabled flag)
-router.get('/planning-center/sync-filter', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const rows = await Database.query(
-      `SELECT planning_center_sync_enabled AS enabled,
-              planning_center_membership_filter_enabled AS membershipFilterEnabled,
-              planning_center_membership_allowlist AS membershipAllowlistRaw,
-              planning_center_field_filter_enabled AS fieldFilterEnabled,
-              planning_center_field_filters AS fieldFiltersRaw
-         FROM church_settings WHERE church_id = ? LIMIT 1`,
-      [churchId]
-    );
-    let membershipAllowlist = [];
-    let fieldFilters = [];
-    if (rows.length) {
-      if (rows[0].membershipAllowlistRaw) { try { membershipAllowlist = JSON.parse(rows[0].membershipAllowlistRaw); } catch (_) {} }
-      if (rows[0].fieldFiltersRaw) { try { fieldFilters = JSON.parse(rows[0].fieldFiltersRaw); } catch (_) {} }
+const PCO_PEOPLE_TYPES = ['regular', 'local_visitor', 'traveller_visitor'];
+const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
+
+function validateBatchBody(body) {
+  const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+          defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+  if (typeof name !== 'string' || !name.trim()) return 'name is required.';
+  if (typeof membershipFilterEnabled !== 'boolean') return 'membershipFilterEnabled must be a boolean.';
+  if (typeof fieldFilterEnabled !== 'boolean') return 'fieldFilterEnabled must be a boolean.';
+  if (!Array.isArray(membershipAllowlist) || !membershipAllowlist.every((v) => typeof v === 'string')) {
+    return 'membershipAllowlist must be an array of strings.';
+  }
+  if (!Array.isArray(fieldFilters)) return 'fieldFilters must be an array.';
+  for (const rule of fieldFilters) {
+    if (!rule || typeof rule.fieldDefinitionId !== 'string' || !Array.isArray(rule.values) || !rule.values.every((v) => typeof v === 'string')) {
+      return 'Each field filter rule needs a fieldDefinitionId and an array of string values.';
     }
-    res.json({
-      enabled: !!(rows.length && rows[0].enabled),
-      membershipFilterEnabled: rows.length ? !!rows[0].membershipFilterEnabled : true,
-      membershipAllowlist,
-      fieldFilterEnabled: !!(rows.length && rows[0].fieldFilterEnabled),
-      fieldFilters,
-    });
+  }
+  if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) {
+    return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
+  }
+  if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) {
+    return 'gatheringTypeId must be an integer or null.';
+  }
+  if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
+  if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
+  if (!Number.isInteger(scheduleDay) || scheduleDay < 0 || scheduleDay > 6) return 'scheduleDay must be an integer between 0 and 6.';
+  return null;
+}
+
+// List all saved sync batches for this church.
+router.get('/planning-center/sync-batches', async (req, res) => {
+  try {
+    const batches = await pcoSync.listBatches(req.user.church_id);
+    res.json({ success: true, batches });
   } catch (error) {
-    logger.error('Get PCO sync filter error:', error);
-    res.status(500).json({ error: 'Failed to read sync config.' });
+    logger.error('List PCO sync batches error:', error);
+    res.status(500).json({ error: 'Failed to load sync batches.' });
   }
 });
 
-// Write sync config
-router.put('/planning-center/sync-filter', async (req, res) => {
+// Create a new saved sync batch.
+router.post('/planning-center/sync-batches', async (req, res) => {
   try {
+    const err = validateBatchBody(req.body);
+    if (err) return res.status(400).json({ error: err });
     const churchId = req.user.church_id;
-    const { enabled, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters } = req.body;
-    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean.' });
-    if (typeof membershipFilterEnabled !== 'boolean') return res.status(400).json({ error: 'membershipFilterEnabled must be a boolean.' });
-    if (typeof fieldFilterEnabled !== 'boolean') return res.status(400).json({ error: 'fieldFilterEnabled must be a boolean.' });
-    if (!Array.isArray(membershipAllowlist) || !membershipAllowlist.every((v) => typeof v === 'string')) {
-      return res.status(400).json({ error: 'membershipAllowlist must be an array of strings.' });
-    }
-    if (!Array.isArray(fieldFilters)) {
-      return res.status(400).json({ error: 'fieldFilters must be an array.' });
-    }
-    for (const rule of fieldFilters) {
-      if (!rule || typeof rule.fieldDefinitionId !== 'string' || !Array.isArray(rule.values) || !rule.values.every((v) => typeof v === 'string')) {
-        return res.status(400).json({ error: 'Each field filter rule needs a fieldDefinitionId and an array of string values.' });
-      }
-    }
+    const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+    const insRes = await Database.query(
+      `INSERT INTO planning_center_sync_batches
+         (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
+          default_people_type, gathering_type_id, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [churchId, name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
+       fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
+       scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay]
+    );
+    const batch = await pcoSync.getBatch(churchId, insRes.insertId);
+    res.json({ success: true, batch });
+  } catch (error) {
+    logger.error('Create PCO sync batch error:', error);
+    res.status(500).json({ error: 'Failed to create sync batch.' });
+  }
+});
+
+// Update a saved sync batch.
+router.put('/planning-center/sync-batches/:id', async (req, res) => {
+  try {
+    const err = validateBatchBody(req.body);
+    if (err) return res.status(400).json({ error: err });
+    const churchId = req.user.church_id;
+    const batchId = Number(req.params.id);
+    const existing = await pcoSync.getBatch(churchId, batchId);
+    if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
+    const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     await Database.query(
-      `UPDATE church_settings
-          SET planning_center_sync_enabled = ?,
-              planning_center_membership_filter_enabled = ?,
-              planning_center_membership_allowlist = ?,
-              planning_center_field_filter_enabled = ?,
-              planning_center_field_filters = ?,
-              planning_center_auto_archive = 0
-        WHERE church_id = ?`,
-      [
-        enabled ? 1 : 0,
-        membershipFilterEnabled ? 1 : 0,
-        JSON.stringify(membershipAllowlist),
-        fieldFilterEnabled ? 1 : 0,
-        JSON.stringify(fieldFilters),
-        churchId,
-      ]
+      `UPDATE planning_center_sync_batches
+          SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
+              field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
+              gathering_type_id = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
+              updated_at = datetime('now')
+        WHERE id = ? AND church_id = ?`,
+      [name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
+       fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
+       scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay, batchId, churchId]
     );
-    res.json({
-      success: true,
-      enabled: !!enabled,
-      membershipFilterEnabled: !!membershipFilterEnabled,
-      membershipAllowlist,
-      fieldFilterEnabled: !!fieldFilterEnabled,
-      fieldFilters,
-    });
+    const batch = await pcoSync.getBatch(churchId, batchId);
+    res.json({ success: true, batch });
   } catch (error) {
-    logger.error('Set PCO sync filter error:', error);
-    res.status(500).json({ error: 'Failed to save sync config.' });
+    logger.error('Update PCO sync batch error:', error);
+    res.status(500).json({ error: 'Failed to update sync batch.' });
   }
 });
 
-// Dry-run: compute the reconcile plan without writing anything
-router.get('/planning-center/sync/plan', async (req, res) => {
+// Delete a saved sync batch. Does not unlink or archive anyone already imported
+// through it — it only stops future runs of that filter.
+router.delete('/planning-center/sync-batches/:id', async (req, res) => {
   try {
     const churchId = req.user.church_id;
+    const batchId = Number(req.params.id);
+    const existing = await pcoSync.getBatch(churchId, batchId);
+    if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
+    await Database.query(`DELETE FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`, [batchId, churchId]);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Delete PCO sync batch error:', error);
+    res.status(500).json({ error: 'Failed to delete sync batch.' });
+  }
+});
+
+// Dry-run: compute one batch's plan without writing anything.
+router.get('/planning-center/sync-batches/:id/plan', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const batch = await pcoSync.getBatch(churchId, Number(req.params.id));
+    if (!batch) return res.status(404).json({ error: 'Sync batch not found.' });
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    // The "Refresh from Planning Center" button sends ?refresh=1 to bypass the cache.
     const force = req.query.refresh === '1' || req.query.force === '1';
-    const plan = await pcoSync.computePlanForChurch(churchId, accessToken, { force });
+    const fullPlan = await pcoSync.computePlanForBatch(churchId, accessToken, batch, { force });
+    // Batch plans omit the whole-roster buckets — those live under /reconciliation.
+    const { archiveExtras, unmatchedVisitors, ...plan } = fullPlan;
     res.json({
       success: true,
       summary: {
@@ -2679,8 +2711,6 @@ router.get('/planning-center/sync/plan', async (req, res) => {
         restore: (plan.restore || []).length,
         ambiguous: plan.ambiguous.length,
         visitorMatches: (plan.visitorMatches || []).length,
-        archiveExtras: (plan.archiveExtras || []).length,
-        unmatchedVisitors: (plan.unmatchedVisitors || []).length,
         add: plan.add.length,
         update: plan.update.length,
         archive: plan.archive.length,
@@ -2689,8 +2719,115 @@ router.get('/planning-center/sync/plan', async (req, res) => {
       plan,
     });
   } catch (error) {
-    logger.error('PCO sync plan error:', error);
+    logger.error('PCO batch sync plan error:', error);
     res.status(500).json({ error: 'Failed to compute sync plan.' });
+  }
+});
+
+// Apply: recompute this batch's plan and apply it. Body may include { selections }.
+router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const userId = req.user.id;
+    const batch = await pcoSync.getBatch(churchId, Number(req.params.id));
+    if (!batch) return res.status(404).json({ error: 'Sync batch not found.' });
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const plan = await pcoSync.computePlanForBatch(churchId, accessToken, batch);
+
+    const rawSel = (req.body && req.body.selections) || {};
+    const candidatesByIndividual = new Map(
+      plan.ambiguous.map((a) => [a.individualId, new Set(a.candidates)])
+    );
+    const ambiguous = {};
+    for (const [individualId, pcoId] of Object.entries(rawSel.ambiguous || {})) {
+      const allowed = candidatesByIndividual.get(Number(individualId));
+      if (allowed && pcoId && allowed.has(pcoId)) ambiguous[individualId] = pcoId;
+    }
+    const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
+    const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
+      .filter((id) => addPcoIds.has(id));
+    const visitorOfferIds = new Set((plan.visitorMatches || []).map((v) => Number(v.individualId)));
+    const visitorChoices = {};
+    for (const [rawId, choice] of Object.entries(rawSel.visitorChoices || {})) {
+      const id = Number(rawId);
+      if (visitorOfferIds.has(id) && (choice === 'promote' || choice === 'keep')) {
+        visitorChoices[id] = choice;
+      }
+    }
+    const selections = { ambiguous, skipAddPcoIds, visitorChoices };
+
+    const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
+      defaultPeopleType: batch.defaultPeopleType,
+      gatheringTypeId: batch.gatheringTypeId,
+    });
+
+    const summary = {
+      at: new Date().toISOString(),
+      added: result.added, updated: result.updated, archived: result.archived,
+      reactivated: result.reactivated, linked: result.linked,
+      ambiguous: plan.ambiguous.length,
+      visitorMatches: (plan.visitorMatches || []).length,
+      errors: result.errors.length,
+    };
+    await Database.query(
+      `UPDATE planning_center_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+      [JSON.stringify(summary), batch.id, churchId]
+    );
+    res.json({ success: true, result, summary });
+  } catch (error) {
+    logger.error('PCO batch sync apply error:', error);
+    res.status(500).json({ error: 'Failed to apply sync.' });
+  }
+});
+
+// Dry-run: whole-roster reconciliation (people no longer found in PCO at all).
+router.get('/planning-center/reconciliation/plan', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+    const force = req.query.refresh === '1' || req.query.force === '1';
+    const plan = await pcoSync.computeReconciliationForChurch(churchId, accessToken, { force });
+    res.json({
+      success: true,
+      summary: { archiveExtras: plan.archiveExtras.length, unmatchedVisitors: plan.unmatchedVisitors.length },
+      plan,
+    });
+  } catch (error) {
+    logger.error('PCO reconciliation plan error:', error);
+    res.status(500).json({ error: 'Failed to compute reconciliation plan.' });
+  }
+});
+
+// Apply: archive the selected archiveExtras. unmatchedVisitors is informational only.
+router.post('/planning-center/reconciliation/apply', async (req, res) => {
+  try {
+    const churchId = req.user.church_id;
+    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
+
+    const plan = await pcoSync.computeReconciliationForChurch(churchId, accessToken);
+    const rawSel = (req.body && req.body.selections) || {};
+    const extraIds = new Set(plan.archiveExtras.map((x) => Number(x.individualId)));
+    const skipArchiveExtraIds = (Array.isArray(rawSel.skipArchiveExtraIds) ? rawSel.skipArchiveExtraIds : [])
+      .map(Number)
+      .filter((id) => extraIds.has(id));
+
+    const result = await pcoSync.applyReconciliation(churchId, plan, { skipArchiveExtraIds });
+    const summary = { at: new Date().toISOString(), archived: result.archived, errors: result.errors.length };
+    await Database.query(
+      `UPDATE church_settings
+          SET planning_center_reconciliation_last_run_at = datetime('now'),
+              planning_center_reconciliation_last_result = ?
+        WHERE church_id = ?`,
+      [JSON.stringify(summary), churchId]
+    );
+    res.json({ success: true, result, summary });
+  } catch (error) {
+    logger.error('PCO reconciliation apply error:', error);
+    res.status(500).json({ error: 'Failed to apply reconciliation.' });
   }
 });
 
@@ -2740,75 +2877,6 @@ router.get('/planning-center/field-summary', async (req, res) => {
   } catch (error) {
     logger.error('PCO field summary error:', error);
     res.status(500).json({ error: 'Failed to load field summary.' });
-  }
-});
-
-// Apply: recompute the plan and apply it. Body may include { selections } for review choices.
-// With no selections, applies everything except ambiguous (auto mode).
-router.post('/planning-center/sync/apply', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const userId = req.user.id;
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const plan = await pcoSync.computePlanForChurch(churchId, accessToken);
-
-    // Sanitize caller selections against the freshly-computed plan so a client can only:
-    //  - resolve an ambiguous individual to one of ITS offered candidate pcoIds
-    //  - opt out of pcoIds that are actually in the add bucket
-    const rawSel = (req.body && req.body.selections) || {};
-    const candidatesByIndividual = new Map(
-      plan.ambiguous.map((a) => [a.individualId, new Set(a.candidates)])
-    );
-    const ambiguous = {};
-    for (const [individualId, pcoId] of Object.entries(rawSel.ambiguous || {})) {
-      const allowed = candidatesByIndividual.get(Number(individualId));
-      if (allowed && pcoId && allowed.has(pcoId)) ambiguous[individualId] = pcoId;
-    }
-    const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
-    const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
-      .filter((id) => addPcoIds.has(id));
-    // Same shape, individualIds — only honour ids actually in the archiveExtras bucket.
-    const extraIds = new Set((plan.archiveExtras || []).map((x) => Number(x.individualId)));
-    const skipArchiveExtraIds = (Array.isArray(rawSel.skipArchiveExtraIds) ? rawSel.skipArchiveExtraIds : [])
-      .map(Number)
-      .filter((id) => extraIds.has(id));
-    // Visitor decisions: only honour ids actually in the visitorMatches bucket and valid choices.
-    const visitorOfferIds = new Set((plan.visitorMatches || []).map((v) => Number(v.individualId)));
-    const visitorChoices = {};
-    for (const [rawId, choice] of Object.entries(rawSel.visitorChoices || {})) {
-      const id = Number(rawId);
-      if (visitorOfferIds.has(id) && (choice === 'promote' || choice === 'keep')) {
-        visitorChoices[id] = choice;
-      }
-    }
-    const selections = { ambiguous, skipAddPcoIds, skipArchiveExtraIds, visitorChoices };
-
-    const result = await pcoSync.applyForChurch(churchId, plan, userId, selections);
-
-    const summary = {
-      at: new Date().toISOString(),
-      added: result.added, updated: result.updated, archived: result.archived,
-      reactivated: result.reactivated, linked: result.linked,
-      ambiguous: plan.ambiguous.length,
-      visitorMatches: (plan.visitorMatches || []).length,
-      archiveExtras: (plan.archiveExtras || []).length,
-      unmatchedVisitors: (plan.unmatchedVisitors || []).length,
-      errors: result.errors.length,
-    };
-    await Database.query(
-      `UPDATE church_settings
-          SET planning_center_last_sync = datetime('now'),
-              planning_center_last_sync_archived = ?,
-              planning_center_last_sync_result = ?
-        WHERE church_id = ?`,
-      [result.archived, JSON.stringify(summary), churchId]
-    );
-    res.json({ success: true, result, summary });
-  } catch (error) {
-    logger.error('PCO sync apply error:', error);
-    res.status(500).json({ error: 'Failed to apply sync.' });
   }
 });
 
