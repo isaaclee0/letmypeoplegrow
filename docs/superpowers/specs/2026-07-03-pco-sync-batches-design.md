@@ -73,9 +73,14 @@ handled later via check-in import.
   daily/weekly/monthly auto-apply, or stays manual-only.
 - **Existing global filter auto-migrates** into a batch called "Main Sync"
   on upgrade, carrying over its existing schedule.
-- **Onboarding's PCO step becomes "create your first batch"** using the same
-  UI as Settings, with gathering assignment inline since the roster starts
-  empty. The separate `pco-gatherings` onboarding step is removed.
+- **Onboarding's `pco-people` step becomes "create your first batch"** using
+  the same UI as Settings, with the batch's own gathering picker surfaced
+  inline since the roster starts empty. The `pco-gatherings` step (PCO
+  check-in import: creates gatherings from PCO's actual event schedule,
+  imports historical attendance, and auto-fills rosters by recency) is
+  **unchanged** — it's a materially richer capability than a batch's
+  "assign everyone to gathering X" field, not something batches replace
+  (see Non-Goals: no change to check-in import).
 - **New people get a batch-level default `people_type`.**
 
 ## Data Model
@@ -252,7 +257,9 @@ This runs once per per-church SQLite file, consistent with how other
 - `OnboardingPage.tsx`: the `pco-people` step renders `PlanningCenterBatchEditor`
   + its plan/review/apply flow directly (creating the church's first batch),
   with the gathering picker surfaced prominently since the roster is empty.
-  The `pco-gatherings` step is removed.
+  The `pco-gatherings` step (`PCOCheckinImport`) is unchanged and still runs
+  immediately after — it creates gatherings from PCO's event/attendance
+  history, which a batch's simple gathering field doesn't replace.
 
 ## Testing
 
