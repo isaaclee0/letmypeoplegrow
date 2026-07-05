@@ -208,6 +208,12 @@ class Database {
       if (!settingsCols.some(c => c.name === 'planning_center_reconciliation_last_result')) {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_reconciliation_last_result TEXT');
       }
+      if (!settingsCols.some(c => c.name === 'planning_center_membership_cache')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_membership_cache TEXT');
+      }
+      if (!settingsCols.some(c => c.name === 'planning_center_field_definitions_cache')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_field_definitions_cache TEXT');
+      }
 
       // Create planning_center_sync_batches if missing, and seed exactly once from
       // the legacy single-filter columns (additive-only migration — the old columns
