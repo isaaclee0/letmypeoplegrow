@@ -73,6 +73,7 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
 
   useEffect(() => {
     onRefreshingChange?.(definitionsRefreshing);
+    return () => onRefreshingChange?.(false);
   }, [definitionsRefreshing, onRefreshingChange]);
 
   const loadValuesForRule = (fieldDefinitionId: string) => {

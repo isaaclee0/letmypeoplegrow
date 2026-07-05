@@ -62,6 +62,14 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
 
   usePcoRefreshPoll(membershipRefreshing, loadMembershipSummary);
 
+  // Used only by the explicit user-facing Retry action in MembershipAllowlistEditor —
+  // distinct from the silent background-poll path, so Retry still shows a loading
+  // state while polling stays silent.
+  const retryMembershipSummary = () => {
+    setMembershipLoading(true);
+    loadMembershipSummary();
+  };
+
   useEffect(() => {
     gatheringsAPI.getAll()
       .then((r: any) => setGatherings(r.data.gatherings || r.data || []))
@@ -142,7 +150,7 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
             error={membershipError}
             selected={membershipAllowlist}
             onChange={setMembershipAllowlist}
-            onReload={loadMembershipSummary}
+            onReload={retryMembershipSummary}
           />
         )}
       </div>
