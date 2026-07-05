@@ -7,7 +7,7 @@ const Database = require('../config/database');
 const { verifyToken } = require('../middleware/auth');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
-const { tallyMembership, tallyField } = require('../services/planningCenter/summary');
+const { tallyField } = require('../services/planningCenter/summary');
 const { fetchFieldDefinitions } = require('../services/planningCenter/fieldDefinitions');
 const metadataCache = require('../services/planningCenter/metadataCache');
 const webSocketService = require('../services/websocket');
@@ -2876,30 +2876,53 @@ router.post('/planning-center/reconciliation/apply', async (req, res) => {
   }
 });
 
-// Membership distribution for the allow-list editor (person counts only, no check-ins)
+// Membership distribution for the allow-list editor (person counts only, no check-ins).
+// Serves the persisted cache immediately; if it's missing, blocks on a live fetch (and
+// populates the cache as a side effect); if it's present but stale, serves it as-is and
+// kicks off a background refresh, flagged via `refreshing` so the client can show it's
+// checking Planning Center for updates.
 router.get('/planning-center/membership-summary', async (req, res) => {
   try {
     const churchId = req.user.church_id;
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    const { people } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
-    res.json({ success: true, ...tallyMembership(people) });
+    const cached = await metadataCache.getMembershipCache(churchId);
+    if (!cached) {
+      const { membership } = await metadataCache.refreshMetadataForChurch(churchId, accessToken);
+      return res.json({ success: true, ...membership, refreshing: false });
+    }
+    const stale = metadataCache.isStale(cached.fetchedAt);
+    if (stale) {
+      metadataCache.refreshMetadataForChurch(churchId, accessToken)
+        .catch((e) => logger.error('PCO membership cache refresh error:', e));
+    }
+    res.json({ success: true, ...cached, refreshing: stale });
   } catch (error) {
     logger.error('PCO membership summary error:', error);
     res.status(500).json({ error: 'Failed to load membership summary.' });
   }
 });
 
-// Custom field definitions (select/checkbox only) for the field-filter editor
+// Custom field definitions (select/checkbox only) for the field-filter editor. Same
+// cache-first/background-refresh treatment as membership-summary above.
 router.get('/planning-center/field-definitions', async (req, res) => {
   try {
     const churchId = req.user.church_id;
     const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
 
-    const definitions = await fetchFieldDefinitions(accessToken);
-    res.json({ success: true, definitions });
+    const cached = await metadataCache.getFieldDefinitionsCache(churchId);
+    if (!cached) {
+      const { fieldDefinitions } = await metadataCache.refreshMetadataForChurch(churchId, accessToken);
+      return res.json({ success: true, ...fieldDefinitions, refreshing: false });
+    }
+    const stale = metadataCache.isStale(cached.fetchedAt);
+    if (stale) {
+      metadataCache.refreshMetadataForChurch(churchId, accessToken)
+        .catch((e) => logger.error('PCO field definitions cache refresh error:', e));
+    }
+    res.json({ success: true, ...cached, refreshing: stale });
   } catch (error) {
     logger.error('PCO field definitions error:', error);
     res.status(500).json({ error: 'Failed to load custom field definitions.' });
