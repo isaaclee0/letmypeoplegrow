@@ -9,6 +9,7 @@ const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
 const { tallyMembership, tallyField } = require('../services/planningCenter/summary');
 const { fetchFieldDefinitions } = require('../services/planningCenter/fieldDefinitions');
+const metadataCache = require('../services/planningCenter/metadataCache');
 const webSocketService = require('../services/websocket');
 
 const router = express.Router();
@@ -1908,6 +1909,13 @@ router.get('/planning-center/callback', async (req, res) => {
 
     // Save tokens to database
     await savePlanningCenterTokens(userId, churchId, tokens);
+
+    // Warm the membership/field-definitions cache as soon as PCO is connected, so the
+    // batch editor has something to show immediately the first time someone opens it,
+    // instead of blocking on a live fetch. Fire-and-forget — errors are logged, not
+    // surfaced, and must not delay the redirect below.
+    metadataCache.refreshMetadataForChurch(churchId, tokens.access_token)
+      .catch((e) => logger.error('PCO connect-time metadata refresh error:', e));
 
     // Re-validate returnTo on the way out (defense in depth).
     if (returnTo && /^\/app\//.test(returnTo)) {
