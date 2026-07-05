@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { integrationsAPI } from '../../services/api';
+import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
 
 export interface FieldDefinition {
   id: string;
@@ -18,28 +19,50 @@ export interface FieldFilterRule {
 interface Props {
   rules: FieldFilterRule[];
   onChange: (next: FieldFilterRule[]) => void;
+  onRefreshingChange?: (refreshing: boolean) => void;
 }
 
-export default function FieldFilterEditor({ rules, onChange }: Props) {
+export default function FieldFilterEditor({ rules, onChange, onRefreshingChange }: Props) {
   const [definitions, setDefinitions] = useState<FieldDefinition[]>([]);
   const [definitionsLoading, setDefinitionsLoading] = useState(true);
   const [definitionsError, setDefinitionsError] = useState<string | null>(null);
+  const [definitionsRefreshing, setDefinitionsRefreshing] = useState(false);
   // Per-field-definition value tally state, loaded lazily when a field is chosen.
   // Keyed by fieldDefinitionId (not array index) so it stays valid when rules are reordered/removed.
   const [valueOptions, setValueOptions] = useState<Record<string, { value: string; count: number }[]>>({});
   const [valueLoading, setValueLoading] = useState<Record<string, boolean>>({});
   const [valueError, setValueError] = useState<Record<string, string | null>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-    setDefinitionsLoading(true);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  const loadDefinitions = () => {
     setDefinitionsError(null);
-    integrationsAPI.getPlanningCenterFieldDefinitions()
-      .then((res) => { if (!cancelled) setDefinitions(res.data.definitions || []); })
-      .catch((e) => { if (!cancelled) setDefinitionsError(e.response?.data?.error || 'Failed to load custom fields.'); })
-      .finally(() => { if (!cancelled) setDefinitionsLoading(false); });
-    return () => { cancelled = true; };
+    return integrationsAPI.getPlanningCenterFieldDefinitions()
+      .then((res) => {
+        if (!mountedRef.current) return;
+        setDefinitions(res.data.definitions || []);
+        setDefinitionsRefreshing(!!res.data.refreshing);
+      })
+      .catch((e) => {
+        if (!mountedRef.current) return;
+        setDefinitionsError(e.response?.data?.error || 'Failed to load custom fields.');
+        setDefinitionsRefreshing(false);
+      })
+      .finally(() => { if (mountedRef.current) setDefinitionsLoading(false); });
+  };
+
+  useEffect(() => {
+    setDefinitionsLoading(true);
+    loadDefinitions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  usePcoRefreshPoll(definitionsRefreshing, loadDefinitions);
+
+  useEffect(() => {
+    onRefreshingChange?.(definitionsRefreshing);
+  }, [definitionsRefreshing, onRefreshingChange]);
 
   const loadValuesForRule = (fieldDefinitionId: string) => {
     setValueLoading((prev) => ({ ...prev, [fieldDefinitionId]: true }));
