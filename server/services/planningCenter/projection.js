@@ -4,7 +4,9 @@
 //
 // fieldDataById: optional Map of FieldDatum id -> raw FieldDatum resource (from the
 // same page's `included` array), used to resolve this person's relationships.field_data
-// references into a { [fieldDefinitionId]: value } map.
+// references into a { [fieldDefinitionId]: value[] } map. A person can have multiple
+// FieldDatum rows for the same field_definition (PCO's multi-select `checkboxes` data
+// type has one row per checked box), so each field's values accumulate into an array.
 function projectPerson(p, fieldDataById) {
   const a = p.attributes || {};
   const hh = p.relationships && p.relationships.households && p.relationships.households.data;
@@ -20,7 +22,9 @@ function projectPerson(p, fieldDataById) {
         && datum.relationships.field_definition.data
         && datum.relationships.field_definition.data.id;
       if (!fieldDefinitionId) continue;
-      fieldValues[fieldDefinitionId] = (datum.attributes && datum.attributes.value) || null;
+      const value = (datum.attributes && datum.attributes.value) || null;
+      if (!fieldValues[fieldDefinitionId]) fieldValues[fieldDefinitionId] = [];
+      fieldValues[fieldDefinitionId].push(value);
     }
   }
 

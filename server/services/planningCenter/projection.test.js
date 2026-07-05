@@ -25,7 +25,7 @@ test('projectPerson handles missing fields and no household', () => {
   assert.deepStrictEqual(p.fieldValues, {});
 });
 
-test('projectPerson extracts fieldValues from included FieldDatum entries', () => {
+test('projectPerson extracts fieldValues from included FieldDatum entries as arrays', () => {
   const raw = {
     id: '123',
     attributes: { first_name: 'Sarah', last_name: 'Wierenga' },
@@ -38,7 +38,24 @@ test('projectPerson extracts fieldValues from included FieldDatum entries', () =
     ['fd2', { id: 'fd2', attributes: { value: 'Yes' }, relationships: { field_definition: { data: { id: 'f2' } } } }],
   ]);
   const p = projectPerson(raw, fieldDataById);
-  assert.deepStrictEqual(p.fieldValues, { f1: 'Connected', f2: 'Yes' });
+  assert.deepStrictEqual(p.fieldValues, { f1: ['Connected'], f2: ['Yes'] });
+});
+
+test('projectPerson accumulates multiple FieldDatum rows for the same field_definition into one array (multi-select checkboxes)', () => {
+  const raw = {
+    id: '123',
+    attributes: {},
+    relationships: {
+      field_data: { data: [{ type: 'FieldDatum', id: 'fd1' }, { type: 'FieldDatum', id: 'fd2' }, { type: 'FieldDatum', id: 'fd3' }] },
+    },
+  };
+  const fieldDataById = new Map([
+    ['fd1', { id: 'fd1', attributes: { value: 'Red' }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+    ['fd2', { id: 'fd2', attributes: { value: 'Blue' }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+    ['fd3', { id: 'fd3', attributes: { value: 'Yes' }, relationships: { field_definition: { data: { id: 'f2' } } } }],
+  ]);
+  const p = projectPerson(raw, fieldDataById);
+  assert.deepStrictEqual(p.fieldValues, { f1: ['Red', 'Blue'], f2: ['Yes'] });
 });
 
 test('projectPerson skips FieldDatum ids missing from the lookup or with no field_definition', () => {

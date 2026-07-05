@@ -205,7 +205,7 @@ test('field-filter source alone can make a person eligible for add, independent 
     fieldFilterEnabled: true, fieldFilters: [{ fieldDefinitionId: 'f1', values: ['Attends Youth Gathering'] }],
   };
   const plan = computePlan({
-    pcoPeople: [pco('p1', 'Field', 'Only', { membership: 'Community Contact', fieldValues: { f1: 'Attends Youth Gathering' } })],
+    pcoPeople: [pco('p1', 'Field', 'Only', { membership: 'Community Contact', fieldValues: { f1: ['Attends Youth Gathering'] } })],
     individuals: [], families: [], filterConfig: cfg,
   });
   assert.strictEqual(plan.add.length, 1);

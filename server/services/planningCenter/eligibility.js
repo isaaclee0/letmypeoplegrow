@@ -11,8 +11,9 @@ function isEligible(person, filterConfig) {
     const rules = filterConfig.fieldFilters || [];
     if (rules.length) {
       const matches = rules.every((r) => {
-        const val = (person.fieldValues && person.fieldValues[r.fieldDefinitionId]) ?? '(none)';
-        return r.values.includes(val);
+        const vals = (person.fieldValues && person.fieldValues[r.fieldDefinitionId]) || [];
+        if (vals.length === 0) return r.values.includes('(none)');
+        return vals.some((val) => r.values.includes(val));
       });
       if (matches) return true;
     }

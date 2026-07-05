@@ -24,9 +24,9 @@ test('tallyMembership handles empty input', () => {
 
 test('tallyField counts by the given field id, sorted desc, with total', () => {
   const people = [
-    { fieldValues: { f1: 'Connected', f2: 'Yes' } },
-    { fieldValues: { f1: 'Connected' } },
-    { fieldValues: { f1: 'New' } },
+    { fieldValues: { f1: ['Connected'], f2: ['Yes'] } },
+    { fieldValues: { f1: ['Connected'] } },
+    { fieldValues: { f1: ['New'] } },
     { fieldValues: {} },
   ];
   const result = tallyField(people, 'f1');
@@ -40,13 +40,28 @@ test('tallyField counts by the given field id, sorted desc, with total', () => {
 
 test('tallyField handles empty input and a field id nobody has', () => {
   assert.deepStrictEqual(tallyField([], 'f1'), { total: 0, values: [] });
-  assert.deepStrictEqual(tallyField([{ fieldValues: { f2: 'X' } }], 'f1'), { total: 1, values: [{ value: '(none)', count: 1 }] });
+  assert.deepStrictEqual(tallyField([{ fieldValues: { f2: ['X'] } }], 'f1'), { total: 1, values: [{ value: '(none)', count: 1 }] });
+});
+
+test('tallyField counts each selected value separately for a person with multiple checked boxes on one field', () => {
+  const people = [
+    { fieldValues: { f1: ['Red', 'Blue'] } },
+    { fieldValues: { f1: ['Blue'] } },
+    { fieldValues: { f1: [] } }, // no boxes checked -> (none)
+  ];
+  const result = tallyField(people, 'f1');
+  assert.strictEqual(result.total, 3);
+  assert.deepStrictEqual(result.values, [
+    { value: 'Blue', count: 2 },
+    { value: 'Red', count: 1 },
+    { value: '(none)', count: 1 },
+  ]);
 });
 
 test('tallyField seeds canonicalOptions at count 0 so unclaimed PCO options still surface', () => {
   const people = [
-    { fieldValues: { f1: 'Connected' } },
-    { fieldValues: { f1: 'Connected' } },
+    { fieldValues: { f1: ['Connected'] } },
+    { fieldValues: { f1: ['Connected'] } },
   ];
   const result = tallyField(people, 'f1', ['Connected', 'New', 'Lapsed']);
   assert.strictEqual(result.total, 2);
@@ -58,6 +73,6 @@ test('tallyField seeds canonicalOptions at count 0 so unclaimed PCO options stil
 });
 
 test('tallyField canonicalOptions does not duplicate a value that people also have', () => {
-  const result = tallyField([{ fieldValues: { f1: 'New' } }], 'f1', ['New']);
+  const result = tallyField([{ fieldValues: { f1: ['New'] } }], 'f1', ['New']);
   assert.deepStrictEqual(result.values, [{ value: 'New', count: 1 }]);
 });
