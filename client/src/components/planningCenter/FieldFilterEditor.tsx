@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { integrationsAPI } from '../../services/api';
 import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
 
@@ -19,6 +19,8 @@ export interface FieldFilterRule {
 interface Props {
   rules: FieldFilterRule[];
   onChange: (next: FieldFilterRule[]) => void;
+  // Read as a useEffect dependency, so pass a stable/memoized callback (e.g. a useState
+  // setter) — an unstable reference will trigger unnecessary re-renders.
   onRefreshingChange?: (refreshing: boolean) => void;
 }
 
@@ -36,7 +38,12 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  const loadDefinitions = () => {
+  // Mirrors `definitions` so the stable (useCallback'd) loadDefinitions below can check
+  // "do we already have data?" without depending on (and going stale relative to) state.
+  const definitionsRef = useRef(definitions);
+  definitionsRef.current = definitions;
+
+  const loadDefinitions = useCallback(() => {
     setDefinitionsError(null);
     return integrationsAPI.getPlanningCenterFieldDefinitions()
       .then((res) => {
@@ -46,17 +53,21 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
       })
       .catch((e) => {
         if (!mountedRef.current) return;
-        setDefinitionsError(e.response?.data?.error || 'Failed to load custom fields.');
         setDefinitionsRefreshing(false);
+        // A background refresh failure shouldn't clobber an already-populated list with
+        // a hard error screen — only surface the error when there's no data to preserve
+        // (i.e. this was the initial load, not a background refresh of a populated list).
+        if (definitionsRef.current.length === 0) {
+          setDefinitionsError(e.response?.data?.error || 'Failed to load custom fields.');
+        }
       })
       .finally(() => { if (mountedRef.current) setDefinitionsLoading(false); });
-  };
+  }, []);
 
   useEffect(() => {
     setDefinitionsLoading(true);
     loadDefinitions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadDefinitions]);
 
   usePcoRefreshPoll(definitionsRefreshing, loadDefinitions);
 
