@@ -36,7 +36,10 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
   const [valueError, setValueError] = useState<Record<string, string | null>>({});
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Mirrors `definitions` so the stable (useCallback'd) loadDefinitions below can check
   // "do we already have data?" without depending on (and going stale relative to) state.
