@@ -218,20 +218,34 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
 }
 
 // Archives active 'regular' individuals whose name matched no one in PCO's full
-// people export (plan.archiveExtras from computePlan). Used only by the
+// people export (plan.archiveExtras from computePlan) — OR, if the reviewer found
+// the right PCO person via manual search, links them instead of archiving (link
+// always wins over archive/skip for that individual). Used only by the
 // reconciliation endpoints — never called as part of a batch's own apply.
-async function applyArchiveExtras(churchId, archiveExtras, skipArchiveExtraIds = []) {
+async function applyArchiveExtras(churchId, archiveExtras, { skipArchiveExtraIds = [], manualLinks = {} } = {}) {
   const skip = new Set(skipArchiveExtraIds.map(Number));
-  const result = { archived: 0, errors: [] };
+  const result = { archived: 0, linked: 0, errors: [] };
   for (const x of archiveExtras) {
-    if (skip.has(Number(x.individualId))) continue;
+    const id = Number(x.individualId);
+    const linkPcoId = manualLinks[id];
+    if (linkPcoId) {
+      try {
+        await Database.query(
+          `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+          [linkPcoId, id, churchId]
+        );
+        result.linked++;
+      } catch (e) { result.errors.push({ type: 'manualLink', id, error: e.message }); }
+      continue;
+    }
+    if (skip.has(id)) continue;
     try {
       await Database.query(
         `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-        [x.individualId, churchId]
+        [id, churchId]
       );
       result.archived++;
-    } catch (e) { result.errors.push({ type: 'archiveExtra', id: x.individualId, error: e.message }); }
+    } catch (e) { result.errors.push({ type: 'archiveExtra', id, error: e.message }); }
   }
   return result;
 }

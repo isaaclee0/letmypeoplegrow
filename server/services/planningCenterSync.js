@@ -280,7 +280,10 @@ async function computeReconciliationForChurch(churchId, accessToken, opts) {
 }
 
 async function applyReconciliation(churchId, plan, selections = {}) {
-  return applyArchiveExtras(churchId, plan.archiveExtras, selections.skipArchiveExtraIds || []);
+  return applyArchiveExtras(churchId, plan.archiveExtras, {
+    skipArchiveExtraIds: selections.skipArchiveExtraIds || [],
+    manualLinks: selections.manualLinks || {},
+  });
 }
 
 // Apply a plan for a church (current church context must be set by caller).
