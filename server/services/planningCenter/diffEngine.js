@@ -20,6 +20,7 @@ const { isEligible } = require('./eligibility');
 //   update            — linked individuals whose name/age differs from PCO (sync these fields down)
 //   archive           — linked individuals whose PCO status went 'inactive'
 //   reactivate        — linked individuals whose PCO status is 'active' again (still eligible)
+//   gatheringEligible — linked individuals who end this run active AND eligible (already-active or reactivated)
 function computePlan({ pcoPeople, individuals, families, filterConfig }) {
   const linked = individuals.filter((i) => i.planningCenterId);
   const unlinked = individuals.filter((i) => !i.planningCenterId);
@@ -81,9 +82,16 @@ function computePlan({ pcoPeople, individuals, families, filterConfig }) {
   }
 
   // Update / archive / reactivate for already-linked rows (unchanged from before).
+  // gatheringEligible additionally tracks every linked individual who ends this run
+  // active and eligible for filterConfig — whether they were already active, or are
+  // being reactivated this run — so any batch with a gathering assigned can add them
+  // to its roster even though they don't need linking/restoring/adding. It has no
+  // effect on any other bucket; it's purely an extra input for gathering-roster
+  // assignment in apply.js.
   const update = [];
   const archive = [];
   const reactivate = [];
+  const gatheringEligible = [];
   for (const i of linked) {
     const p = pcoById.get(i.planningCenterId);
     if (!p) continue; // linked person absent from PCO fetch -> leave alone
@@ -91,6 +99,9 @@ function computePlan({ pcoPeople, individuals, families, filterConfig }) {
       archive.push({ individualId: i.id, pcoId: p.id });
     } else if (!i.isActive && p.status === 'active' && isEligible(p, filterConfig)) {
       reactivate.push({ individualId: i.id, pcoId: p.id });
+      gatheringEligible.push({ individualId: i.id, pcoId: p.id });
+    } else if (i.isActive && isEligible(p, filterConfig)) {
+      gatheringEligible.push({ individualId: i.id, pcoId: p.id });
     }
     if (p.firstName !== i.firstName || p.lastName !== i.lastName || p.child !== !!i.isChild) {
       update.push({ individualId: i.id, pcoId: p.id, firstName: p.firstName, lastName: p.lastName, isChild: p.child });
@@ -172,6 +183,7 @@ function computePlan({ pcoPeople, individuals, families, filterConfig }) {
     update,
     archive,
     reactivate,
+    gatheringEligible,
   };
 }
 

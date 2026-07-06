@@ -211,3 +211,51 @@ test('field-filter source alone can make a person eligible for add, independent 
   assert.strictEqual(plan.add.length, 1);
   assert.strictEqual(plan.add[0].pcoId, 'p1');
 });
+
+test('gatheringEligible: already-linked, active, eligible person is included', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'A', 'B', { status: 'active', membership: 'Church Members' })],
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'p1', isActive: true })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.gatheringEligible, [{ individualId: 1, pcoId: 'p1' }]);
+});
+
+test('gatheringEligible: already-linked, active, NOT eligible person is excluded', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'A', 'B', { status: 'active', membership: 'Community Contact' })],
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'p1', isActive: true })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.gatheringEligible, []);
+});
+
+test('gatheringEligible: excludes someone being archived this run even if eligible before', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'A', 'B', { status: 'inactive', membership: 'Church Members' })],
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'p1', isActive: true })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.archive, [{ individualId: 1, pcoId: 'p1' }]);
+  assert.deepStrictEqual(plan.gatheringEligible, []);
+});
+
+test('gatheringEligible: reactivate-and-eligible person appears in both reactivate and gatheringEligible', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'A', 'B', { status: 'active', membership: 'Church Members' })],
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'p1', isActive: false })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.reactivate, [{ individualId: 1, pcoId: 'p1' }]);
+  assert.deepStrictEqual(plan.gatheringEligible, [{ individualId: 1, pcoId: 'p1' }]);
+});
+
+test('gatheringEligible: reactivate candidate that is not eligible is excluded from both', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'A', 'B', { status: 'active', membership: 'Community Contact' })],
+    individuals: [ind(1, 'A', 'B', { planningCenterId: 'p1', isActive: false })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.reactivate, []);
+  assert.deepStrictEqual(plan.gatheringEligible, []);
+});
