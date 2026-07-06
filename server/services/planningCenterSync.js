@@ -27,8 +27,8 @@ async function getCachedPcoPeople(churchId, accessToken, { force = false } = {})
   if (!force && cached && (Date.now() - cached.fetchedAt) < PCO_PEOPLE_TTL_MS) {
     return cached;
   }
-  const people = await fetchAllPcoPeople(accessToken);
-  const entry = { people, fetchedAt: Date.now() };
+  const { people, householdPrimaryContacts } = await fetchAllPcoPeople(accessToken);
+  const entry = { people, householdPrimaryContacts, fetchedAt: Date.now() };
   pcoPeopleCache.set(churchId, entry);
   return entry;
 }
@@ -154,8 +154,12 @@ async function getAccessTokenForChurch(churchId) {
 }
 
 // Memory-efficient: project each page, discard raw JSON + included resources.
+// Also collects each PCO Household's designated head-of-household
+// (Household.attributes.primary_contact_id) into a Map<householdId, pcoPersonId>,
+// used to propose LMPG family-name updates.
 async function fetchAllPcoPeople(accessToken) {
   const people = [];
+  const householdPrimaryContacts = new Map();
   let next = 'https://api.planningcenteronline.com/people/v2/people?per_page=100&include=households,field_data';
   let pages = 0;
   while (next) {
@@ -170,11 +174,14 @@ async function fetchAllPcoPeople(accessToken) {
     const fieldDataById = new Map();
     for (const inc of data.included || []) {
       if (inc.type === 'FieldDatum') fieldDataById.set(inc.id, inc);
+      else if (inc.type === 'Household' && inc.attributes && inc.attributes.primary_contact_id) {
+        householdPrimaryContacts.set(inc.id, inc.attributes.primary_contact_id);
+      }
     }
     for (const raw of data.data || []) people.push(projectPerson(raw, fieldDataById));
     next = (data.links && data.links.next) || null;
   }
-  return people;
+  return { people, householdPrimaryContacts };
 }
 
 // Load the minimal LMPG state for the current church context.
@@ -189,7 +196,7 @@ async function loadChurchState(churchId) {
     [churchId]
   );
   const families = await Database.query(
-    `SELECT id, planning_center_id AS planningCenterId FROM families WHERE church_id = ?`,
+    `SELECT id, family_name AS familyName, planning_center_id AS planningCenterId FROM families WHERE church_id = ?`,
     [churchId]
   );
   for (const i of individuals) { i.isChild = !!i.isChild; i.isActive = !!i.isActive; }
@@ -248,9 +255,9 @@ async function getBatch(churchId, batchId) {
 // context must be set by caller). filterConfig shape:
 //   { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters }
 async function computePlanForChurch(churchId, accessToken, filterConfig, { force = false } = {}) {
-  const { people: pcoPeople, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
+  const { people: pcoPeople, householdPrimaryContacts, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
   const { individuals, families } = await loadChurchState(churchId);
-  const plan = computePlan({ pcoPeople, individuals, families, filterConfig });
+  const plan = computePlan({ pcoPeople, individuals, families, filterConfig, householdPrimaryContacts });
   plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
   return plan;
 }
