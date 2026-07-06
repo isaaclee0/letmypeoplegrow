@@ -313,6 +313,7 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
       at: new Date().toISOString(),
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
+      gatheringAssigned: result.gatheringAssigned,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
       errors: result.errors.length,
