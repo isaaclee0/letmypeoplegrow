@@ -77,7 +77,7 @@ export default function PlanningCenterReconciliationReview() {
       {plan.archiveExtras.length > 0 && (
         <section>
           <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
-            Not found in Planning Center — will be archived ({plan.archiveExtras.length - skipArchiveExtras.size} selected)
+            Not found in Planning Center — will be archived ({plan.archiveExtras.length - skipArchiveExtras.size - Object.values(manualLinks).filter(Boolean).length} selected)
           </h4>
           <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
             Active members in Let My People Grow whose name doesn't match anyone in Planning Center at all. Uncheck any you want to keep active.
