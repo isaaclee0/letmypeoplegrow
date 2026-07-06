@@ -9,6 +9,7 @@ describe('buildSelections', () => {
       ambiguous: { 12: 'pco_a', 34: 'pco_b' },
       skipAddPcoIds: ['pco_x', 'pco_y'],
       visitorChoices: {},
+      archiveAmbiguousIds: [],
     });
   });
 
@@ -24,6 +25,7 @@ describe('buildSelections', () => {
       ambiguous: {},
       skipAddPcoIds: [],
       visitorChoices: {},
+      archiveAmbiguousIds: [],
     });
   });
 
@@ -34,7 +36,13 @@ describe('buildSelections', () => {
       ambiguous: {},
       skipAddPcoIds: [],
       visitorChoices: { 90: 'promote', 91: 'keep' },
+      archiveAmbiguousIds: [],
     });
+  });
+
+  it('includes archiveAmbiguousIds when provided', () => {
+    const result = buildSelections({}, new Set(), {}, new Set([5, 6]));
+    expect(result.archiveAmbiguousIds).toEqual([5, 6]);
   });
 });
 
@@ -43,6 +51,15 @@ describe('buildReconciliationSelections', () => {
     const skipArchiveExtraIds = new Set([56, 78]);
     expect(buildReconciliationSelections(skipArchiveExtraIds)).toEqual({
       skipArchiveExtraIds: [56, 78],
+      manualLinks: {},
     });
+  });
+
+  it('converts manualLinks picks into a pcoId-only map', () => {
+    const result = buildReconciliationSelections(new Set(), {
+      10: { pcoId: 'p1', firstName: 'A', lastName: 'B' },
+      11: null,
+    });
+    expect(result.manualLinks).toEqual({ 10: 'p1' });
   });
 });
