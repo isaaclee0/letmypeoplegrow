@@ -874,6 +874,8 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/field-definitions', { timeout: 120000 }),
   getPlanningCenterFieldSummary: (fieldDefinitionId: string) =>
     api.get('/integrations/planning-center/field-summary', { params: { fieldDefinitionId }, timeout: 120000 }),
+  searchPlanningCenterPeople: (q: string) =>
+    api.get('/integrations/planning-center/people-search', { params: { q }, timeout: 30000 }),
   getPlanningCenterSyncBatches: () =>
     api.get('/integrations/planning-center/sync-batches'),
   createPlanningCenterSyncBatch: (data: SyncBatchInput) =>
