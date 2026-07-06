@@ -315,7 +315,12 @@ function isDueToday(frequency, day, now = new Date()) {
 async function runBatchSync(churchId, accessToken, batch, userId) {
   try {
     const plan = await computePlanForBatch(churchId, accessToken, batch, { force: false });
-    const result = await applyForChurch(churchId, plan, userId, {}, {
+    // Family name updates are a reviewable, not automatic, step (per design) — scheduled/
+    // unattended runs never have a human to review them, so skip all proposed renames here.
+    // computePlan recomputes this bucket fresh every run, so a skipped proposal simply
+    // reappears next time someone opens the interactive Sync Review screen.
+    const skipFamilyNameUpdateIds = (plan.familyNameUpdates || []).map((f) => f.familyId);
+    const result = await applyForChurch(churchId, plan, userId, { skipFamilyNameUpdateIds }, {
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
     });
@@ -324,6 +329,7 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
       gatheringAssigned: result.gatheringAssigned,
+      familyNamesUpdated: result.familyNamesUpdated,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
       errors: result.errors.length,
