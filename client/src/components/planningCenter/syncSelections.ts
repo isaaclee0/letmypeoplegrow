@@ -18,7 +18,7 @@ export interface SyncSelections {
 //   the reviewer made no decision — no change is applied this run.
 // archiveAmbiguousIds: ambiguous individualIds the reviewer chose to archive outright
 //   instead of picking a candidate.
-// skipFamilyNameUpdateIds: individualIds to skip during family name updates.
+// skipFamilyNameUpdateIds: familyIds to skip during family name updates.
 export function buildSelections(
   ambiguousChoices: Record<string, string | null>,
   skipAddPcoIds: Set<string>,
