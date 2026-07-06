@@ -2903,12 +2903,31 @@ router.post('/planning-center/reconciliation/apply', async (req, res) => {
     const plan = await pcoSync.computeReconciliationForChurch(churchId, accessToken);
     const rawSel = (req.body && req.body.selections) || {};
     const extraIds = new Set(plan.archiveExtras.map((x) => Number(x.individualId)));
+
+    const { people: cachedPcoPeople } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
+    const validPcoIds = new Set(cachedPcoPeople.map((p) => p.id));
+    const linkedRows = await Database.query(
+      `SELECT planning_center_id FROM individuals WHERE church_id = ? AND planning_center_id IS NOT NULL`,
+      [churchId]
+    );
+    const claimedPcoIds = new Set(linkedRows.map((r) => r.planning_center_id));
+
+    const manualLinkCandidates = Object.entries(rawSel.manualLinks || {}).map(([individualId, pcoId]) => ({
+      individualId: Number(individualId), pcoId,
+    }));
+    const acceptedManualLinks = resolveManualLinks(manualLinkCandidates, {
+      validPcoIds, claimedPcoIds, allowedIndividualIds: extraIds,
+    });
+    const manualLinks = {};
+    for (const m of acceptedManualLinks) manualLinks[m.individualId] = m.pcoId;
+
+    const linkedIndividualIds = new Set(Object.keys(manualLinks).map(Number));
     const skipArchiveExtraIds = (Array.isArray(rawSel.skipArchiveExtraIds) ? rawSel.skipArchiveExtraIds : [])
       .map(Number)
-      .filter((id) => extraIds.has(id));
+      .filter((id) => extraIds.has(id) && !linkedIndividualIds.has(id));
 
-    const result = await pcoSync.applyReconciliation(churchId, plan, { skipArchiveExtraIds });
-    const summary = { at: new Date().toISOString(), archived: result.archived, errors: result.errors.length };
+    const result = await pcoSync.applyReconciliation(churchId, plan, { skipArchiveExtraIds, manualLinks });
+    const summary = { at: new Date().toISOString(), archived: result.archived, linked: result.linked, errors: result.errors.length };
     await Database.query(
       `UPDATE church_settings
           SET planning_center_reconciliation_last_run_at = datetime('now'),
