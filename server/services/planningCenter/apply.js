@@ -137,6 +137,19 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
     } catch (e) { result.errors.push({ type: 'reactivate', id: r.individualId, error: e.message }); }
   }
 
+  // Ambiguous individuals the reviewer chose to archive outright instead of picking
+  // a candidate (or a manual search result). Independent of plan.archive (which is
+  // driven by PCO status, not reviewer choice).
+  for (const individualId of (selections.archiveAmbiguousIds || [])) {
+    try {
+      await Database.query(
+        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [individualId, churchId]
+      );
+      result.archived++;
+    } catch (e) { result.errors.push({ type: 'archiveAmbiguous', id: individualId, error: e.message }); }
+  }
+
   // adds: resolve/create family per household, then insert individuals using this
   // batch's default_people_type. Capture new individual ids for gathering assignment.
   const adds = plan.add.filter((a) => !skipAdd.has(a.pcoId));
