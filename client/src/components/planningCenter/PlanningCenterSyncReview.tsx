@@ -14,6 +14,7 @@ interface VisitorMatchEntry {
   peopleType: string;
   candidate: { pcoId: string; firstName: string; lastName: string; membership: string | null };
 }
+interface FamilyNameUpdateEntry { familyId: number; oldName: string; newName: string; }
 interface Plan {
   link: { individualId: number; pcoId: string }[];
   restore: { individualId: number; pcoId: string }[];
@@ -23,6 +24,7 @@ interface Plan {
   update: { individualId: number; firstName: string; lastName: string }[];
   archive: { individualId: number; pcoId: string }[];
   reactivate: { individualId: number; pcoId: string }[];
+  familyNameUpdates: FamilyNameUpdateEntry[];
   pcoFetchedAt?: string;
 }
 
@@ -38,6 +40,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
   const [visitorChoices, setVisitorChoices] = useState<Record<string, VisitorChoice | null>>({});
   const [archiveAmbiguousIds, setArchiveAmbiguousIds] = useState<Set<number>>(new Set());
   const [manualPicks, setManualPicks] = useState<Record<number, PcoPersonResult | null>>({});
+  const [skipFamilyNameUpdateIds, setSkipFamilyNameUpdateIds] = useState<Set<number>>(new Set());
 
   // force: bypass the server-side PCO cache (explicit "Refresh from Planning Center").
   // preserveResult: keep the "Applied: …" message visible when reloading after an apply.
@@ -52,6 +55,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
       setVisitorChoices({});
       setArchiveAmbiguousIds(new Set());
       setManualPicks({});
+      setSkipFamilyNameUpdateIds(new Set());
     } catch (e: any) {
       logger.error('Failed to compute PCO batch sync plan', e);
       setError(e.response?.data?.error || 'Failed to compute sync plan.');
@@ -65,7 +69,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
   const apply = async () => {
     setApplying(true); setError(null);
     try {
-      const selections = buildSelections(ambiguousChoices, skipAdd, visitorChoices, archiveAmbiguousIds);
+      const selections = buildSelections(ambiguousChoices, skipAdd, visitorChoices, archiveAmbiguousIds, skipFamilyNameUpdateIds);
       const res = await integrationsAPI.applyPlanningCenterBatch(batchId, { selections });
       setResult(res.data.result);
       // Refresh the plan so the lists reflect the post-apply DB state instead of
@@ -93,6 +97,10 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
 
   const toggleSkip = (pcoId: string) => {
     setSkipAdd((prev) => { const n = new Set(prev); if (n.has(pcoId)) n.delete(pcoId); else n.add(pcoId); return n; });
+  };
+
+  const toggleSkipFamilyName = (familyId: number) => {
+    setSkipFamilyNameUpdateIds((prev) => { const n = new Set(prev); if (n.has(familyId)) n.delete(familyId); else n.add(familyId); return n; });
   };
 
   return (
@@ -235,6 +243,25 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
         </section>
       )}
 
+      {plan.familyNameUpdates.length > 0 && (
+        <section>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+            Family name updates ({plan.familyNameUpdates.length - skipFamilyNameUpdateIds.size} selected)
+          </h4>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+            Planning Center's head-of-household differs from the current family name. Uncheck any you want to leave as-is.
+          </p>
+          <ul className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-100 dark:divide-gray-700">
+            {plan.familyNameUpdates.map((f) => (
+              <li key={f.familyId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                <input type="checkbox" checked={!skipFamilyNameUpdateIds.has(f.familyId)} onChange={() => toggleSkipFamilyName(f.familyId)} />
+                <span>{f.oldName} → {f.newName}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <details className="text-sm text-gray-600 dark:text-gray-300">
         <summary className="cursor-pointer">Auto-applied: {plan.link.length} link, {plan.restore.length} restore, {plan.update.length} update, {plan.archive.length} archive, {plan.reactivate.length} reactivate</summary>
       </details>
@@ -257,6 +284,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
       {result && (
         <div className="text-sm text-green-700 dark:text-green-400">
           Applied: {result.added} added, {result.updated} updated, {result.archived} archived, {result.reactivated} reactivated, {result.linked} linked
+          {result.familyNamesUpdated ? `, ${result.familyNamesUpdated} family names updated` : ''}
           {result.errors?.length ? <span className="text-red-600 dark:text-red-400"> · {result.errors.length} errors</span> : null}
         </div>
       )}
