@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import { buildReconciliationSelections } from './syncSelections';
+import PcoPersonSearchPicker, { PcoPersonResult } from './PcoPersonSearchPicker';
 
 interface ExtraEntry { individualId: number; firstName: string; lastName: string; }
 interface UnmatchedVisitorEntry { individualId: number; firstName: string; lastName: string; peopleType: string; }
@@ -18,6 +19,8 @@ export default function PlanningCenterReconciliationReview() {
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [skipArchiveExtras, setSkipArchiveExtras] = useState<Set<number>>(new Set());
+  const [manualLinks, setManualLinks] = useState<Record<number, PcoPersonResult | null>>({});
+  const [searchOpenFor, setSearchOpenFor] = useState<Set<number>>(new Set());
 
   const loadPlan = useCallback(async (opts?: { force?: boolean; preserveResult?: boolean }) => {
     setLoading(true); setError(null);
@@ -26,6 +29,8 @@ export default function PlanningCenterReconciliationReview() {
       const res = await integrationsAPI.getPlanningCenterReconciliationPlan({ force: opts?.force });
       setPlan(res.data.plan);
       setSkipArchiveExtras(new Set());
+      setManualLinks({});
+      setSearchOpenFor(new Set());
     } catch (e: any) {
       logger.error('Failed to compute PCO reconciliation plan', e);
       setError(e.response?.data?.error || 'Failed to compute reconciliation plan.');
@@ -47,7 +52,7 @@ export default function PlanningCenterReconciliationReview() {
   const apply = async () => {
     setApplying(true); setError(null);
     try {
-      const selections = buildReconciliationSelections(skipArchiveExtras);
+      const selections = buildReconciliationSelections(skipArchiveExtras, manualLinks);
       const res = await integrationsAPI.applyPlanningCenterReconciliation({ selections });
       setResult(res.data.result);
       await loadPlan({ preserveResult: true });
@@ -79,9 +84,34 @@ export default function PlanningCenterReconciliationReview() {
           </p>
           <ul className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-100 dark:divide-gray-700">
             {plan.archiveExtras.map((x) => (
-              <li key={x.individualId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                <input type="checkbox" checked={!skipArchiveExtras.has(x.individualId)} onChange={() => toggleSkipExtra(x.individualId)} />
-                <span>{x.firstName} {x.lastName}</span>
+              <li key={x.individualId} className="flex flex-col gap-1 px-3 py-1.5 text-sm">
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" checked={!skipArchiveExtras.has(x.individualId) && !manualLinks[x.individualId]}
+                    disabled={!!manualLinks[x.individualId]}
+                    onChange={() => toggleSkipExtra(x.individualId)} />
+                  <span>{x.firstName} {x.lastName}</span>
+                  {manualLinks[x.individualId] ? (
+                    <span className="text-xs text-green-700 dark:text-green-400">
+                      → linking to {manualLinks[x.individualId]!.firstName} {manualLinks[x.individualId]!.lastName}
+                      <button type="button" className="underline ml-1" onClick={() => setManualLinks((p) => ({ ...p, [x.individualId]: null }))}>undo</button>
+                    </span>
+                  ) : (
+                    <button type="button" className="text-xs underline text-gray-600 dark:text-gray-300"
+                      onClick={() => setSearchOpenFor((p) => {
+                        const n = new Set(p);
+                        if (n.has(x.individualId)) n.delete(x.individualId); else n.add(x.individualId);
+                        return n;
+                      })}>
+                      Link instead
+                    </button>
+                  )}
+                </div>
+                {searchOpenFor.has(x.individualId) && !manualLinks[x.individualId] && (
+                  <PcoPersonSearchPicker onPick={(person) => {
+                    setManualLinks((p) => ({ ...p, [x.individualId]: person }));
+                    setSearchOpenFor((p) => { const n = new Set(p); n.delete(x.individualId); return n; });
+                  }} />
+                )}
               </li>
             ))}
           </ul>
@@ -118,7 +148,7 @@ export default function PlanningCenterReconciliationReview() {
 
       {result && (
         <div className="text-sm text-green-700 dark:text-green-400">
-          Archived: {result.archived}
+          Archived: {result.archived}{result.linked ? `, linked: ${result.linked}` : ''}
           {result.errors?.length ? <span className="text-red-600 dark:text-red-400"> · {result.errors.length} errors</span> : null}
         </div>
       )}
