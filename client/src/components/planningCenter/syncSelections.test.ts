@@ -10,6 +10,7 @@ describe('buildSelections', () => {
       skipAddPcoIds: ['pco_x', 'pco_y'],
       visitorChoices: {},
       archiveAmbiguousIds: [],
+      skipFamilyNameUpdateIds: [],
     });
   });
 
@@ -26,6 +27,7 @@ describe('buildSelections', () => {
       skipAddPcoIds: [],
       visitorChoices: {},
       archiveAmbiguousIds: [],
+      skipFamilyNameUpdateIds: [],
     });
   });
 
@@ -37,12 +39,18 @@ describe('buildSelections', () => {
       skipAddPcoIds: [],
       visitorChoices: { 90: 'promote', 91: 'keep' },
       archiveAmbiguousIds: [],
+      skipFamilyNameUpdateIds: [],
     });
   });
 
   it('includes archiveAmbiguousIds when provided', () => {
     const result = buildSelections({}, new Set(), {}, new Set([5, 6]));
     expect(result.archiveAmbiguousIds).toEqual([5, 6]);
+  });
+
+  it('includes skipFamilyNameUpdateIds when provided', () => {
+    const result = buildSelections({}, new Set(), {}, new Set(), new Set([100, 200]));
+    expect(result.skipFamilyNameUpdateIds).toEqual([100, 200]);
   });
 });
 

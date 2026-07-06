@@ -6,6 +6,7 @@ export interface SyncSelections {
   skipAddPcoIds: string[];
   visitorChoices: Record<string, VisitorChoice>;
   archiveAmbiguousIds: number[];
+  skipFamilyNameUpdateIds: number[];
 }
 
 // ambiguousChoices: individualId -> chosen pcoId (or null when the reviewer skipped).
@@ -17,11 +18,13 @@ export interface SyncSelections {
 //   the reviewer made no decision — no change is applied this run.
 // archiveAmbiguousIds: ambiguous individualIds the reviewer chose to archive outright
 //   instead of picking a candidate.
+// skipFamilyNameUpdateIds: individualIds to skip during family name updates.
 export function buildSelections(
   ambiguousChoices: Record<string, string | null>,
   skipAddPcoIds: Set<string>,
   visitorChoices: Record<string, VisitorChoice | null> = {},
   archiveAmbiguousIds: Set<number> = new Set(),
+  skipFamilyNameUpdateIds: Set<number> = new Set(),
 ): SyncSelections {
   const ambiguous: Record<string, string> = {};
   for (const [individualId, pcoId] of Object.entries(ambiguousChoices)) {
@@ -36,6 +39,7 @@ export function buildSelections(
     skipAddPcoIds: [...skipAddPcoIds],
     visitorChoices: vChoices,
     archiveAmbiguousIds: [...archiveAmbiguousIds],
+    skipFamilyNameUpdateIds: [...skipFamilyNameUpdateIds],
   };
 }
 
