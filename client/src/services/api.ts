@@ -822,6 +822,7 @@ export interface SyncBatchLastResult {
   archived: number;
   reactivated: number;
   linked: number;
+  gatheringAssigned: number;
   ambiguous: number;
   visitorMatches: number;
   errors: number;
