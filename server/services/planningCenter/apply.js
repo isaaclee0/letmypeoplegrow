@@ -24,10 +24,11 @@ function groupAdds(adds) {
 // plan.archiveExtras/unmatchedVisitors — those are whole-roster concerns handled by
 // applyArchiveExtras() below, called only from the reconciliation endpoints.
 async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = {}) {
-  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, errors: [] };
+  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, familyNamesUpdated: 0, errors: [] };
   const skipAdd = new Set(selections.skipAddPcoIds || []);
   const ambiguousChoices = selections.ambiguous || {};
   const visitorChoices = selections.visitorChoices || {};
+  const skipFamilyName = new Set((selections.skipFamilyNameUpdateIds || []).map(Number));
   const defaultPeopleType = batchConfig.defaultPeopleType || 'regular';
   const gatheringTypeId = batchConfig.gatheringTypeId || null;
   // Every individual this run links, restores, promotes, or creates, PLUS every
@@ -140,6 +141,19 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
       );
       result.archived++;
     } catch (e) { result.errors.push({ type: 'archiveAmbiguous', id: individualId, error: e.message }); }
+  }
+
+  // Family names PCO's head-of-household suggests differ from the current name,
+  // reviewed and opted into per-family (checked by default client-side).
+  for (const u of (plan.familyNameUpdates || [])) {
+    if (skipFamilyName.has(u.familyId)) continue;
+    try {
+      await Database.query(
+        `UPDATE families SET family_name = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [u.newName, u.familyId, churchId]
+      );
+      result.familyNamesUpdated++;
+    } catch (e) { result.errors.push({ type: 'familyName', id: u.familyId, error: e.message }); }
   }
 
   // adds: resolve/create family per household, then insert individuals using this
