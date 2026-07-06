@@ -219,6 +219,8 @@ CREATE INDEX IF NOT EXISTS idx_individuals_name ON individuals(last_name, first_
 CREATE INDEX IF NOT EXISTS idx_individuals_family ON individuals(family_id);
 CREATE INDEX IF NOT EXISTS idx_individuals_active ON individuals(is_active);
 CREATE INDEX IF NOT EXISTS idx_individuals_church ON individuals(church_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_individuals_pco_id_unique
+  ON individuals(church_id, planning_center_id) WHERE planning_center_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS gathering_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
