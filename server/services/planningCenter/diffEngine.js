@@ -1,5 +1,6 @@
 const { matchIndividuals } = require('./matcher');
 const { isEligible } = require('./eligibility');
+const { buildFamilyName } = require('./familyName');
 
 // Inputs:
 //   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, householdId, fieldValues}]
@@ -21,7 +22,7 @@ const { isEligible } = require('./eligibility');
 //   archive           — linked individuals whose PCO status went 'inactive'
 //   reactivate        — linked individuals whose PCO status is 'active' again (still eligible)
 //   gatheringEligible — linked individuals who end this run active AND eligible (already-active or reactivated)
-function computePlan({ pcoPeople, individuals, families, filterConfig }) {
+function computePlan({ pcoPeople, individuals, families, filterConfig, householdPrimaryContacts }) {
   const linked = individuals.filter((i) => i.planningCenterId);
   const unlinked = individuals.filter((i) => !i.planningCenterId);
   const linkedPcoIds = new Set(linked.map((i) => i.planningCenterId));
@@ -108,6 +109,33 @@ function computePlan({ pcoPeople, individuals, families, filterConfig }) {
     }
   }
 
+  // Family name sync: for every LMPG family linked to a PCO household whose
+  // PCO-designated head-of-household is one of that family's own linked members,
+  // propose a rename built the same way buildFamilyName always has, but with the
+  // head-of-household first. Skipped entirely if the head-of-household isn't yet
+  // linked to an LMPG individual — no guess is made in that case.
+  const familyNameUpdates = [];
+  if (householdPrimaryContacts) {
+    const membersByFamily = new Map();
+    for (const i of individuals) {
+      if (i.familyId == null) continue;
+      if (!membersByFamily.has(i.familyId)) membersByFamily.set(i.familyId, []);
+      membersByFamily.get(i.familyId).push(i);
+    }
+    for (const f of families) {
+      if (!f.planningCenterId) continue;
+      const primaryContactPcoId = householdPrimaryContacts.get(f.planningCenterId);
+      if (!primaryContactPcoId) continue;
+      const members = membersByFamily.get(f.id) || [];
+      const head = members.find((m) => m.planningCenterId === primaryContactPcoId);
+      if (!head) continue; // head-of-household not yet linked in LMPG -> no guess
+      const newName = buildFamilyName([head, ...members.filter((m) => m !== head)]);
+      if (newName !== f.familyName) {
+        familyNameUpdates.push({ familyId: f.id, oldName: f.familyName, newName });
+      }
+    }
+  }
+
   // Re-bucket the matcher's "unmatched" by peopleType + isActive:
   //   active + regular  -> archiveExtras  (manual regulars not in PCO)
   //   visitor (any)     -> unmatchedVisitors (informational)
@@ -184,6 +212,7 @@ function computePlan({ pcoPeople, individuals, families, filterConfig }) {
     archive,
     reactivate,
     gatheringEligible,
+    familyNameUpdates,
   };
 }
 

@@ -11,6 +11,10 @@ function ind(id, first, last, extra = {}) {
 const FILTER = { membershipFilterEnabled: true, membershipAllowlist: ['Church Members', 'Regular Attenders'], fieldFilterEnabled: false, fieldFilters: [] };
 const FILTER_EMPTY = { membershipFilterEnabled: true, membershipAllowlist: [], fieldFilterEnabled: false, fieldFilters: [] };
 
+function family(id, familyName, extra = {}) {
+  return { id, familyName, planningCenterId: null, ...extra };
+}
+
 test('archive only on PCO inactive for a linked person', () => {
   const plan = computePlan({
     pcoPeople: [pco('p1', 'A', 'B', { status: 'inactive' })],
@@ -258,4 +262,72 @@ test('gatheringEligible: reactivate candidate that is not eligible is excluded f
   });
   assert.deepStrictEqual(plan.reactivate, []);
   assert.deepStrictEqual(plan.gatheringEligible, []);
+});
+
+test('familyNameUpdates: proposes a rename when the linked head-of-household differs from the current family name', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [ind(1, 'Jane', 'Smith', { planningCenterId: 'p1', familyId: 10 })],
+    families: [family(10, 'Smith, John', { planningCenterId: 'h1' })],
+    filterConfig: FILTER,
+    householdPrimaryContacts: new Map([['h1', 'p1']]),
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, [{ familyId: 10, oldName: 'Smith, John', newName: 'Smith, Jane' }]);
+});
+
+test('familyNameUpdates: skips when the head-of-household is not yet linked in LMPG', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [ind(1, 'Jane', 'Smith', { planningCenterId: 'p2', familyId: 10 })],
+    families: [family(10, 'Smith, John', { planningCenterId: 'h1' })],
+    filterConfig: FILTER,
+    householdPrimaryContacts: new Map([['h1', 'p1']]),
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, []);
+});
+
+test('familyNameUpdates: does not propose when the name already matches', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [ind(1, 'Jane', 'Smith', { planningCenterId: 'p1', familyId: 10 })],
+    families: [family(10, 'Smith, Jane', { planningCenterId: 'h1' })],
+    filterConfig: FILTER,
+    householdPrimaryContacts: new Map([['h1', 'p1']]),
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, []);
+});
+
+test('familyNameUpdates: skips families with no planning_center_id', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [ind(1, 'Jane', 'Smith', { planningCenterId: 'p1', familyId: 10 })],
+    families: [family(10, 'Smith, John')],
+    filterConfig: FILTER,
+    householdPrimaryContacts: new Map([['h1', 'p1']]),
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, []);
+});
+
+test('familyNameUpdates: empty when householdPrimaryContacts is not provided', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [ind(1, 'Jane', 'Smith', { planningCenterId: 'p1', familyId: 10 })],
+    families: [family(10, 'Smith, John', { planningCenterId: 'h1' })],
+    filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, []);
+});
+
+test('familyNameUpdates: puts the head-of-household first among adults, keeps other adults', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Jane', 'Smith', { householdId: 'h1' })],
+    individuals: [
+      ind(1, 'John', 'Smith', { planningCenterId: 'p0', familyId: 10 }),
+      ind(2, 'Jane', 'Smith', { planningCenterId: 'p1', familyId: 10 }),
+    ],
+    families: [family(10, 'Smith, John and Jane', { planningCenterId: 'h1' })],
+    filterConfig: FILTER,
+    householdPrimaryContacts: new Map([['h1', 'p1']]),
+  });
+  assert.deepStrictEqual(plan.familyNameUpdates, [{ familyId: 10, oldName: 'Smith, John and Jane', newName: 'Smith, Jane and John' }]);
 });
