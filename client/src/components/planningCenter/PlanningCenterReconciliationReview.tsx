@@ -110,6 +110,7 @@ export default function PlanningCenterReconciliationReview() {
                   <PcoPersonSearchPicker onPick={(person) => {
                     setManualLinks((p) => ({ ...p, [x.individualId]: person }));
                     setSearchOpenFor((p) => { const n = new Set(p); n.delete(x.individualId); return n; });
+                    setSkipArchiveExtras((p) => { const n = new Set(p); n.delete(x.individualId); return n; });
                   }} />
                 )}
               </li>
