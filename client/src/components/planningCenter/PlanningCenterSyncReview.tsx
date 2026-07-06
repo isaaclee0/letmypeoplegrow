@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import { buildSelections, VisitorChoice } from './syncSelections';
+import PcoPersonSearchPicker, { PcoPersonResult } from './PcoPersonSearchPicker';
 
 interface CandidateDetail { pcoId: string; firstName: string; lastName: string; membership: string | null; }
 interface AmbiguousEntry { individualId: number; firstName: string; lastName: string; candidates: string[]; candidateDetails: CandidateDetail[]; }
@@ -35,6 +36,8 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
   const [ambiguousChoices, setAmbiguousChoices] = useState<Record<string, string | null>>({});
   const [skipAdd, setSkipAdd] = useState<Set<string>>(new Set());
   const [visitorChoices, setVisitorChoices] = useState<Record<string, VisitorChoice | null>>({});
+  const [archiveAmbiguousIds, setArchiveAmbiguousIds] = useState<Set<number>>(new Set());
+  const [manualPicks, setManualPicks] = useState<Record<number, PcoPersonResult | null>>({});
 
   // force: bypass the server-side PCO cache (explicit "Refresh from Planning Center").
   // preserveResult: keep the "Applied: …" message visible when reloading after an apply.
@@ -47,6 +50,8 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
       setAmbiguousChoices({});
       setSkipAdd(new Set());
       setVisitorChoices({});
+      setArchiveAmbiguousIds(new Set());
+      setManualPicks({});
     } catch (e: any) {
       logger.error('Failed to compute PCO batch sync plan', e);
       setError(e.response?.data?.error || 'Failed to compute sync plan.');
@@ -60,7 +65,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
   const apply = async () => {
     setApplying(true); setError(null);
     try {
-      const selections = buildSelections(ambiguousChoices, skipAdd, visitorChoices);
+      const selections = buildSelections(ambiguousChoices, skipAdd, visitorChoices, archiveAmbiguousIds);
       const res = await integrationsAPI.applyPlanningCenterBatch(batchId, { selections });
       setResult(res.data.result);
       // Refresh the plan so the lists reflect the post-apply DB state instead of
@@ -118,15 +123,44 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
                   {a.candidateDetails.map((c) => (
                     <label key={c.pcoId} className="flex items-center gap-2 text-sm">
                       <input type="radio" name={`amb-${a.individualId}`} checked={ambiguousChoices[a.individualId] === c.pcoId}
-                        onChange={() => setAmbiguousChoices((p) => ({ ...p, [a.individualId]: c.pcoId }))} />
+                        onChange={() => {
+                          setAmbiguousChoices((p) => ({ ...p, [a.individualId]: c.pcoId }));
+                          setManualPicks((p) => ({ ...p, [a.individualId]: null }));
+                          setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
+                        }} />
                       <span>{c.firstName} {c.lastName}{c.membership ? ` — ${c.membership}` : ''}</span>
                     </label>
                   ))}
+                  {manualPicks[a.individualId] && (
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="radio" name={`amb-${a.individualId}`}
+                        checked={ambiguousChoices[a.individualId] === manualPicks[a.individualId]!.pcoId} readOnly />
+                      <span>{manualPicks[a.individualId]!.firstName} {manualPicks[a.individualId]!.lastName} (found by search)</span>
+                    </label>
+                  )}
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="radio" name={`amb-${a.individualId}`} checked={!ambiguousChoices[a.individualId]}
-                      onChange={() => setAmbiguousChoices((p) => ({ ...p, [a.individualId]: null }))} />
+                    <input type="radio" name={`amb-${a.individualId}`} checked={archiveAmbiguousIds.has(a.individualId)}
+                      onChange={() => {
+                        setArchiveAmbiguousIds((p) => new Set(p).add(a.individualId));
+                        setAmbiguousChoices((p) => ({ ...p, [a.individualId]: null }));
+                        setManualPicks((p) => ({ ...p, [a.individualId]: null }));
+                      }} />
+                    <span>Archive this person</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name={`amb-${a.individualId}`}
+                      checked={!ambiguousChoices[a.individualId] && !archiveAmbiguousIds.has(a.individualId)}
+                      onChange={() => {
+                        setAmbiguousChoices((p) => ({ ...p, [a.individualId]: null }));
+                        setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
+                      }} />
                     <span>Skip (leave unlinked)</span>
                   </label>
+                  <PcoPersonSearchPicker onPick={(person) => {
+                    setManualPicks((p) => ({ ...p, [a.individualId]: person }));
+                    setAmbiguousChoices((p) => ({ ...p, [a.individualId]: person.pcoId }));
+                    setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
+                  }} />
                 </div>
               </li>
             ))}
