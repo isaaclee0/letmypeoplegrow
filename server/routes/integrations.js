@@ -2785,6 +2785,7 @@ router.get('/planning-center/sync-batches/:id/plan', async (req, res) => {
         update: plan.update.length,
         archive: plan.archive.length,
         reactivate: plan.reactivate.length,
+        familyNameUpdates: (plan.familyNameUpdates || []).length,
       },
       plan,
     });
@@ -2847,7 +2848,12 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
         visitorChoices[id] = choice;
       }
     }
-    const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds };
+    const familyNameUpdateIds = new Set((plan.familyNameUpdates || []).map((f) => f.familyId));
+    const skipFamilyNameUpdateIds = (Array.isArray(rawSel.skipFamilyNameUpdateIds) ? rawSel.skipFamilyNameUpdateIds : [])
+      .map(Number)
+      .filter((id) => familyNameUpdateIds.has(id));
+
+    const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds, skipFamilyNameUpdateIds };
 
     const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
       defaultPeopleType: batch.defaultPeopleType,
@@ -2859,6 +2865,7 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
       gatheringAssigned: result.gatheringAssigned,
+      familyNamesUpdated: result.familyNamesUpdated,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
       errors: result.errors.length,
