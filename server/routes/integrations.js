@@ -2807,17 +2807,38 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
     const plan = await pcoSync.computePlanForBatch(churchId, accessToken, batch);
 
     const rawSel = (req.body && req.body.selections) || {};
-    const candidatesByIndividual = new Map(
-      plan.ambiguous.map((a) => [a.individualId, new Set(a.candidates)])
-    );
-    const ambiguous = {};
-    for (const [individualId, pcoId] of Object.entries(rawSel.ambiguous || {})) {
-      const allowed = candidatesByIndividual.get(Number(individualId));
-      if (allowed && pcoId && allowed.has(pcoId)) ambiguous[individualId] = pcoId;
-    }
+    const { people: cachedPcoPeople } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
+    const validPcoIds = new Set(cachedPcoPeople.map((p) => p.id));
+
     const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
     const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
       .filter((id) => addPcoIds.has(id));
+
+    // Seed claimed pcoIds with everything the plan itself already assigns, so a
+    // reviewer's manual ambiguous pick can't collide with an auto-link/restore/
+    // visitor-match/non-skipped-add from the same run.
+    const claimedPcoIds = new Set([
+      ...plan.link.map((l) => l.pcoId),
+      ...(plan.restore || []).map((r) => r.pcoId),
+      ...(plan.visitorMatches || []).map((v) => v.candidate.pcoId),
+      ...plan.add.filter((a) => !skipAddPcoIds.includes(a.pcoId)).map((a) => a.pcoId),
+    ]);
+
+    const ambiguousIndividualIds = new Set(plan.ambiguous.map((a) => a.individualId));
+    const ambiguousCandidates = Object.entries(rawSel.ambiguous || {}).map(([individualId, pcoId]) => ({
+      individualId: Number(individualId), pcoId,
+    }));
+    const acceptedAmbiguous = resolveManualLinks(ambiguousCandidates, {
+      validPcoIds, claimedPcoIds, allowedIndividualIds: ambiguousIndividualIds,
+    });
+    const ambiguous = {};
+    for (const a of acceptedAmbiguous) ambiguous[a.individualId] = a.pcoId;
+
+    const linkedAmbiguousIds = new Set(Object.keys(ambiguous).map(Number));
+    const archiveAmbiguousIds = (Array.isArray(rawSel.archiveAmbiguousIds) ? rawSel.archiveAmbiguousIds : [])
+      .map(Number)
+      .filter((id) => ambiguousIndividualIds.has(id) && !linkedAmbiguousIds.has(id));
+
     const visitorOfferIds = new Set((plan.visitorMatches || []).map((v) => Number(v.individualId)));
     const visitorChoices = {};
     for (const [rawId, choice] of Object.entries(rawSel.visitorChoices || {})) {
@@ -2826,7 +2847,7 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
         visitorChoices[id] = choice;
       }
     }
-    const selections = { ambiguous, skipAddPcoIds, visitorChoices };
+    const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds };
 
     const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
       defaultPeopleType: batch.defaultPeopleType,
