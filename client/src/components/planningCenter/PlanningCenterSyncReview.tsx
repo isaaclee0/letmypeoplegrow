@@ -153,14 +153,18 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
                       onChange={() => {
                         setAmbiguousChoices((p) => ({ ...p, [a.individualId]: null }));
                         setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
+                        setManualPicks((p) => ({ ...p, [a.individualId]: null }));
                       }} />
                     <span>Skip (leave unlinked)</span>
                   </label>
-                  <PcoPersonSearchPicker onPick={(person) => {
-                    setManualPicks((p) => ({ ...p, [a.individualId]: person }));
-                    setAmbiguousChoices((p) => ({ ...p, [a.individualId]: person.pcoId }));
-                    setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
-                  }} />
+                  <PcoPersonSearchPicker
+                    key={`${a.individualId}-${manualPicks[a.individualId]?.pcoId || 'empty'}`}
+                    onPick={(person) => {
+                      setManualPicks((p) => ({ ...p, [a.individualId]: person }));
+                      setAmbiguousChoices((p) => ({ ...p, [a.individualId]: person.pcoId }));
+                      setArchiveAmbiguousIds((p) => { const n = new Set(p); n.delete(a.individualId); return n; });
+                    }}
+                  />
                 </div>
               </li>
             ))}

@@ -889,7 +889,7 @@ export const integrationsAPI = {
       params: opts?.force ? { refresh: 1 } : undefined,
       timeout: 120000,
     }),
-  applyPlanningCenterBatch: (id: number, data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[]; visitorChoices?: Record<string, string> } }) =>
+  applyPlanningCenterBatch: (id: number, data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[]; visitorChoices?: Record<string, string>; archiveAmbiguousIds?: number[] } }) =>
     api.post(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
   getPlanningCenterReconciliationPlan: (opts?: { force?: boolean }) =>
     api.get('/integrations/planning-center/reconciliation/plan', {
