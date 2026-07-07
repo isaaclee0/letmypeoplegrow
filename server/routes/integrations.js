@@ -91,6 +91,13 @@ function makeHttpsRequest(url, options = {}) {
   });
 }
 
+// Read a Planning Center env var, tolerating the British "CENTRE" spelling.
+// This app is Australian, so PLANNING_CENTRE_* creeps into some .env files;
+// accept either spelling so a typo can't silently break the OAuth flow.
+function pcoEnv(suffix) {
+  return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
+}
+
 // Helper function to get Elvanto API key from user preferences
 async function getElvantoApiKey(userId, churchId) {
   try {
@@ -1663,8 +1670,8 @@ async function refreshPlanningCenterToken(refreshToken) {
       data: {
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
-        client_id: process.env.PLANNING_CENTER_CLIENT_ID,
-        client_secret: process.env.PLANNING_CENTER_CLIENT_SECRET
+        client_id: pcoEnv('CLIENT_ID'),
+        client_secret: pcoEnv('CLIENT_SECRET')
       }
     });
 
@@ -1758,7 +1765,7 @@ async function makePlanningCenterRequest(url, tokens, userId, churchId) {
 router.get('/planning-center/status', async (req, res) => {
   try {
     // Check if Planning Center is enabled
-    const isEnabled = process.env.PLANNING_CENTER_ENABLED === 'true';
+    const isEnabled = pcoEnv('ENABLED') === 'true';
 
     if (!isEnabled) {
       return res.json({
@@ -1845,7 +1852,7 @@ function computePcoRedirectUri(req) {
   const host = (req.headers['x-forwarded-host'] || req.get('host') || '')
     .toString().split(',')[0].trim();
   if (!host) {
-    return process.env.PLANNING_CENTER_REDIRECT_URI || null;
+    return pcoEnv('REDIRECT_URI') || null;
   }
   // Force https for real domains; only localhost is served over http. The proxy
   // chain does not reliably set X-Forwarded-Proto, so we don't trust it here —
@@ -1857,7 +1864,7 @@ function computePcoRedirectUri(req) {
 
 // Initiate OAuth flow
 router.get('/planning-center/authorize', (req, res) => {
-  const clientId = process.env.PLANNING_CENTER_CLIENT_ID;
+  const clientId = pcoEnv('CLIENT_ID');
   const redirectUri = computePcoRedirectUri(req);
   const scope = 'people check_ins'; // Request access to People and Check-ins
 
@@ -1926,6 +1933,9 @@ router.get('/planning-center/callback', async (req, res) => {
     // carried in state; fall back to deriving it from this request's host.
     const redirectUri = stateRedirectUri || computePcoRedirectUri(req);
 
+    const clientId = pcoEnv('CLIENT_ID');
+    const clientSecret = pcoEnv('CLIENT_SECRET');
+
     // Exchange authorization code for access token
     const response = await makeHttpsRequest('https://api.planningcenteronline.com/oauth/token', {
       method: 'POST',
@@ -1935,14 +1945,24 @@ router.get('/planning-center/callback', async (req, res) => {
       data: {
         grant_type: 'authorization_code',
         code: code,
-        client_id: process.env.PLANNING_CENTER_CLIENT_ID,
-        client_secret: process.env.PLANNING_CENTER_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         redirect_uri: redirectUri
       }
     });
 
     if (response.status !== 200) {
+      // Log credential *shape* only (never the secret) to diagnose invalid_client
+      // without leaking anything. A length/whitespace mismatch here usually means
+      // the secret was corrupted (e.g. Docker Compose '$' interpolation) or unset.
       console.error('Planning Center OAuth error:', response.data);
+      console.error('Planning Center OAuth credential check:', {
+        clientIdLength: clientId ? clientId.length : 0,
+        clientSecretPresent: !!clientSecret,
+        clientSecretLength: clientSecret ? clientSecret.length : 0,
+        clientSecretHasWhitespace: clientSecret ? /\s/.test(clientSecret) : false,
+        redirectUri,
+      });
       return res.status(500).send('Failed to obtain access token');
     }
 

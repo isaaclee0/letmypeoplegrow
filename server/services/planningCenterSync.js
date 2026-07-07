@@ -117,12 +117,17 @@ async function getTokensForChurch(churchId) {
   };
 }
 
+// Tolerate the British "CENTRE" spelling so a .env typo can't break token refresh.
+function pcoEnv(suffix) {
+  return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
+}
+
 async function refreshToken(refreshTokenValue) {
   const response = await httpsPost('https://api.planningcenteronline.com/oauth/token', {
     grant_type: 'refresh_token',
     refresh_token: refreshTokenValue,
-    client_id: process.env.PLANNING_CENTER_CLIENT_ID,
-    client_secret: process.env.PLANNING_CENTER_CLIENT_SECRET,
+    client_id: pcoEnv('CLIENT_ID'),
+    client_secret: pcoEnv('CLIENT_SECRET'),
   });
   return response.status === 200 ? response.data : null;
 }
