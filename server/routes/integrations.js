@@ -1833,11 +1833,40 @@ router.get('/planning-center/status', async (req, res) => {
   }
 });
 
+// Derive the OAuth redirect URI from the incoming request so the same app can
+// serve multiple production domains (e.g. app.letmypeoplegrow.com.au and
+// letmypeoplegrow.app). Each domain must still be registered as a valid callback
+// in the Planning Center OAuth app. The value must be identical between the
+// /authorize and /callback steps; because PCO redirects back to the same host,
+// deriving it from the request on both sides keeps them in sync.
+// An explicit PLANNING_CENTER_REDIRECT_URI env var overrides this (used only as a
+// fallback when the request host cannot be determined).
+function computePcoRedirectUri(req) {
+  const forwardedProto = (req.headers['x-forwarded-proto'] || req.protocol || 'https')
+    .toString().split(',')[0].trim();
+  const host = (req.headers['x-forwarded-host'] || req.get('host') || '')
+    .toString().split(',')[0].trim();
+  if (host) {
+    return `${forwardedProto}://${host}/api/integrations/planning-center/callback`;
+  }
+  return process.env.PLANNING_CENTER_REDIRECT_URI || null;
+}
+
 // Initiate OAuth flow
 router.get('/planning-center/authorize', (req, res) => {
   const clientId = process.env.PLANNING_CENTER_CLIENT_ID;
-  const redirectUri = process.env.PLANNING_CENTER_REDIRECT_URI;
+  const redirectUri = computePcoRedirectUri(req);
   const scope = 'people check_ins'; // Request access to People and Check-ins
+
+  if (!clientId || !redirectUri) {
+    console.error('🔐 Planning Center OAuth misconfigured:', {
+      hasClientId: !!clientId,
+      redirectUri,
+    });
+    return res.status(500).json({
+      error: 'Planning Center is not configured on this server. Set PLANNING_CENTER_CLIENT_ID and PLANNING_CENTER_CLIENT_SECRET.',
+    });
+  }
 
   console.log('🔐 Planning Center OAuth - redirect_uri:', redirectUri);
 
@@ -1846,12 +1875,15 @@ router.get('/planning-center/authorize', (req, res) => {
   const rawReturnTo = typeof req.query.returnTo === 'string' ? req.query.returnTo : '';
   const returnTo = /^\/app\//.test(rawReturnTo) ? rawReturnTo : '';
 
-  // Generate state parameter for security (optional but recommended)
+  // Generate state parameter for security (optional but recommended).
+  // Carry the exact redirect_uri so the callback's token exchange uses an
+  // identical value (PCO requires the authorize and token redirect_uri to match).
   const state = Buffer.from(JSON.stringify({
     userId: req.user.id,
     churchId: req.user.church_id,
     timestamp: Date.now(),
     returnTo,
+    redirectUri,
   })).toString('base64');
 
   const authUrl = `https://api.planningcenteronline.com/oauth/authorize?` +
@@ -1876,15 +1908,20 @@ router.get('/planning-center/callback', async (req, res) => {
     }
 
     // Decode state to get user info
-    let userId, churchId, returnTo;
+    let userId, churchId, returnTo, stateRedirectUri;
     try {
       const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
       userId = stateData.userId;
       churchId = stateData.churchId;
       returnTo = stateData.returnTo; // may be undefined for older flows
+      stateRedirectUri = stateData.redirectUri; // may be undefined for older flows
     } catch (e) {
       return res.status(400).send('Invalid state parameter');
     }
+
+    // Must match the redirect_uri sent during /authorize. Prefer the value
+    // carried in state; fall back to deriving it from this request's host.
+    const redirectUri = stateRedirectUri || computePcoRedirectUri(req);
 
     // Exchange authorization code for access token
     const response = await makeHttpsRequest('https://api.planningcenteronline.com/oauth/token', {
@@ -1897,7 +1934,7 @@ router.get('/planning-center/callback', async (req, res) => {
         code: code,
         client_id: process.env.PLANNING_CENTER_CLIENT_ID,
         client_secret: process.env.PLANNING_CENTER_CLIENT_SECRET,
-        redirect_uri: process.env.PLANNING_CENTER_REDIRECT_URI
+        redirect_uri: redirectUri
       }
     });
 
