@@ -1842,14 +1842,17 @@ router.get('/planning-center/status', async (req, res) => {
 // An explicit PLANNING_CENTER_REDIRECT_URI env var overrides this (used only as a
 // fallback when the request host cannot be determined).
 function computePcoRedirectUri(req) {
-  const forwardedProto = (req.headers['x-forwarded-proto'] || req.protocol || 'https')
-    .toString().split(',')[0].trim();
   const host = (req.headers['x-forwarded-host'] || req.get('host') || '')
     .toString().split(',')[0].trim();
-  if (host) {
-    return `${forwardedProto}://${host}/api/integrations/planning-center/callback`;
+  if (!host) {
+    return process.env.PLANNING_CENTER_REDIRECT_URI || null;
   }
-  return process.env.PLANNING_CENTER_REDIRECT_URI || null;
+  // Force https for real domains; only localhost is served over http. The proxy
+  // chain does not reliably set X-Forwarded-Proto, so we don't trust it here —
+  // all registered PCO callback URIs for real domains are https.
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host);
+  const proto = isLocal ? 'http' : 'https';
+  return `${proto}://${host}/api/integrations/planning-center/callback`;
 }
 
 // Initiate OAuth flow
