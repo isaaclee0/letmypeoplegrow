@@ -1326,6 +1326,7 @@ const ReportsPage: React.FC = () => {
                         <li key={g.key} className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 items-center px-3 py-2 ${color} rounded`}>
                           <AttendanceHistoryPopover
                             people={g.members ?? (g.individualId != null ? [{ individualId: g.individualId, name: g.name }] : [])}
+                            gatheringIds={selectedGatherings.map(sg => sg.id)}
                           >
                             <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{g.name}</span>
                           </AttendanceHistoryPopover>

@@ -597,7 +597,7 @@ router.get('/export', requireRole(['admin', 'coordinator']), async (req, res) =>
     // Get all sessions in the date range to determine column headers
     const placeholders = gatheringIds.map(() => '?').join(',');
     const sessionsQuery = `
-      SELECT DISTINCT as_table.session_date, as_table.gathering_type_id, gt.name as gathering_name
+      SELECT DISTINCT as_table.session_date, as_table.gathering_type_id, gt.name as gathering_name, gt.frequency as gathering_frequency
       FROM attendance_sessions as_table
       JOIN gathering_types gt ON as_table.gathering_type_id = gt.id
       WHERE as_table.session_date >= ? AND as_table.session_date <= ?

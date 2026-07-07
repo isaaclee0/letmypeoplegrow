@@ -18,7 +18,12 @@ const attendanceMap = new Map([
   ['6_2026-06-07_2', true],
 ]);
 
-// Multi-gathering: gathering name in date headers, counts before date columns
+// Multi-gathering: gathering name in date headers, counts before date columns.
+// Present/Absent Count are period-based here (periods default to weekly since
+// these fixture sessions carry no gathering_frequency): Jo attended a
+// gathering every week (Sunday AM both weeks) so Absent Count is 0, even
+// though the raw Youth column is FALSE (never attended Youth, not counted
+// since no attendance record exists for Jo at Youth at all).
 const table = buildExportTable({ sessions, people, attendanceMap, includeGatheringInHeaders: true });
 assert.deepStrictEqual(table.headers, [
   'First Name', 'Last Name', 'Family Name', 'People Type', 'Adult/Child',
@@ -27,9 +32,9 @@ assert.deepStrictEqual(table.headers, [
 ]);
 assert.deepStrictEqual(table.rows[0], [
   'Jo', 'Smith, Jr', 'Smith', 'Regular Attender', 'Adult',
-  2, 1, 'TRUE', 'FALSE', 'TRUE',
+  2, 0, 'TRUE', 'FALSE', 'TRUE',
 ]);
-assert.deepStrictEqual(table.rows[1].slice(4), ['Child', 1, 2, 'FALSE', 'TRUE', 'FALSE']);
+assert.deepStrictEqual(table.rows[1].slice(4), ['Child', 1, 0, 'FALSE', 'TRUE', 'FALSE']);
 
 // Single gathering: plain date headers, no gathering name anywhere
 const single = buildExportTable({
@@ -51,6 +56,33 @@ assert.strictEqual(csvLines[0].split(',').length, table.headers.length);
 // TSV: tab separator, control characters sanitized
 const tsv = toTsv(table);
 tsv.split('\n').forEach(line => assert.strictEqual(line.split('\t').length, table.headers.length));
+
+// Regression check: a person who attends every week, but always at only one
+// of two selected weekly gatherings, must show Absent Count 0 — not one FALSE
+// per missed gathering per week (the bug this period-based logic fixes).
+const weeklySessions = [
+  { session_date: '2026-06-07', gathering_type_id: 1, gathering_name: 'Sunday AM', gathering_frequency: 'weekly' },
+  { session_date: '2026-06-07', gathering_type_id: 2, gathering_name: 'Sunday PM', gathering_frequency: 'weekly' },
+  { session_date: '2026-06-14', gathering_type_id: 1, gathering_name: 'Sunday AM', gathering_frequency: 'weekly' },
+  { session_date: '2026-06-14', gathering_type_id: 2, gathering_name: 'Sunday PM', gathering_frequency: 'weekly' },
+  { session_date: '2026-06-21', gathering_type_id: 1, gathering_name: 'Sunday AM', gathering_frequency: 'weekly' },
+  { session_date: '2026-06-21', gathering_type_id: 2, gathering_name: 'Sunday PM', gathering_frequency: 'weekly' },
+];
+const weeklyPeople = [{ id: 7, first_name: 'Sam', last_name: 'Regular', family_name: '', people_type: 'Regular Attender', is_child: 0 }];
+const weeklyAttendanceMap = new Map([
+  ['7_2026-06-07_1', true], ['7_2026-06-07_2', false],
+  ['7_2026-06-14_1', true], ['7_2026-06-14_2', false],
+  ['7_2026-06-21_1', true], ['7_2026-06-21_2', false],
+]);
+const weeklyTable = buildExportTable({
+  sessions: weeklySessions,
+  people: weeklyPeople,
+  attendanceMap: weeklyAttendanceMap,
+  includeGatheringInHeaders: true,
+});
+assert.deepStrictEqual(weeklyTable.rows[0].slice(5), [
+  3, 0, 'TRUE', 'FALSE', 'TRUE', 'FALSE', 'TRUE', 'FALSE',
+]);
 
 // XLSX: produces a non-empty buffer with the xlsx magic bytes (PK zip header)
 toXlsx(table).then(buffer => {

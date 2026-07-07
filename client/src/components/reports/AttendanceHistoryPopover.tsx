@@ -10,6 +10,13 @@ interface AttendanceHistoryResponse {
 interface AttendanceHistoryPopoverProps {
   people: Array<{ individualId: number; name: string }>;
   children: React.ReactNode;
+  /**
+   * Gathering IDs currently selected on the Reports page. When provided, the
+   * "most recent" attendance is pulled only from these gatherings (rather than
+   * the person's entire all-time history), and — when more than one gathering
+   * is selected — each date is labelled with which gathering it was for.
+   */
+  gatheringIds?: number[];
 }
 
 type Status = 'idle' | 'loading' | 'loaded' | 'error';
@@ -35,16 +42,30 @@ function formatDate(dateString: string): string {
   }
 }
 
-export function getLastPresentDates(history: AttendanceHistoryEntry[], limit = 3): string[] {
-  return history.filter(row => row.present).slice(0, limit).map(row => row.date);
+// Returns the most recent "present" attendance entries, keeping the full entry
+// (so callers can display which gathering each date belongs to) and optionally
+// scoping the history down to a specific set of gathering IDs first (e.g. the
+// gatherings currently selected on the Reports page) rather than the person's
+// entire all-time history.
+export function getLastPresentEntries(
+  history: AttendanceHistoryEntry[],
+  gatheringIds?: number[],
+  limit = 3
+): AttendanceHistoryEntry[] {
+  const scoped = gatheringIds && gatheringIds.length > 0
+    ? history.filter(row => gatheringIds.includes(row.gatheringId))
+    : history;
+  return scoped.filter(row => row.present).slice(0, limit);
 }
 
-const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ people, children }) => {
+const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ people, children, gatheringIds }) => {
   const [visible, setVisible] = useState(false);
   const [status, setStatus] = useState<Status>('idle');
-  const [datesByPerson, setDatesByPerson] = useState<Map<number, string[]>>(new Map());
+  const [entriesByPerson, setEntriesByPerson] = useState<Map<number, AttendanceHistoryEntry[]>>(new Map());
   const containerRef = useRef<HTMLSpanElement>(null);
   const peopleKey = people.map(p => p.individualId).join(',');
+  const gatheringIdsKey = (gatheringIds ?? []).slice().sort((a, b) => a - b).join(',');
+  const showGatheringLabel = (gatheringIds?.length ?? 0) > 1;
 
   useEffect(() => {
     if (!visible) return;
@@ -53,13 +74,13 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
     Promise.all(
       people.map(p =>
         fetchHistoryCached(p.individualId).then(
-          res => [p.individualId, getLastPresentDates(res.history)] as const
+          res => [p.individualId, getLastPresentEntries(res.history, gatheringIds)] as const
         )
       )
     )
       .then(entries => {
         if (cancelled) return;
-        setDatesByPerson(new Map(entries));
+        setEntriesByPerson(new Map(entries));
         setStatus('loaded');
       })
       .catch(() => {
@@ -70,7 +91,7 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, peopleKey]);
+  }, [visible, peopleKey, gatheringIdsKey]);
 
   useEffect(() => {
     if (!visible) return;
@@ -119,18 +140,23 @@ const AttendanceHistoryPopover: React.FC<AttendanceHistoryPopoverProps> = ({ peo
           {status === 'loaded' && (
             <div className="space-y-2">
               {people.map(p => {
-                const dates = datesByPerson.get(p.individualId) ?? [];
+                const entries = entriesByPerson.get(p.individualId) ?? [];
                 return (
                   <div key={p.individualId}>
                     {people.length > 1 && (
                       <div className="font-semibold text-gray-900 dark:text-gray-100">{p.name}</div>
                     )}
-                    {dates.length === 0 ? (
+                    {entries.length === 0 ? (
                       <div className="text-gray-500 dark:text-gray-400">No attendance on record.</div>
                     ) : (
                       <ul className="text-gray-700 dark:text-gray-300">
-                        {dates.map(d => (
-                          <li key={d}>{formatDate(d)}</li>
+                        {entries.map((entry, idx) => (
+                          <li key={`${entry.gatheringId}-${entry.date}-${idx}`}>
+                            {formatDate(entry.date)}
+                            {showGatheringLabel && (
+                              <span className="text-gray-500 dark:text-gray-400"> — {entry.gatheringName}</span>
+                            )}
+                          </li>
                         ))}
                       </ul>
                     )}
