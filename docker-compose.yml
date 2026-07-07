@@ -19,6 +19,9 @@ services:
       OTC_EXPIRE_MINUTES: 10
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au
+      # Planning Center integration is generally available; OAuth credentials
+      # (PLANNING_CENTER_CLIENT_ID/SECRET/REDIRECT_URI) are supplied via server/.env.
+      PLANNING_CENTER_ENABLED: 'true'
     ports:
       - "3001:3001"
     volumes:
