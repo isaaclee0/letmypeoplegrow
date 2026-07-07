@@ -134,10 +134,15 @@ const ReportsPage: React.FC = () => {
     selectedGatherings.some(g => g.attendanceType === 'headcount') && 
     selectedGatherings.some(g => g.attendanceType === 'standard');
   
-  // Determine if we should show visitor information
-  const shouldShowVisitorInfo = hasMixedGatheringTypes || 
-    (selectedGatherings.length === 1 && selectedGatherings[0].attendanceType === 'standard') ||
-    (!hasMultipleGatherings && selectedGathering?.attendanceType === 'standard');
+  // Determine if we should show visitor/absence information. This only requires at
+  // least one selected gathering to track individual attendance (i.e. be 'standard');
+  // headcount-only selections have no per-individual data to show. Previously this
+  // was incorrectly restricted to a single standard gathering, hiding the panel when
+  // multiple standard gatherings were selected together — now that absence streaks
+  // are computed per-period across all selected gatherings, there's no reason to hide
+  // it in that case.
+  const shouldShowVisitorInfo = selectedGatherings.length > 0 &&
+    selectedGatherings.some(g => g.attendanceType === 'standard');
 
   // Initialize default date range to last 4 weeks on every open
   useEffect(() => {
@@ -261,7 +266,23 @@ const ReportsPage: React.FC = () => {
     }
   }, [selectedGatherings, startDate, endDate]);
 
-  // Load recent session details to derive absence streaks and recent visitors
+  // Load recent session details to derive absence streaks and recent visitors.
+  //
+  // When multiple gatherings are selected, a person shouldn't be flagged as absent
+  // just because they missed one gathering while attending another in the same
+  // reporting period (e.g. Sunday AM vs PM, or Sunday vs midweek). Session dates are
+  // therefore grouped into "periods" sized by the shortest frequency among the
+  // selected gatherings, and a period only counts as an absence if the person missed
+  // every selected gathering that occurred within it.
+  const frequencyToDays = (freq?: string): number => {
+    switch (freq) {
+      case 'biweekly': return 14;
+      case 'monthly': return 30;
+      case 'weekly':
+      default: return 7;
+    }
+  };
+
   const loadAbsenceAndVisitorDetails = useCallback(async () => {
     if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
     setIsLoadingDetails(true);
@@ -272,13 +293,32 @@ const ReportsPage: React.FC = () => {
       const MAX_SESSIONS = 12;
       const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
 
+      // Assign each session date to a period index (0 = most recent). Dates within
+      // `periodDays` of the period's anchor (most recent date in that period) are
+      // grouped together, so gatherings on different days of the same week collapse
+      // into a single period.
+      const periodDays = Math.min(...selectedGatherings.map(g => frequencyToDays(g.frequency)));
+      const periodIndexByDate = new Map<string, number>();
+      {
+        let anchorTime: number | null = null;
+        let currentPeriod = -1;
+        limitedDates.forEach((d: string) => {
+          const t = new Date(d).getTime();
+          if (anchorTime === null || (anchorTime - t) / (1000 * 60 * 60 * 24) >= periodDays) {
+            currentPeriod += 1;
+            anchorTime = t;
+          }
+          periodIndexByDate.set(d, currentPeriod);
+        });
+      }
+
       const responses = await Promise.all(
         limitedDates.flatMap((d: string) => 
           selectedGatherings.map(g => attendanceAPI.get(g.id, d))
         )
       );
 
-      type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; statuses: boolean[] };
+      type RegularEntry = { firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; periodPresence: Map<number, boolean> };
       const regularMap = new Map<number, RegularEntry>();
       const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
       const now = new Date();
@@ -288,12 +328,15 @@ const ReportsPage: React.FC = () => {
         const sessionDateStr = limitedDates[idx];
         const sessionDate = new Date(sessionDateStr);
         const withinSixWeeks = (now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24) <= 42;
+        const periodIndex = periodIndexByDate.get(sessionDateStr)!;
 
         const list = data.attendanceList || [];
         list.forEach((ind: any) => {
           if (typeof ind.id !== 'number') return;
-           const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, familyId: (ind as any).familyId ?? null, familyName: (ind as any).familyName ?? null, statuses: [] as boolean[] };
-          existing.statuses.push(!!ind.present);
+           const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, familyId: (ind as any).familyId ?? null, familyName: (ind as any).familyName ?? null, periodPresence: new Map<number, boolean>() };
+          const present = !!ind.present;
+          const alreadyPresent = existing.periodPresence.get(periodIndex) === true;
+          existing.periodPresence.set(periodIndex, present || alreadyPresent);
           regularMap.set(ind.id, existing);
         });
 
@@ -312,9 +355,10 @@ const ReportsPage: React.FC = () => {
 
       const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; familyId?: number | null; familyName?: string | null; streak: number }> = [];
       Array.from(regularMap.entries()).forEach(([id, entry]) => {
+        const sortedPeriods = Array.from(entry.periodPresence.keys()).sort((a, b) => a - b);
         let streak = 0;
-        for (const present of entry.statuses) {
-          if (present) break;
+        for (const periodIndex of sortedPeriods) {
+          if (entry.periodPresence.get(periodIndex)) break;
           streak += 1;
         }
         if (streak >= 2) {
@@ -666,79 +710,6 @@ const ReportsPage: React.FC = () => {
     familyIds.forEach(id => loadFamilyCaregivers(id));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupedAbsences, recentVisitors]);
-
-  const loadAttendanceDetails = useCallback(async () => {
-    if (selectedGatherings.length === 0 || !metrics?.attendanceData) return;
-    setIsLoadingDetails(true);
-    try {
-      const sessionDatesDesc: string[] = [...metrics.attendanceData]
-        .map((s: any) => s.date)
-        .sort((a: string, b: string) => b.localeCompare(a));
-      const MAX_SESSIONS = 12;
-      const limitedDates = sessionDatesDesc.slice(0, MAX_SESSIONS);
-
-      const responses = await Promise.all(
-        limitedDates.flatMap((d: string) => 
-          selectedGatherings.map(g => attendanceAPI.get(g.id, d))
-        )
-      );
-
-      type RegularEntry = { firstName: string; lastName: string; statuses: boolean[] };
-      const regularMap = new Map<number, RegularEntry>();
-      const visitorCounts = new Map<string, { name: string; count: number; familyId: number | null }>();
-      const now = new Date();
-
-      responses.forEach((resp: any, idx: number) => {
-        const data = resp.data as { attendanceList?: any[]; visitors?: any[] };
-        const sessionDateStr = limitedDates[idx];
-        const sessionDate = new Date(sessionDateStr);
-        const withinSixWeeks = (now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24) <= 42;
-
-        const list = data.attendanceList || [];
-        list.forEach((ind: any) => {
-          if (typeof ind.id !== 'number') return;
-          const existing: RegularEntry = regularMap.get(ind.id) || { firstName: ind.firstName, lastName: ind.lastName, statuses: [] as boolean[] };
-          existing.statuses.push(Boolean(ind.present));
-          regularMap.set(ind.id, existing);
-        });
-
-        if (withinSixWeeks) {
-          const visitors = data.visitors || [];
-          visitors.forEach((v: any) => {
-            if (!v.present) return;
-            const key = v.id ? `id:${v.id}` : `name:${v.name || 'Visitor'}`;
-            const name = v.name || 'Visitor';
-            const existing = visitorCounts.get(key) || { name, count: 0, familyId: v.familyId ?? null };
-            existing.count += 1;
-            visitorCounts.set(key, existing);
-          });
-        }
-      });
-
-      const absenceArr: Array<{ individualId: number; firstName: string; lastName: string; streak: number }> = [];
-      Array.from(regularMap.entries()).forEach(([id, entry]) => {
-        let streak = 0;
-        for (const present of entry.statuses) {
-          if (present) break;
-          streak += 1;
-        }
-        if (streak >= 2) {
-          absenceArr.push({ individualId: id, firstName: entry.firstName, lastName: entry.lastName, streak });
-        }
-      });
-      absenceArr.sort((a, b) => (b.streak - a.streak) || a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
-      setAbsenceList(absenceArr);
-
-      const visitorsArr = Array.from(visitorCounts.entries()).map(([key, val]) => ({ key, name: val.name, count: val.count, familyId: val.familyId }))
-        .filter((v) => v.count >= 2)
-        .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name));
-      setRecentVisitors(visitorsArr);
-    } catch (e) {
-      // ignore
-    } finally {
-      setIsLoadingDetails(false);
-    }
-  }, [selectedGatherings, metrics?.attendanceData]);
 
   const quickDateOptions = [
     { 
@@ -1325,7 +1296,11 @@ const ReportsPage: React.FC = () => {
           <div className="bg-white dark:bg-gray-800 shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
               <h3 className="text-lg leading-6 font-medium text-gray-900 dark:text-gray-100">Regulars With Recent Absences</h3>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Based on consecutive absences in the latest sessions for this gathering.</p>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {selectedGatherings.length > 1
+                  ? 'Based on consecutive periods with no attendance at any of the selected gatherings.'
+                  : 'Based on consecutive absences in the latest sessions for this gathering.'}
+              </p>
               <div className="mt-4">
                  {isLoadingDetails ? (
                   <div className="flex justify-center items-center h-40">
@@ -1338,7 +1313,7 @@ const ReportsPage: React.FC = () => {
                   {/* Column headers */}
                   <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 px-3 pb-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                     <span>Name</span>
-                    <span className="w-16 text-center" title="Consecutive absences">Absences</span>
+                    <span className="w-16 text-center" title={selectedGatherings.length > 1 ? 'Consecutive periods absent from all selected gatherings' : 'Consecutive absences'}>Absences</span>
                     <span className="w-32">Caregiver</span>
                     <span className="w-4"></span>
                   </div>
