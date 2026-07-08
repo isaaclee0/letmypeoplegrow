@@ -172,6 +172,30 @@ test('archived individual matching PCO goes to restore (not link)', () => {
   assert.deepStrictEqual(plan.link, []);
 });
 
+test('archived individual name-matching an INACTIVE PCO person is not restored (stays archived)', () => {
+  // Regression: someone archived in LMPG whose name matches a person who is
+  // themselves archived/inactive in PCO must not be unarchived just because the
+  // names match — PCO's inactive status should be respected, not overridden.
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Lazarus', 'Risen', { membership: 'Church Members', status: 'inactive' })],
+    individuals: [ind(1, 'Lazarus', 'Risen', { planningCenterId: null, isActive: false })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.restore, []);
+  assert.deepStrictEqual(plan.link, []);
+  assert.deepStrictEqual(plan.add, []);
+});
+
+test('active individual name-matching an INACTIVE PCO person is not linked', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Sarah', 'Wierenga', { membership: 'Church Members', status: 'inactive' })],
+    individuals: [ind(1, 'Sarah', 'Wierenga', { planningCenterId: null, isActive: true })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.link, []);
+  assert.deepStrictEqual(plan.restore, []);
+});
+
 test('active regular not in PCO goes to archiveExtras', () => {
   const plan = computePlan({
     pcoPeople: [],

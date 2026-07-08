@@ -53,17 +53,23 @@ function computePlan({ pcoPeople, individuals, families, filterConfig, household
   // custom-tab tag) — ends up linking the church's entire name-matchable population,
   // since matching ignores filterConfig entirely. So filter the matched output down
   // to this batch's eligible people before bucketing; unmatched stays untouched.
+  //
+  // Also require PCO status === 'active': an unlinked LMPG individual (active or
+  // archived) whose name matches a PCO person who is themselves archived/inactive in
+  // PCO must not be linked, and especially must never be restored (unarchived) —
+  // someone archived in PCO should stay however LMPG currently has them. Leave the
+  // match alone entirely; it'll be picked up for real once/if PCO reactivates them.
   const { links: rawMatchedLinks, ambiguous: rawAmbiguous, unmatched } = matchIndividuals(unlinkedForMatcher, availablePco, familyMembers);
   const matchedLinks = rawMatchedLinks.filter((m) => {
     const p = pcoById.get(m.pcoId);
-    return p && isEligible(p, filterConfig);
+    return p && p.status === 'active' && isEligible(p, filterConfig);
   });
   const ambiguous = rawAmbiguous
     .map((a) => ({
       ...a,
       candidates: a.candidates.filter((pcoId) => {
         const p = pcoById.get(pcoId);
-        return p && isEligible(p, filterConfig);
+        return p && p.status === 'active' && isEligible(p, filterConfig);
       }),
     }))
     .filter((a) => a.candidates.length > 0);
