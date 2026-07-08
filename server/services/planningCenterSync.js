@@ -5,6 +5,7 @@ const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
 const { applyPlan, applyArchiveExtras } = require('./planningCenter/apply');
+const { reviewNotificationDecision, buildPcoReviewMessage } = require('./planningCenter/reviewNotification');
 
 let cronJob = null;
 
@@ -438,6 +439,43 @@ async function runReconciliationSync(churchId, accessToken, userId) {
   }
 }
 
+// ─── Review-needed notifications ─────────────────────────────────────────────
+
+async function maybeNotifyPcoReviewNeeded(churchId, totals) {
+  const rows = await Database.query(
+    `SELECT planning_center_last_notified_review AS last FROM church_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  const prev = rows.length && rows[0].last ? JSON.parse(rows[0].last) : null;
+  const decision = reviewNotificationDecision(prev, totals);
+
+  if (decision.clear) {
+    await Database.query(
+      `UPDATE church_settings SET planning_center_last_notified_review = NULL WHERE church_id = ?`,
+      [churchId]
+    );
+  }
+  if (!decision.notify) return;
+
+  const message = buildPcoReviewMessage(totals);
+  const admins = await Database.query(
+    `SELECT id FROM users WHERE role IN ('admin', 'coordinator') AND is_active = 1 AND church_id = ?`,
+    [churchId]
+  );
+  for (const admin of admins) {
+    await Database.query(
+      `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
+       VALUES (?, ?, ?, 'system', ?)`,
+      [admin.id, 'Planning Center sync needs your review', message, churchId]
+    );
+  }
+  await Database.query(
+    `UPDATE church_settings SET planning_center_last_notified_review = ? WHERE church_id = ?`,
+    [JSON.stringify(totals), churchId]
+  );
+  logger.info(`PCO review notification: church ${churchId} notified ${admins.length} admin(s) — ${JSON.stringify(totals)}`);
+}
+
 async function syncChurch(church, { skipScheduleCheck = false } = {}) {
   const churchId = church.church_id;
   await Database.setChurchContext(churchId, async () => {
@@ -471,11 +509,22 @@ async function syncChurch(church, { skipScheduleCheck = false } = {}) {
       // reconciliation below reuse it (force: false) rather than each re-fetching.
       await getCachedPcoPeople(churchId, accessToken, { force: true });
 
+      const totals = { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0, reconciliationArchived: 0 };
       for (const batch of dueBatches) {
-        await runBatchSync(churchId, accessToken, batch, userId);
+        const summary = await runBatchSync(churchId, accessToken, batch, userId);
+        if (summary) {
+          totals.ambiguous += summary.ambiguous;
+          totals.visitorMatches += summary.visitorMatches;
+          totals.familyNameUpdatesPending += summary.familyNameUpdatesPending;
+        }
       }
 
-      if (reconciliationDue) await runReconciliationSync(churchId, accessToken, userId);
+      if (reconciliationDue) {
+        const reconciliationSummary = await runReconciliationSync(churchId, accessToken, userId);
+        if (reconciliationSummary) totals.reconciliationArchived += reconciliationSummary.archived;
+      }
+
+      await maybeNotifyPcoReviewNeeded(churchId, totals);
     } catch (err) {
       logger.error(`PCO sync: error for church ${churchId}: ${err.message}`);
     }
