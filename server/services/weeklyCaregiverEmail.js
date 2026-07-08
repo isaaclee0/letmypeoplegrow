@@ -6,8 +6,10 @@ const { sendWeeklyCaregiverDigestEmail } = require('../utils/email');
  * assigned family member with a consecutive-absence streak >= threshold.
  *
  * Each digest contains `entries`, where each entry is either:
- *   { type: 'family', familyName, minStreak, members: [{ name, streak, gatheringName }] }
- *   { type: 'individual', name, familyName, streak, gatheringName }
+ *   { type: 'family', familyName, minStreak, members: [{ name, streak, gatheringName, lastAttendances }] }
+ *   { type: 'individual', name, familyName, streak, gatheringName, lastAttendances }
+ * where `lastAttendances` is an array (most recent first, up to 3) of
+ * { date, gatheringName } for that person's most recent "present" records.
  *
  * Families with 2+ absent members are grouped into a single family entry.
  * Families with only 1 absent member produce an individual entry.
@@ -127,8 +129,39 @@ async function generateCaregiverDigests(churchId) {
 
   if (memberStreak.size === 0) return [];
 
+  // --- 6b. Fetch each absent member's last 3 present attendances (all-time,
+  // across all standard-mode gatherings), matching the "Regulars With Recent
+  // Absences" popover behaviour on the Reports page.
+  const absentMemberIds = [...memberStreak.keys()];
+  const absentMemberPlaceholders = absentMemberIds.map(() => '?').join(',');
+  const presentHistory = await Database.query(
+    `SELECT ar.individual_id, s.session_date, gt.name AS gathering_name
+     FROM attendance_records ar
+     JOIN attendance_sessions s ON ar.session_id = s.id
+     JOIN gathering_types gt ON gt.id = s.gathering_type_id
+     WHERE ar.individual_id IN (${absentMemberPlaceholders})
+       AND ar.church_id = ?
+       AND ar.present = 1
+       AND gt.attendance_type = 'standard'
+       AND s.excluded_from_stats = 0
+     ORDER BY s.session_date DESC`,
+    [...absentMemberIds, churchId]
+  );
+
+  const lastAttendancesByPerson = new Map(); // individualId → [{ date, gatheringName }]
+  for (const row of presentHistory) {
+    let arr = lastAttendancesByPerson.get(row.individual_id);
+    if (!arr) {
+      arr = [];
+      lastAttendancesByPerson.set(row.individual_id, arr);
+    }
+    if (arr.length < 3) {
+      arr.push({ date: row.session_date, gatheringName: row.gathering_name });
+    }
+  }
+
   // --- 7. Build entries per family (grouped or individual) ---
-  // familyId → [{ name, streak, gatheringName }]
+  // familyId → [{ name, streak, gatheringName, lastAttendances }]
   const absentByFamily = new Map();
   // Also track the family name for display
   const familyNames = new Map(); // familyId → family_name string
@@ -143,6 +176,7 @@ async function generateCaregiverDigests(churchId) {
       name: `${member.first_name} ${member.last_name}`,
       streak: streakInfo.streak,
       gatheringName: streakInfo.gatheringName,
+      lastAttendances: lastAttendancesByPerson.get(member.id) || [],
     });
   }
 
@@ -175,6 +209,7 @@ async function generateCaregiverDigests(churchId) {
         familyName: formattedName,
         streak: absentMembers[0].streak,
         gatheringName: absentMembers[0].gatheringName,
+        lastAttendances: absentMembers[0].lastAttendances,
       });
     }
   }

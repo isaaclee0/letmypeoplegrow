@@ -647,6 +647,31 @@ const sendCaregiverNotificationEmail = async (contact, individual, family, misse
   );
 };
 
+// Formats a session_date ('YYYY-MM-DD') as e.g. "1 Jun 2026", using UTC so
+// the calendar date is never shifted by the server's local timezone.
+function formatShortDate(dateStr) {
+  try {
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-AU', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+// Renders a person's most recent "present" attendances (as computed by
+// weeklyCaregiverEmail.js) as a short, comma-separated string for display
+// under their name in the digest email.
+function formatLastAttendances(lastAttendances) {
+  if (!lastAttendances || lastAttendances.length === 0) {
+    return 'No attendance on record';
+  }
+  return lastAttendances.map(a => formatShortDate(a.date)).join(', ');
+}
+
 /**
  * Weekly caregiver digest email — sent on the same day as the weekly review.
  *
@@ -654,8 +679,9 @@ const sendCaregiverNotificationEmail = async (contact, individual, family, misse
  * @param {string} firstName
  * @param {string} churchName
  * @param {Array} entries - mixed array of family and individual entries from weeklyCaregiverEmail.js
- *   Family: { type:'family', familyName, minStreak, members:[{ name, streak, gatheringName }] }
- *   Individual: { type:'individual', name, familyName, streak, gatheringName }
+ *   Family: { type:'family', familyName, minStreak, members:[{ name, streak, gatheringName, lastAttendances }] }
+ *   Individual: { type:'individual', name, familyName, streak, gatheringName, lastAttendances }
+ *   where lastAttendances is an array (most recent first, up to 3) of { date, gatheringName }
  */
 const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entries) => {
   const subject = `${churchName} — Pastoral follow-up this week`;
@@ -671,11 +697,16 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
         const streakText = m.streak === 1 ? '1 absence' : `${m.streak} absences`;
         const gathering = m.gatheringName ? ` &mdash; ${m.gatheringName}` : '';
         return `<tr>
-          <td style="padding: 4px 0; font-size: 13px; color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; border-bottom: 1px solid #fed7aa;">
+          <td style="padding: 4px 0 0; font-size: 13px; color: #374151; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;">
             ${m.name}
           </td>
-          <td style="padding: 4px 0 4px 12px; font-size: 13px; color: #ea580c; font-weight: 600; white-space: nowrap; text-align: right; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif; border-bottom: 1px solid #fed7aa;">
+          <td style="padding: 4px 0 0 12px; font-size: 13px; color: #ea580c; font-weight: 600; white-space: nowrap; text-align: right; font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;">
             ${streakText}${gathering ? `<span style="color:#9ca3af;font-weight:400;">${gathering}</span>` : ''}
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" style="padding: 0 0 6px; font-size: 11px; color: #9ca3af; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif; border-bottom: 1px solid #fed7aa;">
+            Last present: ${formatLastAttendances(m.lastAttendances)}
           </td>
         </tr>`;
       }).join('');
@@ -724,6 +755,9 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
               </table>
               <div style="margin-top: 8px; font-size: 13px; color: #6b7280; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;">
                 ${streakText}${gatheringText}
+              </div>
+              <div style="margin-top: 4px; font-size: 12px; color: #9ca3af; font-family: 'Lato', 'Helvetica Neue', Arial, sans-serif;">
+                Last present: ${formatLastAttendances(entry.lastAttendances)}
               </div>
             </td>
           </tr>
@@ -811,13 +845,13 @@ const sendWeeklyCaregiverDigestEmail = async (email, firstName, churchName, entr
     if (entry.type === 'family') {
       const memberLines = entry.members.map(m => {
         const streakText = m.streak === 1 ? '1 absence' : `${m.streak} absences`;
-        return `    - ${m.name}: ${streakText}`;
+        return `    - ${m.name}: ${streakText} (last present: ${formatLastAttendances(m.lastAttendances)})`;
       }).join('\n');
       return `- ${entry.familyName} (${entry.members.length} members, ${entry.minStreak}+ in a row):\n${memberLines}`;
     }
     const streakText = entry.streak === 1 ? '1 consecutive absence' : `${entry.streak} consecutive absences`;
     const gathering = entry.gatheringName ? ` in ${entry.gatheringName}` : '';
-    return `- ${entry.name}${entry.familyName ? ` (${entry.familyName})` : ''}: ${streakText}${gathering}`;
+    return `- ${entry.name}${entry.familyName ? ` (${entry.familyName})` : ''}: ${streakText}${gathering} (last present: ${formatLastAttendances(entry.lastAttendances)})`;
   }).join('\n');
 
   const textContent = `Hi ${firstName},\n\nHere ${introText} you're caring for who may need a check-in this week:\n\n${entriesText}\n\nResearch shows that a personal follow-up from someone who knows them makes a real difference.\n\nView attendance reports: ${appUrl}/app/reports\n\nBlessings,\n${churchName}\n\n---\nYou're receiving this because you've been assigned as a caregiver in ${churchName}'s attendance system.`;
