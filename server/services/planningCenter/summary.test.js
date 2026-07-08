@@ -72,6 +72,20 @@ test('tallyField seeds canonicalOptions at count 0 so unclaimed PCO options stil
   ]);
 });
 
+test('tallyField treats a stray null/blank entry in the values array as (none), not a literal null option', () => {
+  const people = [
+    { fieldValues: { f1: [null] } },
+    { fieldValues: { f1: [''] } },
+    { fieldValues: { f1: ['Connected'] } },
+  ];
+  const result = tallyField(people, 'f1');
+  assert.strictEqual(result.total, 3);
+  assert.deepStrictEqual(result.values, [
+    { value: '(none)', count: 2 },
+    { value: 'Connected', count: 1 },
+  ]);
+});
+
 test('tallyField canonicalOptions does not duplicate a value that people also have', () => {
   const result = tallyField([{ fieldValues: { f1: ['New'] } }], 'f1', ['New']);
   assert.deepStrictEqual(result.values, [{ value: 'New', count: 1 }]);

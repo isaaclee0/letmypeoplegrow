@@ -71,6 +71,40 @@ test('projectPerson skips FieldDatum ids missing from the lookup or with no fiel
   assert.deepStrictEqual(p.fieldValues, {});
 });
 
+test('projectPerson drops FieldDatum rows with a blank/null value instead of pushing null', () => {
+  const raw = {
+    id: '123',
+    attributes: {},
+    relationships: {
+      field_data: { data: [{ type: 'FieldDatum', id: 'fd1' }, { type: 'FieldDatum', id: 'fd2' }, { type: 'FieldDatum', id: 'fd3' }] },
+    },
+  };
+  const fieldDataById = new Map([
+    ['fd1', { id: 'fd1', attributes: { value: null }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+    ['fd2', { id: 'fd2', attributes: { value: '' }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+    ['fd3', { id: 'fd3', attributes: {}, relationships: { field_definition: { data: { id: 'f2' } } } }], // missing value attr entirely
+  ]);
+  const p = projectPerson(raw, fieldDataById);
+  // f1/f2 should never even appear as keys — a blank answer is indistinguishable from no row at all.
+  assert.deepStrictEqual(p.fieldValues, {});
+});
+
+test('projectPerson keeps real values alongside a blank row for the same field', () => {
+  const raw = {
+    id: '123',
+    attributes: {},
+    relationships: {
+      field_data: { data: [{ type: 'FieldDatum', id: 'fd1' }, { type: 'FieldDatum', id: 'fd2' }] },
+    },
+  };
+  const fieldDataById = new Map([
+    ['fd1', { id: 'fd1', attributes: { value: null }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+    ['fd2', { id: 'fd2', attributes: { value: 'Connected' }, relationships: { field_definition: { data: { id: 'f1' } } } }],
+  ]);
+  const p = projectPerson(raw, fieldDataById);
+  assert.deepStrictEqual(p.fieldValues, { f1: ['Connected'] });
+});
+
 test('projectPerson with no fieldDataById argument still returns an empty fieldValues map', () => {
   const raw = { id: '9', attributes: {}, relationships: { field_data: { data: [{ id: 'fd1' }] } } };
   const p = projectPerson(raw);

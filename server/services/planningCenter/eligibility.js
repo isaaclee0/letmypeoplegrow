@@ -11,7 +11,10 @@ function isEligible(person, filterConfig) {
     const rules = filterConfig.fieldFilters || [];
     if (rules.length) {
       const matches = rules.every((r) => {
-        const vals = (person.fieldValues && person.fieldValues[r.fieldDefinitionId]) || [];
+        // Defensively drop falsy entries (null/undefined/'') — a blank answer must be
+        // treated the same as no answer at all, not as a real (unmatchable) value that
+        // silently bypasses the '(none)' sentinel check below.
+        const vals = ((person.fieldValues && person.fieldValues[r.fieldDefinitionId]) || []).filter(Boolean);
         if (vals.length === 0) return r.values.includes('(none)');
         return vals.some((val) => r.values.includes(val));
       });

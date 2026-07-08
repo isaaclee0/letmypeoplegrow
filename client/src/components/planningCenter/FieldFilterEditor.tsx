@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Combobox, ComboboxInput, ComboboxOption, ComboboxOptions } from '@headlessui/react';
 import { integrationsAPI } from '../../services/api';
 import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
 
@@ -14,6 +15,71 @@ export interface FieldFilterRule {
   tabName: string | null;
   fieldName: string;
   values: string[];
+}
+
+function fieldLabel(d: FieldDefinition): string {
+  return d.tabName ? `${d.tabName} — ${d.name}` : d.name;
+}
+
+// Tabless fields sort after every tab group; within a group (or the tabless group),
+// fields are alphabetical by name.
+function sortDefinitions(definitions: FieldDefinition[]): FieldDefinition[] {
+  return [...definitions].sort((a, b) => {
+    if (!!a.tabName !== !!b.tabName) return a.tabName ? -1 : 1;
+    const tabCompare = (a.tabName || '').localeCompare(b.tabName || '', undefined, { sensitivity: 'base' });
+    if (tabCompare !== 0) return tabCompare;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+}
+
+// Searchable/filterable replacement for a plain <select> — the field list can run
+// into dozens of custom-tab fields across many tabs, so a type-to-filter combobox
+// keeps it usable.
+function FieldPicker({
+  definitions,
+  selectedId,
+  onSelect,
+}: {
+  definitions: FieldDefinition[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const selected = definitions.find((d) => d.id === selectedId) || null;
+  const filtered = query.trim() === ''
+    ? definitions
+    : definitions.filter((d) => fieldLabel(d).toLowerCase().includes(query.trim().toLowerCase()));
+
+  return (
+    <Combobox value={selected} onChange={(d: FieldDefinition | null) => onSelect(d ? d.id : '')} onClose={() => setQuery('')}>
+      <div className="relative flex-1">
+        <ComboboxInput
+          className="w-full text-sm rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+          displayValue={(d: FieldDefinition | null) => (d ? fieldLabel(d) : '')}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search custom fields…"
+        />
+        <ComboboxOptions
+          anchor="bottom start"
+          className="z-10 w-[var(--input-width)] mt-1 max-h-60 overflow-auto rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg empty:invisible [--anchor-gap:4px]"
+        >
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching fields.</div>
+          ) : (
+            filtered.map((d) => (
+              <ComboboxOption
+                key={d.id}
+                value={d}
+                className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100 cursor-pointer data-focus:bg-green-50 dark:data-focus:bg-gray-700"
+              >
+                {fieldLabel(d)}
+              </ComboboxOption>
+            ))
+          )}
+        </ComboboxOptions>
+      </div>
+    </Combobox>
+  );
 }
 
 interface Props {
@@ -94,6 +160,7 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
       });
   };
 
+  const sortedDefinitions = sortDefinitions(definitions);
   const usedFieldIds = new Set(rules.map((r) => r.fieldDefinitionId));
 
   const addRule = () => {
@@ -134,26 +201,20 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
         A person is eligible via this filter only if every rule below matches (AND).
       </p>
       {rules.map((rule, index) => {
-        const options = valueOptions[rule.fieldDefinitionId] || [];
+        // Defensive: a blank/null value should never reach here (the backend now
+        // normalizes it to the '(none)' bucket), but filter it out just in case so a
+        // stray falsy entry never renders as an unlabeled, unintentionally-selectable row.
+        const options = (valueOptions[rule.fieldDefinitionId] || []).filter((v) => v.value);
         const loadingValues = !!valueLoading[rule.fieldDefinitionId];
         const error = valueError[rule.fieldDefinitionId];
         return (
           <div key={rule.fieldDefinitionId || `empty-${index}`} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
             <div className="flex items-center justify-between gap-2 mb-2">
-              <select
-                value={rule.fieldDefinitionId}
-                onChange={(e) => setRuleField(index, e.target.value)}
-                className="flex-1 text-sm rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-              >
-                <option value="">Select a custom field…</option>
-                {definitions
-                  .filter((d) => d.id === rule.fieldDefinitionId || !usedFieldIds.has(d.id))
-                  .map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.tabName ? `${d.tabName} — ${d.name}` : d.name}
-                    </option>
-                  ))}
-              </select>
+              <FieldPicker
+                definitions={sortedDefinitions.filter((d) => d.id === rule.fieldDefinitionId || !usedFieldIds.has(d.id))}
+                selectedId={rule.fieldDefinitionId}
+                onSelect={(id) => setRuleField(index, id)}
+              />
               <button
                 type="button"
                 onClick={() => removeRule(index)}

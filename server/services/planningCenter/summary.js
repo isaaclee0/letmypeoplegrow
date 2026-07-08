@@ -25,7 +25,10 @@ function tallyField(people, fieldDefinitionId, canonicalOptions = []) {
   const counts = new Map();
   for (const opt of canonicalOptions) counts.set(opt, 0);
   for (const p of people) {
-    const raw = (p.fieldValues && p.fieldValues[fieldDefinitionId]) || [];
+    // Defensively drop any falsy entries (null/undefined/'') before checking
+    // emptiness — a blank "answer" is not a real value and must fall through to the
+    // '(none)' bucket, not leak through as a literal null/empty-string option.
+    const raw = ((p.fieldValues && p.fieldValues[fieldDefinitionId]) || []).filter(Boolean);
     if (raw.length === 0) {
       counts.set('(none)', (counts.get('(none)') || 0) + 1);
       continue;

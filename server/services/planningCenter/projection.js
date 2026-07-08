@@ -22,7 +22,13 @@ function projectPerson(p, fieldDataById) {
         && datum.relationships.field_definition.data
         && datum.relationships.field_definition.data.id;
       if (!fieldDefinitionId) continue;
-      const value = (datum.attributes && datum.attributes.value) || null;
+      const value = datum.attributes && datum.attributes.value;
+      // A FieldDatum row can exist with a blank/null value (e.g. an answer that was
+      // cleared rather than removed). Treat that exactly like "no row at all" so it
+      // falls through to the '(none)' sentinel downstream — otherwise it leaks a
+      // literal null into the values array, which bypasses the empty-array '(none)'
+      // check entirely and shows up as an invisible, unlabeled option in the filter UI.
+      if (value === null || value === undefined || value === '') continue;
       if (!fieldValues[fieldDefinitionId]) fieldValues[fieldDefinitionId] = [];
       fieldValues[fieldDefinitionId].push(value);
     }

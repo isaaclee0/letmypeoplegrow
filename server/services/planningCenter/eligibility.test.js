@@ -47,6 +47,19 @@ test('field-only: missing field value is normalized to (none) and matches a (non
   assert.strictEqual(isEligible(person({ fieldValues: { f1: [] } }), cfg), true, 'no checkboxes selected -> (none)');
 });
 
+test('field-only: a stray null/blank entry in fieldValues is treated as (none), not a real value that dodges the sentinel check', () => {
+  const cfg = {
+    membershipFilterEnabled: false, membershipAllowlist: [],
+    fieldFilterEnabled: true,
+    fieldFilters: [{ fieldDefinitionId: 'f1', values: ['Connected'] }],
+  };
+  assert.strictEqual(isEligible(person({ fieldValues: { f1: [null] } }), cfg), false, 'blank row must not match a real-value rule');
+  assert.strictEqual(isEligible(person({ fieldValues: { f1: [''] } }), cfg), false);
+
+  const noneCfg = { ...cfg, fieldFilters: [{ fieldDefinitionId: 'f1', values: ['(none)'] }] };
+  assert.strictEqual(isEligible(person({ fieldValues: { f1: [null] } }), noneCfg), true, 'blank row must match via the (none) sentinel like a missing row would');
+});
+
 test('field disabled: field match does not count even with matching rules configured', () => {
   const cfg = {
     membershipFilterEnabled: false, membershipAllowlist: [],
