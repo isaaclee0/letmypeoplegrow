@@ -143,7 +143,7 @@ The application uses a passwordless authentication system:
 - `/api/families` - Family grouping
 - `/api/reports` - Dashboard and analytics
 - `/api/settings` - Church configuration
-- `/api/integrations` - External integrations (Elvanto)
+- `/api/integrations` - External integrations (Elvanto, Planning Center — see "Planning Center Online (PCO) Integration" below)
 - `/api/ai` - AI insights (optional feature)
 
 ### Database Schema
@@ -183,6 +183,33 @@ The application supports two attendance tracking modes:
 - `client/src/pages/AttendancePage.tsx` - Main attendance UI
 - `server/routes/attendance.js` - Attendance endpoints
 - `server/services/websocket.js` - Real-time updates
+
+### Planning Center Online (PCO) Integration
+
+Optional, ongoing two-way sync with Planning Center's People and Check-ins APIs. This is a different shape of integration than Elvanto: Elvanto is a one-shot, unlinked import (admin ticks people/families, they get copied in, no persistent relationship). PCO links individuals/families to PCO IDs and keeps syncing — matching, archiving, and reactivating people as their PCO status changes, on a schedule.
+
+**Key files:**
+- `server/routes/integrations.js` - OAuth flow + batch CRUD/plan/apply + check-in import routes (shares this file with Elvanto; PCO occupies roughly lines 1600+ of ~3,600). Contains ~670 lines of dead pre-rewrite routes (`/planning-center/people`, `/import-people`, `/link-family`) with no client callers — don't build on these, they're superseded.
+- `server/services/planningCenterSync.js` - HTTPS client, PCO-people cache (10-min TTL), cron scheduler (daily 02:00), batch data access
+- `server/services/planningCenter/` - one module per concern: `matcher.js` (name/household matching), `eligibility.js` (batch filter evaluation), `diffEngine.js` (computes a sync plan), `apply.js` (mutates DB per plan), `projection.js`/`fieldDefinitions.js` (PCO custom field handling), `metadataCache.js` (persisted filter-picker cache), `checkinsImport.js` (attendance-history import), `mode.js` (source-of-truth lock). Each has a co-located `.test.js`.
+- `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` and `client/src/components/planningCenter/*` - admin UI (batch editor, sync review, reconciliation review)
+
+**Data model:**
+- `individuals.planning_center_id` / `families.planning_center_id` - link to a PCO Person/Household, unique-indexed per church
+- `planning_center_sync_batches` table - a named, independently schedulable sync unit: its own membership/custom-field filter, default `people_type` for newly-created people, optional gathering auto-assignment, own schedule
+- `church_settings` holds ~19 PCO-prefixed columns, several of which are legacy (single-filter/single-schedule, superseded by the batches table) and unused but left in place per the additive-only migration convention
+- OAuth tokens live in `user_preferences` (`preference_key = 'planning_center_tokens'`), scoped to whichever *user* connected PCO — there is no church-level credential row, so `getTokensForChurch` grabs any user in the church with tokens (`LIMIT 1`, no ordering)
+
+**Core concepts:**
+- **Batches**: a church can run multiple named batches (e.g. "Members", "Youth Group") each with its own filter/schedule/target gathering. Matching always runs against PCO's full unfiltered people set; only the *output* buckets (link/restore/ambiguous/visitor-match) are scoped to the batch's own filter.
+- **Reconciliation**: a separate, whole-roster check (not tied to any batch) for active LMPG individuals who no longer match anyone in PCO — surfaced for archive/manual-link/skip, on its own schedule.
+- **Source-of-truth mode**: when `church_settings.planning_center_sync_indicator = 1` — labeled "Show sync indicator" in the UI, with copy that only mentions a cosmetic badge — any individual with a `planning_center_id` becomes locked: manual name/age edits, archive, reactivate, delete, and merge are all rejected (403 `PCO_MODE_LOCKED`). Enforced in `mode.js`/`individuals.js`, mirrored client-side in `client/src/utils/pcoLock.ts`. The UI does not disclose this behavioral side effect — be aware when touching this toggle or its copy.
+- **Matching**: name + household corroboration only (`matcher.js`) — PCO email/phone/custom IDs are never consulted. Ambiguous matches are surfaced for manual review, not auto-resolved.
+
+**Known rough edges** (from an architecture review; fix opportunistically, don't assume they're intentional):
+- Token-refresh is implemented independently three times (`integrations.js` x2, `planningCenterSync.js`) against the same `user_preferences` row — PCO rotates the refresh token on every use, so concurrent refreshes across these paths can overwrite a fresh token with a stale one.
+- `server/routes/families.js` and `server/routes/settings.js` both return a field called `planningCenterSyncEnabled`, backed by two *different* columns (`planning_center_sync_indicator` vs `planning_center_sync_enabled`) with two different meanings — don't assume they mean the same thing just because the name matches.
+- "Run now" in the batch UI applies with zero review (no ambiguous-match/family-name confirmation); onboarding does the same for its first batch by design. Given matching/eligibility bugs have shipped and been fixed multiple times in this feature's short life, treat blind-apply paths as higher-risk than "Review & sync."
 
 ### PWA and Service Worker
 
@@ -253,6 +280,11 @@ Real-time updates for attendance tracking:
 - Import members and gatherings from Elvanto
 - API key-based authentication
 - Configure via Integrations page
+
+**Planning Center Integration (Optional):**
+- Ongoing, linked two-way sync with Planning Center People + Check-ins (not a one-shot import — see "Planning Center Online (PCO) Integration" under Architecture)
+- OAuth2 authentication, configure `PLANNING_CENTER_CLIENT_ID`/`PLANNING_CENTER_CLIENT_SECRET` (or `PLANNING_CENTRE_*`) in `server/.env`
+- Configure via Settings → Integrations tab; gated behind `PLANNING_CENTER_ENABLED=true`
 
 ## Database Migrations
 
