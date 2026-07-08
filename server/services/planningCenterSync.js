@@ -99,6 +99,13 @@ function httpsPost(url, body) {
 }
 
 // ─── Token helpers ───────────────────────────────────────────────────────────
+//
+// This module is the single implementation of PCO OAuth token persistence and
+// refresh. server/routes/integrations.js delegates to these rather than keeping
+// its own copies — PCO rotates the refresh token on every use, so more than one
+// independent refresh path risks two callers racing to refresh at once, with
+// the loser persisting a token PCO has already rotated away from and silently
+// breaking the connection.
 
 async function getTokensForChurch(churchId) {
   // Find any user in this church who has PCO tokens stored
@@ -117,6 +124,33 @@ async function getTokensForChurch(churchId) {
   };
 }
 
+// Load a specific user's PCO tokens — as opposed to getTokensForChurch, which
+// grabs whichever user in the church happens to have tokens. Used by
+// request-scoped routes that already know which user is asking.
+async function getPlanningCenterTokens(userId, churchId) {
+  const rows = await Database.query(
+    `SELECT preference_value FROM user_preferences
+      WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?
+      LIMIT 1`,
+    [userId, churchId]
+  );
+  if (!rows.length) return null;
+  const pref = rows[0].preference_value;
+  return typeof pref === 'string' ? JSON.parse(pref) : pref;
+}
+
+async function savePlanningCenterTokens(userId, churchId, tokens) {
+  await Database.query(
+    `DELETE FROM user_preferences WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?`,
+    [userId, churchId]
+  );
+  await Database.query(
+    `INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
+     VALUES (?, 'planning_center_tokens', ?, ?)`,
+    [userId, JSON.stringify(tokens), churchId]
+  );
+}
+
 // Tolerate the British "CENTRE" spelling so a .env typo can't break token refresh.
 function pcoEnv(suffix) {
   return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
@@ -132,21 +166,50 @@ async function refreshToken(refreshTokenValue) {
   return response.status === 200 ? response.data : null;
 }
 
+// Refresh proactively if the token is expired or expiring soon, ONCE, coalescing
+// concurrent callers (e.g. a scheduled batch sync and a concurrent check-in
+// import for the same church) onto a single in-flight refresh via a per
+// user+church single-flight guard. Without this, two independent refreshes can
+// race and the second one persists a token PCO already rotated away from.
+const PCO_TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000; // refresh if <10 min of life left
+const pcoRefreshInFlight = new Map(); // `${userId}|${churchId}` -> Promise<tokens|null>
+
+async function ensureValidPlanningCenterTokens(userId, churchId, tokens) {
+  if (!tokens || !tokens.refresh_token) return tokens || null;
+  const expiringSoon = tokens.expires_at && Date.now() >= (tokens.expires_at - PCO_TOKEN_REFRESH_MARGIN_MS);
+  if (!expiringSoon) return tokens;
+
+  const key = `${userId}|${churchId}`;
+  if (pcoRefreshInFlight.has(key)) return pcoRefreshInFlight.get(key);
+
+  const refreshPromise = (async () => {
+    const fresh = await refreshToken(tokens.refresh_token);
+    if (!fresh || !fresh.access_token) {
+      // Refresh failed (e.g. refresh token revoked). If the token is already past
+      // its actual expiry there's nothing usable left, so signal that clearly.
+      // If it's merely expiring soon, hand back what we have so a caller mid-flight
+      // can still use it before it's actually rejected.
+      const trulyExpired = tokens.expires_at && Date.now() >= tokens.expires_at;
+      return trulyExpired ? null : tokens;
+    }
+    const saved = {
+      ...tokens,
+      ...fresh, // new access_token AND (usually) rotated refresh_token
+      expires_at: Date.now() + ((fresh.expires_in || 7200) * 1000),
+    };
+    if (!saved.refresh_token) saved.refresh_token = tokens.refresh_token;
+    await savePlanningCenterTokens(userId, churchId, saved);
+    return saved;
+  })();
+
+  pcoRefreshInFlight.set(key, refreshPromise);
+  try { return await refreshPromise; }
+  finally { pcoRefreshInFlight.delete(key); }
+}
+
 async function getValidAccessToken(churchId, userId, tokens) {
-  let accessToken = tokens.access_token;
-  if (tokens.expires_at && Date.now() >= tokens.expires_at) {
-    const newTokens = await refreshToken(tokens.refresh_token);
-    if (!newTokens) return null;
-    accessToken = newTokens.access_token;
-    newTokens.expires_at = Date.now() + newTokens.expires_in * 1000;
-    newTokens.refresh_token = tokens.refresh_token;
-    await Database.query(
-      `UPDATE user_preferences SET preference_value = ?
-       WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?`,
-      [JSON.stringify(newTokens), userId, churchId]
-    );
-  }
-  return accessToken;
+  const fresh = await ensureValidPlanningCenterTokens(userId, churchId, tokens);
+  return fresh ? fresh.access_token : null;
 }
 
 // ─── Reconcile pipeline helpers ──────────────────────────────────────────────
@@ -453,4 +516,5 @@ module.exports = {
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, batchFilterConfig, computePlanForBatch,
   computeReconciliationForChurch, applyReconciliation,
+  getPlanningCenterTokens, savePlanningCenterTokens, ensureValidPlanningCenterTokens,
 };

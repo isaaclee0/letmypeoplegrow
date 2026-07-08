@@ -1610,135 +1610,33 @@ router.post('/elvanto/import', async (req, res) => {
 // ===== PLANNING CENTER INTEGRATION =====
 
 // Helper function to get Planning Center OAuth tokens
-async function getPlanningCenterTokens(userId, churchId) {
-  try {
-    console.log('🔍 Getting Planning Center tokens for:', { userId, churchId });
-    const preferences = await Database.query(`
-      SELECT preference_value
-      FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?
-      LIMIT 1
-    `, [userId, churchId]);
+// Token persistence, refresh, and single-flight coalescing all live in
+// planningCenterSync.js — the canonical implementation, shared by these routes
+// and the cron/service layer. PCO rotates the refresh token on every use, so
+// having more than one independent refresh path risks a race where one caller
+// overwrites a freshly rotated token with a stale one; keeping a single
+// implementation (with one in-flight guard) avoids that.
+const getPlanningCenterTokens = pcoSync.getPlanningCenterTokens;
+const savePlanningCenterTokens = pcoSync.savePlanningCenterTokens;
+const ensureValidPlanningCenterTokens = pcoSync.ensureValidPlanningCenterTokens;
 
-    console.log('🔍 Query result:', { rowCount: preferences.length });
-
-    if (preferences.length === 0) {
-      console.log('❌ No Planning Center tokens found');
-      return null;
-    }
-
-    const prefValue = preferences[0].preference_value;
-    const data = typeof prefValue === 'string' ? JSON.parse(prefValue) : prefValue;
-    console.log('✅ Planning Center tokens found, access_token prefix:', data.access_token?.substring(0, 20) + '...');
-    return data;
-  } catch (error) {
-    console.error('❌ Error getting Planning Center tokens:', error);
-    return null;
-  }
-}
-
-// Helper function to save Planning Center OAuth tokens
-async function savePlanningCenterTokens(userId, churchId, tokens) {
-  try {
-    // Delete existing tokens
-    await Database.query(`
-      DELETE FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?
-    `, [userId, churchId]);
-
-    // Insert new tokens
-    await Database.query(`
-      INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
-      VALUES (?, 'planning_center_tokens', ?, ?)
-    `, [userId, JSON.stringify(tokens), churchId]);
-
-    return true;
-  } catch (error) {
-    console.error('Error saving Planning Center tokens:', error);
-    return false;
-  }
-}
-
-// Helper function to refresh Planning Center access token
-async function refreshPlanningCenterToken(refreshToken) {
-  try {
-    const response = await makeHttpsRequest('https://api.planningcenteronline.com/oauth/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      data: {
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: pcoEnv('CLIENT_ID'),
-        client_secret: pcoEnv('CLIENT_SECRET')
-      }
-    });
-
-    if (response.status === 200) {
-      return response.data;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error refreshing Planning Center token:', error);
-    return null;
-  }
-}
-
-// Proactively refresh the access token if it's expired or expiring soon, ONCE,
-// before any fan-out of parallel requests. PCO rotates the refresh token on use, so
-// letting concurrent requests each refresh causes a race that invalidates the token.
-// A single-flight guard coalesces concurrent callers onto one refresh.
-const PCO_TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000; // refresh if <10 min of life left
-const pcoRefreshInFlight = new Map(); // `${userId}|${churchId}` -> Promise<tokens>
-
-async function ensureValidPlanningCenterTokens(userId, churchId, tokens) {
-  if (!tokens || !tokens.refresh_token) return tokens;
-  const expiringSoon = tokens.expires_at && Date.now() >= (tokens.expires_at - PCO_TOKEN_REFRESH_MARGIN_MS);
-  if (!expiringSoon) return tokens;
-
-  const key = `${userId}|${churchId}`;
-  if (pcoRefreshInFlight.has(key)) return pcoRefreshInFlight.get(key);
-
-  const refreshPromise = (async () => {
-    const fresh = await refreshPlanningCenterToken(tokens.refresh_token);
-    if (!fresh || !fresh.access_token) {
-      // Refresh failed (e.g. refresh token revoked) — return existing tokens so the
-      // caller surfaces a clear 401/Not connected rather than crashing here.
-      return tokens;
-    }
-    const saved = {
-      ...tokens,
-      ...fresh, // new access_token AND rotated refresh_token
-      expires_at: Date.now() + ((fresh.expires_in || 7200) * 1000),
-    };
-    await savePlanningCenterTokens(userId, churchId, saved);
-    return saved;
-  })();
-
-  pcoRefreshInFlight.set(key, refreshPromise);
-  try { return await refreshPromise; }
-  finally { pcoRefreshInFlight.delete(key); }
+// The PCO connection is church-wide, not per-admin — any admin should see (and
+// be able to use) the same connection regardless of which admin completed the
+// OAuth flow. Tokens are stored keyed by that connecting admin's user_id purely
+// as a storage detail (see planningCenterSync.js), so routes representing "is
+// this church connected" must look up by church, not by the current viewer —
+// getPlanningCenterTokens(req.user.id, ...) only finds a row for the admin who
+// originally connected, making every other admin see "Not Connected".
+async function getChurchPlanningCenterTokens(churchId) {
+  const owned = await pcoSync.getTokensForChurch(churchId);
+  return owned ? { ownerUserId: owned.userId, tokens: owned.tokens } : null;
 }
 
 // Helper function to make authenticated Planning Center API requests
 async function makePlanningCenterRequest(url, tokens, userId, churchId) {
   try {
-    let accessToken = tokens.access_token;
-
-    // Check if token needs refresh (if expires_at exists and is past)
-    if (tokens.expires_at && Date.now() >= tokens.expires_at) {
-      const newTokens = await refreshPlanningCenterToken(tokens.refresh_token);
-      if (newTokens) {
-        accessToken = newTokens.access_token;
-        newTokens.expires_at = Date.now() + (newTokens.expires_in * 1000);
-        // PCO ROTATES the refresh token on every refresh — persist the NEW one.
-        // Keeping the old token (the previous bug) breaks the next refresh.
-        if (!newTokens.refresh_token) newTokens.refresh_token = tokens.refresh_token;
-        await savePlanningCenterTokens(userId, churchId, newTokens);
-      }
-    }
+    const validTokens = await ensureValidPlanningCenterTokens(userId, churchId, tokens);
+    const accessToken = (validTokens || tokens).access_token;
 
     // Retry on PCO rate limiting (429), honouring Retry-After. Matters when we
     // fan out paginated requests concurrently.
@@ -1776,10 +1674,10 @@ router.get('/planning-center/status', async (req, res) => {
       });
     }
 
-    const userId = req.user.id;
     const churchId = req.user.church_id;
 
-    const tokens = await getPlanningCenterTokens(userId, churchId);
+    const owned = await getChurchPlanningCenterTokens(churchId);
+    const tokens = owned && owned.tokens;
 
     if (!tokens || !tokens.access_token) {
       return res.json({
@@ -1795,7 +1693,7 @@ router.get('/planning-center/status', async (req, res) => {
       const response = await makePlanningCenterRequest(
         'https://api.planningcenteronline.com/people/v2/me',
         tokens,
-        userId,
+        owned.ownerUserId,
         churchId
       );
 
@@ -1995,13 +1893,16 @@ router.get('/planning-center/callback', async (req, res) => {
 // Disconnect Planning Center
 router.post('/planning-center/disconnect', async (req, res) => {
   try {
-    const userId = req.user.id;
     const churchId = req.user.church_id;
 
+    // Church-wide, not scoped to the clicking admin — the connection isn't
+    // "theirs" any more than any other admin's, and status/connect are already
+    // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
+    // or a non-connecting admin's click would silently no-op.
     await Database.query(`
       DELETE FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?
-    `, [userId, churchId]);
+      WHERE church_id = ? AND preference_key = 'planning_center_tokens'
+    `, [churchId]);
 
     res.json({ success: true, message: 'Planning Center disconnected successfully.' });
   } catch (error) {
@@ -2394,18 +2295,17 @@ router.get('/planning-center/checkins', async (req, res) => {
 // List distinct PCO events that have check-ins in range (for the mapping screen).
 router.get('/planning-center/checkins/events', async (req, res) => {
   try {
-    const userId = req.user.id;
     const churchId = req.user.church_id;
     const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate);
 
-    const tokens = await getPlanningCenterTokens(userId, churchId);
-    if (!tokens || !tokens.access_token) {
+    const owned = await getChurchPlanningCenterTokens(churchId);
+    if (!owned || !owned.tokens.access_token) {
       return res.status(400).json({ error: 'Planning Center not connected.' });
     }
 
     const force = req.query.refresh === '1';
     const onProgress = makeImportProgressEmitter(churchId, req.query.jobId, 'fetching');
-    const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, force, onProgress });
+    const { payload, timezone } = await fetchAllCheckins({ tokens: owned.tokens, userId: owned.ownerUserId, churchId, startDate, endDate, force, onProgress });
     const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
     const events = checkinsImport.summarizeEvents(normalized);
 
@@ -2448,7 +2348,6 @@ router.get('/planning-center/checkin-import-state', async (req, res) => {
 // treated as "not available" so the UI simply doesn't prompt.
 router.get('/planning-center/checkins/availability', async (req, res) => {
   try {
-    const userId = req.user.id;
     const churchId = req.user.church_id;
 
     // Once a check-in import has happened, never nudge again.
@@ -2458,14 +2357,14 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
       return res.json({ success: true, hasImported: true, available: false });
     }
 
-    const tokens = await getPlanningCenterTokens(userId, churchId);
-    if (!tokens || !tokens.access_token) {
+    const owned = await getChurchPlanningCenterTokens(churchId);
+    if (!owned || !owned.tokens.access_token) {
       return res.json({ success: true, hasImported: false, available: false });
     }
 
     const response = await makePlanningCenterRequest(
       'https://api.planningcenteronline.com/check-ins/v2/check_ins?per_page=1',
-      tokens, userId, churchId
+      owned.tokens, owned.ownerUserId, churchId
     );
     const total = (response && response.status === 200)
       ? (response.data?.meta?.total_count ?? (response.data?.data?.length || 0))
@@ -3126,15 +3025,18 @@ async function runCheckinImport({ req, commit }) {
     }
   }
 
-  const tokens = await getPlanningCenterTokens(userId, churchId);
-  if (!tokens || !tokens.access_token) {
+  // Note: userId above is the *acting* admin (used below for attribution and
+  // "assign to me"); the PCO connection itself is church-wide, so the token
+  // lookup uses whichever admin actually owns the stored tokens.
+  const owned = await getChurchPlanningCenterTokens(churchId);
+  if (!owned || !owned.tokens.access_token) {
     const err = new Error('Planning Center not connected.');
     err.statusCode = 400;
     throw err;
   }
 
   const onProgress = makeImportProgressEmitter(churchId, jobId, 'fetching');
-  const { payload, timezone } = await fetchAllCheckins({ tokens, userId, churchId, startDate, endDate, onProgress });
+  const { payload, timezone } = await fetchAllCheckins({ tokens: owned.tokens, userId: owned.ownerUserId, churchId, startDate, endDate, onProgress });
   const normalized = checkinsImport.normalizeCheckIns(payload, timezone, { startDate, endDate });
 
   // Existing individuals keyed by planning_center_id (active OR archived).
