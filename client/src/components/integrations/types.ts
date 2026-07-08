@@ -15,6 +15,7 @@ export interface PlanningCenterStatus {
   enabled: boolean;
   connected: boolean;
   loading: boolean;
+  planningCenterAccount: string | null;
 }
 
 export type IntegrationKey = 'elvanto' | 'ai' | 'planning-center';

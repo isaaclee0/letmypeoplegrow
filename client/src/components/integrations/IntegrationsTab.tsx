@@ -29,6 +29,7 @@ const IntegrationsTab: React.FC = () => {
     enabled: false,
     connected: false,
     loading: true,
+    planningCenterAccount: null,
   });
 
   const [selected, setSelected] = useState<IntegrationKey | null>(null);
@@ -66,6 +67,7 @@ const IntegrationsTab: React.FC = () => {
         enabled: response.data.enabled === true,
         connected: response.data.connected === true,
         loading: false,
+        planningCenterAccount: response.data.planningCenterAccount ?? null,
       });
     } catch (error) {
       logger.error('Failed to fetch Planning Center status:', error);
@@ -200,6 +202,7 @@ const IntegrationsTab: React.FC = () => {
             }
             connected={pcStatus.connected}
             loading={pcStatus.loading}
+            connectedLabel={pcStatus.planningCenterAccount || undefined}
             onOpen={() => setSelected('planning-center')}
             onDisconnect={pcStatus.connected ? () => {
               setSelected('planning-center');

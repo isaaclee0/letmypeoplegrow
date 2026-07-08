@@ -29,6 +29,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
+  const [showSourceOfTruthModal, setShowSourceOfTruthModal] = useState(false);
 
   useEffect(() => {
     if (initialAction === 'disconnect') setShowPlanningCenterDisconnectModal(true);
@@ -71,6 +72,21 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       logger.error('Failed to update sync indicator setting:', error);
       setPcSyncIndicator(!value); // revert
     }
+  };
+
+  // Turning this on locks linked people to PCO, so confirm before enabling.
+  // Turning it off only removes restrictions, so it can happen immediately.
+  const requestPcSyncIndicatorToggle = (value: boolean) => {
+    if (value) {
+      setShowSourceOfTruthModal(true);
+    } else {
+      handlePcSyncIndicatorToggle(false);
+    }
+  };
+
+  const confirmEnableSourceOfTruth = () => {
+    setShowSourceOfTruthModal(false);
+    handlePcSyncIndicatorToggle(true);
   };
 
   const toggleMasterSync = async (value: boolean) => {
@@ -210,7 +226,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 {status.connected && (
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center">
                     <CheckCircleIcon className="w-3 h-3 mr-1" />
-                    Connected
+                    {status.planningCenterAccount || 'Connected'}
                   </p>
                 )}
               </div>
@@ -303,14 +319,15 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Show sync indicator</h5>
+                  <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">PCO is source of truth for members</h5>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Show a Planning Center badge on families imported from PCO
+                    Locks linked people to Planning Center — their name and age group can only be changed in PCO,
+                    and archive/reactivate/delete/merge are disabled here. Also shows a PCO badge on synced families.
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => handlePcSyncIndicatorToggle(!pcSyncIndicator)}
+                  onClick={() => requestPcSyncIndicatorToggle(!pcSyncIndicator)}
                   className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                   role="switch"
                   aria-checked={pcSyncIndicator}
@@ -539,6 +556,59 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               >
                 <LinkSlashIcon className="h-4 w-4 mr-2" />
                 Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Source-of-truth mode confirmation */}
+      <Modal
+        isOpen={showSourceOfTruthModal}
+        onClose={() => setShowSourceOfTruthModal(false)}
+      >
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                Make Planning Center source of truth for members?
+              </h3>
+              <button
+                onClick={() => setShowSourceOfTruthModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
+              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
+            </div>
+
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 text-center">
+                This changes how you manage people linked to Planning Center:
+              </p>
+              <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside space-y-1">
+                <li>Their name and age group can only be edited in Planning Center, not here</li>
+                <li>Archive, reactivate, delete, and merge are disabled here for linked people</li>
+                <li>New regular members can't be added by hand (visitors are unaffected)</li>
+                <li>A PCO badge appears on synced families</li>
+              </ul>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowSourceOfTruthModal(false)}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmEnableSourceOfTruth}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+              >
+                Enable
               </button>
             </div>
           </div>
