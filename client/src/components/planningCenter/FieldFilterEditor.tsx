@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Combobox, ComboboxInput, ComboboxOption, ComboboxOptions } from '@headlessui/react';
+import { Combobox, ComboboxInput, ComboboxOption, ComboboxOptions, Popover, PopoverButton, PopoverPanel } from '@headlessui/react';
+import { ChevronDownIcon } from '@heroicons/react/24/outline';
 import { integrationsAPI } from '../../services/api';
 import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
 
@@ -79,6 +80,78 @@ function FieldPicker({
         </ComboboxOptions>
       </div>
     </Combobox>
+  );
+}
+
+// Searchable multi-select dropdown for a field's possible values — a field can have
+// dozens of options (e.g. a long dropdown/checkbox list in PCO), so this stays closed
+// by default and lets the admin type to filter rather than scrolling a long checklist.
+function ValuePicker({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: { value: string; count: number }[];
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const filtered = query.trim() === ''
+    ? options
+    : options.filter((o) => o.value.toLowerCase().includes(query.trim().toLowerCase()));
+
+  const summary = selected.length === 0
+    ? 'Select values…'
+    : selected.length === 1
+      ? selected[0]
+      : `${selected.length} values selected`;
+
+  return (
+    <Popover className="relative">
+      <PopoverButton className="w-full flex items-center justify-between gap-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-800 px-3 py-2 text-left">
+        <span className={`truncate ${selected.length === 0 ? 'text-gray-400 dark:text-gray-500' : 'text-gray-900 dark:text-gray-100'}`}>
+          {summary}
+        </span>
+        <ChevronDownIcon className="h-4 w-4 text-gray-400 shrink-0" />
+      </PopoverButton>
+      <PopoverPanel
+        anchor="bottom start"
+        className="z-10 w-[var(--button-width)] mt-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg [--anchor-gap:4px]"
+      >
+        <div className="p-2 border-b border-gray-200 dark:border-gray-700">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search values…"
+            autoFocus
+            className="w-full text-sm rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          />
+        </div>
+        <ul className="max-h-60 overflow-auto divide-y divide-gray-100 dark:divide-gray-700">
+          {filtered.length === 0 ? (
+            <li className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching values.</li>
+          ) : (
+            filtered.map((v) => (
+              <li key={v.value}>
+                <label className="flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(v.value)}
+                      onChange={() => onToggle(v.value)}
+                      className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 shrink-0"
+                    />
+                    <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{v.value}</span>
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">{v.count}</span>
+                </label>
+              </li>
+            ))
+          )}
+        </ul>
+      </PopoverPanel>
+    </Popover>
   );
 }
 
@@ -230,22 +303,11 @@ export default function FieldFilterEditor({ rules, onChange, onRefreshingChange 
               <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
             )}
             {rule.fieldDefinitionId && !loadingValues && !error && (
-              <ul className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-md">
-                {options.map((v) => (
-                  <li key={v.value} className="flex items-center justify-between px-3 py-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={rule.values.includes(v.value)}
-                        onChange={() => toggleRuleValue(index, v.value)}
-                        className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                      />
-                      <span className="text-sm text-gray-900 dark:text-gray-100">{v.value}</span>
-                    </label>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">{v.count}</span>
-                  </li>
-                ))}
-              </ul>
+              <ValuePicker
+                options={options}
+                selected={rule.values}
+                onToggle={(value) => toggleRuleValue(index, value)}
+              />
             )}
           </div>
         );
