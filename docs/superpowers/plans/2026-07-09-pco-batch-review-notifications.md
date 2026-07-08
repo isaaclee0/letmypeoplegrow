@@ -194,7 +194,7 @@ module.exports = { reviewNotificationDecision, buildPcoReviewMessage };
 docker compose -f docker-compose.dev.yml exec server sh -c "node --test services/planningCenter/reviewNotification.test.js"
 ```
 
-Expected: PASS, `# tests 12`, `# pass 12`, `# fail 0`.
+Expected: PASS, `# tests 11`, `# pass 11`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -446,7 +446,7 @@ Neither function has direct unit tests (they're DB/network-coupled, consistent w
 docker compose -f docker-compose.dev.yml exec server sh -c "node --test services/planningCenterSync.test.js services/planningCenter/*.test.js"
 ```
 
-Expected: PASS, `# fail 0` (should now read `# tests 140`, up from 128 — the 12 new tests from Task 1).
+Expected: PASS, `# fail 0` (should now read `# tests 139`, up from 128 — the 11 new tests from Task 1).
 
 - [ ] **Step 4: Commit**
 
@@ -1063,7 +1063,7 @@ EOF
 docker compose -f docker-compose.dev.yml exec server sh -c "node --test services/planningCenterSync.test.js services/planningCenter/*.test.js"
 ```
 
-Expected: `# fail 0`, `# tests 140` (128 pre-existing + 12 new from Task 1).
+Expected: `# fail 0`, `# tests 139` (128 pre-existing + 11 new from Task 1).
 
 - [ ] **Step 2: Restart both containers and confirm clean boot**
 
