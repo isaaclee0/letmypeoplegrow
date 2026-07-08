@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   planning_center_reconciliation_last_result TEXT,
   planning_center_membership_cache TEXT,
   planning_center_field_definitions_cache TEXT,
+  planning_center_last_notified_review TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
