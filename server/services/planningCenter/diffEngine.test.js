@@ -73,6 +73,50 @@ test('name-matched unlinked person becomes a link, never a duplicate add', () =>
   assert.deepStrictEqual(plan.add, []);
 });
 
+test('name-matched unlinked person whose PCO record is NOT eligible for this filter is left unlinked, not force-linked', () => {
+  // Regression: a narrowly-scoped batch (e.g. one custom-tab field) must not link
+  // every name-matchable person in all of PCO regardless of the batch's own filter —
+  // only those the filter actually admits should ever be linked/restored/matched.
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Sarah', 'Wierenga', { membership: 'Community Contact' })], // not in FILTER's allow-list
+    individuals: [ind(1, 'Sarah', 'Wierenga', { planningCenterId: null })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.link, []);
+  assert.deepStrictEqual(plan.add, []); // also not added (name already exists in LMPG, just left alone)
+});
+
+test('name-matched archived person whose PCO record is NOT eligible for this filter is not restored', () => {
+  const plan = computePlan({
+    pcoPeople: [pco('p1', 'Sarah', 'Wierenga', { membership: 'Community Contact', status: 'active' })],
+    individuals: [ind(1, 'Sarah', 'Wierenga', { planningCenterId: null, isActive: false })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(plan.restore, []);
+});
+
+test('field-filter batch only links people whose field values actually match, not every name-matchable person in PCO', () => {
+  const cfg = {
+    membershipFilterEnabled: false, membershipAllowlist: [],
+    fieldFilterEnabled: true,
+    fieldFilters: [{ fieldDefinitionId: 'f1', values: ['Little Squirts'] }],
+  };
+  const plan = computePlan({
+    pcoPeople: [
+      pco('p1', 'Tagged', 'Kid', { fieldValues: { f1: ['Little Squirts'] } }),
+      pco('p2', 'Untagged', 'Kid', { fieldValues: {} }),
+      pco('p3', 'Other', 'Tag', { fieldValues: { f1: ['Something Else'] } }),
+    ],
+    individuals: [
+      ind(1, 'Tagged', 'Kid', { planningCenterId: null }),
+      ind(2, 'Untagged', 'Kid', { planningCenterId: null }),
+      ind(3, 'Other', 'Tag', { planningCenterId: null }),
+    ],
+    families: [], filterConfig: cfg,
+  });
+  assert.deepStrictEqual(plan.link, [{ individualId: 1, pcoId: 'p1' }]);
+});
+
 test('membership demotion while active is a no-op (no archive)', () => {
   const plan = computePlan({
     pcoPeople: [pco('p1', 'A', 'B', { status: 'active', membership: 'Community Contact' })],
@@ -187,7 +231,7 @@ test('visitor with pco_link_declined is skipped from visitorMatches, still in un
 
 test('ambiguous entries are enriched with individual + candidate names', () => {
   const plan = computePlan({
-    pcoPeople: [pco('p1', 'John', 'Smith', { membership: 'Church Members' }), pco('p2', 'John', 'Smith', { membership: 'New People' })],
+    pcoPeople: [pco('p1', 'John', 'Smith', { membership: 'Church Members' }), pco('p2', 'John', 'Smith', { membership: 'Regular Attenders' })],
     individuals: [ind(7, 'John', 'Smith', { planningCenterId: null })],
     families: [], filterConfig: FILTER,
   });
@@ -200,7 +244,24 @@ test('ambiguous entries are enriched with individual + candidate names', () => {
   const byId = Object.fromEntries(a.candidateDetails.map((c) => [c.pcoId, c]));
   assert.strictEqual(byId.p1.firstName, 'John');
   assert.strictEqual(byId.p1.membership, 'Church Members');
-  assert.strictEqual(byId.p2.membership, 'New People');
+  assert.strictEqual(byId.p2.membership, 'Regular Attenders');
+});
+
+test('ambiguous candidates outside the filter are dropped; entry disappears if none remain eligible', () => {
+  const narrowed = computePlan({
+    pcoPeople: [pco('p1', 'John', 'Smith', { membership: 'Church Members' }), pco('p2', 'John', 'Smith', { membership: 'New People' })],
+    individuals: [ind(7, 'John', 'Smith', { planningCenterId: null })],
+    families: [], filterConfig: FILTER, // allow-list only includes 'Church Members'/'Regular Attenders'
+  });
+  assert.strictEqual(narrowed.ambiguous.length, 1);
+  assert.deepStrictEqual(narrowed.ambiguous[0].candidates, ['p1']); // p2 (New People) filtered out
+
+  const noneEligible = computePlan({
+    pcoPeople: [pco('p1', 'John', 'Smith', { membership: 'New People' }), pco('p2', 'John', 'Smith', { membership: 'Visitors' })],
+    individuals: [ind(7, 'John', 'Smith', { planningCenterId: null })],
+    families: [], filterConfig: FILTER,
+  });
+  assert.deepStrictEqual(noneEligible.ambiguous, []); // entry dropped entirely, not just emptied
 });
 
 test('field-filter source alone can make a person eligible for add, independent of membership', () => {

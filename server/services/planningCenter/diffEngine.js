@@ -44,7 +44,29 @@ function computePlan({ pcoPeople, individuals, families, filterConfig, household
     unlinked.filter((i) => i.pcoLinkDeclined).map((i) => i.id)
   );
 
-  const { links: matchedLinks, ambiguous, unmatched } = matchIndividuals(unlinkedForMatcher, availablePco, familyMembers);
+  // Matching itself always runs against the full unfiltered `availablePco` (not
+  // scoped to filterConfig) — this is required so `unmatched` (below, feeding
+  // archiveExtras/unmatchedVisitors) reflects true "no match anywhere in PCO"
+  // regardless of which batch's filter happens to be active. But surfacing those raw
+  // matches as `link`/`restore`/`ambiguous`/`visitorMatches` without also checking
+  // eligibility would mean *any* batch run — however narrowly filtered (e.g. one
+  // custom-tab tag) — ends up linking the church's entire name-matchable population,
+  // since matching ignores filterConfig entirely. So filter the matched output down
+  // to this batch's eligible people before bucketing; unmatched stays untouched.
+  const { links: rawMatchedLinks, ambiguous: rawAmbiguous, unmatched } = matchIndividuals(unlinkedForMatcher, availablePco, familyMembers);
+  const matchedLinks = rawMatchedLinks.filter((m) => {
+    const p = pcoById.get(m.pcoId);
+    return p && isEligible(p, filterConfig);
+  });
+  const ambiguous = rawAmbiguous
+    .map((a) => ({
+      ...a,
+      candidates: a.candidates.filter((pcoId) => {
+        const p = pcoById.get(pcoId);
+        return p && isEligible(p, filterConfig);
+      }),
+    }))
+    .filter((a) => a.candidates.length > 0);
 
   const individualsById = new Map(individuals.map((i) => [i.id, i]));
 
