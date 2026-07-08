@@ -400,6 +400,10 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
       familyNamesUpdated: result.familyNamesUpdated,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
+      // How many family-name proposals this run *skipped* (as opposed to
+      // familyNamesUpdated above, which is how many were actually applied —
+      // always 0 here, since they're always skipped on an unattended run).
+      familyNameUpdatesPending: skipFamilyNameUpdateIds.length,
       errors: result.errors.length,
     };
     await Database.query(
@@ -407,8 +411,10 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
       [JSON.stringify(summary), batch.id]
     );
     logger.info(`PCO batch sync: church ${churchId} batch ${batch.id} (${batch.name}) done — ${JSON.stringify(summary)}`);
+    return summary;
   } catch (err) {
     logger.error(`PCO batch sync: error for church ${churchId} batch ${batch.id}: ${err.message}`);
+    return null;
   }
 }
 
@@ -425,8 +431,10 @@ async function runReconciliationSync(churchId, accessToken, userId) {
       [JSON.stringify(summary), churchId]
     );
     logger.info(`PCO reconciliation: church ${churchId} done — ${JSON.stringify(summary)}`);
+    return summary;
   } catch (err) {
     logger.error(`PCO reconciliation: error for church ${churchId}: ${err.message}`);
+    return null;
   }
 }
 
