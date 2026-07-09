@@ -371,9 +371,15 @@ async function applyForChurch(churchId, plan, userId, selections, batchConfig = 
 
 // Decides whether a church's sync is due to run "tonight" given its configured
 // frequency/day. Weekly day-of-week: 0=Sunday..6=Saturday (JS Date convention).
+// Monthly day-of-month: 1-31, clamped to the last day of shorter months (e.g.
+// day 31 runs on April 30th; day 29 runs on Feb 28th outside leap years).
 function isDueToday(frequency, day, now = new Date()) {
   if (frequency === 'daily') return true;
-  if (frequency === 'monthly') return now.getDate() === 1;
+  if (frequency === 'monthly') {
+    const targetDay = typeof day === 'number' ? day : 1;
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return now.getDate() === Math.min(targetDay, lastDayOfMonth);
+  }
   // weekly (default, and fallback for unrecognized frequencies)
   const targetDay = typeof day === 'number' ? day : 1;
   return now.getDay() === targetDay;

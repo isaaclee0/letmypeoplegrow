@@ -37,3 +37,33 @@ test('isDueToday: unknown frequency falls back to weekly behavior', () => {
   assert.strictEqual(isDueToday('bogus', 1, monday), true);
   assert.strictEqual(isDueToday('bogus', 1, tuesday), false);
 });
+
+test('isDueToday: monthly matches an exact mid-month day', () => {
+  const the14th = new Date('2026-07-14T02:00:00');
+  const the15th = new Date('2026-07-15T02:00:00');
+  const the16th = new Date('2026-07-16T02:00:00');
+  assert.strictEqual(isDueToday('monthly', 15, the14th), false);
+  assert.strictEqual(isDueToday('monthly', 15, the15th), true);
+  assert.strictEqual(isDueToday('monthly', 15, the16th), false);
+});
+
+test('isDueToday: monthly day 31 clamps to the last day of a 30-day month', () => {
+  const april29 = new Date('2026-04-29T02:00:00');
+  const april30 = new Date('2026-04-30T02:00:00'); // April has 30 days
+  assert.strictEqual(isDueToday('monthly', 31, april29), false);
+  assert.strictEqual(isDueToday('monthly', 31, april30), true);
+});
+
+test('isDueToday: monthly day 29 clamps to the 28th in a non-leap February', () => {
+  const feb27 = new Date('2026-02-27T02:00:00');
+  const feb28 = new Date('2026-02-28T02:00:00'); // 2026 is not a leap year
+  assert.strictEqual(isDueToday('monthly', 29, feb27), false);
+  assert.strictEqual(isDueToday('monthly', 29, feb28), true);
+});
+
+test('isDueToday: monthly day 29 matches exactly in a leap February', () => {
+  const feb28 = new Date('2028-02-28T02:00:00');
+  const feb29 = new Date('2028-02-29T02:00:00'); // 2028 is a leap year
+  assert.strictEqual(isDueToday('monthly', 29, feb28), false);
+  assert.strictEqual(isDueToday('monthly', 29, feb29), true);
+});
