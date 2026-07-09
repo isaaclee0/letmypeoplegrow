@@ -4,6 +4,7 @@ import logger from '../../utils/logger';
 import MembershipAllowlistEditor from './MembershipAllowlistEditor';
 import FieldFilterEditor, { FieldFilterRule } from './FieldFilterEditor';
 import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
+import { ordinalDay } from '../../utils/pcoSchedule';
 
 interface GatheringOption { id: number; name: string; }
 
@@ -235,7 +236,15 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
             <>
               <select
                 value={scheduleFrequency}
-                onChange={(e) => setScheduleFrequency(e.target.value as SyncBatchInput['scheduleFrequency'])}
+                onChange={(e) => {
+                  const freq = e.target.value as SyncBatchInput['scheduleFrequency'];
+                  setScheduleFrequency(freq);
+                  setScheduleDay((prev) => {
+                    if (freq === 'weekly') return prev >= 0 && prev <= 6 ? prev : 1;
+                    if (freq === 'monthly') return prev >= 1 && prev <= 31 ? prev : 1;
+                    return prev; // daily: value unused
+                  });
+                }}
                 className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
               >
                 <option value="daily">Daily</option>
@@ -256,6 +265,24 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
                   <option value={5}>Friday</option>
                   <option value={6}>Saturday</option>
                 </select>
+              )}
+              {scheduleFrequency === 'monthly' && (
+                <>
+                  <select
+                    value={scheduleDay}
+                    onChange={(e) => setScheduleDay(Number(e.target.value))}
+                    className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
+                  >
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                      <option key={d} value={d}>{ordinalDay(d)}</option>
+                    ))}
+                  </select>
+                  {scheduleDay >= 29 && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Runs on the last day of the month if it's shorter.
+                    </span>
+                  )}
+                </>
               )}
             </>
           )}
