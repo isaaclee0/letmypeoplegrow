@@ -5,8 +5,9 @@ import { useCheckIns } from '../contexts/CheckInsContext';
 import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
-import { aiAPI, gatheringsAPI } from '../services/api';
+import { aiAPI, gatheringsAPI, notificationsAPI } from '../services/api';
 import logger from '../utils/logger';
+import { formatDistanceToNow } from 'date-fns';
 import {
   Bars3Icon,
   BellIcon,
@@ -24,12 +25,25 @@ import {
   ClipboardDocumentCheckIcon,
 } from '@heroicons/react/24/outline';
 
+interface NotificationItem {
+  id: number;
+  title: string;
+  message: string;
+  notification_type: string;
+  is_read: number;
+  reference_type: string | null;
+  reference_id: number | null;
+  created_at: string;
+}
+
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
   const [checkInsAvailable, setCheckInsAvailable] = useState(false);
-  const { user, logout } = useAuth();
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const { user, logout, updateUser } = useAuth();
   const checkInsCtx = useCheckIns();
   const { isOfflineMode, connectionStatus } = useWebSocket();
   const { updateAvailable, performUpdate } = usePWAUpdate();
@@ -97,6 +111,42 @@ const Layout: React.FC = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showNotifications]);
+
+  // Fetch actual notifications when the dropdown is opened
+  useEffect(() => {
+    if (!showNotifications) return;
+
+    let cancelled = false;
+    const fetchNotifications = async () => {
+      setNotificationsLoading(true);
+      try {
+        const response = await notificationsAPI.getAll({ limit: 10 });
+        if (!cancelled) {
+          setNotifications(response.data.notifications || []);
+        }
+      } catch (error) {
+        logger.error('Failed to fetch notifications:', error);
+      } finally {
+        if (!cancelled) setNotificationsLoading(false);
+      }
+    };
+
+    fetchNotifications();
+    return () => { cancelled = true; };
+  }, [showNotifications]);
+
+  const handleNotificationClick = async (notification: NotificationItem) => {
+    if (notification.is_read) return;
+
+    setNotifications(prev => prev.map(n => n.id === notification.id ? { ...n, is_read: 1 } : n));
+    updateUser({ unreadNotifications: Math.max(0, (user?.unreadNotifications || 1) - 1) });
+
+    try {
+      await notificationsAPI.markAsRead(notification.id);
+    } catch (error) {
+      logger.error('Failed to mark notification as read:', error);
+    }
+  };
 
   const navigation = user?.role === 'attendance_taker' ? [
     { name: 'Attendance', href: '/app/attendance', icon: ClipboardDocumentListIcon },
@@ -362,27 +412,50 @@ const Layout: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Regular Notifications - only show for non-attendance takers */}
-                      {user?.role !== 'attendance_taker' && (
-                        <div>
-                          {user?.unreadNotifications && user.unreadNotifications > 0 ? (
-                            <div className="text-sm text-gray-600 dark:text-gray-400">
-                              You have {user.unreadNotifications} unread notification{user.unreadNotifications !== 1 ? 's' : ''}.
+                      {/* Notifications list */}
+                      <div className="max-h-80 overflow-y-auto scrollbar-thin -mx-1">
+                        {notificationsLoading ? (
+                          <div className="text-sm text-gray-500 dark:text-gray-400 px-1">Loading...</div>
+                        ) : notifications.length > 0 ? (
+                          <ul className="space-y-1">
+                            {notifications.map(notification => (
+                              <li key={notification.id}>
+                                <button
+                                  onClick={() => handleNotificationClick(notification)}
+                                  className={`w-full text-left px-2 py-2 rounded-md transition-colors duration-150 ${
+                                    notification.is_read
+                                      ? 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                                      : 'bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30'
+                                  }`}
+                                >
+                                  <div className="flex items-start">
+                                    {!notification.is_read && (
+                                      <span className="mt-1.5 mr-2 h-2 w-2 rounded-full bg-primary-500 shrink-0" />
+                                    )}
+                                    <div className={notification.is_read ? 'ml-4' : ''}>
+                                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                        {notification.title}
+                                      </p>
+                                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">
+                                        {notification.message}
+                                      </p>
+                                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                                        {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          !updateAvailable && (
+                            <div className="text-sm text-gray-500 dark:text-gray-400 px-1">
+                              No notifications.
                             </div>
-                          ) : (
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
-                              No new notifications.
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Show message for attendance takers when no updates */}
-                      {user?.role === 'attendance_taker' && !updateAvailable && (
-                        <div className="text-sm text-gray-500 dark:text-gray-400">
-                          No notifications.
-                        </div>
-                      )}
+                          )
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
