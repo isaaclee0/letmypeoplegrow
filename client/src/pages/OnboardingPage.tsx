@@ -5,6 +5,7 @@ import { authAPI, onboardingAPI, integrationsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { CheckIcon, MapPinIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import PlanningCenterBatchEditor from '../components/planningCenter/PlanningCenterBatchEditor';
+import PlanningCenterSyncReview from '../components/planningCenter/PlanningCenterSyncReview';
 import PCOCheckinImport from '../components/PCOCheckinImport';
 import { SyncBatch } from '../services/api';
 
@@ -24,7 +25,7 @@ interface LocationResult {
 }
 
 const OnboardingPage: React.FC = () => {
-  const [step, setStep] = useState<'form' | 'code' | 'choose-path' | 'pco-people' | 'pco-gatherings'>('form');
+  const [step, setStep] = useState<'form' | 'code' | 'choose-path' | 'pco-people' | 'pco-review' | 'pco-gatherings'>('form');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -34,7 +35,7 @@ const OnboardingPage: React.FC = () => {
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [locationSearching, setLocationSearching] = useState(false);
-  const [importingPeople, setImportingPeople] = useState(false);
+  const [firstBatchId, setFirstBatchId] = useState<number | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [checkinProbe, setCheckinProbe] = useState<'probing' | 'available' | 'unavailable'>('probing');
   const [showCheckinImport, setShowCheckinImport] = useState(false);
@@ -198,19 +199,15 @@ const OnboardingPage: React.FC = () => {
     navigate('/app/gatherings');
   };
 
-  // The batch is created/saved by PlanningCenterBatchEditor itself; this just
-  // runs an immediate, auto-applied import (no manual review — same one-time,
-  // no-review behaviour onboarding had before) and advances the wizard.
-  const onFirstBatchSaved = async (batch: SyncBatch) => {
-    setImportingPeople(true); setError('');
-    try {
-      await integrationsAPI.applyPlanningCenterBatch(batch.id, {});
-      setStep('pco-gatherings');
-    } catch (e: any) {
-      setError(e.response?.data?.error || 'Failed to import people from Planning Center.');
-    } finally {
-      setImportingPeople(false);
-    }
+  // The batch is created/saved by PlanningCenterBatchEditor itself. Advance to
+  // the review step instead of auto-applying blindly — the admin reviews
+  // ambiguous matches, visitor promotions, and family name updates in the same
+  // screen Settings uses, then explicitly applies (or continues without
+  // applying; the batch is saved regardless and can be run later from
+  // Settings).
+  const onFirstBatchSaved = (batch: SyncBatch) => {
+    setFirstBatchId(batch.id);
+    setStep('pco-review');
   };
 
   return (
@@ -376,16 +373,30 @@ const OnboardingPage: React.FC = () => {
           ) : step === 'pco-people' ? (
             <div className="space-y-4">
               <p className="text-sm text-gray-700">Choose which Planning Center people to import, and optionally assign them to a gathering.</p>
-              {importingPeople ? (
-                <p className="text-sm text-gray-700">Importing…</p>
-              ) : (
-                <PlanningCenterBatchEditor
-                  batch={null}
-                  onSaved={onFirstBatchSaved}
-                  onCancel={() => setStep('pco-gatherings')}
-                />
-              )}
+              <PlanningCenterBatchEditor
+                batch={null}
+                onSaved={onFirstBatchSaved}
+                onCancel={() => setStep('pco-gatherings')}
+              />
               {error && <p className="text-sm text-red-600">{error}</p>}
+            </div>
+          ) : step === 'pco-review' ? (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                Review what Planning Center found before continuing. You can also skip straight ahead — this batch is saved and can be run again later from Settings.
+              </p>
+              {firstBatchId !== null && (
+                <PlanningCenterSyncReview connected={true} batchId={firstBatchId} />
+              )}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setStep('pco-gatherings')}
+                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
+                >
+                  Continue
+                </button>
+              </div>
             </div>
           ) : step === 'pco-gatherings' ? (
             <div className="space-y-4">
