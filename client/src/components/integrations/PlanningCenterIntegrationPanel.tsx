@@ -14,6 +14,7 @@ import {
 import { integrationsAPI, settingsAPI, SyncBatch } from '../../services/api';
 import Modal from '../Modal';
 import logger from '../../utils/logger';
+import { ordinalDay } from '../../utils/pcoSchedule';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import PlanningCenterReconciliationReview from '../planningCenter/PlanningCenterReconciliationReview';
@@ -423,7 +424,16 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   {reconciliationScheduleEnabled && (
                     <>
                       <select value={reconciliationFrequency}
-                        onChange={(e) => { setReconciliationFrequency(e.target.value as 'daily' | 'weekly' | 'monthly'); setReconciliationDirty(true); }}
+                        onChange={(e) => {
+                          const freq = e.target.value as 'daily' | 'weekly' | 'monthly';
+                          setReconciliationFrequency(freq);
+                          setReconciliationDay((prev) => {
+                            if (freq === 'weekly') return prev >= 0 && prev <= 6 ? prev : 1;
+                            if (freq === 'monthly') return prev >= 1 && prev <= 31 ? prev : 1;
+                            return prev; // daily: value unused
+                          });
+                          setReconciliationDirty(true);
+                        }}
                         className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
@@ -441,6 +451,22 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           <option value={5}>Friday</option>
                           <option value={6}>Saturday</option>
                         </select>
+                      )}
+                      {reconciliationFrequency === 'monthly' && (
+                        <>
+                          <select value={reconciliationDay}
+                            onChange={(e) => { setReconciliationDay(Number(e.target.value)); setReconciliationDirty(true); }}
+                            className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
+                            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                              <option key={d} value={d}>{ordinalDay(d)}</option>
+                            ))}
+                          </select>
+                          {reconciliationDay >= 29 && (
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              Runs on the last day of the month if it's shorter.
+                            </span>
+                          )}
+                        </>
                       )}
                       <button type="button" onClick={saveReconciliationConfig} disabled={!reconciliationDirty || reconciliationSaving}
                         className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50">
