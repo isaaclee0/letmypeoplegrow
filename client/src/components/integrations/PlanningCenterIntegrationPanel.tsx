@@ -41,7 +41,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batchesError, setBatchesError] = useState<string | null>(null);
   const [editingBatch, setEditingBatch] = useState<SyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
-  const [runningBatchId, setRunningBatchId] = useState<number | null>(null);
   const [reconciliationScheduleEnabled, setReconciliationScheduleEnabled] = useState(false);
   const [reconciliationFrequency, setReconciliationFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
   const [reconciliationDay, setReconciliationDay] = useState(1);
@@ -96,18 +95,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     } catch (error) {
       logger.error('Failed to update master sync switch:', error);
       setPcSyncEnabled(!value);
-    }
-  };
-
-  const runBatchNow = async (batchId: number) => {
-    setRunningBatchId(batchId);
-    try {
-      await integrationsAPI.applyPlanningCenterBatch(batchId, {});
-      await loadBatches();
-    } catch (e: any) {
-      setPlanningCenterError(e.response?.data?.error || 'Sync failed.');
-    } finally {
-      setRunningBatchId(null);
     }
   };
 
@@ -403,10 +390,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
-                          <button type="button" onClick={() => runBatchNow(batch.id)} disabled={runningBatchId === batch.id}
-                            className="text-sm underline text-gray-600 dark:text-gray-300 disabled:opacity-50">
-                            {runningBatchId === batch.id ? 'Syncing…' : 'Run now'}
-                          </button>
                           <button type="button" onClick={() => setReviewingBatchId(reviewingBatchId === batch.id ? null : batch.id)}
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
