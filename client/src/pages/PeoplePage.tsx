@@ -110,7 +110,7 @@ const PeoplePage: React.FC = () => {
   const [people, setPeople] = useState<Person[]>([]);
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
-  const [planningCenterSyncEnabled, setPlanningCenterSyncEnabled] = useState(false);
+  const [planningCenterSyncIndicator, setPlanningCenterSyncIndicator] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -360,7 +360,7 @@ const PeoplePage: React.FC = () => {
     try {
       const response = await familiesAPI.getAll();
       setFamilies(response.data.families || []);
-      setPlanningCenterSyncEnabled(!!response.data.planningCenterSyncEnabled);
+      setPlanningCenterSyncIndicator(!!response.data.planningCenterSyncIndicator);
     } catch (err: any) {
       setError('Failed to load families');
     }
@@ -1297,12 +1297,12 @@ const PeoplePage: React.FC = () => {
         allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
         lockedCount={selectedPeople.reduce((n, id) => {
           const p = people.find(pp => pp.id === id);
-          return n + (isPcoLocked(p, planningCenterSyncEnabled) ? 1 : 0);
+          return n + (isPcoLocked(p, planningCenterSyncIndicator) ? 1 : 0);
         }, 0)}
         lockNameAge={modalSelectedCount === 1 && (() => {
           const id = selectedPeople[0];
           const p = id !== undefined ? people.find(pp => pp.id === id) : undefined;
-          return isPcoLocked(p, planningCenterSyncEnabled);
+          return isPcoLocked(p, planningCenterSyncIndicator);
         })()}
         onSave={async () => {
           try {
@@ -1761,7 +1761,7 @@ const PeoplePage: React.FC = () => {
 
                                                        variant="grouped"
 
-                                                       planningCenterSyncEnabled={planningCenterSyncEnabled}
+                                                       planningCenterSyncIndicator={planningCenterSyncIndicator}
 
                                                      />
 
@@ -1805,7 +1805,7 @@ const PeoplePage: React.FC = () => {
 
                                            variant="individual"
 
-                                           planningCenterSyncEnabled={planningCenterSyncEnabled}
+                                           planningCenterSyncIndicator={planningCenterSyncIndicator}
 
                                          />
 
@@ -1946,7 +1946,7 @@ const PeoplePage: React.FC = () => {
 
                                   variant="grouped"
 
-                                  planningCenterSyncEnabled={planningCenterSyncEnabled}
+                                  planningCenterSyncIndicator={planningCenterSyncIndicator}
 
                                 />
 
@@ -1985,7 +1985,7 @@ const PeoplePage: React.FC = () => {
                                 />
                                 <div className="flex items-center space-x-2">
                                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
-                                  {planningCenterSyncEnabled && person.planningCenterId && (
+                                  {planningCenterSyncIndicator && person.planningCenterId && (
                                     <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
                                       PCO
                                     </span>
@@ -2125,7 +2125,7 @@ const PeoplePage: React.FC = () => {
 
                                     variant="grouped"
 
-                                    planningCenterSyncEnabled={planningCenterSyncEnabled}
+                                    planningCenterSyncIndicator={planningCenterSyncIndicator}
 
                                   />
 
@@ -2668,7 +2668,7 @@ const PeoplePage: React.FC = () => {
              </div>
            )}
            {/* Archive Button - hidden when any selected person is PCO-linked (lifecycle owned by sync) */}
-           {!selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncEnabled)) && (
+           {!selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncIndicator)) && (
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
@@ -2689,7 +2689,7 @@ const PeoplePage: React.FC = () => {
            )}
 
            {/* Merge Button - Only shown for 2+ people, admin users, and only when no selected person is PCO-linked */}
-           {isAdmin && selectedPeople.length >= 2 && !selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncEnabled)) && (
+           {isAdmin && selectedPeople.length >= 2 && !selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncIndicator)) && (
                <div className="flex items-center justify-end space-x-3">
                  <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge
@@ -2720,7 +2720,7 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
          </div>
-        ) : !planningCenterSyncEnabled ? (
+        ) : !planningCenterSyncIndicator ? (
          <>
            <button
              onClick={() => openAddModal()}

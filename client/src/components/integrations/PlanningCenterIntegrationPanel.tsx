@@ -294,7 +294,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 <div className="mt-2 text-sm text-green-700 dark:text-green-400">
                   <ul className="list-disc list-inside space-y-1">
                     <li>Import people with household grouping</li>
-                    <li>Sync check-in data for attendance tracking</li>
+                    <li>Import historical check-in data as a one-time attendance backfill</li>
                     <li>Seamless integration with Planning Center Online</li>
                   </ul>
                 </div>

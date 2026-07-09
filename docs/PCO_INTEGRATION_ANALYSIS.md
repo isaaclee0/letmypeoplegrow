@@ -162,12 +162,19 @@ nothing in the UI explained this.
 with copy that discloses the lockdown behavior, and enabling it requires confirming a
 dialog that lists the consequences. See item 1 in Implementation Gaps below.
 
-### Naming collision (developer + behavior hazard)
+### `[fixed 2026-07-09]` Naming collision (developer + behavior hazard)
 
-`server/routes/families.js` returns `planningCenterSyncEnabled` but reads
+Was: `server/routes/families.js` returned `planningCenterSyncEnabled` but read
 `planning_center_sync_indicator` (the lock flag), **not** `planning_center_sync_enabled`
-(the cron flag). `client/src/pages/PeoplePage.tsx` uses this for locks and badges. The
-Settings API uses the same name for the cron flag. Two different concepts share one label.
+(the cron flag). `client/src/pages/PeoplePage.tsx` used this for locks and badges. The
+Settings API used the same name for the cron flag. Two different concepts shared one label.
+
+Now: `families.js` returns `planningCenterSyncIndicator`, matching the name `settings.js`
+already used for the same `planning_center_sync_indicator` column. Renamed the propagated
+identifier end-to-end on the client to match: `pcoLock.ts` (`isPcoLocked`/`countPcoLocked`
+params), `PeoplePage.tsx` (state + all call sites), and `PersonCard.tsx` (prop). No behavior
+change — `planningCenterSyncEnabled` in `settings.js`/`PlanningCenterIntegrationPanel.tsx`
+(the cron flag) was untouched and remains correctly named.
 
 ---
 
@@ -210,9 +217,10 @@ These are intentional out-of-scope items — not missing features:
      (`ensureValidPlanningCenterTokens`, with one in-flight guard), reused by both the
      route handlers and the cron/service layer
 
-3. **Marketing copy overpromises check-in sync**
-   - `PlanningCenterIntegrationPanel.tsx:294` says *"Sync check-in data for attendance
-     tracking"* — implies ongoing sync; reality is one-time historical import
+3. **`[fixed 2026-07-09]` Marketing copy overpromises check-in sync**
+   - Was: `PlanningCenterIntegrationPanel.tsx:294` said *"Sync check-in data for attendance
+     tracking"* — implied ongoing sync; reality is one-time historical import
+   - Now: reworded to "Import historical check-in data as a one-time attendance backfill"
 
 4. **`[fixed 2026-07-09]` Onboarding skips sync review**
    - Was: `applyPlanningCenterBatch(batch.id, {})` immediately after first batch save
@@ -242,11 +250,21 @@ These are intentional out-of-scope items — not missing features:
 7. **`planning_center_auto_archive`** — legacy column still in settings API/schema;
    superseded by batch sync + reconciliation; no UI
 
-8. **Historical CSV import endpoints** — exist in `client/src/services/api.ts` but no
-   UI (PCO check-in import replaced the primary path)
+8. **`[fixed 2026-07-09]` Historical CSV import endpoints**
+   - Was: `previewHistoricalCsv`/`importHistoricalCsv` existed in `client/src/services/api.ts`
+     with no UI caller (PCO check-in import replaced the primary path)
+   - Now: removed, along with the server-side `POST /historical-csv-preview` /
+     `POST /historical-csv-execute` routes and their exclusive helpers (`csvUpload`
+     multer config, `parseHistoricalCsv`, `matchAndBuildRecords`, `parseDateHeader`),
+     and the now-unused `fs`/`multer`/`csv-parser` imports in `integrations.js`
 
-9. **Legacy browse/import routes** — `GET /planning-center/people`,
-   `POST /import-people`, `POST /link-family` still on server; UI moved to batches
+9. **`[fixed 2026-07-09]` Legacy browse/import routes**
+   - Was: `GET /planning-center/people`, `POST /import-people`, `POST /link-family`,
+     and the dead `GET /planning-center/checkins` browse endpoint (see item 11) still
+     on the server with no client caller; UI moved to batches
+   - Now: all four removed from `server/routes/integrations.js`, along with the
+     now-unused `getPlanningCenterTokens` per-user token alias (its only callers were
+     these routes)
 
 10. **Monthly schedule has no day-of-month picker** — `schedule_day` only shown for weekly;
     monthly always runs on the 1st (confirmed: `isDueToday()` in `planningCenterSync.js:312`
@@ -260,11 +278,10 @@ These are intentional out-of-scope items — not missing features:
     - Now: `/status`, `/checkins/events`, `/checkins/availability`, `/disconnect`, and
       check-in import all resolve tokens church-wide via `getChurchPlanningCenterTokens`
       / a church-scoped `DELETE`, matching how the batch/cron sync paths already worked.
-      (The bare `GET /planning-center/checkins` browse endpoint still uses per-admin
-      token lookup, but it's dead code — no client caller — same as the other legacy
-      routes in item 9.)
+      (The bare `GET /planning-center/checkins` browse endpoint used per-admin token
+      lookup and had no client caller — removed as part of item 9's cleanup.)
 
-12. **`[cross-review]` Two independent, unmerged PCO caching layers**
+12. **`[cross-review]` `[partially fixed 2026-07-09]` Two independent, unmerged PCO caching layers**
     - An in-memory `pcoPeopleCache` (10-minute TTL) inside `planningCenterSync.js`
       holds the full projected PCO people list, shared by plan computation, membership
       summary, and people-search
@@ -272,10 +289,23 @@ These are intentional out-of-scope items — not missing features:
       `_field_definitions_cache` in `church_settings`, 1-hour staleness) in
       `metadataCache.js` serves the batch editor's filter picker, with its own
       background-refresh/polling (`usePcoRefreshPoll`)
-    - They're related (the persisted cache's refresh internally calls into the
-      in-memory cache's fetch function) but not unified — a cold persisted cache still
-      pays for a full paginated PCO fetch synchronously on first read. Not incorrect,
-      just an avoidable extra layer of state to reason about
+    - These two layers genuinely serve different needs (short-lived raw list for sync
+      computation vs. long-lived persisted aggregate for UI display that must survive
+      restarts) and were left as two layers on purpose — merging them into one would
+      either drop cross-restart persistence or add DB/JSON overhead to the hot sync
+      path. Not attempted.
+    - What *was* fixed: `membership-summary` and `field-definitions` each reimplemented
+      an identical "cold cache blocks on a live fetch, stale cache returns immediately
+      and refreshes in the background" policy inline; `field-summary` skipped the
+      persisted cache entirely and called `fetchFieldDefinitions(accessToken)` — a live
+      PCO request — on every single call, even though `field-definitions` had usually
+      already warmed that exact cache. Consolidated all three into one shared
+      `metadataCache.readCacheFirst`/`readMembershipSummary`/`readFieldDefinitionsSummary`,
+      so there's now one cache-read policy instead of three divergent ones, and
+      `field-summary` no longer re-fetches field definitions from PCO on every request.
+      Response shapes are unchanged (no client changes needed); the still-open,
+      lower-priority piece is the synchronous full-fetch-on-cold-cache path itself
+      (unchanged — cold-start only, mitigated by the existing connect-time warm-up).
 
 13. **PCO feature flag** — integration hidden when `PLANNING_CENTER_ENABLED` is false; no
     in-app explanation
@@ -321,21 +351,33 @@ import all landed as specified.
 |---------------|----------|
 | Source-of-truth mode not tied to "being on PCO" (mislabeled toggle, not enabled in onboarding) | **Fixed 2026-07-09** — toggle relabeled + confirmation dialog added |
 | Token refresh implemented independently in 3 places against the same DB row `[cross-review]` | **Fixed 2026-07-09** — consolidated to one implementation |
-| Users told check-ins "sync" when it's historical import only | **High** — wrong expectations (not yet fixed) |
+| Users told check-ins "sync" when it's historical import only | **Fixed 2026-07-09** — copy reworded to say one-time backfill |
 | Onboarding / Run now skip review for ambiguous matches | **Fixed 2026-07-09** — Run now removed, onboarding shows a review step |
 | Scheduled reconciliation auto-archives without review | **Mitigated 2026-07-09** — still auto-archives by design, now notifies admins |
-| Two different flags named `planningCenterSyncEnabled` in different APIs | **Medium** — maintenance hazard (not yet fixed) |
-| Two unrelated, unmerged PCO caching layers `[cross-review]` | **Low** — works, but an avoidable extra layer of state (not yet fixed) |
+| Two different flags named `planningCenterSyncEnabled` in different APIs | **Fixed 2026-07-09** — `families.js` renamed to `planningCenterSyncIndicator`, matching `settings.js` |
+| Dead legacy routes/endpoints (`/planning-center/people`, `/import-people`, `/link-family`, dead `/planning-center/checkins` browse, historical CSV import) | **Fixed 2026-07-09** — removed from server and client, including exclusive helpers and now-unused imports |
+| Two unrelated, unmerged PCO caching layers `[cross-review]` | **Partially fixed 2026-07-09** — three divergent cache-read policies consolidated into one; the two layers themselves are kept (deliberately, not an oversight) |
 | No ongoing attendance bridge from PCO | **By design** — but churches may expect it |
 
-**`[fixed 2026-07-09]`** Both of the previously highest-impact fixes are done: the
-source-of-truth toggle is relabeled with a confirmation dialog (item 1), and the three
-independent token-refresh implementations are consolidated into one (item 2).
+**`[fixed 2026-07-09]`** All of the previously highest/medium-impact items are done: the
+source-of-truth toggle is relabeled with a confirmation dialog (item 1), the three
+independent token-refresh implementations are consolidated into one (item 2), the check-in
+"sync" marketing copy no longer implies ongoing sync (item 3), the `families.js` /
+`settings.js` naming collision is resolved, and the dead legacy routes/endpoints (items 8, 9)
+are removed.
 
-**Next-highest-impact fix:** the check-in "sync" marketing copy (item 3) still implies
-ongoing sync when the feature is a one-time historical import — update
-`PlanningCenterIntegrationPanel.tsx:294` so churches don't expect PCO check-ins to keep
-flowing into LMPG after the initial import.
+**`[partially fixed 2026-07-09]`** Item 12's three divergent cache-read code paths
+(`membership-summary`, `field-definitions`, and `field-summary` — the last of which
+skipped caching for field definitions entirely) are now one shared policy in
+`metadataCache.js`, and `field-summary` no longer re-fetches field definitions from PCO
+on every call. The two caching *layers* themselves (in-memory people list vs. persisted
+aggregate) were kept as-is — they serve genuinely different needs, and merging them
+would trade one problem for a worse one.
+
+**Next-highest-impact fix:** none of the remaining items are behavioral bugs — `planning_center_auto_archive`
+(item 7, unused column) and the monthly day-of-month picker (item 10, actual feature
+work, not a fix) and the PCO feature-flag explanation (item 13) are the only open items,
+all Medium/Low and none urgent.
 
 ---
 

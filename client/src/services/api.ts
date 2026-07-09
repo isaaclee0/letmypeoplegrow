@@ -865,8 +865,6 @@ export const integrationsAPI = {
   authorizePlanningCenter: (returnTo?: string) =>
     api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
-  getPlanningCenterCheckins: (params: { startDate: string; endDate: string }) =>
-    api.get('/integrations/planning-center/checkins', { params, timeout: 120000 }),
   // People sync (replaces the old browse/import flow)
   getPlanningCenterMembershipSummary: () =>
     api.get('/integrations/planning-center/membership-summary', { timeout: 120000 }),
@@ -930,24 +928,6 @@ export const integrationsAPI = {
     assignToGatherings?: boolean;
     recencyWeeks?: number;
   }) => api.post('/integrations/planning-center/import-checkins/execute', body, { timeout: 120000 }),
-
-  // Historical CSV attendance backfill
-  previewHistoricalCsv: (file: File) => {
-    const form = new FormData();
-    form.append('file', file);
-    return api.post('/integrations/historical-csv-preview', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 60000,
-    });
-  },
-  importHistoricalCsv: (file: File) => {
-    const form = new FormData();
-    form.append('file', file);
-    return api.post('/integrations/historical-csv-execute', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
-    });
-  },
 };
 
 // AI Insights API

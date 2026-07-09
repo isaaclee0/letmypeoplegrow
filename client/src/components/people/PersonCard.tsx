@@ -39,7 +39,7 @@ interface PersonCardProps {
   getStandardGatheringAssignments: (assignments?: Array<{ id: number; name: string }>) => Array<{ id: number; name: string }>;
   getBadgeInfo: (person: { isChild?: boolean; badgeText?: string | null; badgeColor?: string | null; badgeIcon?: string | null }) => BadgeInfo | null;
   variant?: 'grouped' | 'individual'; // grouped has more spacing, individual is compact
-  planningCenterSyncEnabled?: boolean;
+  planningCenterSyncIndicator?: boolean;
 }
 
 const PersonCard: React.FC<PersonCardProps> = ({
@@ -52,7 +52,7 @@ const PersonCard: React.FC<PersonCardProps> = ({
   getStandardGatheringAssignments,
   getBadgeInfo,
   variant = 'grouped',
-  planningCenterSyncEnabled = false
+  planningCenterSyncIndicator = false
 }) => {
   const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
   const isGrouped = variant === 'grouped';
@@ -83,7 +83,7 @@ const PersonCard: React.FC<PersonCardProps> = ({
             <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
               {displayName}
             </span>
-            {planningCenterSyncEnabled && person.planningCenterId && (
+            {planningCenterSyncIndicator && person.planningCenterId && (
               <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
                 PCO
               </span>

@@ -43,9 +43,9 @@ router.get('/', async (req, res) => {
       memberCount: Number(family.memberCount)
     }));
 
-    const planningCenterSyncEnabled = !!(settingsRows[0]?.planning_center_sync_indicator);
+    const planningCenterSyncIndicator = !!(settingsRows[0]?.planning_center_sync_indicator);
 
-    res.json({ families: processedFamilies, planningCenterSyncEnabled });
+    res.json({ families: processedFamilies, planningCenterSyncIndicator });
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Failed to retrieve families.' });

@@ -11,9 +11,9 @@ export interface PcoLockablePerson {
 
 export function isPcoLocked(
   person: PcoLockablePerson | undefined | null,
-  planningCenterSyncEnabled: boolean,
+  planningCenterSyncIndicator: boolean,
 ): boolean {
-  if (!planningCenterSyncEnabled) return false;
+  if (!planningCenterSyncIndicator) return false;
   if (!person) return false;
   return !!person.planningCenterId;
 }
@@ -21,9 +21,9 @@ export function isPcoLocked(
 // Count how many of `people` are PCO-locked under the given mode flag.
 export function countPcoLocked<T extends PcoLockablePerson>(
   people: T[],
-  planningCenterSyncEnabled: boolean,
+  planningCenterSyncIndicator: boolean,
 ): number {
-  if (!planningCenterSyncEnabled) return 0;
+  if (!planningCenterSyncIndicator) return 0;
   let n = 0;
   for (const p of people) if (p && p.planningCenterId) n++;
   return n;
