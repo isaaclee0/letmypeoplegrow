@@ -2179,7 +2179,13 @@ function validateBatchBody(body) {
   }
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
   if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
-  if (!Number.isInteger(scheduleDay) || scheduleDay < 0 || scheduleDay > 6) return 'scheduleDay must be an integer between 0 and 6.';
+  if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
+  if (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6)) {
+    return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
+  }
+  if (scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31)) {
+    return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
+  }
   return null;
 }
 
