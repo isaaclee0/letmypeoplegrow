@@ -378,7 +378,6 @@ const OnboardingPage: React.FC = () => {
                 onSaved={onFirstBatchSaved}
                 onCancel={() => setStep('pco-gatherings')}
               />
-              {error && <p className="text-sm text-red-600">{error}</p>}
             </div>
           ) : step === 'pco-review' ? (
             <div className="space-y-4">
@@ -392,7 +391,7 @@ const OnboardingPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setStep('pco-gatherings')}
-                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
+                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                 >
                   Continue
                 </button>
