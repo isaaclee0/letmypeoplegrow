@@ -143,10 +143,10 @@ gates scheduled batch runs and reconciliation cron.
 
 | Setting | DB column | What it actually does | UI label today |
 |---------|-----------|----------------------|----------------|
-| Source-of-truth lock + badge | `planning_center_sync_indicator` | Enables ALL lockdown behavior | **"Show sync indicator"** — sounds cosmetic |
+| Source-of-truth lock + badge | `planning_center_sync_indicator` | Enables ALL lockdown behavior | **"Show sync indicator"** — sounds cosmetic (label as of 2026-07-08; superseded, see note below) |
 | Scheduled sync | `planning_center_sync_enabled` | Enables cron for batches + reconciliation | **"Enable Planning Center sync"** |
 
-A church can easily:
+A church could previously easily:
 
 1. Connect PCO and run batches (master sync on)
 2. Never turn on "Show sync indicator"
@@ -155,8 +155,12 @@ A church can easily:
 
 Onboarding **intentionally does not** enable source-of-truth mode
 (`2026-06-04-pco-onboarding-import-design.md`: "remains a later toggle in Settings").
-Post-onboarding churches are **not** in PCO mode until an admin flips that toggle — but
-nothing in the UI explains this.
+Post-onboarding churches were **not** in PCO mode until an admin flipped that toggle, and
+nothing in the UI explained this.
+
+**`[fixed 2026-07-09]`** The toggle is now labeled "PCO is source of truth for members,"
+with copy that discloses the lockdown behavior, and enabling it requires confirming a
+dialog that lists the consequences. See item 1 in Implementation Gaps below.
 
 ### Naming collision (developer + behavior hazard)
 
@@ -225,12 +229,12 @@ These are intentional out-of-scope items — not missing features:
      "Review & sync"
 
 6. **`[mitigated 2026-07-09]` Scheduled reconciliation auto-archives without human review**
-   - Still auto-archives on schedule — explicitly kept as-is (archiving is reversible via
-     reactivate, and holding it for approval would make an unattended nightly job do
+   - Was/still: auto-archives on schedule — explicitly kept as-is (archiving is reversible
+     via reactivate, and holding it for approval would make an unattended nightly job do
      nothing most nights)
-   - No longer silent: admins/coordinators get an in-app notification summarizing what a
-     scheduled run left for review (ambiguous matches, visitor-match suggestions, pending
-     family name updates) and how many people reconciliation archived — see
+   - Now: no longer silent — admins/coordinators get an in-app notification summarizing
+     what a scheduled run left for review (ambiguous matches, visitor-match suggestions,
+     pending family name updates) and how many people reconciliation archived — see
      `docs/superpowers/specs/2026-07-09-pco-batch-review-notifications-design.md`
 
 ### Medium impact (polish / dead code)
@@ -248,13 +252,17 @@ These are intentional out-of-scope items — not missing features:
     monthly always runs on the 1st (confirmed: `isDueToday()` in `planningCenterSync.js:312`
     hardcodes `now.getDate() === 1`)
 
-11. **`[fixed 2026-07-09]` OAuth disconnect is per-user** — was: tokens stored in
-    `user_preferences`; disconnect removed only the connecting user's tokens; status,
-    check-in browse/events/availability, and check-in import were all scoped to the
-    viewing admin instead of the church, so only the original connecting admin could see
-    "Connected" or run check-in import. Now: `/status`, `/checkins/*`, `/disconnect`, and
-    check-in import all resolve tokens church-wide via `getChurchPlanningCenterTokens` /
-    a church-scoped `DELETE`, matching how the batch/cron sync paths already worked.
+11. **`[fixed 2026-07-09]` OAuth disconnect is per-user**
+    - Was: tokens stored in `user_preferences`; disconnect removed only the connecting
+      user's tokens; status, check-in browse/events/availability, and check-in import
+      were all scoped to the viewing admin instead of the church, so only the original
+      connecting admin could see "Connected" or run check-in import
+    - Now: `/status`, `/checkins/events`, `/checkins/availability`, `/disconnect`, and
+      check-in import all resolve tokens church-wide via `getChurchPlanningCenterTokens`
+      / a church-scoped `DELETE`, matching how the batch/cron sync paths already worked.
+      (The bare `GET /planning-center/checkins` browse endpoint still uses per-admin
+      token lookup, but it's dead code — no client caller — same as the other legacy
+      routes in item 9.)
 
 12. **`[cross-review]` Two independent, unmerged PCO caching layers**
     - An in-memory `pcoPeopleCache` (10-minute TTL) inside `planningCenterSync.js`
@@ -289,10 +297,10 @@ For a church migrating from PCO to LMPG:
 1. **Connect** PCO (OAuth — `people` + `check_ins` scopes)
 2. **Create batches** — e.g. "Members" (Church Members + Regular Attenders), "Youth"
    (custom field), each with appropriate gathering assignment
-3. **Review & sync** each batch (not just "Run now") — resolve ambiguous matches,
-   visitor promotions, family name updates
-4. **Enable source-of-truth mode** — flip `planning_center_sync_indicator (currently
-   "Show sync indicator")
+3. **Review & sync** each batch — resolve ambiguous matches, visitor promotions, family
+   name updates
+4. **Enable source-of-truth mode** — flip `planning_center_sync_indicator` (labeled "PCO
+   is source of truth for members")
 5. **Enable master sync** — for scheduled batch runs
 6. **Run reconciliation manually first** — before scheduling auto-archive
 7. **Import check-in history** (optional, one-time) — map events to gatherings; understand
@@ -320,13 +328,14 @@ import all landed as specified.
 | Two unrelated, unmerged PCO caching layers `[cross-review]` | **Low** — works, but an avoidable extra layer of state (not yet fixed) |
 | No ongoing attendance bridge from PCO | **By design** — but churches may expect it |
 
-**Highest-impact fix:** relabel and/or couple the source-of-truth toggle with the master
-sync switch, and add a post-onboarding prompt explaining that PCO lockdown is a separate
-step.
+**`[fixed 2026-07-09]`** Both of the previously highest-impact fixes are done: the
+source-of-truth toggle is relabeled with a confirmation dialog (item 1), and the three
+independent token-refresh implementations are consolidated into one (item 2).
 
-**Highest-impact reliability fix (separate axis — silent failure, not UX):** consolidate
-the three independent token-refresh implementations into one, so a rotation race can't
-silently break the PCO connection.
+**Next-highest-impact fix:** the check-in "sync" marketing copy (item 3) still implies
+ongoing sync when the feature is a one-time historical import — update
+`PlanningCenterIntegrationPanel.tsx:294` so churches don't expect PCO check-ins to keep
+flowing into LMPG after the initial import.
 
 ---
 
