@@ -190,51 +190,48 @@ These are intentional out-of-scope items — not missing features:
 
 ### High impact (behavioral / UX)
 
-1. **Source-of-truth toggle is mislabeled and disconnected from onboarding**
-   - Users think they're "fully on PCO" after onboarding + first batch, but locks aren't
-     active until they find and enable a toggle labeled "Show sync indicator"
-   - Consider renaming to "PCO is source of truth for members" and/or auto-enabling when
-     master sync is turned on (with a confirmation dialog explaining lockdown)
+1. **`[fixed 2026-07-09]` Source-of-truth toggle is mislabeled and disconnected from onboarding**
+   - Was: users thought they were "fully on PCO" after onboarding + first batch, but locks
+     weren't active until they found and enabled a toggle labeled "Show sync indicator"
+   - Now: relabeled to "PCO is source of truth for members" with copy that discloses the
+     lock, and enabling it asks for confirmation first
 
-2. **`[cross-review]` OAuth token refresh is implemented independently three times**
-   - `refreshToken()` in `server/services/planningCenterSync.js:125`,
-     `refreshPlanningCenterToken()` in `server/routes/integrations.js:1663`, and a
-     separate proactive single-flight guard `ensureValidPlanningCenterTokens()` in
-     `server/routes/integrations.js:1696` (used only by the check-in fetch path to avoid
-     a rotation race across concurrent paginated requests)
-   - All three independently persist rotated tokens to the same
-     `user_preferences` row (`preference_key = 'planning_center_tokens'`). PCO rotates
-     the refresh token on every use, so a race between two of these paths (e.g. a
-     scheduled batch sync and a concurrent check-in import) can overwrite a freshly
-     rotated token with a now-invalid one, silently breaking the PCO connection until
-     someone reconnects
-   - Consolidate to a single refresh path/lock, reused by both the route handlers and
-     the cron/service layer
+2. **`[cross-review]` `[fixed 2026-07-09]` OAuth token refresh is implemented independently three times**
+   - Was: `refreshToken()` in `server/services/planningCenterSync.js`,
+     `refreshPlanningCenterToken()`, and a separate proactive single-flight guard
+     `ensureValidPlanningCenterTokens()` in `server/routes/integrations.js` — three
+     independent implementations each persisting rotated tokens to the same
+     `user_preferences` row, risking a race that silently breaks the PCO connection
+   - Now: consolidated into a single implementation in `planningCenterSync.js`
+     (`ensureValidPlanningCenterTokens`, with one in-flight guard), reused by both the
+     route handlers and the cron/service layer
 
 3. **Marketing copy overpromises check-in sync**
    - `PlanningCenterIntegrationPanel.tsx:294` says *"Sync check-in data for attendance
      tracking"* — implies ongoing sync; reality is one-time historical import
 
-4. **Onboarding skips sync review**
-   - Design: batch editor + review flow
-   - Implementation: `applyPlanningCenterBatch(batch.id, {})` immediately after first
-     batch save (`OnboardingPage.tsx`)
-   - Ambiguous matches, visitor promotions, and selective adds are silently skipped on
-     first import
+4. **`[fixed 2026-07-09]` Onboarding skips sync review**
+   - Was: `applyPlanningCenterBatch(batch.id, {})` immediately after first batch save
+     (`OnboardingPage.tsx`), silently skipping ambiguous matches, visitor promotions,
+     and selective adds
+   - Now: onboarding has a `pco-review` step showing the same `PlanningCenterSyncReview`
+     screen Settings uses, with a "Continue" button that doesn't require applying first —
+     see `docs/superpowers/specs/2026-07-09-pco-batch-review-notifications-design.md`
 
-5. **"Run now" bypasses review**
-   - Same as onboarding — applies with empty selections; ambiguous items stay unlinked
-     until someone opens "Review & sync"
-   - Not wrong per cron design, but easy to miss that `ambiguous > 0` means incomplete
-     linking
+5. **`[fixed 2026-07-09]` "Run now" bypasses review**
+   - Was: applied with empty selections; ambiguous items stayed unlinked until someone
+     opened "Review & sync" anyway
+   - Now: the "Run now" button is removed — batches only run manually through
+     "Review & sync"
 
-6. **Scheduled reconciliation auto-archives without human review**
-   - Confirmed in code: `runReconciliationSync()` (`planningCenterSync.js:352`) calls
-     `applyReconciliation(churchId, plan, {})` with empty options — no selections, no
-     review
-   - By design, but consequential — active regulars with no PCO name match get archived
-     silently at 2 AM
-   - Manual reconciliation has search-and-link; scheduled path does not
+6. **`[mitigated 2026-07-09]` Scheduled reconciliation auto-archives without human review**
+   - Still auto-archives on schedule — explicitly kept as-is (archiving is reversible via
+     reactivate, and holding it for approval would make an unattended nightly job do
+     nothing most nights)
+   - No longer silent: admins/coordinators get an in-app notification summarizing what a
+     scheduled run left for review (ambiguous matches, visitor-match suggestions, pending
+     family name updates) and how many people reconciliation archived — see
+     `docs/superpowers/specs/2026-07-09-pco-batch-review-notifications-design.md`
 
 ### Medium impact (polish / dead code)
 
@@ -251,8 +248,13 @@ These are intentional out-of-scope items — not missing features:
     monthly always runs on the 1st (confirmed: `isDueToday()` in `planningCenterSync.js:312`
     hardcodes `now.getDate() === 1`)
 
-11. **OAuth disconnect is per-user** — tokens stored in `user_preferences`; disconnect
-    removes only the connecting user's tokens; cron uses `LIMIT 1` any user with tokens
+11. **`[fixed 2026-07-09]` OAuth disconnect is per-user** — was: tokens stored in
+    `user_preferences`; disconnect removed only the connecting user's tokens; status,
+    check-in browse/events/availability, and check-in import were all scoped to the
+    viewing admin instead of the church, so only the original connecting admin could see
+    "Connected" or run check-in import. Now: `/status`, `/checkins/*`, `/disconnect`, and
+    check-in import all resolve tokens church-wide via `getChurchPlanningCenterTokens` /
+    a church-scoped `DELETE`, matching how the batch/cron sync paths already worked.
 
 12. **`[cross-review]` Two independent, unmerged PCO caching layers**
     - An in-memory `pcoPeopleCache` (10-minute TTL) inside `planningCenterSync.js`
@@ -309,13 +311,13 @@ import all landed as specified.
 
 | Missing piece | Severity |
 |---------------|----------|
-| Source-of-truth mode not tied to "being on PCO" (mislabeled toggle, not enabled in onboarding) | **Critical** — defeats the core value prop |
-| Token refresh implemented independently in 3 places against the same DB row `[cross-review]` | **High** — can silently break the PCO connection (PCO rotates the refresh token on every use) |
-| Users told check-ins "sync" when it's historical import only | **High** — wrong expectations |
-| Onboarding / Run now skip review for ambiguous matches | **High** — incomplete initial linking |
-| Scheduled reconciliation auto-archives without review | **Medium** — can surprise admins |
-| Two different flags named `planningCenterSyncEnabled` in different APIs | **Medium** — maintenance hazard |
-| Two unrelated, unmerged PCO caching layers `[cross-review]` | **Low** — works, but an avoidable extra layer of state |
+| Source-of-truth mode not tied to "being on PCO" (mislabeled toggle, not enabled in onboarding) | **Fixed 2026-07-09** — toggle relabeled + confirmation dialog added |
+| Token refresh implemented independently in 3 places against the same DB row `[cross-review]` | **Fixed 2026-07-09** — consolidated to one implementation |
+| Users told check-ins "sync" when it's historical import only | **High** — wrong expectations (not yet fixed) |
+| Onboarding / Run now skip review for ambiguous matches | **Fixed 2026-07-09** — Run now removed, onboarding shows a review step |
+| Scheduled reconciliation auto-archives without review | **Mitigated 2026-07-09** — still auto-archives by design, now notifies admins |
+| Two different flags named `planningCenterSyncEnabled` in different APIs | **Medium** — maintenance hazard (not yet fixed) |
+| Two unrelated, unmerged PCO caching layers `[cross-review]` | **Low** — works, but an avoidable extra layer of state (not yet fixed) |
 | No ongoing attendance bridge from PCO | **By design** — but churches may expect it |
 
 **Highest-impact fix:** relabel and/or couple the source-of-truth toggle with the master
