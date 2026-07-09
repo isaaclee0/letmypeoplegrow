@@ -565,8 +565,17 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
       params.push(planningCenterReconciliationFrequency);
     }
     if (planningCenterReconciliationDay !== undefined) {
-      if (!Number.isInteger(planningCenterReconciliationDay) || planningCenterReconciliationDay < 0 || planningCenterReconciliationDay > 6) {
-        return res.status(400).json({ error: 'planningCenterReconciliationDay must be an integer between 0 and 6.' });
+      if (!Number.isInteger(planningCenterReconciliationDay)) {
+        return res.status(400).json({ error: 'planningCenterReconciliationDay must be an integer.' });
+      }
+      // planningCenterReconciliationFrequency and planningCenterReconciliationDay are
+      // independent optional fields on this PATCH-style endpoint, so when frequency
+      // isn't present in this same request we fall back to the permissive union range
+      // (0-31) rather than guessing. The client always sends both together.
+      const minDay = planningCenterReconciliationFrequency === 'monthly' ? 1 : 0;
+      const maxDay = planningCenterReconciliationFrequency === 'weekly' ? 6 : 31;
+      if (planningCenterReconciliationDay < minDay || planningCenterReconciliationDay > maxDay) {
+        return res.status(400).json({ error: `planningCenterReconciliationDay must be an integer between ${minDay} and ${maxDay}.` });
       }
       updates.push('planning_center_reconciliation_day = ?');
       params.push(planningCenterReconciliationDay);
