@@ -68,10 +68,11 @@ const IntegrationsTab: React.FC = () => {
         connected: response.data.connected === true,
         loading: false,
         planningCenterAccount: response.data.planningCenterAccount ?? null,
+        fetchFailed: false,
       });
     } catch (error) {
       logger.error('Failed to fetch Planning Center status:', error);
-      setPcStatus(prev => ({ ...prev, loading: false }));
+      setPcStatus(prev => ({ ...prev, loading: false, fetchFailed: true }));
     }
   }, []);
 
@@ -189,7 +190,7 @@ const IntegrationsTab: React.FC = () => {
         />
 
         {/* Planning Center */}
-        {pcStatus.enabled && (
+        {!pcStatus.loading && !pcStatus.fetchFailed && (
           <IntegrationCard
             name="Planning Center"
             description="Connect to Planning Center Online to import people and check-ins."
@@ -203,6 +204,7 @@ const IntegrationsTab: React.FC = () => {
             connected={pcStatus.connected}
             loading={pcStatus.loading}
             connectedLabel={pcStatus.planningCenterAccount || undefined}
+            disabledMessage={pcStatus.enabled ? undefined : 'Not enabled on this server — ask your administrator to configure Planning Center.'}
             onOpen={() => setSelected('planning-center')}
             onDisconnect={pcStatus.connected ? () => {
               setSelected('planning-center');

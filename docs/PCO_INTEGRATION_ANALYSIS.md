@@ -1,7 +1,7 @@
 # PCO Integration: How It Should Work vs. What You Might Be Missing
 
-**Date:** 2026-07-08 (addendum added 2026-07-09)
-**Status:** Investigation notes (not a design spec)
+**Date:** 2026-07-08 (addendum added 2026-07-09; all findings closed out 2026-07-10)
+**Status:** Investigation notes (not a design spec) — all identified gaps fixed
 
 This document summarizes how the Planning Center Online (PCO) integration is
 intended to work, what is implemented, and where behavior or UX diverges from that
@@ -247,8 +247,12 @@ These are intentional out-of-scope items — not missing features:
 
 ### Medium impact (polish / dead code)
 
-7. **`planning_center_auto_archive`** — legacy column still in settings API/schema;
-   superseded by batch sync + reconciliation; no UI
+7. **`[fixed 2026-07-10]` `planning_center_auto_archive`**
+   - Was: legacy column round-tripped through the `/settings/integrations` GET/PUT API and
+     typed in `api.ts`, with no UI control and nothing reading it to gate behavior
+   - Now: removed from the settings API (GET/PUT) and the `updateIntegrationSettings` type;
+     the DB column itself stays in `schema.js`/`database.js` per the additive-only migration
+     convention
 
 8. **`[fixed 2026-07-09]` Historical CSV import endpoints**
    - Was: `previewHistoricalCsv`/`importHistoricalCsv` existed in `client/src/services/api.ts`
@@ -266,9 +270,13 @@ These are intentional out-of-scope items — not missing features:
      now-unused `getPlanningCenterTokens` per-user token alias (its only callers were
      these routes)
 
-10. **Monthly schedule has no day-of-month picker** — `schedule_day` only shown for weekly;
-    monthly always runs on the 1st (confirmed: `isDueToday()` in `planningCenterSync.js:312`
-    hardcodes `now.getDate() === 1`)
+10. **`[fixed 2026-07-10]` Monthly schedule has no day-of-month picker**
+    - Was: `schedule_day` only shown for weekly; monthly always ran on the 1st
+      (`isDueToday()` hardcoded `now.getDate() === 1`)
+    - Now: both the batch schedule editor and the reconciliation schedule editor show a
+      day-of-month picker for monthly frequency (`ordinalDay` helper), `isDueToday()` respects
+      `scheduleDay` for monthly (clamped to end-of-month), and legacy rows with `schedule_day = 0`
+      are treated as day 1 rather than never firing
 
 11. **`[fixed 2026-07-09]` OAuth disconnect is per-user**
     - Was: tokens stored in `user_preferences`; disconnect removed only the connecting
@@ -307,8 +315,35 @@ These are intentional out-of-scope items — not missing features:
       lower-priority piece is the synchronous full-fetch-on-cold-cache path itself
       (unchanged — cold-start only, mitigated by the existing connect-time warm-up).
 
-13. **PCO feature flag** — integration hidden when `PLANNING_CENTER_ENABLED` is false; no
-    in-app explanation
+13. **`[fixed 2026-07-10]` PCO feature flag had no in-app explanation**
+    - Was: when `PLANNING_CENTER_ENABLED` is false, `/planning-center/status` returns
+      `enabled: false` and `IntegrationsTab.tsx` omitted the Planning Center card entirely —
+      an admin had no way to tell the integration existed but wasn't turned on
+      (`PlanningCenterIntegrationPanel.tsx` was also unreachable in this state, so it
+      couldn't have shown a message even if one had been added there)
+    - Now: the card always renders once the status fetch completes; when disabled it shows
+      a "Not available" badge and the message "Not enabled on this server — ask your
+      administrator to configure Planning Center" instead of the Connect/Set up action
+      (`IntegrationCard.tsx`'s new `disabledMessage` prop, wired in `IntegrationsTab.tsx`).
+      A self-review of this fix caught a follow-on gap: a genuine status-fetch failure
+      (network/server error, unrelated to the flag) would have looked identical to "flag is
+      off" and shown the same "not enabled" message misleadingly — fixed by tracking
+      `fetchFailed` separately so a real error falls back to the original hidden-card
+      behavior instead of asserting a specific wrong cause
+
+14. **`[found and fixed 2026-07-10]` `getChurchPlanningCenterTokens` always threw, breaking
+    status/checkins/disconnect for every church** — not one of this document's original
+    findings; surfaced while verifying item 13 in the browser
+    - Was: item 11's church-wide token lookup (`server/routes/integrations.js:1626`) called
+      `pcoSync.getTokensForChurch(churchId)`, but `getTokensForChurch` — while defined in
+      `planningCenterSync.js` — was never added to that module's `module.exports`. Every
+      caller (`/planning-center/status`, `/checkins/events`, `/checkins/availability`,
+      `/disconnect`, check-in import) threw `TypeError: pcoSync.getTokensForChurch is not a
+      function` and 500'd. In practice this meant **every already-connected church saw
+      Planning Center as unreachable** — caught here because it made item 13's fix show the
+      wrong message ("not enabled") for what was actually a crash
+    - Now: `getTokensForChurch` added to `planningCenterSync.js`'s exports; verified in
+      browser that `/planning-center/status` returns the real connected state again
 
 ### Low impact (already implemented correctly)
 
@@ -357,6 +392,10 @@ import all landed as specified.
 | Two different flags named `planningCenterSyncEnabled` in different APIs | **Fixed 2026-07-09** — `families.js` renamed to `planningCenterSyncIndicator`, matching `settings.js` |
 | Dead legacy routes/endpoints (`/planning-center/people`, `/import-people`, `/link-family`, dead `/planning-center/checkins` browse, historical CSV import) | **Fixed 2026-07-09** — removed from server and client, including exclusive helpers and now-unused imports |
 | Two unrelated, unmerged PCO caching layers `[cross-review]` | **Partially fixed 2026-07-09** — three divergent cache-read policies consolidated into one; the two layers themselves are kept (deliberately, not an oversight) |
+| Monthly schedule had no day-of-month picker | **Fixed 2026-07-10** — day-of-month picker added to batch and reconciliation schedule editors |
+| `planning_center_auto_archive` dead column round-tripped through settings API | **Fixed 2026-07-10** — removed from GET/PUT and client type; DB column kept per additive-only convention |
+| PCO feature flag disabled the integration with no in-app explanation | **Fixed 2026-07-10** — card now always shows, with a "Not available" message when disabled |
+| `getChurchPlanningCenterTokens` threw on every call (missing export), breaking status/checkins/disconnect church-wide | **Found and fixed 2026-07-10** — not an original finding; surfaced while verifying the fix above in-browser |
 | No ongoing attendance bridge from PCO | **By design** — but churches may expect it |
 
 **`[fixed 2026-07-09]`** All of the previously highest/medium-impact items are done: the
@@ -374,10 +413,14 @@ on every call. The two caching *layers* themselves (in-memory people list vs. pe
 aggregate) were kept as-is — they serve genuinely different needs, and merging them
 would trade one problem for a worse one.
 
-**Next-highest-impact fix:** none of the remaining items are behavioral bugs — `planning_center_auto_archive`
-(item 7, unused column) and the monthly day-of-month picker (item 10, actual feature
-work, not a fix) and the PCO feature-flag explanation (item 13) are the only open items,
-all Medium/Low and none urgent.
+**`[fixed 2026-07-10]`** All previously open Medium/Low items are now closed: the monthly
+day-of-month picker (item 10), the dead `planning_center_auto_archive` settings-API
+round-trip (item 7), and the PCO feature-flag's missing in-app explanation (item 13).
+
+**Remaining:** none of the items in this document are open. Item 12's two caching layers
+were deliberately kept (not a gap); item 6's auto-archive-without-review behavior is
+by-design and mitigated with notifications; the lack of an ongoing PCO attendance bridge
+is by design. Future work here would come from new findings, not this backlog.
 
 ---
 

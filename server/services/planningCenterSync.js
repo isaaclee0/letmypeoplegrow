@@ -585,4 +585,5 @@ module.exports = {
   listBatches, getBatch, batchFilterConfig, computePlanForBatch,
   computeReconciliationForChurch, applyReconciliation,
   getPlanningCenterTokens, savePlanningCenterTokens, ensureValidPlanningCenterTokens,
+  getTokensForChurch,
 };

@@ -503,7 +503,7 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 router.get('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const rows = await Database.query(
-      `SELECT planning_center_sync_indicator, planning_center_auto_archive, planning_center_sync_enabled,
+      `SELECT planning_center_sync_indicator, planning_center_sync_enabled,
               planning_center_reconciliation_schedule_enabled, planning_center_reconciliation_frequency,
               planning_center_reconciliation_day, planning_center_reconciliation_last_run_at,
               planning_center_reconciliation_last_result
@@ -517,7 +517,6 @@ router.get('/integrations', requireRole(['admin']), async (req, res) => {
     }
     res.json({
       planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
-      planningCenterAutoArchive: !!(row.planning_center_auto_archive),
       planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
       planningCenterReconciliationScheduleEnabled: !!(row.planning_center_reconciliation_schedule_enabled),
       planningCenterReconciliationFrequency: row.planning_center_reconciliation_frequency || 'weekly',
@@ -535,7 +534,7 @@ const PCO_RECONCILIATION_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const {
-      planningCenterSyncIndicator, planningCenterAutoArchive, planningCenterSyncEnabled,
+      planningCenterSyncIndicator, planningCenterSyncEnabled,
       planningCenterReconciliationScheduleEnabled, planningCenterReconciliationFrequency,
       planningCenterReconciliationDay,
     } = req.body;
@@ -544,10 +543,6 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     if (typeof planningCenterSyncIndicator === 'boolean') {
       updates.push('planning_center_sync_indicator = ?');
       params.push(planningCenterSyncIndicator ? 1 : 0);
-    }
-    if (typeof planningCenterAutoArchive === 'boolean') {
-      updates.push('planning_center_auto_archive = ?');
-      params.push(planningCenterAutoArchive ? 1 : 0);
     }
     if (typeof planningCenterSyncEnabled === 'boolean') {
       updates.push('planning_center_sync_enabled = ?');

@@ -794,7 +794,6 @@ export const settingsAPI = {
   getIntegrationSettings: () => api.get('/settings/integrations'),
   updateIntegrationSettings: (data: {
     planningCenterSyncIndicator?: boolean;
-    planningCenterAutoArchive?: boolean;
     planningCenterSyncEnabled?: boolean;
     planningCenterReconciliationScheduleEnabled?: boolean;
     planningCenterReconciliationFrequency?: 'daily' | 'weekly' | 'monthly';

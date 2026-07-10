@@ -16,6 +16,8 @@ export interface PlanningCenterStatus {
   connected: boolean;
   loading: boolean;
   planningCenterAccount: string | null;
+  /** True when the status fetch itself failed (network/server error), as opposed to a successful response reporting the integration disabled. */
+  fetchFailed?: boolean;
 }
 
 export type IntegrationKey = 'elvanto' | 'ai' | 'planning-center';

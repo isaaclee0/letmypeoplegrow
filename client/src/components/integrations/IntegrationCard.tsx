@@ -20,10 +20,12 @@ interface IntegrationCardProps {
   onOpen: () => void;
   /** Only rendered when connected. */
   onDisconnect?: () => void;
+  /** When set, renders a disabled "Not available" state with this message instead of the normal action area. */
+  disabledMessage?: string;
 }
 
 const IntegrationCard: React.FC<IntegrationCardProps> = ({
-  name, description, icon, connected, loading, connectedLabel, onOpen, onDisconnect,
+  name, description, icon, connected, loading, connectedLabel, onOpen, onDisconnect, disabledMessage,
 }) => {
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
@@ -39,10 +41,17 @@ const IntegrationCard: React.FC<IntegrationCardProps> = ({
                 {connectedLabel}
               </p>
             )}
+            {disabledMessage && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{disabledMessage}</p>
+            )}
           </div>
         </div>
         <div className="flex items-center space-x-3">
-          {loading ? (
+          {disabledMessage ? (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+              Not available
+            </span>
+          ) : loading ? (
             <ArrowPathIcon className="w-5 h-5 animate-spin text-gray-400" />
           ) : connected ? (
             <>
