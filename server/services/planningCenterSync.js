@@ -376,7 +376,12 @@ async function applyForChurch(churchId, plan, userId, selections, batchConfig = 
 function isDueToday(frequency, day, now = new Date()) {
   if (frequency === 'daily') return true;
   if (frequency === 'monthly') {
-    const targetDay = typeof day === 'number' ? day : 1;
+    // A stored day < 1 (e.g. a legacy row saved as day=0 back when this
+    // column meant "day of week" for every frequency, before monthly got
+    // its own 1-31 validation) must fall back to a safe default rather
+    // than resolve to Math.min(0, lastDayOfMonth) === 0, which would never
+    // match any date and silently stop the schedule from ever firing again.
+    const targetDay = typeof day === 'number' && day >= 1 ? day : 1;
     const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     return now.getDate() === Math.min(targetDay, lastDayOfMonth);
   }

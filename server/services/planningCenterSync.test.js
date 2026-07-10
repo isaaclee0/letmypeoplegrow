@@ -67,3 +67,10 @@ test('isDueToday: monthly day 29 matches exactly in a leap February', () => {
   assert.strictEqual(isDueToday('monthly', 29, feb28), false);
   assert.strictEqual(isDueToday('monthly', 29, feb29), true);
 });
+
+test('isDueToday: monthly falls back to day 1 for a legacy day=0 value', () => {
+  const the1st = new Date('2026-07-01T02:00:00');
+  const the2nd = new Date('2026-07-02T02:00:00');
+  assert.strictEqual(isDueToday('monthly', 0, the1st), true);
+  assert.strictEqual(isDueToday('monthly', 0, the2nd), false);
+});
