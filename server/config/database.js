@@ -233,6 +233,7 @@ class Database {
           field_filters TEXT,
           default_people_type TEXT DEFAULT 'regular' CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
           gathering_type_id INTEGER,
+          gathering_auto_remove_enabled INTEGER DEFAULT 0,
           schedule_enabled INTEGER DEFAULT 0,
           schedule_frequency TEXT DEFAULT 'weekly',
           schedule_day INTEGER DEFAULT 1,
@@ -280,6 +281,18 @@ class Database {
             );
           }
         }
+      }
+
+      // Migrate planning_center_sync_batches: gathering auto-remove toggle
+      const pcsbCols = db.prepare('PRAGMA table_info(planning_center_sync_batches)').all();
+      if (!pcsbCols.some(c => c.name === 'gathering_auto_remove_enabled')) {
+        db.exec('ALTER TABLE planning_center_sync_batches ADD COLUMN gathering_auto_remove_enabled INTEGER DEFAULT 0');
+      }
+
+      // Migrate gathering_lists: batch-ownership tracking for auto-remove
+      const glCols = db.prepare('PRAGMA table_info(gathering_lists)').all();
+      if (!glCols.some(c => c.name === 'added_by_pco_batch_id')) {
+        db.exec('ALTER TABLE gathering_lists ADD COLUMN added_by_pco_batch_id INTEGER REFERENCES planning_center_sync_batches(id) ON DELETE SET NULL');
       }
     }
 

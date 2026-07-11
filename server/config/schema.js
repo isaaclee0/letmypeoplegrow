@@ -230,9 +230,11 @@ CREATE TABLE IF NOT EXISTS gathering_lists (
   added_by INTEGER,
   church_id TEXT,
   added_at TEXT DEFAULT (datetime('now')),
+  added_by_pco_batch_id INTEGER,
   FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
   FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
   FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (added_by_pco_batch_id) REFERENCES planning_center_sync_batches(id) ON DELETE SET NULL,
   UNIQUE(gathering_type_id, individual_id)
 );
 CREATE INDEX IF NOT EXISTS idx_gl_gathering ON gathering_lists(gathering_type_id);
@@ -248,6 +250,7 @@ CREATE TABLE IF NOT EXISTS planning_center_sync_batches (
   field_filters TEXT,
   default_people_type TEXT DEFAULT 'regular' CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
   gathering_type_id INTEGER,
+  gathering_auto_remove_enabled INTEGER DEFAULT 0,
   schedule_enabled INTEGER DEFAULT 0,
   schedule_frequency TEXT DEFAULT 'weekly',
   schedule_day INTEGER DEFAULT 1,
