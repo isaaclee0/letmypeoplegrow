@@ -289,6 +289,7 @@ function rowToBatch(row) {
     fieldFilters,
     defaultPeopleType: row.defaultPeopleType || 'regular',
     gatheringTypeId: row.gatheringTypeId || null,
+    gatheringAutoRemoveEnabled: !!row.gatheringAutoRemoveEnabled,
     scheduleEnabled: !!row.scheduleEnabled,
     scheduleFrequency: row.scheduleFrequency || 'weekly',
     scheduleDay: typeof row.scheduleDay === 'number' ? row.scheduleDay : 1,
@@ -303,6 +304,7 @@ const BATCH_SELECT = `SELECT id, name, membership_filter_enabled AS membershipFi
          field_filters AS fieldFiltersRaw,
          default_people_type AS defaultPeopleType,
          gathering_type_id AS gatheringTypeId,
+         gathering_auto_remove_enabled AS gatheringAutoRemoveEnabled,
          schedule_enabled AS scheduleEnabled,
          schedule_frequency AS scheduleFrequency,
          schedule_day AS scheduleDay,
@@ -401,14 +403,17 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
     // reappears next time someone opens the interactive Sync Review screen.
     const skipFamilyNameUpdateIds = (plan.familyNameUpdates || []).map((f) => f.familyId);
     const result = await applyForChurch(churchId, plan, userId, { skipFamilyNameUpdateIds }, {
+      batchId: batch.id,
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
+      gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
     });
     const summary = {
       at: new Date().toISOString(),
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
       gatheringAssigned: result.gatheringAssigned,
+      gatheringRemoved: result.gatheringRemoved,
       familyNamesUpdated: result.familyNamesUpdated,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
