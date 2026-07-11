@@ -8,6 +8,7 @@ const { tallyField } = require('../services/planningCenter/summary');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { resolveManualLinks } = require('../services/planningCenter/selectionValidation');
 const metadataCache = require('../services/planningCenter/metadataCache');
+const { isEligible } = require('../services/planningCenter/eligibility');
 const webSocketService = require('../services/websocket');
 
 const router = express.Router();
@@ -2279,6 +2280,40 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
        gatheringAutoRemoveEnabled ? 1 : 0, scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay, batchId, churchId]
     );
     const batch = await pcoSync.getBatch(churchId, batchId);
+
+    // Backfill: the moment this toggle flips off -> on for a batch with a
+    // gathering assigned, claim ownership of existing gathering_lists rows this
+    // batch would itself currently add — so stale members already on the roster
+    // before this feature (or before this toggle) existed get caught on the very
+    // next sync, not just future drift. Rows that don't qualify (unlinked,
+    // inactive, or linked-but-non-matching) are left permanently unowned — never
+    // a candidate for auto-removal, same protection manual additions get.
+    if (!existing.gatheringAutoRemoveEnabled && batch.gatheringAutoRemoveEnabled && batch.gatheringTypeId) {
+      const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+      if (accessToken) {
+        const { people: pcoPeople } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
+        const pcoById = new Map(pcoPeople.map((p) => [p.id, p]));
+        const filterConfig = pcoSync.batchFilterConfig(batch);
+        const candidates = await Database.query(
+          `SELECT gl.id, i.planning_center_id AS pcoId
+             FROM gathering_lists gl
+             JOIN individuals i ON i.id = gl.individual_id AND i.church_id = gl.church_id
+            WHERE gl.gathering_type_id = ? AND gl.added_by_pco_batch_id IS NULL
+              AND gl.church_id = ? AND i.planning_center_id IS NOT NULL AND i.is_active = 1`,
+          [batch.gatheringTypeId, churchId]
+        );
+        for (const row of candidates) {
+          const person = pcoById.get(row.pcoId);
+          if (person && person.status === 'active' && isEligible(person, filterConfig)) {
+            await Database.query(
+              `UPDATE gathering_lists SET added_by_pco_batch_id = ? WHERE id = ? AND church_id = ?`,
+              [batch.id, row.id, churchId]
+            );
+          }
+        }
+      }
+    }
+
     res.json({ success: true, batch });
   } catch (error) {
     logger.error('Update PCO sync batch error:', error);
