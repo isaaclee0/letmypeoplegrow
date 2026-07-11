@@ -385,7 +385,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             <p className="text-xs text-gray-500 dark:text-gray-400">
                               Last run {new Date(batch.lastSyncResult.at).toLocaleString()}: {batch.lastSyncResult.added} added, {batch.lastSyncResult.updated} updated, {batch.lastSyncResult.linked} linked
                               {batch.lastSyncResult.ambiguous ? `, ${batch.lastSyncResult.ambiguous} need review` : ''}
-                              {batch.gatheringTypeId && batch.lastSyncResult.gatheringAssigned ? `, ${batch.lastSyncResult.gatheringAssigned} added to gathering` : ''}.
+                              {batch.gatheringTypeId && batch.lastSyncResult.gatheringAssigned ? `, ${batch.lastSyncResult.gatheringAssigned} added to gathering` : ''}
+                              {batch.gatheringAutoRemoveEnabled && batch.lastSyncResult.gatheringRemoved ? `, ${batch.lastSyncResult.gatheringRemoved} removed from gathering` : ''}.
                             </p>
                           )}
                         </div>
