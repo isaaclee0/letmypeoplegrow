@@ -2369,7 +2369,9 @@ router.get('/planning-center/sync-batches/:id/plan', async (req, res) => {
 
     const force = req.query.refresh === '1' || req.query.force === '1';
     const fullPlan = await pcoSync.computePlanForBatch(churchId, accessToken, batch, { force });
-    // Batch plans omit the whole-roster buckets — those live under /reconciliation.
+    // Batch plans omit the whole-roster buckets (archiveExtras/unmatchedVisitors) —
+    // no endpoint surfaces those on their own anymore; computePlan still returns
+    // them because diffEngine.js is shared with every batch's own plan.
     const { archiveExtras, unmatchedVisitors, ...plan } = fullPlan;
     res.json({
       success: true,
