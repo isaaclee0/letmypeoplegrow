@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { groupAdds, applyArchiveExtras, computeGatheringRemovals } = require('./apply');
+const { groupAdds, computeGatheringRemovals } = require('./apply');
 
 test('groupAdds groups by household, solo for null household', () => {
   const groups = groupAdds([
@@ -40,8 +40,4 @@ test('computeGatheringRemovals returns everyone owned when the touched set is em
 
 test('computeGatheringRemovals returns empty for an empty owned list', () => {
   assert.deepStrictEqual(computeGatheringRemovals([], new Set([1])), []);
-});
-
-test('applyArchiveExtras is exported as a function', () => {
-  assert.strictEqual(typeof applyArchiveExtras, 'function');
 });

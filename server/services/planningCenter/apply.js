@@ -32,8 +32,8 @@ function computeGatheringRemovals(ownedIndividualIds, touchedIndividualIds) {
 //   { defaultPeopleType?: 'regular'|'local_visitor'|'traveller_visitor', gatheringTypeId?: number|null }
 //   — the batch's own settings; applied to every person this run creates or links.
 // Returns counts + per-item errors (never throws on item failure). Does NOT touch
-// plan.archiveExtras/unmatchedVisitors — those are whole-roster concerns handled by
-// applyArchiveExtras() below, called only from the reconciliation endpoints.
+// plan.archiveExtras/unmatchedVisitors — computePlan still produces those buckets
+// as shared diff output, but nothing in the batch apply path consumes them.
 async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = {}) {
   const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, gatheringRemoved: 0, familyNamesUpdated: 0, errors: [] };
   const skipAdd = new Set(selections.skipAddPcoIds || []);
@@ -264,37 +264,4 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
   return result;
 }
 
-// Archives active 'regular' individuals whose name matched no one in PCO's full
-// people export (plan.archiveExtras from computePlan) — OR, if the reviewer found
-// the right PCO person via manual search, links them instead of archiving (link
-// always wins over archive/skip for that individual). Used only by the
-// reconciliation endpoints — never called as part of a batch's own apply.
-async function applyArchiveExtras(churchId, archiveExtras, { skipArchiveExtraIds = [], manualLinks = {} } = {}) {
-  const skip = new Set(skipArchiveExtraIds.map(Number));
-  const result = { archived: 0, linked: 0, errors: [] };
-  for (const x of archiveExtras) {
-    const id = Number(x.individualId);
-    const linkPcoId = manualLinks[id];
-    if (linkPcoId) {
-      try {
-        await Database.query(
-          `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-          [linkPcoId, id, churchId]
-        );
-        result.linked++;
-      } catch (e) { result.errors.push({ type: 'manualLink', id, error: e.message }); }
-      continue;
-    }
-    if (skip.has(id)) continue;
-    try {
-      await Database.query(
-        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-        [id, churchId]
-      );
-      result.archived++;
-    } catch (e) { result.errors.push({ type: 'archiveExtra', id, error: e.message }); }
-  }
-  return result;
-}
-
-module.exports = { applyPlan, groupAdds, applyArchiveExtras, computeGatheringRemovals };
+module.exports = { applyPlan, groupAdds, computeGatheringRemovals };
