@@ -2158,7 +2158,7 @@ const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 
 function validateBatchBody(body) {
   const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-          defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+          defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
   if (typeof membershipFilterEnabled !== 'boolean') return 'membershipFilterEnabled must be a boolean.';
   if (typeof fieldFilterEnabled !== 'boolean') return 'fieldFilterEnabled must be a boolean.';
@@ -2177,6 +2177,7 @@ function validateBatchBody(body) {
   if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) {
     return 'gatheringTypeId must be an integer or null.';
   }
+  if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
   if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
   if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
@@ -2230,15 +2231,15 @@ router.post('/planning-center/sync-batches', async (req, res) => {
     if (err) return res.status(400).json({ error: err });
     const churchId = req.user.church_id;
     const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+            defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const insRes = await Database.query(
       `INSERT INTO planning_center_sync_batches
          (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
-          default_people_type, gathering_type_id, schedule_enabled, schedule_frequency, schedule_day)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_people_type, gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [churchId, name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
        fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
-       scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay]
+       gatheringAutoRemoveEnabled ? 1 : 0, scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay]
     );
     const batch = await pcoSync.getBatch(churchId, insRes.insertId);
     res.json({ success: true, batch });
@@ -2258,17 +2259,17 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
     const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+            defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     await Database.query(
       `UPDATE planning_center_sync_batches
           SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
               field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
-              gathering_type_id = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
+              gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
               updated_at = datetime('now')
         WHERE id = ? AND church_id = ?`,
       [name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
        fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
-       scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay, batchId, churchId]
+       gatheringAutoRemoveEnabled ? 1 : 0, scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay, batchId, churchId]
     );
     const batch = await pcoSync.getBatch(churchId, batchId);
     res.json({ success: true, batch });
@@ -2389,8 +2390,10 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
     const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds, skipFamilyNameUpdateIds };
 
     const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
+      batchId: batch.id,
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
+      gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
     });
 
     const summary = {
@@ -2398,6 +2401,7 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
       added: result.added, updated: result.updated, archived: result.archived,
       reactivated: result.reactivated, linked: result.linked,
       gatheringAssigned: result.gatheringAssigned,
+      gatheringRemoved: result.gatheringRemoved,
       familyNamesUpdated: result.familyNamesUpdated,
       ambiguous: plan.ambiguous.length,
       visitorMatches: (plan.visitorMatches || []).length,
