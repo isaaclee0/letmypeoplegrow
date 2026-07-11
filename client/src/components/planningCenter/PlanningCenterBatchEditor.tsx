@@ -5,6 +5,8 @@ import MembershipAllowlistEditor from './MembershipAllowlistEditor';
 import FieldFilterEditor, { FieldFilterRule } from './FieldFilterEditor';
 import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
 import { ordinalDay } from '../../utils/pcoSchedule';
+import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import Modal from '../Modal';
 
 interface GatheringOption { id: number; name: string; }
 
@@ -23,6 +25,8 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
   const [defaultPeopleType, setDefaultPeopleType] = useState<SyncBatchInput['defaultPeopleType']>(batch?.defaultPeopleType || 'regular');
   const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(batch?.gatheringTypeId ? 'existing' : 'none');
   const [gatheringTypeId, setGatheringTypeId] = useState<number | null>(batch?.gatheringTypeId ?? null);
+  const [gatheringAutoRemoveEnabled, setGatheringAutoRemoveEnabled] = useState(batch?.gatheringAutoRemoveEnabled ?? false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [newGatheringName, setNewGatheringName] = useState('');
   const [gatherings, setGatherings] = useState<GatheringOption[]>([]);
   const [scheduleEnabled, setScheduleEnabled] = useState(batch?.scheduleEnabled ?? false);
@@ -106,6 +110,7 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
         fieldFilters,
         defaultPeopleType,
         gatheringTypeId: finalGatheringTypeId,
+        gatheringAutoRemoveEnabled,
         scheduleEnabled,
         scheduleFrequency,
         scheduleDay,
@@ -120,6 +125,22 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
     } finally {
       setSaving(false);
     }
+  };
+
+  // Turning this on can immediately remove existing roster members who don't
+  // match this batch (via the toggle-enable backfill), so confirm before enabling.
+  // Turning it off needs no confirmation — it only stops future removals.
+  const requestGatheringAutoRemoveToggle = (value: boolean) => {
+    if (value) {
+      setShowRemoveConfirm(true);
+    } else {
+      setGatheringAutoRemoveEnabled(false);
+    }
+  };
+
+  const confirmEnableGatheringAutoRemove = () => {
+    setShowRemoveConfirm(false);
+    setGatheringAutoRemoveEnabled(true);
   };
 
   return (
@@ -223,6 +244,19 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
         </div>
       </div>
 
+      {gatheringMode !== 'none' && (
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => requestGatheringAutoRemoveToggle(!gatheringAutoRemoveEnabled)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${gatheringAutoRemoveEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+            role="switch" aria-checked={gatheringAutoRemoveEnabled}>
+            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${gatheringAutoRemoveEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+          </button>
+          <span className="text-sm text-gray-700 dark:text-gray-300">
+            Automatically remove people from this gathering when they no longer match this batch
+          </span>
+        </div>
+      )}
+
       <div>
         <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Schedule</p>
         <div className="flex flex-wrap items-center gap-3">
@@ -309,6 +343,48 @@ export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: 
           Checking Planning Center for the latest data…
         </div>
       )}
+
+      <Modal isOpen={showRemoveConfirm} onClose={() => setShowRemoveConfirm(false)}>
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                Enable automatic removal for this batch?
+              </h3>
+              <button
+                onClick={() => setShowRemoveConfirm(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
+              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
+            </div>
+
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 text-center">
+              This will also remove anyone already on the roster who doesn't currently
+              match this batch, next time it syncs.
+            </p>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowRemoveConfirm(false)}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmEnableGatheringAutoRemove}
+                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+              >
+                Enable
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
