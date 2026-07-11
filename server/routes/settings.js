@@ -503,41 +503,23 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 router.get('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const rows = await Database.query(
-      `SELECT planning_center_sync_indicator, planning_center_sync_enabled,
-              planning_center_reconciliation_schedule_enabled, planning_center_reconciliation_frequency,
-              planning_center_reconciliation_day, planning_center_reconciliation_last_run_at,
-              planning_center_reconciliation_last_result
+      `SELECT planning_center_sync_indicator, planning_center_sync_enabled
        FROM church_settings WHERE church_id = ? LIMIT 1`,
       [req.user.church_id]
     );
     const row = rows[0] || {};
-    let reconciliationLastResult = null;
-    if (row.planning_center_reconciliation_last_result) {
-      try { reconciliationLastResult = JSON.parse(row.planning_center_reconciliation_last_result); } catch (_) {}
-    }
     res.json({
       planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
       planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
-      planningCenterReconciliationScheduleEnabled: !!(row.planning_center_reconciliation_schedule_enabled),
-      planningCenterReconciliationFrequency: row.planning_center_reconciliation_frequency || 'weekly',
-      planningCenterReconciliationDay: typeof row.planning_center_reconciliation_day === 'number' ? row.planning_center_reconciliation_day : 1,
-      planningCenterReconciliationLastRunAt: row.planning_center_reconciliation_last_run_at || null,
-      planningCenterReconciliationLastResult: reconciliationLastResult,
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve integration settings.' });
   }
 });
 
-const PCO_RECONCILIATION_FREQUENCIES = ['daily', 'weekly', 'monthly'];
-
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
-    const {
-      planningCenterSyncIndicator, planningCenterSyncEnabled,
-      planningCenterReconciliationScheduleEnabled, planningCenterReconciliationFrequency,
-      planningCenterReconciliationDay,
-    } = req.body;
+    const { planningCenterSyncIndicator, planningCenterSyncEnabled } = req.body;
     const updates = [];
     const params = [];
     if (typeof planningCenterSyncIndicator === 'boolean') {
@@ -547,33 +529,6 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     if (typeof planningCenterSyncEnabled === 'boolean') {
       updates.push('planning_center_sync_enabled = ?');
       params.push(planningCenterSyncEnabled ? 1 : 0);
-    }
-    if (typeof planningCenterReconciliationScheduleEnabled === 'boolean') {
-      updates.push('planning_center_reconciliation_schedule_enabled = ?');
-      params.push(planningCenterReconciliationScheduleEnabled ? 1 : 0);
-    }
-    if (planningCenterReconciliationFrequency !== undefined) {
-      if (!PCO_RECONCILIATION_FREQUENCIES.includes(planningCenterReconciliationFrequency)) {
-        return res.status(400).json({ error: 'planningCenterReconciliationFrequency must be one of daily, weekly, monthly.' });
-      }
-      updates.push('planning_center_reconciliation_frequency = ?');
-      params.push(planningCenterReconciliationFrequency);
-    }
-    if (planningCenterReconciliationDay !== undefined) {
-      if (!Number.isInteger(planningCenterReconciliationDay)) {
-        return res.status(400).json({ error: 'planningCenterReconciliationDay must be an integer.' });
-      }
-      // planningCenterReconciliationFrequency and planningCenterReconciliationDay are
-      // independent optional fields on this PATCH-style endpoint, so when frequency
-      // isn't present in this same request we fall back to the permissive union range
-      // (0-31) rather than guessing. The client always sends both together.
-      const minDay = planningCenterReconciliationFrequency === 'monthly' ? 1 : 0;
-      const maxDay = planningCenterReconciliationFrequency === 'weekly' ? 6 : 31;
-      if (planningCenterReconciliationDay < minDay || planningCenterReconciliationDay > maxDay) {
-        return res.status(400).json({ error: `planningCenterReconciliationDay must be an integer between ${minDay} and ${maxDay}.` });
-      }
-      updates.push('planning_center_reconciliation_day = ?');
-      params.push(planningCenterReconciliationDay);
     }
     if (updates.length) {
       params.push(req.user.church_id);
