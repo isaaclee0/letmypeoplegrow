@@ -809,6 +809,7 @@ export interface SyncBatchInput {
   fieldFilters: { fieldDefinitionId: string; tabName: string | null; fieldName: string; values: string[] }[];
   defaultPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   gatheringTypeId: number | null;
+  gatheringAutoRemoveEnabled: boolean;
   scheduleEnabled: boolean;
   scheduleFrequency: 'daily' | 'weekly' | 'monthly';
   scheduleDay: number;
@@ -822,6 +823,7 @@ export interface SyncBatchLastResult {
   reactivated: number;
   linked: number;
   gatheringAssigned: number;
+  gatheringRemoved: number;
   ambiguous: number;
   visitorMatches: number;
   errors: number;
