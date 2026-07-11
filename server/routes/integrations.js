@@ -2302,14 +2302,26 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
               AND gl.church_id = ? AND i.planning_center_id IS NOT NULL AND i.is_active = 1`,
           [batch.gatheringTypeId, churchId]
         );
+        let claimed = 0;
+        const backfillErrors = [];
         for (const row of candidates) {
           const person = pcoById.get(row.pcoId);
           if (person && person.status === 'active' && isEligible(person, filterConfig)) {
-            await Database.query(
-              `UPDATE gathering_lists SET added_by_pco_batch_id = ? WHERE id = ? AND church_id = ?`,
-              [batch.id, row.id, churchId]
-            );
+            try {
+              await Database.query(
+                `UPDATE gathering_lists SET added_by_pco_batch_id = ? WHERE id = ? AND church_id = ?`,
+                [batch.id, row.id, churchId]
+              );
+              claimed++;
+            } catch (e) {
+              backfillErrors.push({ id: row.id, error: e.message });
+            }
           }
+        }
+        if (backfillErrors.length > 0) {
+          logger.warn('PCO gathering-ownership backfill had per-row failures', {
+            churchId, batchId: batch.id, candidateCount: candidates.length, claimed, errors: backfillErrors,
+          });
         }
       }
     }
