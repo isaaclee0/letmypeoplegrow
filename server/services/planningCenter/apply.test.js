@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { groupAdds, applyArchiveExtras } = require('./apply');
+const { groupAdds, applyArchiveExtras, computeGatheringRemovals } = require('./apply');
 
 test('groupAdds groups by household, solo for null household', () => {
   const groups = groupAdds([
@@ -22,6 +22,24 @@ test('groupAdds keeps two null-household people as separate solo groups', () => 
   ]);
   assert.strictEqual(groups.length, 2);
   assert.ok(groups.every((g) => g.householdId === null && g.members.length === 1));
+});
+
+test('computeGatheringRemovals keeps only ids not in the touched set', () => {
+  const owned = [1, 2, 3];
+  const touched = new Set([2]);
+  assert.deepStrictEqual(computeGatheringRemovals(owned, touched), [1, 3]);
+});
+
+test('computeGatheringRemovals returns empty when everyone owned is still touched', () => {
+  assert.deepStrictEqual(computeGatheringRemovals([1, 2], new Set([1, 2])), []);
+});
+
+test('computeGatheringRemovals returns everyone owned when the touched set is empty', () => {
+  assert.deepStrictEqual(computeGatheringRemovals([5, 6], new Set()), [5, 6]);
+});
+
+test('computeGatheringRemovals returns empty for an empty owned list', () => {
+  assert.deepStrictEqual(computeGatheringRemovals([], new Set([1])), []);
 });
 
 test('applyArchiveExtras is exported as a function', () => {

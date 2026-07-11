@@ -12,6 +12,17 @@ function groupAdds(adds) {
   return [...map.values()];
 }
 
+// Pure diff for batch-gathering auto-removal: given the individualIds a batch
+// currently owns on its assigned gathering (added_by_pco_batch_id = this batch),
+// and the individualIds that should be there after this run (touchedIndividualIds,
+// which already includes gatheringEligible + freshly linked/restored/added people —
+// see applyPlan), return the owned ids that are no longer in that set. Pure so it
+// can be unit-tested without a database; the DB read/delete wiring lives in
+// applyPlan itself (see Task 3 of the gathering-auto-removal plan).
+function computeGatheringRemovals(ownedIndividualIds, touchedIndividualIds) {
+  return ownedIndividualIds.filter((id) => !touchedIndividualIds.has(id));
+}
+
 // Apply a plan within the CURRENT church DB context (caller sets context).
 // selections:
 //   { ambiguous?: {individualId: pcoId},
@@ -256,4 +267,4 @@ async function applyArchiveExtras(churchId, archiveExtras, { skipArchiveExtraIds
   return result;
 }
 
-module.exports = { applyPlan, groupAdds, applyArchiveExtras };
+module.exports = { applyPlan, groupAdds, applyArchiveExtras, computeGatheringRemovals };
