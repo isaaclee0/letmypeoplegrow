@@ -103,3 +103,60 @@ test('withTestChurchDb: two sequential calls get distinct, isolated church datab
   assert.strictEqual(first, 1);
   assert.strictEqual(second, 1);
 });
+
+test('withTestChurchDb: restores a pre-existing CHURCH_DATA_DIR to its exact sentinel value afterward', async () => {
+  // Save/restore around our OWN env manipulation, separate from the harness's
+  // own restoration logic under test — so this test can't leave
+  // CHURCH_DATA_DIR in a weird state for whatever runs after it in this file.
+  const realOriginal = process.env.CHURCH_DATA_DIR;
+  try {
+    process.env.CHURCH_DATA_DIR = '/tmp/pre-existing-sentinel';
+
+    await withTestChurchDb(async () => {
+      // While fn runs, the harness has overridden CHURCH_DATA_DIR to its own
+      // temp dir — the sentinel should NOT be visible here.
+      assert.notStrictEqual(process.env.CHURCH_DATA_DIR, '/tmp/pre-existing-sentinel');
+    });
+
+    assert.strictEqual(
+      process.env.CHURCH_DATA_DIR,
+      '/tmp/pre-existing-sentinel',
+      'CHURCH_DATA_DIR should be restored to the exact value present when withTestChurchDb was called'
+    );
+  } finally {
+    if (realOriginal === undefined) {
+      delete process.env.CHURCH_DATA_DIR;
+    } else {
+      process.env.CHURCH_DATA_DIR = realOriginal;
+    }
+  }
+});
+
+test('withTestChurchDb: restores a genuinely absent CHURCH_DATA_DIR to undefined (not the string "undefined")', async () => {
+  const realOriginal = process.env.CHURCH_DATA_DIR;
+  try {
+    delete process.env.CHURCH_DATA_DIR;
+    assert.strictEqual(process.env.CHURCH_DATA_DIR, undefined);
+
+    await withTestChurchDb(async () => {
+      // While fn runs, the harness has overridden CHURCH_DATA_DIR to its own
+      // temp dir — it should be genuinely absent neither before nor now.
+      assert.notStrictEqual(process.env.CHURCH_DATA_DIR, undefined);
+    });
+
+    assert.strictEqual(
+      process.env.CHURCH_DATA_DIR,
+      undefined,
+      'CHURCH_DATA_DIR should be genuinely absent afterward, not the string "undefined" ' +
+        '(process.env coerces assigned values to strings, so a naive ' +
+        '`process.env.X = previousValue` with previousValue === undefined would produce ' +
+        'the literal string "undefined" instead of deleting the key — this guards against that)'
+    );
+  } finally {
+    if (realOriginal === undefined) {
+      delete process.env.CHURCH_DATA_DIR;
+    } else {
+      process.env.CHURCH_DATA_DIR = realOriginal;
+    }
+  }
+});

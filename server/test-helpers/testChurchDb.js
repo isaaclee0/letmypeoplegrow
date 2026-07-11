@@ -36,10 +36,15 @@ const Database = require('../config/database');
  *
  * @param {(churchId: string) => any} fn - work to run against the fresh DB.
  * @param {(info: { churchId: string, tempDir: string }) => void} [onReady] -
- *   optional callback invoked once the temp dir + schema'd church DB exist,
- *   before `fn` runs. Exists purely so tests can observe/assert on the temp
- *   path (e.g. to confirm cleanup actually deletes it); not needed for
- *   normal use.
+ *   INTERNAL: exists solely for `testChurchDb.smoke.test.js` to assert on
+ *   the harness's own cleanup behavior (e.g. that `tempDir` really gets
+ *   deleted afterward). Real feature tests (e.g. a future `apply.test.js`
+ *   DB-integration suite) should never need this — seed data and call
+ *   code-under-test from inside `fn`, where the church context is already
+ *   active. Note `onReady` fires BEFORE `Database.setChurchContext` is
+ *   entered, so calling `Database.query(...)` from inside `onReady` will
+ *   throw "No church context set" — it's not a place to run test logic,
+ *   only to observe `{ churchId, tempDir }`.
  * @returns {Promise<any>} whatever `fn` returned.
  *
  * KNOWN LIMITATION: `Database`'s module-level `dataDir` (and its singleton
@@ -72,7 +77,14 @@ async function withTestChurchDb(fn, onReady) {
 
     return await Database.setChurchContext(churchId, () => fn(churchId));
   } finally {
-    Database.closeChurchDb(churchId);
+    // closeAll() rather than closeChurchDb(churchId): this harness is
+    // sequential-only (see KNOWN LIMITATION above), so at most one church
+    // DB is ever open at a time here — closeAll() is equivalent for that
+    // one connection, but it also closes and nulls out the singleton
+    // `registryDb` connection that `Database.initialize()` opens fresh on
+    // every call (see database.js:574-583), which `closeChurchDb` alone
+    // would otherwise leak on every `withTestChurchDb` call.
+    Database.closeAll();
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     if (previousChurchDataDir === undefined) {
