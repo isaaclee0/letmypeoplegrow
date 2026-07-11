@@ -187,3 +187,33 @@ test('applyPlan: a person still in the eligible set is left alone', async () => 
     assert.strictEqual(row.added_by_pco_batch_id, batchId);
   });
 });
+
+test('applyPlan: insert never steals ownership of a row another batch (or a manual addition) already owns', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const gatheringTypeId = await seedGathering(churchId, 'Sunday Service');
+    // The individual is already on the roster via a manual addition (no owning
+    // batch). A different, newly-run batch now also considers them eligible.
+    const individualId = await seedIndividual(churchId, 'Manually', 'Added');
+    await seedGatheringListRow(churchId, gatheringTypeId, individualId, null);
+
+    const newBatchId = await seedBatch(churchId, 'Batch C');
+    const plan = emptyPlan({ gatheringEligible: [{ individualId, pcoId: 'p1' }] });
+    const batchConfig = {
+      batchId: newBatchId,
+      defaultPeopleType: 'regular',
+      gatheringTypeId,
+      gatheringAutoRemoveEnabled: true,
+    };
+
+    const result = await applyPlan(churchId, plan, null, {}, batchConfig);
+
+    assert.strictEqual(result.errors.length, 0, `expected no errors, got: ${JSON.stringify(result.errors)}`);
+    // ON CONFLICT DO NOTHING means the existing row's affectedRows is 0, so
+    // this must NOT be counted as a fresh assignment.
+    assert.strictEqual(result.gatheringAssigned, 0);
+
+    const row = await getGatheringListRow(churchId, gatheringTypeId, individualId);
+    assert.ok(row, 'row should still be present');
+    assert.strictEqual(row.added_by_pco_batch_id, null, 'ownership must not be reassigned to the new batch by an insert attempt');
+  });
+});
