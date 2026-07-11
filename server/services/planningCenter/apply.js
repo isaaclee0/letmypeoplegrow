@@ -35,13 +35,15 @@ function computeGatheringRemovals(ownedIndividualIds, touchedIndividualIds) {
 // plan.archiveExtras/unmatchedVisitors — those are whole-roster concerns handled by
 // applyArchiveExtras() below, called only from the reconciliation endpoints.
 async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = {}) {
-  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, familyNamesUpdated: 0, errors: [] };
+  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, gatheringRemoved: 0, familyNamesUpdated: 0, errors: [] };
   const skipAdd = new Set(selections.skipAddPcoIds || []);
   const ambiguousChoices = selections.ambiguous || {};
   const visitorChoices = selections.visitorChoices || {};
   const skipFamilyName = new Set((selections.skipFamilyNameUpdateIds || []).map(Number));
   const defaultPeopleType = batchConfig.defaultPeopleType || 'regular';
   const gatheringTypeId = batchConfig.gatheringTypeId || null;
+  const batchId = batchConfig.batchId || null;
+  const gatheringAutoRemoveEnabled = !!batchConfig.gatheringAutoRemoveEnabled;
   // Every individual this run links, restores, promotes, or creates, PLUS every
   // already-linked individual who's currently active and eligible for this batch's
   // filter (plan.gatheringEligible, from diffEngine.js) — used to populate the
@@ -219,15 +221,43 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
   // were genuinely new this run — affectedRows === 0 means they were already on the
   // roster (ON CONFLICT DO NOTHING is a safe no-op, not an error, not a new count).
   if (gatheringTypeId) {
+    // Tag ownership unconditionally (even if this batch's auto-remove toggle is
+    // off) — cheap, and it means a batch that gets the toggle turned on later
+    // already has partial ownership data from everything synced since this
+    // feature shipped, without needing a fresh backfill for those rows.
     for (const individualId of touchedIndividualIds) {
       try {
         const insertResult = await Database.query(
-          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
-           VALUES (?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
-          [gatheringTypeId, individualId, userId, churchId]
+          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id, added_by_pco_batch_id)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
+          [gatheringTypeId, individualId, userId, churchId, batchId]
         );
         if (insertResult.affectedRows > 0) result.gatheringAssigned++;
       } catch (e) { result.errors.push({ type: 'gatheringAssign', id: individualId, error: e.message }); }
+    }
+
+    // Remove people this batch itself added to this gathering who no longer
+    // belong — only when the batch has opted in. ON CONFLICT DO NOTHING above
+    // means ownership is first-writer-wins, so this only ever touches rows this
+    // exact batch is responsible for; manual additions and other batches' rows
+    // are untouched (added_by_pco_batch_id won't match this batch's id).
+    if (gatheringAutoRemoveEnabled && batchId) {
+      const ownedRows = await Database.query(
+        `SELECT individual_id FROM gathering_lists
+          WHERE gathering_type_id = ? AND added_by_pco_batch_id = ? AND church_id = ?`,
+        [gatheringTypeId, batchId, churchId]
+      );
+      const toRemove = computeGatheringRemovals(ownedRows.map((r) => r.individual_id), touchedIndividualIds);
+      for (const individualId of toRemove) {
+        try {
+          const delResult = await Database.query(
+            `DELETE FROM gathering_lists
+              WHERE gathering_type_id = ? AND individual_id = ? AND added_by_pco_batch_id = ? AND church_id = ?`,
+            [gatheringTypeId, individualId, batchId, churchId]
+          );
+          if (delResult.affectedRows > 0) result.gatheringRemoved++;
+        } catch (e) { result.errors.push({ type: 'gatheringRemove', id: individualId, error: e.message }); }
+      }
     }
   }
 
