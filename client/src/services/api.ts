@@ -878,9 +878,12 @@ export const integrationsAPI = {
   getPlanningCenterSyncBatches: () =>
     api.get('/integrations/planning-center/sync-batches'),
   createPlanningCenterSyncBatch: (data: SyncBatchInput) =>
-    api.post('/integrations/planning-center/sync-batches', data),
+    api.post('/integrations/planning-center/sync-batches', data, { timeout: 120000 }),
   updatePlanningCenterSyncBatch: (id: number, data: SyncBatchInput) =>
-    api.put(`/integrations/planning-center/sync-batches/${id}`, data),
+    // Enabling gatheringAutoRemoveEnabled can trigger a live PCO fetch for the
+    // toggle-enable backfill (server/routes/integrations.js), which can take well
+    // over the global 15s default when the PCO people cache is cold.
+    api.put(`/integrations/planning-center/sync-batches/${id}`, data, { timeout: 120000 }),
   deletePlanningCenterSyncBatch: (id: number) =>
     api.delete(`/integrations/planning-center/sync-batches/${id}`),
   getPlanningCenterBatchPlan: (id: number, opts?: { force?: boolean }) =>
