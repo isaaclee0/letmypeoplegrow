@@ -4,7 +4,7 @@
 // subtle comparison bug — can be unit tested without mocking DB or HTTPS
 // calls, matching how the rest of services/planningCenter/ is tested.
 
-// totals/prev shape: { ambiguous, visitorMatches, familyNameUpdatesPending, reconciliationArchived }
+// totals/prev shape: { ambiguous, visitorMatches, familyNameUpdatesPending }
 // prev is null if there is no prior notification on record.
 // Returns { notify, clear }:
 //   - notify: create a new notification now
@@ -12,16 +12,14 @@
 //     resolved, so a future reappearance notifies fresh instead of being
 //     compared against a stale, no-longer-relevant snapshot)
 function reviewNotificationDecision(prev, totals) {
-  const allZero = !totals.ambiguous && !totals.visitorMatches &&
-    !totals.familyNameUpdatesPending && !totals.reconciliationArchived;
+  const allZero = !totals.ambiguous && !totals.visitorMatches && !totals.familyNameUpdatesPending;
   if (allZero) {
     return { notify: false, clear: !!prev };
   }
   const unchanged = !!prev &&
     prev.ambiguous === totals.ambiguous &&
     prev.visitorMatches === totals.visitorMatches &&
-    prev.familyNameUpdatesPending === totals.familyNameUpdatesPending &&
-    prev.reconciliationArchived === totals.reconciliationArchived;
+    prev.familyNameUpdatesPending === totals.familyNameUpdatesPending;
   return { notify: !unchanged, clear: false };
 }
 
@@ -39,12 +37,8 @@ function buildPcoReviewMessage(totals) {
     parts.push(`${totals.familyNameUpdatesPending} family name update${totals.familyNameUpdatesPending === 1 ? '' : 's'}`);
   }
 
-  const sentences = [];
-  if (parts.length) sentences.push(`${parts.join(', ')} need review in Review & Sync.`);
-  if (totals.reconciliationArchived) {
-    sentences.push(`Reconciliation also archived ${totals.reconciliationArchived} ${totals.reconciliationArchived === 1 ? 'person' : 'people'} you may want to double-check.`);
-  }
-  return sentences.join(' ');
+  if (!parts.length) return '';
+  return `${parts.join(', ')} need review in Review & Sync.`;
 }
 
 module.exports = { reviewNotificationDecision, buildPcoReviewMessage };
