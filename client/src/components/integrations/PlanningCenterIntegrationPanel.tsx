@@ -305,7 +305,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div>
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Master switch — turns off all batches below.
+                      Master switch — turns all batches below on or off.
                     </p>
                   </div>
                   <button
