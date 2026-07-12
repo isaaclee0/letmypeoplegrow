@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSelections, buildReconciliationSelections, VisitorChoice } from './syncSelections';
+import { buildSelections, VisitorChoice } from './syncSelections';
 
 describe('buildSelections', () => {
   it('maps ambiguous choices and skip set into the apply payload', () => {
@@ -51,23 +51,5 @@ describe('buildSelections', () => {
   it('includes skipFamilyNameUpdateIds when provided', () => {
     const result = buildSelections({}, new Set(), {}, new Set(), new Set([100, 200]));
     expect(result.skipFamilyNameUpdateIds).toEqual([100, 200]);
-  });
-});
-
-describe('buildReconciliationSelections', () => {
-  it('converts skipArchiveExtraIds set into the apply payload', () => {
-    const skipArchiveExtraIds = new Set([56, 78]);
-    expect(buildReconciliationSelections(skipArchiveExtraIds)).toEqual({
-      skipArchiveExtraIds: [56, 78],
-      manualLinks: {},
-    });
-  });
-
-  it('converts manualLinks picks into a pcoId-only map', () => {
-    const result = buildReconciliationSelections(new Set(), {
-      10: { pcoId: 'p1', firstName: 'A', lastName: 'B' },
-      11: null,
-    });
-    expect(result.manualLinks).toEqual({ 10: 'p1' });
   });
 });

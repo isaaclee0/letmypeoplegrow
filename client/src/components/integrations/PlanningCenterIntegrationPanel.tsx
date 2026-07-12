@@ -14,10 +14,8 @@ import {
 import { integrationsAPI, settingsAPI, SyncBatch } from '../../services/api';
 import Modal from '../Modal';
 import logger from '../../utils/logger';
-import { ordinalDay } from '../../utils/pcoSchedule';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
-import PlanningCenterReconciliationReview from '../planningCenter/PlanningCenterReconciliationReview';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import { PlanningCenterStatus, PanelProps } from './types';
 
@@ -42,13 +40,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batchesError, setBatchesError] = useState<string | null>(null);
   const [editingBatch, setEditingBatch] = useState<SyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
-  const [reconciliationScheduleEnabled, setReconciliationScheduleEnabled] = useState(false);
-  const [reconciliationFrequency, setReconciliationFrequency] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
-  const [reconciliationDay, setReconciliationDay] = useState(1);
-  const [reconciliationLastResult, setReconciliationLastResult] = useState<any>(null);
-  const [reconciliationDirty, setReconciliationDirty] = useState(false);
-  const [reconciliationSaving, setReconciliationSaving] = useState(false);
-  const [showReconciliationReview, setShowReconciliationReview] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
 
@@ -108,22 +99,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     }
   };
 
-  const saveReconciliationConfig = async () => {
-    setReconciliationSaving(true);
-    try {
-      await settingsAPI.updateIntegrationSettings({
-        planningCenterReconciliationScheduleEnabled: reconciliationScheduleEnabled,
-        planningCenterReconciliationFrequency: reconciliationFrequency,
-        planningCenterReconciliationDay: reconciliationDay,
-      });
-      setReconciliationDirty(false);
-    } catch (e: any) {
-      setPlanningCenterError(e.response?.data?.error || 'Failed to save reconciliation schedule.');
-    } finally {
-      setReconciliationSaving(false);
-    }
-  };
-
   // Handle Planning Center connect (OAuth flow)
   const handlePlanningCenterConnect = async () => {
     try {
@@ -151,17 +126,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     }
   };
 
-  // Load batches, sync indicator, master switch, and reconciliation config when connected
+  // Load batches, sync indicator, and master switch when connected
   useEffect(() => {
     if (status.connected) {
       loadBatches();
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
         setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
-        setReconciliationScheduleEnabled(!!r.data.planningCenterReconciliationScheduleEnabled);
-        setReconciliationFrequency(r.data.planningCenterReconciliationFrequency || 'weekly');
-        setReconciliationDay(typeof r.data.planningCenterReconciliationDay === 'number' ? r.data.planningCenterReconciliationDay : 1);
-        setReconciliationLastResult(r.data.planningCenterReconciliationLastResult || null);
       }).catch(() => {});
       // Cheap probe: nudge to import check-ins only if data exists and none has
       // been imported yet.
@@ -330,7 +301,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div>
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Master switch — turns off all batches and the "check for people who left" schedule below.
+                      Master switch — turns off all batches below.
                     </p>
                   </div>
                   <button
@@ -407,89 +378,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     </li>
                   ))}
                 </ul>
-              </div>
-
-              {/* Reconciliation: people no longer in PCO at all */}
-              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Check for people who left</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Finds active people whose name doesn't match anyone in Planning Center at all, across every saved batch.
-                </p>
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <button type="button" onClick={() => { setReconciliationScheduleEnabled((v) => !v); setReconciliationDirty(true); }}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${reconciliationScheduleEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                    role="switch" aria-checked={reconciliationScheduleEnabled}>
-                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${reconciliationScheduleEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
-                  <span className="text-sm text-gray-700 dark:text-gray-300">{reconciliationScheduleEnabled ? 'Runs automatically' : 'Manual only'}</span>
-                  {reconciliationScheduleEnabled && (
-                    <>
-                      <select value={reconciliationFrequency}
-                        onChange={(e) => {
-                          const freq = e.target.value as 'daily' | 'weekly' | 'monthly';
-                          setReconciliationFrequency(freq);
-                          setReconciliationDay((prev) => {
-                            if (freq === 'weekly') return prev >= 0 && prev <= 6 ? prev : 1;
-                            if (freq === 'monthly') return prev >= 1 && prev <= 31 ? prev : 1;
-                            return prev; // daily: value unused
-                          });
-                          setReconciliationDirty(true);
-                        }}
-                        className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
-                        <option value="daily">Daily</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                      </select>
-                      {reconciliationFrequency === 'weekly' && (
-                        <select value={reconciliationDay}
-                          onChange={(e) => { setReconciliationDay(Number(e.target.value)); setReconciliationDirty(true); }}
-                          className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
-                          <option value={0}>Sunday</option>
-                          <option value={1}>Monday</option>
-                          <option value={2}>Tuesday</option>
-                          <option value={3}>Wednesday</option>
-                          <option value={4}>Thursday</option>
-                          <option value={5}>Friday</option>
-                          <option value={6}>Saturday</option>
-                        </select>
-                      )}
-                      {reconciliationFrequency === 'monthly' && (
-                        <>
-                          <select value={reconciliationDay}
-                            onChange={(e) => { setReconciliationDay(Number(e.target.value)); setReconciliationDirty(true); }}
-                            className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500">
-                            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                              <option key={d} value={d}>{ordinalDay(d)}</option>
-                            ))}
-                          </select>
-                          {reconciliationDay >= 29 && (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              Runs on the last day of the month if it's shorter.
-                            </span>
-                          )}
-                        </>
-                      )}
-                      <button type="button" onClick={saveReconciliationConfig} disabled={!reconciliationDirty || reconciliationSaving}
-                        className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50">
-                        {reconciliationSaving ? 'Saving…' : 'Save schedule'}
-                      </button>
-                    </>
-                  )}
-                  <button type="button" onClick={() => setShowReconciliationReview((v) => !v)}
-                    className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700">
-                    {showReconciliationReview ? 'Hide check' : 'Check now'}
-                  </button>
-                </div>
-                {reconciliationLastResult && (
-                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    Last checked {new Date(reconciliationLastResult.at).toLocaleString()}: {reconciliationLastResult.archived} archived.
-                  </p>
-                )}
-                {showReconciliationReview && (
-                  <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
-                    <PlanningCenterReconciliationReview />
-                  </div>
-                )}
               </div>
 
               {/* Check-in attendance import */}

@@ -43,24 +43,3 @@ export function buildSelections(
   };
 }
 
-export interface ManualLinkPick { pcoId: string; firstName: string; lastName: string; }
-
-export interface ReconciliationSelections {
-  skipArchiveExtraIds: number[];
-  manualLinks: Record<string, string>;
-}
-
-// skipArchiveExtraIds: archiveExtras individualIds the reviewer deselected
-//   (i.e. these LMPG individuals will NOT be archived this run).
-// manualLinks: archiveExtras individualId -> a manually-picked PCO person (or null
-//   if not linked) — converted here to a pcoId-only map for the apply payload.
-export function buildReconciliationSelections(
-  skipArchiveExtraIds: Set<number>,
-  manualLinks: Record<number, ManualLinkPick | null> = {},
-): ReconciliationSelections {
-  const links: Record<string, string> = {};
-  for (const [individualId, pick] of Object.entries(manualLinks)) {
-    if (pick) links[individualId] = pick.pcoId;
-  }
-  return { skipArchiveExtraIds: [...skipArchiveExtraIds], manualLinks: links };
-}

@@ -795,9 +795,6 @@ export const settingsAPI = {
   updateIntegrationSettings: (data: {
     planningCenterSyncIndicator?: boolean;
     planningCenterSyncEnabled?: boolean;
-    planningCenterReconciliationScheduleEnabled?: boolean;
-    planningCenterReconciliationFrequency?: 'daily' | 'weekly' | 'monthly';
-    planningCenterReconciliationDay?: number;
   }) => api.put('/settings/integrations', data),
 };
 
@@ -893,13 +890,6 @@ export const integrationsAPI = {
     }),
   applyPlanningCenterBatch: (id: number, data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[]; visitorChoices?: Record<string, string>; archiveAmbiguousIds?: number[] } }) =>
     api.post(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
-  getPlanningCenterReconciliationPlan: (opts?: { force?: boolean }) =>
-    api.get('/integrations/planning-center/reconciliation/plan', {
-      params: opts?.force ? { refresh: 1 } : undefined,
-      timeout: 120000,
-    }),
-  applyPlanningCenterReconciliation: (data: { selections?: { skipArchiveExtraIds?: number[] } }) =>
-    api.post('/integrations/planning-center/reconciliation/apply', data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),
