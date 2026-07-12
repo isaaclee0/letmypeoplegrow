@@ -42,6 +42,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
+  const [peopleLinked, setPeopleLinked] = useState(true);
 
   const loadBatches = useCallback(async () => {
     setBatchesLoading(true); setBatchesError(null);
@@ -137,7 +138,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       // Cheap probe: nudge to import check-ins only if data exists and none has
       // been imported yet.
       integrationsAPI.getCheckinAvailability()
-        .then(r => setCheckinAvailable(!!r.data.available && !r.data.hasImported))
+        .then(r => {
+          setCheckinAvailable(!!r.data.available && !r.data.hasImported);
+          setPeopleLinked(r.data.peopleLinked !== false);
+        })
         .catch(() => setCheckinAvailable(false));
     }
   }, [status.connected, loadBatches]);
@@ -382,27 +386,37 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
               {/* Check-in attendance import */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
-                {checkinAvailable && (
-                  <div className="mb-3 rounded-md bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 px-4 py-3 flex items-center justify-between gap-3">
-                    <p className="text-sm text-blue-800 dark:text-blue-200">
-                      Check-in data is available in Planning Center — would you like to import it?
-                    </p>
+                {!peopleLinked ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Link your people to Planning Center first — add a sync batch above and run it — before importing
+                    check-in history. This keeps imported attendance matched to the right person instead of creating
+                    duplicates.
+                  </p>
+                ) : (
+                  <>
+                    {checkinAvailable && (
+                      <div className="mb-3 rounded-md bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 px-4 py-3 flex items-center justify-between gap-3">
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          Check-in data is available in Planning Center — would you like to import it?
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowImport(true)}
+                          className="shrink-0 inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                        >
+                          Import now
+                        </button>
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => setShowImport(true)}
-                      className="shrink-0 inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
                     >
-                      Import now
+                      Import attendance history
                     </button>
-                  </div>
+                  </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setShowImport(true)}
-                  className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
-                >
-                  Import attendance history
-                </button>
               </div>
             </div>
           )}
