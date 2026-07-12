@@ -65,6 +65,7 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<any>(null);
+  const [notLinked, setNotLinked] = useState(false);
   const [autoLoaded, setAutoLoaded] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [recencyWeeks, setRecencyWeeks] = useState(defaultRecencyWeeks);
@@ -127,7 +128,7 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
 
   const findEvents = async (range?: { startDate: string; endDate: string }) => {
     const query = range ?? { startDate, endDate };
-    setLoading(true); setError(null); setPreview(null); setDone(null);
+    setLoading(true); setError(null); setNotLinked(false); setPreview(null); setDone(null);
     const jobId = newJobId(); setProgress({ phase: 'fetching', percent: 0 });
     try {
       const r = await integrationsAPI.getCheckinEvents({ ...query, jobId });
@@ -151,7 +152,11 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
       }
       setMappings(defaults);
     } catch (e: any) {
-      setError(e.response?.data?.error || 'Failed to load events.');
+      if (e.response?.data?.code === 'PCO_NOT_LINKED') {
+        setNotLinked(true);
+      } else {
+        setError(e.response?.data?.error || 'Failed to load events.');
+      }
     } finally { setLoading(false); setProgress(null); }
   };
 
@@ -168,11 +173,11 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
   }, []);
 
   useEffect(() => {
-    if (showSkip && autoLoaded && !error && events.length === 0 && onSkip) {
+    if (showSkip && autoLoaded && !error && !notLinked && events.length === 0 && onSkip) {
       onSkip();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoLoaded, events.length, error, showSkip]);
+  }, [autoLoaded, events.length, error, notLinked, showSkip]);
 
   const runPreview = async () => {
     setLoading(true); setError(null);
@@ -293,6 +298,20 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
         </p>
       </div>
 
+      {notLinked ? (
+        <div className="rounded-md bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 px-4 py-3 space-y-2">
+          <p className="text-sm text-amber-800 dark:text-amber-200">
+            Link your people to Planning Center first — set up and run a sync batch — before importing check-in history.
+            Importing now would create a new record for every attendee instead of matching them to your existing people.
+          </p>
+          {showSkip && onSkip && (
+            <button type="button" onClick={() => onSkip()} className="text-sm underline text-amber-800 dark:text-amber-200">
+              Skip this step
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
       {events.length > 0 && (
         <div className="rounded bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 text-sm px-3 py-2">
           Found {events.reduce((n, e) => n + e.checkinCount, 0)} check-ins across {events.length} event{events.length === 1 ? '' : 's'} available to import.
@@ -453,6 +472,8 @@ const PCOCheckinImport: React.FC<PCOCheckinImportProps> = ({
           <div>Gatherings created: {done.gatheringsCreated}</div>
           <div>People created (inactive): {done.createdPeople}</div>
         </div>
+      )}
+      </>
       )}
     </div>
   );
