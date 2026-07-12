@@ -77,7 +77,7 @@ const OnboardingPage: React.FC = () => {
     integrationsAPI.getCheckinAvailability()
       .then((r: any) => {
         if (cancelled) return;
-        if (r.data?.available && !r.data?.hasImported) {
+        if (r.data?.available && !r.data?.hasImported && r.data?.peopleLinked !== false) {
           setCheckinProbe('available');
         } else {
           setCheckinProbe('unavailable');
