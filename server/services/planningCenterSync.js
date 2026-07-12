@@ -213,7 +213,7 @@ async function getValidAccessToken(churchId, userId, tokens) {
   return fresh ? fresh.access_token : null;
 }
 
-// ─── Reconcile pipeline helpers ──────────────────────────────────────────────
+// ─── Sync pipeline helpers ───────────────────────────────────────────────────
 
 // Token accessor for endpoints/cron (wraps existing helpers).
 async function getAccessTokenForChurch(churchId) {
