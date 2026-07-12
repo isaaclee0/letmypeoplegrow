@@ -24,7 +24,7 @@ deliberately split ownership model:
 
 | Domain | Source of truth | Mechanism |
 |--------|----------------|-----------|
-| Regular/member people (names, child flag, active/inactive) | PCO | Batch sync + reconciliation |
+| Regular/member people (names, child flag, active/inactive) | PCO | Batch sync + reconciliation (reconciliation removed 2026-07-12) |
 | Visitors | LMPG | Hand-managed; optional promotion to regular via sync review |
 | Family groupings | LMPG | Set at link time; optional family-name updates from PCO head-of-household (review only) |
 | Gatherings / service schedule | LMPG | Created manually, via batch roster assignment, or from PCO Check-in **events** (not PCO Services) |
@@ -91,7 +91,13 @@ Key files:
 - `client/src/components/planningCenter/PlanningCenterSyncReview.tsx`
 - `server/services/planningCenterSync.js`
 
-### 2. Reconciliation ("Check for people who left")
+### 2. Reconciliation ("Check for people who left") — **removed 2026-07-12**
+
+> This feature was removed: PCO rarely deletes people (it marks them inactive
+> instead), so "no name-match anywhere in PCO" was a weak, false-positive-prone
+> proxy for "this person left" — and the real signal (a *linked* individual's
+> PCO status going inactive) was already handled automatically by every batch's
+> own `archive` bucket. See `docs/superpowers/plans/2026-07-12-pco-remove-reconciliation.md`.
 
 **Separate** from any batch — scans the **full unfiltered PCO export**.
 
@@ -137,14 +143,14 @@ silently diverge.
 - People type, family assignment, badges, and gathering associations remain editable
 
 **This is separate from `planning_center_sync_enabled`** — the master switch that
-gates scheduled batch runs and reconciliation cron.
+gates scheduled batch runs and (formerly) reconciliation cron, removed 2026-07-12.
 
 ### Two toggles, one poorly labeled
 
 | Setting | DB column | What it actually does | UI label today |
 |---------|-----------|----------------------|----------------|
 | Source-of-truth lock + badge | `planning_center_sync_indicator` | Enables ALL lockdown behavior | **"Show sync indicator"** — sounds cosmetic (label as of 2026-07-08; superseded, see note below) |
-| Scheduled sync | `planning_center_sync_enabled` | Enables cron for batches + reconciliation | **"Enable Planning Center sync"** |
+| Scheduled sync | `planning_center_sync_enabled` | Enables cron for batches (+ reconciliation, removed 2026-07-12) | **"Enable Planning Center sync"** |
 
 A church could previously easily:
 
@@ -236,7 +242,7 @@ These are intentional out-of-scope items — not missing features:
    - Now: the "Run now" button is removed — batches only run manually through
      "Review & sync"
 
-6. **`[mitigated 2026-07-09]` Scheduled reconciliation auto-archives without human review**
+6. **`[mitigated 2026-07-09]` Scheduled reconciliation auto-archives without human review — feature removed 2026-07-12**
    - Was/still: auto-archives on schedule — explicitly kept as-is (archiving is reversible
      via reactivate, and holding it for approval would make an unattended nightly job do
      nothing most nights)
@@ -244,6 +250,7 @@ These are intentional out-of-scope items — not missing features:
      what a scheduled run left for review (ambiguous matches, visitor-match suggestions,
      pending family name updates) and how many people reconciliation archived — see
      `docs/superpowers/specs/2026-07-09-pco-batch-review-notifications-design.md`
+   - Moot as of 2026-07-12: reconciliation itself was removed (see section 2 above).
 
 ### Medium impact (polish / dead code)
 
@@ -273,10 +280,11 @@ These are intentional out-of-scope items — not missing features:
 10. **`[fixed 2026-07-10]` Monthly schedule has no day-of-month picker**
     - Was: `schedule_day` only shown for weekly; monthly always ran on the 1st
       (`isDueToday()` hardcoded `now.getDate() === 1`)
-    - Now: both the batch schedule editor and the reconciliation schedule editor show a
-      day-of-month picker for monthly frequency (`ordinalDay` helper), `isDueToday()` respects
-      `scheduleDay` for monthly (clamped to end-of-month), and legacy rows with `schedule_day = 0`
-      are treated as day 1 rather than never firing
+    - Now: both the batch schedule editor and the reconciliation schedule editor (the latter
+      removed 2026-07-12 along with reconciliation itself) show a day-of-month picker for
+      monthly frequency (`ordinalDay` helper), `isDueToday()` respects `scheduleDay` for
+      monthly (clamped to end-of-month), and legacy rows with `schedule_day = 0` are treated
+      as day 1 rather than never firing
 
 11. **`[fixed 2026-07-09]` OAuth disconnect is per-user**
     - Was: tokens stored in `user_preferences`; disconnect removed only the connecting
@@ -348,7 +356,7 @@ These are intentional out-of-scope items — not missing features:
 ### Low impact (already implemented correctly)
 
 - `gatheringEligible` bucket and `gatheringAssigned` count — implemented per July 2026 spec
-- Manual PCO search + `archiveAmbiguousIds` + reconciliation `manualLinks` — implemented
+- Manual PCO search + `archiveAmbiguousIds` + reconciliation `manualLinks` — implemented (reconciliation removed 2026-07-12)
 - `idx_individuals_pco_id_unique` partial unique index — in `server/config/schema.js`
 - Family name updates skipped on unattended cron — correct per design
 - Check-in import `DO NOTHING` conflict handling — correct
@@ -367,7 +375,7 @@ For a church migrating from PCO to LMPG:
 4. **Enable source-of-truth mode** — flip `planning_center_sync_indicator` (labeled "PCO
    is source of truth for members")
 5. **Enable master sync** — for scheduled batch runs
-6. **Run reconciliation manually first** — before scheduling auto-archive
+6. ~~**Run reconciliation manually first** — before scheduling auto-archive~~ (step removed 2026-07-12; reconciliation no longer exists)
 7. **Import check-in history** (optional, one-time) — map events to gatherings; understand
    LMPG owns attendance going forward
 8. **Track attendance in LMPG** — no further PCO check-in pulls
@@ -377,8 +385,8 @@ For a church migrating from PCO to LMPG:
 ## Summary
 
 **Architecturally, the backend engine is largely complete and matches the design docs.**
-Sync batches, reconciliation split, gathering eligibility, manual linkage, and check-in
-import all landed as specified.
+Sync batches, reconciliation split (reconciliation removed 2026-07-12), gathering
+eligibility, manual linkage, and check-in import all landed as specified.
 
 **What is missing is mostly clarity and guardrails at the product layer:**
 
@@ -388,11 +396,11 @@ import all landed as specified.
 | Token refresh implemented independently in 3 places against the same DB row `[cross-review]` | **Fixed 2026-07-09** — consolidated to one implementation |
 | Users told check-ins "sync" when it's historical import only | **Fixed 2026-07-09** — copy reworded to say one-time backfill |
 | Onboarding / Run now skip review for ambiguous matches | **Fixed 2026-07-09** — Run now removed, onboarding shows a review step |
-| Scheduled reconciliation auto-archives without review | **Mitigated 2026-07-09** — still auto-archives by design, now notifies admins |
+| Scheduled reconciliation auto-archives without review | **Mitigated 2026-07-09** — still auto-archives by design, now notifies admins. Moot as of 2026-07-12: reconciliation itself removed. |
 | Two different flags named `planningCenterSyncEnabled` in different APIs | **Fixed 2026-07-09** — `families.js` renamed to `planningCenterSyncIndicator`, matching `settings.js` |
 | Dead legacy routes/endpoints (`/planning-center/people`, `/import-people`, `/link-family`, dead `/planning-center/checkins` browse, historical CSV import) | **Fixed 2026-07-09** — removed from server and client, including exclusive helpers and now-unused imports |
 | Two unrelated, unmerged PCO caching layers `[cross-review]` | **Partially fixed 2026-07-09** — three divergent cache-read policies consolidated into one; the two layers themselves are kept (deliberately, not an oversight) |
-| Monthly schedule had no day-of-month picker | **Fixed 2026-07-10** — day-of-month picker added to batch and reconciliation schedule editors |
+| Monthly schedule had no day-of-month picker | **Fixed 2026-07-10** — day-of-month picker added to batch and reconciliation schedule editors (reconciliation schedule editor removed 2026-07-12) |
 | `planning_center_auto_archive` dead column round-tripped through settings API | **Fixed 2026-07-10** — removed from GET/PUT and client type; DB column kept per additive-only convention |
 | PCO feature flag disabled the integration with no in-app explanation | **Fixed 2026-07-10** — card now always shows, with a "Not available" message when disabled |
 | `getChurchPlanningCenterTokens` threw on every call (missing export), breaking status/checkins/disconnect church-wide | **Found and fixed 2026-07-10** — not an original finding; surfaced while verifying the fix above in-browser |
@@ -433,7 +441,7 @@ is by design. Future work here would come from new findings, not this backlog.
 | `server/routes/integrations.js` | All PCO HTTP endpoints |
 | `server/services/planningCenterSync.js` | Fetch, cache, plan, apply, cron scheduler |
 | `server/services/planningCenter/diffEngine.js` | Plan computation |
-| `server/services/planningCenter/apply.js` | DB writes for plan + reconciliation |
+| `server/services/planningCenter/apply.js` | DB writes for plan (reconciliation-only apply path removed 2026-07-12) |
 | `server/services/planningCenter/checkinsImport.js` | Check-in normalization & record building |
 | `server/services/planningCenter/mode.js` | Source-of-truth mode helpers |
 | `server/routes/settings.js` | Integration toggles |
@@ -447,7 +455,7 @@ is by design. Future work here would come from new findings, not this backlog.
 | `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` | Main PCO settings UI |
 | `client/src/components/planningCenter/PlanningCenterBatchEditor.tsx` | Batch CRUD form |
 | `client/src/components/planningCenter/PlanningCenterSyncReview.tsx` | Batch sync plan review/apply |
-| `client/src/components/planningCenter/PlanningCenterReconciliationReview.tsx` | Departure reconciliation |
+| `client/src/components/planningCenter/PlanningCenterReconciliationReview.tsx` | Departure reconciliation — **file removed 2026-07-12** |
 | `client/src/components/PCOCheckinImport.tsx` | Attendance history import wizard |
 | `client/src/pages/OnboardingPage.tsx` | PCO onboarding path |
 | `client/src/pages/PeoplePage.tsx` | PCO badge + lock behavior |

@@ -192,7 +192,7 @@ Optional, ongoing two-way sync with Planning Center's People and Check-ins APIs.
 - `server/routes/integrations.js` - OAuth flow + batch CRUD/plan/apply + check-in import routes (shares this file with Elvanto; PCO occupies roughly lines 1600+ of ~3,600). Contains ~670 lines of dead pre-rewrite routes (`/planning-center/people`, `/import-people`, `/link-family`) with no client callers — don't build on these, they're superseded.
 - `server/services/planningCenterSync.js` - HTTPS client, PCO-people cache (10-min TTL), cron scheduler (daily 02:00), batch data access
 - `server/services/planningCenter/` - one module per concern: `matcher.js` (name/household matching), `eligibility.js` (batch filter evaluation), `diffEngine.js` (computes a sync plan), `apply.js` (mutates DB per plan), `projection.js`/`fieldDefinitions.js` (PCO custom field handling), `metadataCache.js` (persisted filter-picker cache), `checkinsImport.js` (attendance-history import), `mode.js` (source-of-truth lock). Each has a co-located `.test.js`.
-- `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` and `client/src/components/planningCenter/*` - admin UI (batch editor, sync review, reconciliation review)
+- `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` and `client/src/components/planningCenter/*` - admin UI (batch editor, sync review)
 
 **Data model:**
 - `individuals.planning_center_id` / `families.planning_center_id` - link to a PCO Person/Household, unique-indexed per church
@@ -202,7 +202,6 @@ Optional, ongoing two-way sync with Planning Center's People and Check-ins APIs.
 
 **Core concepts:**
 - **Batches**: a church can run multiple named batches (e.g. "Members", "Youth Group") each with its own filter/schedule/target gathering. Matching always runs against PCO's full unfiltered people set; only the *output* buckets (link/restore/ambiguous/visitor-match) are scoped to the batch's own filter.
-- **Reconciliation**: a separate, whole-roster check (not tied to any batch) for active LMPG individuals who no longer match anyone in PCO — surfaced for archive/manual-link/skip, on its own schedule.
 - **Source-of-truth mode**: when `church_settings.planning_center_sync_indicator = 1` — labeled "Show sync indicator" in the UI, with copy that only mentions a cosmetic badge — any individual with a `planning_center_id` becomes locked: manual name/age edits, archive, reactivate, delete, and merge are all rejected (403 `PCO_MODE_LOCKED`). Enforced in `mode.js`/`individuals.js`, mirrored client-side in `client/src/utils/pcoLock.ts`. The UI does not disclose this behavioral side effect — be aware when touching this toggle or its copy.
 - **Matching**: name + household corroboration only (`matcher.js`) — PCO email/phone/custom IDs are never consulted. Ambiguous matches are surfaced for manual review, not auto-resolved.
 
