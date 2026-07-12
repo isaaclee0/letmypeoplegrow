@@ -9,6 +9,7 @@ const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { resolveManualLinks } = require('../services/planningCenter/selectionValidation');
 const metadataCache = require('../services/planningCenter/metadataCache');
 const { isEligible } = require('../services/planningCenter/eligibility');
+const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 
 const router = express.Router();
@@ -2073,6 +2074,9 @@ function resolveRange(startDate, endDate) {
 router.get('/planning-center/checkins/events', async (req, res) => {
   try {
     const churchId = req.user.church_id;
+    if (!(await hasLinkedPeople(churchId))) {
+      return res.status(403).json(notLinkedResponse());
+    }
     const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate);
 
     const owned = await getChurchPlanningCenterTokens(churchId);
@@ -2126,17 +2130,18 @@ router.get('/planning-center/checkin-import-state', async (req, res) => {
 router.get('/planning-center/checkins/availability', async (req, res) => {
   try {
     const churchId = req.user.church_id;
+    const peopleLinked = await hasLinkedPeople(churchId);
 
     // Once a check-in import has happened, never nudge again.
     const state = await loadCheckinImportState(churchId);
     const hasImported = !!(state && state.imported && Object.keys(state.imported).length > 0);
     if (hasImported) {
-      return res.json({ success: true, hasImported: true, available: false });
+      return res.json({ success: true, hasImported: true, available: false, peopleLinked });
     }
 
     const owned = await getChurchPlanningCenterTokens(churchId);
     if (!owned || !owned.tokens.access_token) {
-      return res.json({ success: true, hasImported: false, available: false });
+      return res.json({ success: true, hasImported: false, available: false, peopleLinked });
     }
 
     const response = await makePlanningCenterRequest(
@@ -2146,11 +2151,11 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
     const total = (response && response.status === 200)
       ? (response.data?.meta?.total_count ?? (response.data?.data?.length || 0))
       : 0;
-    res.json({ success: true, hasImported: false, available: total > 0, total });
+    res.json({ success: true, hasImported: false, available: total > 0, total, peopleLinked });
   } catch (error) {
     logger.error('PCO checkin availability error:', error);
     // Non-fatal: the UI just won't prompt.
-    res.json({ success: true, hasImported: false, available: false });
+    res.json({ success: true, hasImported: false, available: false, peopleLinked: false });
   }
 });
 
@@ -2549,6 +2554,13 @@ router.get('/planning-center/field-summary', async (req, res) => {
 async function runCheckinImport({ req, commit }) {
   const userId = req.user.id;
   const churchId = req.user.church_id;
+  if (!(await hasLinkedPeople(churchId))) {
+    const body = notLinkedResponse();
+    const err = new Error(body.error);
+    err.statusCode = 403;
+    err.code = body.code;
+    throw err;
+  }
   const { startDate, endDate } = resolveRange(req.body.startDate, req.body.endDate);
   const mappings = Array.isArray(req.body.mappings) ? req.body.mappings : [];
 
@@ -2852,7 +2864,7 @@ router.post('/planning-center/import-checkins/preview', async (req, res) => {
     res.json({ success: true, ...summary });
   } catch (error) {
     logger.error('PCO check-in preview error:', error);
-    res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message, code: error.code });
   }
 });
 
@@ -2863,7 +2875,7 @@ router.post('/planning-center/import-checkins/execute', async (req, res) => {
     res.json({ success: true, ...summary });
   } catch (error) {
     logger.error('PCO check-in execute error:', error);
-    res.status(error.statusCode || 500).json({ success: false, error: error.message });
+    res.status(error.statusCode || 500).json({ success: false, error: error.message, code: error.code });
   }
 });
 
