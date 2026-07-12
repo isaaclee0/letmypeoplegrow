@@ -190,7 +190,7 @@ const IntegrationsTab: React.FC = () => {
         />
 
         {/* Planning Center */}
-        {!pcStatus.loading && !pcStatus.fetchFailed && (
+        {!pcStatus.fetchFailed && (
           <IntegrationCard
             name="Planning Center"
             description="Connect to Planning Center Online to import people and check-ins."
@@ -204,7 +204,7 @@ const IntegrationsTab: React.FC = () => {
             connected={pcStatus.connected}
             loading={pcStatus.loading}
             connectedLabel={pcStatus.planningCenterAccount || undefined}
-            disabledMessage={pcStatus.enabled ? undefined : 'Not enabled on this server — ask your administrator to configure Planning Center.'}
+            disabledMessage={!pcStatus.loading && !pcStatus.enabled ? 'Not enabled on this server — ask your administrator to configure Planning Center.' : undefined}
             onOpen={() => setSelected('planning-center')}
             onDisconnect={pcStatus.connected ? () => {
               setSelected('planning-center');
