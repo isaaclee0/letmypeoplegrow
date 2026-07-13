@@ -154,6 +154,7 @@ export interface User {
   isFirstLogin?: boolean;
   defaultGatheringId?: number;
   church_id?: string;
+  churchName?: string;
   gatheringAssignments: GatheringType[];
   unreadNotifications?: number;
   hasSampleData?: boolean;
@@ -278,9 +279,15 @@ export const authAPI = {
   logout: () => 
     api.post('/auth/logout'),
     
-  clearExpiredToken: () => 
+  clearExpiredToken: () =>
     api.post('/auth/clear-expired-token'),
-    
+
+  getMyChurches: () =>
+    api.get('/auth/my-churches'),
+
+  switchChurch: (targetChurchId: string) =>
+    api.post('/auth/switch-church', { targetChurchId }),
+
 
   checkUsers: () =>
     api.get('/auth/check-users'),
