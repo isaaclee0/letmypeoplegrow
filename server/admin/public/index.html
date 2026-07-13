@@ -837,6 +837,7 @@
                 <th>Church</th>
                 <th>Role</th>
                 <th>Status</th>
+                <th>Linked</th>
                 <th>Created</th>
                 <th>Last Login</th>
                 <th>Actions</th>
@@ -853,10 +854,16 @@
                   <td><code>${u.church_id}</code></td>
                   <td><span class="role-badge role-${u.role}">${u.role}</span></td>
                   <td class="${u.is_active ? 'status-active' : 'status-inactive'}">${u.is_active ? 'Active' : 'Inactive'}</td>
+                  <td>
+                    ${u.person_id
+                      ? `<button class="action-btn" onclick="unlinkUser('${u.church_id}', ${u.id})" title="Unlink">🔗 Unlink</button>`
+                      : `<button class="action-btn" onclick="openLinkModal('${u.church_id}', ${u.id}, '${(u.first_name || '').replace(/'/g, "\\'")} ${(u.last_name || '').replace(/'/g, "\\'")}')" title="Link to another account">Link</button>`
+                    }
+                  </td>
                   <td class="timestamp">${formatDate(u.created_at)}</td>
                   <td class="timestamp">${formatRelative(u.last_login_at)}</td>
                   <td class="actions">
-                    ${u.is_active 
+                    ${u.is_active
                       ? `<button class="action-btn danger" onclick="deleteUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}', false)" title="Deactivate">🚫</button>`
                       : `<button class="action-btn success" onclick="reactivateUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}')" title="Reactivate">✓</button>`
                     }
@@ -1098,6 +1105,99 @@
         }
       } catch (err) {
         alert('Failed to reactivate user: ' + err.message);
+      }
+    }
+
+    // Unlink a user from their linked-person group
+    async function unlinkUser(churchId, userId) {
+      if (!confirm('Unlink this account from its linked person group?')) return;
+
+      try {
+        const res = await fetch(`/api/users/${churchId}/${userId}/unlink`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          alert(data.message);
+          loadAllUsers(usersPage, document.getElementById('user-search').value);
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (err) {
+        alert('Failed to unlink user: ' + err.message);
+      }
+    }
+
+    let linkModalSource = null;
+
+    // Open the "link to another account" modal
+    function openLinkModal(churchId, userId, name) {
+      linkModalSource = { churchId, userId };
+      const modalHtml = `
+        <div class="modal-overlay" onclick="if(event.target === this) closeModal()">
+          <div class="modal">
+            <div class="modal-header">
+              <h3>Link ${name} to another account</h3>
+              <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <input type="text" class="search-box" id="link-search" style="width: 100%; margin-bottom: 1rem;" placeholder="Search by name or email..." oninput="searchLinkCandidates()">
+              <div id="link-search-results"></div>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    let linkSearchTimeout;
+    function searchLinkCandidates() {
+      clearTimeout(linkSearchTimeout);
+      linkSearchTimeout = setTimeout(async () => {
+        const query = document.getElementById('link-search').value;
+        if (!query) {
+          document.getElementById('link-search-results').innerHTML = '';
+          return;
+        }
+        try {
+          const data = await fetchJSON(`/api/users?search=${encodeURIComponent(query)}&limit=10`);
+          const candidates = data.users.filter(u => !(u.church_id === linkModalSource.churchId && u.id === linkModalSource.userId));
+          const html = candidates.length ? candidates.map(u => `
+            <div class="user-item">
+              <div class="user-item-info">
+                <div>
+                  <div>${u.first_name || ''} ${u.last_name || ''}</div>
+                  <div class="timestamp">${u.email || u.mobile_number || '-'} &middot; <code>${u.church_id}</code></div>
+                </div>
+              </div>
+              <div class="user-item-actions">
+                <button class="transfer-btn" onclick="confirmLink('${u.church_id}', ${u.id}, '${(u.first_name || '').replace(/'/g, "\\'")} ${(u.last_name || '').replace(/'/g, "\\'")}')">Link</button>
+              </div>
+            </div>
+          `).join('') : '<div class="empty-state">No matches</div>';
+          document.getElementById('link-search-results').innerHTML = html;
+        } catch (err) {
+          document.getElementById('link-search-results').innerHTML = `<div class="empty-state">Search failed: ${err.message}</div>`;
+        }
+      }, 300);
+    }
+
+    async function confirmLink(targetChurchId, targetUserId, targetName) {
+      if (!confirm(`Link this account to ${targetName}?`)) return;
+      try {
+        const res = await fetch(`/api/users/${linkModalSource.churchId}/${linkModalSource.userId}/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetChurchId, targetUserId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(data.message);
+          closeModal();
+          loadAllUsers(usersPage, document.getElementById('user-search').value);
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (err) {
+        alert('Failed to link users: ' + err.message);
       }
     }
 
