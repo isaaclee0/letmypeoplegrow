@@ -356,3 +356,27 @@ test('resolveChurchSwitch: succeeds and returns the target user row', async () =
     assert.strictEqual(result.targetUser.role, 'coordinator');
   });
 });
+
+test('registerUserLookup: preserves an existing person_id when re-registering the same row (e.g. on next login)', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = `preservetest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+    Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    const linkedPersonId = Database.getRegistryDb()
+      .prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?')
+      .get(1, churchIdA).person_id;
+    assert.ok(linkedPersonId, 'sanity check: link should have been created');
+
+    // Simulate the linked user logging in again (auth.js calls registerUserLookup
+    // on every successful login) or updating their profile (resyncUserLookup).
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+
+    const rowAfterReLogin = Database.getRegistryDb()
+      .prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?')
+      .get(1, churchIdA);
+    assert.strictEqual(rowAfterReLogin.person_id, linkedPersonId, 'person_id must survive re-registration, not silently reset to null');
+  });
+});

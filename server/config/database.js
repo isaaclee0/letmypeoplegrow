@@ -490,12 +490,15 @@ class Database {
 
   static registerUserLookup(userId, email, mobileNumber, churchId) {
     if (!registryDb) throw new Error('Registry not initialized');
+    const existing = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userId, churchId);
     registryDb.prepare(
       'DELETE FROM user_lookup WHERE user_id = ? AND church_id = ?'
     ).run(userId, churchId);
     registryDb.prepare(
-      'INSERT OR REPLACE INTO user_lookup (user_id, email, mobile_number, church_id) VALUES (?, ?, ?, ?)'
-    ).run(userId, email || null, mobileNumber || null, churchId);
+      'INSERT OR REPLACE INTO user_lookup (user_id, email, mobile_number, church_id, person_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(userId, email || null, mobileNumber || null, churchId, existing ? existing.person_id : null);
   }
 
   static lookupLinkedChurches(userId, churchId, email, mobileNumber) {
