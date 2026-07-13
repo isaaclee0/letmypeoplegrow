@@ -497,6 +497,28 @@ class Database {
     ).run(userId, email || null, mobileNumber || null, churchId);
   }
 
+  static lookupLinkedChurches(userId, churchId, email, mobileNumber) {
+    if (!registryDb) return [];
+    const selfRow = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userId, churchId);
+    const personId = selfRow ? selfRow.person_id : null;
+    const emailParam = email || null;
+    const mobileParam = mobileNumber || null;
+
+    return registryDb.prepare(
+      `SELECT DISTINCT ul.church_id, ul.user_id, c.church_name
+       FROM user_lookup ul
+       JOIN churches c ON c.church_id = ul.church_id
+       WHERE ul.church_id != ?
+         AND (
+           (? IS NOT NULL AND ul.email = ?) OR
+           (? IS NOT NULL AND ul.mobile_number = ?) OR
+           (? IS NOT NULL AND ul.person_id = ?)
+         )`
+    ).all(churchId, emailParam, emailParam, mobileParam, mobileParam, personId, personId);
+  }
+
   static resyncUserLookup(userId) {
     const churchId = Database.getCurrentChurchId();
     if (!churchId) throw new Error('resyncUserLookup requires an active church context');
