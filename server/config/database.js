@@ -3,6 +3,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('path');
 const fs = require('fs');
 const { REGISTRY_SCHEMA, CHURCH_SCHEMA, UPDATED_AT_TRIGGERS } = require('./schema');
+const { randomUUID } = require('crypto');
 
 const asyncLocalStorage = new AsyncLocalStorage();
 const churchDbs = new Map();
@@ -489,12 +490,91 @@ class Database {
 
   static registerUserLookup(userId, email, mobileNumber, churchId) {
     if (!registryDb) throw new Error('Registry not initialized');
+    const existing = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userId, churchId);
     registryDb.prepare(
       'DELETE FROM user_lookup WHERE user_id = ? AND church_id = ?'
     ).run(userId, churchId);
     registryDb.prepare(
-      'INSERT OR REPLACE INTO user_lookup (user_id, email, mobile_number, church_id) VALUES (?, ?, ?, ?)'
-    ).run(userId, email || null, mobileNumber || null, churchId);
+      'INSERT OR REPLACE INTO user_lookup (user_id, email, mobile_number, church_id, person_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(userId, email || null, mobileNumber || null, churchId, existing ? existing.person_id : null);
+  }
+
+  static lookupLinkedChurches(userId, churchId, email, mobileNumber) {
+    if (!registryDb) return [];
+    const selfRow = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userId, churchId);
+    const personId = selfRow ? selfRow.person_id : null;
+    const emailParam = email || null;
+    const mobileParam = mobileNumber || null;
+
+    return registryDb.prepare(
+      `SELECT DISTINCT ul.church_id, ul.user_id, c.church_name
+       FROM user_lookup ul
+       JOIN churches c ON c.church_id = ul.church_id
+       WHERE ul.church_id != ?
+         AND (
+           (? IS NOT NULL AND ul.email = ?) OR
+           (? IS NOT NULL AND ul.mobile_number = ?) OR
+           (? IS NOT NULL AND ul.person_id = ?)
+         )`
+    ).all(churchId, emailParam, emailParam, mobileParam, mobileParam, personId, personId);
+  }
+
+  static async resolveChurchSwitch(userId, churchId, email, mobileNumber, targetChurchId) {
+    const linked = Database.lookupLinkedChurches(userId, churchId, email, mobileNumber);
+    const target = linked.find(l => l.church_id === targetChurchId);
+    if (!target) {
+      return { ok: false, status: 403, error: 'That church is not linked to your account.' };
+    }
+    if (!Database.isChurchApproved(targetChurchId)) {
+      return { ok: false, status: 403, error: 'That church is pending approval.' };
+    }
+
+    const targetUsers = await Database.queryForChurch(
+      targetChurchId,
+      'SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE id = ?',
+      [target.user_id]
+    );
+    if (targetUsers.length === 0 || !targetUsers[0].is_active) {
+      return { ok: false, status: 401, error: 'That account is no longer active.' };
+    }
+
+    return { ok: true, targetUser: targetUsers[0] };
+  }
+
+  static linkUserLookups(churchIdA, userIdA, churchIdB, userIdB) {
+    if (!registryDb) throw new Error('Registry not initialized');
+    const rowA = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userIdA, churchIdA);
+    const rowB = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userIdB, churchIdB);
+    if (!rowA || !rowB) throw new Error('No registry entry found for one or both users');
+
+    if (rowA.person_id && rowB.person_id && rowA.person_id !== rowB.person_id) {
+      // Both already belong to different groups: merge B's whole group into A's.
+      registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE person_id = ?')
+        .run(rowA.person_id, rowB.person_id);
+      return rowA.person_id;
+    }
+
+    const personId = rowA.person_id || rowB.person_id || randomUUID();
+    registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?')
+      .run(personId, userIdA, churchIdA);
+    registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?')
+      .run(personId, userIdB, churchIdB);
+    return personId;
+  }
+
+  static unlinkUserLookup(churchId, userId) {
+    if (!registryDb) throw new Error('Registry not initialized');
+    const result = registryDb.prepare('UPDATE user_lookup SET person_id = NULL WHERE user_id = ? AND church_id = ?')
+      .run(userId, churchId);
+    return result.changes > 0;
   }
 
   static resyncUserLookup(userId) {
@@ -552,6 +632,12 @@ class Database {
     return row ? !!row.is_approved : false;
   }
 
+  static getChurchName(churchId) {
+    if (!registryDb) return null;
+    const row = registryDb.prepare('SELECT church_name FROM churches WHERE church_id = ?').get(churchId);
+    return row ? row.church_name : null;
+  }
+
   static approveChurch(churchId, approved) {
     if (!registryDb) throw new Error('Registry not initialized');
     registryDb.prepare('UPDATE churches SET is_approved = ? WHERE church_id = ?').run(approved ? 1 : 0, churchId);
@@ -566,6 +652,13 @@ class Database {
       registryDb.exec('UPDATE churches SET is_approved = 1');
       console.log('✅ Registry migration: added is_approved column, approved all existing churches');
     }
+
+    const lookupCols = registryDb.prepare('PRAGMA table_info(user_lookup)').all();
+    if (!lookupCols.some(c => c.name === 'person_id')) {
+      registryDb.exec('ALTER TABLE user_lookup ADD COLUMN person_id TEXT');
+      console.log('✅ Registry migration: added person_id column to user_lookup');
+    }
+    registryDb.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
   }
 
   static getRegistryDb() {
