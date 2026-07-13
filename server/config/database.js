@@ -520,6 +520,28 @@ class Database {
     ).all(churchId, emailParam, emailParam, mobileParam, mobileParam, personId, personId);
   }
 
+  static async resolveChurchSwitch(userId, churchId, email, mobileNumber, targetChurchId) {
+    const linked = Database.lookupLinkedChurches(userId, churchId, email, mobileNumber);
+    const target = linked.find(l => l.church_id === targetChurchId);
+    if (!target) {
+      return { ok: false, status: 403, error: 'That church is not linked to your account.' };
+    }
+    if (!Database.isChurchApproved(targetChurchId)) {
+      return { ok: false, status: 403, error: 'That church is pending approval.' };
+    }
+
+    const targetUsers = await Database.queryForChurch(
+      targetChurchId,
+      'SELECT id, email, mobile_number, primary_contact_method, role, first_name, last_name, is_active, first_login_completed, default_gathering_id, church_id FROM users WHERE id = ?',
+      [target.user_id]
+    );
+    if (targetUsers.length === 0 || !targetUsers[0].is_active) {
+      return { ok: false, status: 401, error: 'That account is no longer active.' };
+    }
+
+    return { ok: true, targetUser: targetUsers[0] };
+  }
+
   static linkUserLookups(churchIdA, userIdA, churchIdB, userIdB) {
     if (!registryDb) throw new Error('Registry not initialized');
     const rowA = registryDb.prepare(
@@ -605,6 +627,12 @@ class Database {
     if (!registryDb) return false;
     const row = registryDb.prepare('SELECT is_approved FROM churches WHERE church_id = ?').get(churchId);
     return row ? !!row.is_approved : false;
+  }
+
+  static getChurchName(churchId) {
+    if (!registryDb) return null;
+    const row = registryDb.prepare('SELECT church_name FROM churches WHERE church_id = ?').get(churchId);
+    return row ? row.church_name : null;
   }
 
   static approveChurch(churchId, approved) {

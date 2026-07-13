@@ -265,3 +265,94 @@ test('linkUserLookups: is a safe no-op when both rows already share the same per
     assert.strictEqual(rowB.person_id, 'already-shared');
   });
 });
+
+test('resolveChurchSwitch: rejects when the target church is not linked to the user', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const insertA = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Solo', 'User', 1, ?)`,
+      ['solo@example.com', churchIdA]
+    );
+    Database.registerUserLookup(insertA.insertId, 'solo@example.com', null, churchIdA);
+
+    const result = await Database.resolveChurchSwitch(insertA.insertId, churchIdA, 'solo@example.com', null, 'nonexistent_church');
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, 403);
+  });
+});
+
+test('resolveChurchSwitch: rejects when the target church is not approved', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = `switchtest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    Database.ensureChurch(churchIdB, 'Unapproved Church'); // REGISTRY_SCHEMA defaults is_approved to 0
+
+    const insertA = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['dave@example.com', churchIdA]
+    );
+    Database.registerUserLookup(insertA.insertId, 'dave@example.com', null, churchIdA);
+    const insertB = await Database.queryForChurch(
+      churchIdB,
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['dave@example.com', churchIdB]
+    );
+    Database.registerUserLookup(insertB.insertId, 'dave@example.com', null, churchIdB);
+
+    const result = await Database.resolveChurchSwitch(insertA.insertId, churchIdA, 'dave@example.com', null, churchIdB);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, 403);
+  });
+});
+
+test('resolveChurchSwitch: rejects when the target user account is inactive', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = `switchtest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.getRegistryDb().prepare('UPDATE churches SET is_approved = 1 WHERE church_id = ?').run(churchIdB);
+
+    const insertA = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['dave@example.com', churchIdA]
+    );
+    Database.registerUserLookup(insertA.insertId, 'dave@example.com', null, churchIdA);
+    const insertB = await Database.queryForChurch(
+      churchIdB,
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 0, ?)`,
+      ['dave@example.com', churchIdB]
+    );
+    Database.registerUserLookup(insertB.insertId, 'dave@example.com', null, churchIdB);
+
+    const result = await Database.resolveChurchSwitch(insertA.insertId, churchIdA, 'dave@example.com', null, churchIdB);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.status, 401);
+  });
+});
+
+test('resolveChurchSwitch: succeeds and returns the target user row', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = `switchtest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.getRegistryDb().prepare('UPDATE churches SET is_approved = 1 WHERE church_id = ?').run(churchIdB);
+
+    const insertA = await Database.query(
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'admin', 'Dave', 'Matthews', 1, ?)`,
+      ['dave@example.com', churchIdA]
+    );
+    Database.registerUserLookup(insertA.insertId, 'dave@example.com', null, churchIdA);
+    const insertB = await Database.queryForChurch(
+      churchIdB,
+      `INSERT INTO users (email, role, first_name, last_name, is_active, church_id) VALUES (?, 'coordinator', 'Dave', 'Matthews', 1, ?)`,
+      ['dave@example.com', churchIdB]
+    );
+    Database.registerUserLookup(insertB.insertId, 'dave@example.com', null, churchIdB);
+
+    const result = await Database.resolveChurchSwitch(insertA.insertId, churchIdA, 'dave@example.com', null, churchIdB);
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.targetUser.id, insertB.insertId);
+    assert.strictEqual(result.targetUser.church_id, churchIdB);
+    assert.strictEqual(result.targetUser.role, 'coordinator');
+  });
+});
