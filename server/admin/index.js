@@ -228,6 +228,16 @@ app.get('/api/users', async (req, res) => {
         ${whereClause}
         ORDER BY u.created_at DESC
       `, params);
+
+      const registryDb = Database.getRegistryDb();
+      const personIdRows = registryDb.prepare(
+        'SELECT user_id, person_id FROM user_lookup WHERE church_id = ?'
+      ).all(cid);
+      const personIdByUserId = new Map(personIdRows.map(r => [r.user_id, r.person_id]));
+      for (const u of users) {
+        u.person_id = personIdByUserId.get(u.id) || null;
+      }
+
       allUsers.push(...users);
     }
 
@@ -264,6 +274,10 @@ app.get('/api/users/:userId', async (req, res) => {
       const user = await Database.queryForChurch(cid, 'SELECT * FROM users WHERE id = ?', [userId]);
       if (user.length) {
         foundUser = user[0];
+        const lookupRow = Database.getRegistryDb().prepare(
+          'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+        ).get(userId, cid);
+        foundUser.person_id = lookupRow ? lookupRow.person_id : null;
         recentActivity = await Database.queryForChurch(cid, `
           SELECT action, entity_type, created_at
           FROM audit_log
