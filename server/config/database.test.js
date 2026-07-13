@@ -153,3 +153,87 @@ test('lookupLinkedChurches: returns empty array when nothing matches', async () 
     assert.deepStrictEqual(linked, []);
   });
 });
+
+function makeChurchId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+test('linkUserLookups: generates a shared person_id for two unlinked rows', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = makeChurchId('linktest');
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+
+    const personId = Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    const rowA = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(1, churchIdA);
+    const rowB = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(2, churchIdB);
+    assert.ok(personId);
+    assert.strictEqual(rowA.person_id, personId);
+    assert.strictEqual(rowB.person_id, personId);
+  });
+});
+
+test('linkUserLookups: reuses an existing person_id rather than generating a new one', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = makeChurchId('linktest');
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?')
+      .run('existing-group-id', 1, churchIdA);
+
+    const personId = Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    assert.strictEqual(personId, 'existing-group-id');
+    const rowB = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(2, churchIdB);
+    assert.strictEqual(rowB.person_id, 'existing-group-id');
+  });
+});
+
+test('linkUserLookups: merges two existing groups when both rows already have different person_ids', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = makeChurchId('linktest');
+    const churchIdC = makeChurchId('linktest');
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.ensureChurch(churchIdC, 'Church C');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+    Database.registerUserLookup(3, 'c@example.com', null, churchIdC);
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?').run('group-a', 1, churchIdA);
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?').run('group-b', 2, churchIdB);
+    // churchIdC is a second member of group-b, to prove the whole group merges, not just the one row.
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?').run('group-b', 3, churchIdC);
+
+    const personId = Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    assert.strictEqual(personId, 'group-a');
+    const rowC = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(3, churchIdC);
+    assert.strictEqual(rowC.person_id, 'group-a');
+  });
+});
+
+test('linkUserLookups: throws when a row does not exist', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    assert.throws(() => Database.linkUserLookups(churchIdA, 1, 'nonexistent_church', 999));
+  });
+});
+
+test('unlinkUserLookup: clears only the specified row, leaving other group members intact', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = makeChurchId('linktest');
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+    Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    Database.unlinkUserLookup(churchIdA, 1);
+
+    const rowA = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(1, churchIdA);
+    const rowB = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(2, churchIdB);
+    assert.strictEqual(rowA.person_id, null);
+    assert.ok(rowB.person_id, 'the other group member should keep its person_id');
+  });
+});

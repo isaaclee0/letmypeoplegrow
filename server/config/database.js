@@ -3,6 +3,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('path');
 const fs = require('fs');
 const { REGISTRY_SCHEMA, CHURCH_SCHEMA, UPDATED_AT_TRIGGERS } = require('./schema');
+const { randomUUID } = require('crypto');
 
 const asyncLocalStorage = new AsyncLocalStorage();
 const churchDbs = new Map();
@@ -517,6 +518,37 @@ class Database {
            (? IS NOT NULL AND ul.person_id = ?)
          )`
     ).all(churchId, emailParam, emailParam, mobileParam, mobileParam, personId, personId);
+  }
+
+  static linkUserLookups(churchIdA, userIdA, churchIdB, userIdB) {
+    if (!registryDb) throw new Error('Registry not initialized');
+    const rowA = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userIdA, churchIdA);
+    const rowB = registryDb.prepare(
+      'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+    ).get(userIdB, churchIdB);
+    if (!rowA || !rowB) throw new Error('No registry entry found for one or both users');
+
+    if (rowA.person_id && rowB.person_id && rowA.person_id !== rowB.person_id) {
+      // Both already belong to different groups: merge B's whole group into A's.
+      registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE person_id = ?')
+        .run(rowA.person_id, rowB.person_id);
+      return rowA.person_id;
+    }
+
+    const personId = rowA.person_id || rowB.person_id || randomUUID();
+    registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?')
+      .run(personId, userIdA, churchIdA);
+    registryDb.prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?')
+      .run(personId, userIdB, churchIdB);
+    return personId;
+  }
+
+  static unlinkUserLookup(churchId, userId) {
+    if (!registryDb) throw new Error('Registry not initialized');
+    registryDb.prepare('UPDATE user_lookup SET person_id = NULL WHERE user_id = ? AND church_id = ?')
+      .run(userId, churchId);
   }
 
   static resyncUserLookup(userId) {
