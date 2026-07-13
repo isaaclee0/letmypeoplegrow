@@ -1,6 +1,6 @@
 const validator = require('validator');
 const DOMPurify = require('isomorphic-dompurify');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 /**
  * Rate limiter for potential church ID guessing attempts
@@ -20,7 +20,7 @@ const churchIdGuessingLimiter = rateLimit({
   skipFailedRequests: false,
   // Custom key generator to track by IP
   keyGenerator: (req) => {
-    return `church_guess_${req.ip}`;
+    return `church_guess_${ipKeyGenerator(req.ip)}`;
   }
 });
 
@@ -42,7 +42,7 @@ const authAttemptLimiter = rateLimit({
   skipFailedRequests: false,
   // Custom key generator to track by IP
   keyGenerator: (req) => {
-    return `auth_fail_${req.ip}`;
+    return `auth_fail_${ipKeyGenerator(req.ip)}`;
   }
 });
 
@@ -282,7 +282,8 @@ const createSecurityRateLimit = (windowMs = 15 * 60 * 1000, max = 10) => {
     skipSuccessfulRequests: true,
     // Custom key generator to include user ID if available
     keyGenerator: (req) => {
-      return req.user?.id ? `${req.ip}_${req.user.id}` : req.ip;
+      const ipKey = ipKeyGenerator(req.ip);
+      return req.user?.id ? `${ipKey}_${req.user.id}` : ipKey;
     }
   });
 };

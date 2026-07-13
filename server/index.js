@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const http = require('http');
@@ -244,7 +244,8 @@ const globalLimiter = rateLimit({
   skipSuccessfulRequests: true,
   // Custom key generator to include user ID if available
   keyGenerator: (req) => {
-    return req.user?.id ? `${req.ip}_${req.user.id}` : req.ip;
+    const ipKey = ipKeyGenerator(req.ip);
+    return req.user?.id ? `${ipKey}_${req.user.id}` : ipKey;
   }
 });
 
