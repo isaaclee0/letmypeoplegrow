@@ -12,6 +12,27 @@ const router = express.Router();
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
 
+// Assign every individual in `individualIds` to the union of gathering types
+// any of them already belonged to (used when merging individuals/families so
+// no one loses a gathering assignment another member of the merge held).
+async function consolidateGatheringAssignments(conn, { individualIds, churchId, addedBy }) {
+  const assignments = await conn.query(`
+    SELECT DISTINCT gathering_type_id
+    FROM gathering_lists
+    WHERE individual_id IN (?) AND church_id = ?
+  `, [individualIds, churchId]);
+
+  for (const { gathering_type_id: gatheringTypeId } of assignments) {
+    for (const individualId of individualIds) {
+      await conn.query(`
+        INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(gathering_type_id, individual_id) DO UPDATE SET added_by = excluded.added_by
+      `, [gatheringTypeId, individualId, addedBy, churchId]);
+    }
+  }
+}
+
 // Get families
 router.get('/', async (req, res) => {
   try {
@@ -386,23 +407,15 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
         WHERE id IN (?) AND church_id = ?
       `, [newFamilyId, individualIds, req.user.church_id]);
       
-      // If merging assignments, consolidate all gathering assignments
+      // If merging assignments, consolidate all gathering assignments so every
+      // individual in the new family holds the union of gathering types any
+      // of the original individuals were assigned to.
       if (mergeAssignments) {
-        // Get all unique gathering assignments from the individuals
-        const assignments = await conn.query(`
-          SELECT DISTINCT gathering_type_id
-          FROM gathering_lists
-          WHERE individual_id IN (?) AND church_id = ?
-        `, [individualIds, req.user.church_id]);
-        
-        // Add assignments to all individuals in the new family
-        for (const assignment of assignments) {
-          await conn.query(`
-            INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(gathering_type_id, individual_id) DO UPDATE SET added_by = excluded.added_by
-          `, [assignment.gathering_type_id, newFamilyId, req.user.id, req.user.church_id]);
-        }
+        await consolidateGatheringAssignments(conn, {
+          individualIds,
+          churchId: req.user.church_id,
+          addedBy: req.user.id,
+        });
       }
     });
     
@@ -519,3 +532,4 @@ router.delete('/:id/caregivers/:caregiverId', requireRole(['admin', 'coordinator
 });
 
 module.exports = router;
+module.exports.consolidateGatheringAssignments = consolidateGatheringAssignments;
