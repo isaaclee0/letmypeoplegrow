@@ -547,8 +547,9 @@ class Database {
 
   static unlinkUserLookup(churchId, userId) {
     if (!registryDb) throw new Error('Registry not initialized');
-    registryDb.prepare('UPDATE user_lookup SET person_id = NULL WHERE user_id = ? AND church_id = ?')
+    const result = registryDb.prepare('UPDATE user_lookup SET person_id = NULL WHERE user_id = ? AND church_id = ?')
       .run(userId, churchId);
+    return result.changes > 0;
   }
 
   static resyncUserLookup(userId) {

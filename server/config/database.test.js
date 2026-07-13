@@ -229,11 +229,39 @@ test('unlinkUserLookup: clears only the specified row, leaving other group membe
     Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
     Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
 
-    Database.unlinkUserLookup(churchIdA, 1);
+    const result = Database.unlinkUserLookup(churchIdA, 1);
 
+    assert.strictEqual(result, true, 'should return true when a row is actually unlinked');
     const rowA = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(1, churchIdA);
     const rowB = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(2, churchIdB);
     assert.strictEqual(rowA.person_id, null);
     assert.ok(rowB.person_id, 'the other group member should keep its person_id');
+  });
+});
+
+test('unlinkUserLookup: returns false when no matching row exists', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const result = Database.unlinkUserLookup(churchIdA, 9999);
+
+    assert.strictEqual(result, false, 'should return false when no user_lookup row matches');
+  });
+});
+
+test('linkUserLookups: is a safe no-op when both rows already share the same person_id', async () => {
+  await withTestChurchDb(async (churchIdA) => {
+    const churchIdB = makeChurchId('linktest');
+    Database.ensureChurch(churchIdB, 'Church B');
+    Database.registerUserLookup(1, 'a@example.com', null, churchIdA);
+    Database.registerUserLookup(2, 'b@example.com', null, churchIdB);
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?').run('already-shared', 1, churchIdA);
+    Database.getRegistryDb().prepare('UPDATE user_lookup SET person_id = ? WHERE user_id = ? AND church_id = ?').run('already-shared', 2, churchIdB);
+
+    const personId = Database.linkUserLookups(churchIdA, 1, churchIdB, 2);
+
+    assert.strictEqual(personId, 'already-shared');
+    const rowA = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(1, churchIdA);
+    const rowB = Database.getRegistryDb().prepare('SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?').get(2, churchIdB);
+    assert.strictEqual(rowA.person_id, 'already-shared');
+    assert.strictEqual(rowB.person_id, 'already-shared');
   });
 });
