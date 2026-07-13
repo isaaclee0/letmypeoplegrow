@@ -9,6 +9,7 @@ const Database = require('../config/database');
 const { sendOTCEmail, sendNewChurchApprovalEmail } = require('../utils/email');
 const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
+const logger = require('../config/logger');
 
 const router = express.Router();
 
@@ -478,6 +479,7 @@ router.post('/verify-code',
           firstName: fullUser.first_name,
           lastName: fullUser.last_name,
           church_id: fullUser.church_id,
+          churchName: Database.getChurchName(fullUser.church_id),
           isChurchApproved: Database.isChurchApproved(fullUser.church_id),
           isFirstLogin,
           defaultGatheringId: fullUser.default_gathering_id,
@@ -526,6 +528,7 @@ router.get('/me', verifyToken, async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         church_id: user.church_id,
+        churchName: Database.getChurchName(user.church_id),
         isChurchApproved: Database.isChurchApproved(user.church_id),
         isFirstLogin: !user.first_login_completed,
         defaultGatheringId: user.default_gathering_id,
@@ -539,6 +542,110 @@ router.get('/me', verifyToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to get user information.' });
   }
 });
+
+router.get('/my-churches', verifyToken, async (req, res) => {
+  try {
+    const user = req.user;
+    const linked = Database.lookupLinkedChurches(user.id, user.church_id, user.email, user.mobile_number);
+
+    const churches = [];
+    for (const row of linked) {
+      if (!Database.isChurchApproved(row.church_id)) continue;
+      const targetUsers = await Database.queryForChurch(
+        row.church_id,
+        'SELECT is_active FROM users WHERE id = ?',
+        [row.user_id]
+      );
+      if (targetUsers.length === 0 || !targetUsers[0].is_active) continue;
+      churches.push({ churchId: row.church_id, churchName: row.church_name });
+    }
+
+    res.json({ churches });
+  } catch (error) {
+    console.error('Get my-churches error:', error);
+    res.status(500).json({ error: 'Failed to load linked churches.' });
+  }
+});
+
+router.post('/switch-church',
+  verifyToken,
+  [body('targetChurchId').trim().notEmpty().withMessage('targetChurchId is required')],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const user = req.user;
+      const { targetChurchId } = req.body;
+
+      const result = await Database.resolveChurchSwitch(user.id, user.church_id, user.email, user.mobile_number, targetChurchId);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      const targetUser = result.targetUser;
+
+      const token = jwt.sign(
+        { userId: targetUser.id, email: targetUser.email, mobile: targetUser.mobile_number, role: targetUser.role, churchId: targetUser.church_id },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRE || '30d' }
+      );
+
+      const cookieOptions = {
+        httpOnly: true,
+        secure: req.secure || process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: '/'
+      };
+      if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
+      res.cookie('authToken', token, cookieOptions);
+
+      await Database.queryForChurch(targetChurchId, "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", [targetUser.id]);
+
+      logger.info('Church switch', {
+        fromChurchId: user.church_id,
+        fromUserId: user.id,
+        toChurchId: targetChurchId,
+        toUserId: targetUser.id
+      });
+
+      const assignments = await Database.queryForChurch(
+        targetChurchId,
+        `SELECT gt.id, gt.name, gt.description
+         FROM user_gathering_assignments uga
+         JOIN gathering_types gt ON uga.gathering_type_id = gt.id
+         WHERE uga.user_id = ? AND gt.is_active = 1
+         ORDER BY gt.name`,
+        [targetUser.id]
+      );
+      const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
+
+      res.json({
+        message: 'Switched church successfully',
+        user: {
+          id: targetUser.id,
+          email: targetUser.email,
+          mobileNumber: targetUser.mobile_number,
+          primaryContactMethod: targetUser.primary_contact_method,
+          role: targetUser.role,
+          firstName: targetUser.first_name,
+          lastName: targetUser.last_name,
+          church_id: targetUser.church_id,
+          churchName: Database.getChurchName(targetUser.church_id),
+          isChurchApproved: true,
+          isFirstLogin: false,
+          defaultGatheringId: targetUser.default_gathering_id,
+          gatheringAssignments: assignmentsWithNumbers
+        }
+      });
+    } catch (error) {
+      console.error('Switch church error:', error);
+      res.status(500).json({ error: 'Failed to switch church.' });
+    }
+  }
+);
 
 const refreshLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,

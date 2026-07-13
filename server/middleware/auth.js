@@ -47,7 +47,7 @@ const verifyToken = async (req, res, next) => {
         const churchApproved = Database.isChurchApproved(user.church_id);
         req.churchApproved = churchApproved;
         if (!churchApproved) {
-          const allowedPaths = ['/api/auth/me', '/api/auth/refresh', '/api/auth/logout'];
+          const allowedPaths = ['/api/auth/me', '/api/auth/refresh', '/api/auth/logout', '/api/auth/my-churches', '/api/auth/switch-church'];
           if (!allowedPaths.some(p => req.originalUrl.startsWith(p))) {
             return res.status(403).json({ error: 'Your church is pending approval.', code: 'CHURCH_PENDING_APPROVAL' });
           }
