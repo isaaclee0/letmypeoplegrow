@@ -569,6 +569,7 @@ router.get('/my-churches', verifyToken, async (req, res) => {
 
 router.post('/switch-church',
   verifyToken,
+  authLimiter,
   [body('targetChurchId').trim().notEmpty().withMessage('targetChurchId is required')],
   async (req, res) => {
     try {
@@ -592,16 +593,6 @@ router.post('/switch-church',
         { expiresIn: process.env.JWT_EXPIRE || '30d' }
       );
 
-      const cookieOptions = {
-        httpOnly: true,
-        secure: req.secure || process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        path: '/'
-      };
-      if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
-      res.cookie('authToken', token, cookieOptions);
-
       await Database.queryForChurch(targetChurchId, "UPDATE users SET last_login_at = datetime('now') WHERE id = ?", [targetUser.id]);
 
       logger.info('Church switch', {
@@ -622,6 +613,16 @@ router.post('/switch-church',
       );
       const assignmentsWithNumbers = assignments.map(a => ({ ...a, id: Number(a.id) }));
 
+      const cookieOptions = {
+        httpOnly: true,
+        secure: req.secure || process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        path: '/'
+      };
+      if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
+      res.cookie('authToken', token, cookieOptions);
+
       res.json({
         message: 'Switched church successfully',
         user: {
@@ -635,7 +636,7 @@ router.post('/switch-church',
           church_id: targetUser.church_id,
           churchName: Database.getChurchName(targetUser.church_id),
           isChurchApproved: true,
-          isFirstLogin: false,
+          isFirstLogin: !targetUser.first_login_completed,
           defaultGatheringId: targetUser.default_gathering_id,
           gatheringAssignments: assignmentsWithNumbers
         }
