@@ -6,6 +6,7 @@ import { useWebSocket } from '../contexts/WebSocketContext';
 import { usePWAUpdate } from '../contexts/PWAUpdateContext';
 import { getFormattedVersion } from '../utils/version';
 import { aiAPI, gatheringsAPI, notificationsAPI } from '../services/api';
+import ChurchSwitcher from './ChurchSwitcher';
 import logger from '../utils/logger';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -217,6 +218,7 @@ const Layout: React.FC = () => {
                 <div className="ml-3">
                   <p className="text-sm font-medium text-white">{user?.firstName} {user?.lastName}</p>
                   <p className="text-xs text-primary-200 capitalize">{user?.role?.replace('_', ' ')}</p>
+                  <ChurchSwitcher textClassName="text-xs text-primary-200 mt-0.5" />
                 </div>
               </div>
             </div>
@@ -304,6 +306,9 @@ const Layout: React.FC = () => {
               </nav>
               {/* Actions - Desktop */}
               <div className="px-2 space-y-1 mt-2 hidden lg:block">
+                <div className="px-2 pb-2">
+                  <ChurchSwitcher textClassName="text-xs text-primary-100" />
+                </div>
                 <button
                   onClick={handleLogout}
                   className="w-full text-white hover:bg-primary-600 dark:hover:bg-gray-700 hover:text-white group flex items-center px-2 py-2 text-sm font-medium rounded-md transition-colors duration-200"
