@@ -683,6 +683,24 @@
       return `${Math.floor(days / 30)} months ago`;
     }
 
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    // Escapes a value for safe use as a single-quoted JS string literal embedded inside
+    // a double-quoted HTML attribute (e.g. onclick="fn('${escapeJsAttr(value)}')"). Escaping
+    // only the JS-string delimiter (as this codebase previously did via replace(/'/g, "\\'"))
+    // leaves the double-quoted attribute itself breakable by a literal '"' in the value.
+    function escapeJsAttr(str) {
+      const jsEscaped = (str == null ? '' : String(str))
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/[\r\n\u2028\u2029]/g, '');
+      return escapeHtml(jsEscaped).replace(/"/g, '&quot;');
+    }
+
     // Load stats
     async function loadStats() {
       try {
@@ -746,7 +764,7 @@
                       }
                       ${c.country_code ? `<span class="country-badge">${c.country_code}</span>` : ''}
                     </div>
-                    <div class="created-by">by ${(c.created_by_name || '').trim() || 'Unknown'}${c.created_by_email ? ` (${c.created_by_email})` : ''}</div>
+                    <div class="created-by">by ${escapeHtml((c.created_by_name || '').trim() || 'Unknown')}${c.created_by_email ? ` (${escapeHtml(c.created_by_email)})` : ''}</div>
                   </td>
                   <td>
                     ${c.is_approved
@@ -803,10 +821,10 @@
               ${users.map(u => `
                 <tr>
                   <td>
-                    <div>${u.first_name || ''} ${u.last_name || ''}</div>
-                    <div class="timestamp">${u.email || u.mobile_number}</div>
+                    <div>${escapeHtml(u.first_name || '')} ${escapeHtml(u.last_name || '')}</div>
+                    <div class="timestamp">${escapeHtml(u.email || u.mobile_number || '')}</div>
                   </td>
-                  <td><code>${u.church_id}</code></td>
+                  <td><code>${escapeHtml(u.church_id)}</code></td>
                   <td><span class="role-badge role-${u.role}">${u.role}</span></td>
                   <td>${u.sessions_created}</td>
                   <td class="timestamp">${formatRelative(u.last_login_at)}</td>
@@ -847,20 +865,20 @@
                 <tr>
                   <td>${u.id}</td>
                   <td>
-                    <div>${u.first_name || ''} ${u.last_name || ''}</div>
-                    <div class="timestamp">${u.email || u.mobile_number || '-'}</div>
+                    <div>${escapeHtml(u.first_name || '')} ${escapeHtml(u.last_name || '')}</div>
+                    <div class="timestamp">${escapeHtml(u.email || u.mobile_number || '-')}</div>
                   </td>
-                  <td><code>${u.church_id}</code></td>
+                  <td><code>${escapeHtml(u.church_id)}</code></td>
                   <td><span class="role-badge role-${u.role}">${u.role}</span></td>
                   <td class="${u.is_active ? 'status-active' : 'status-inactive'}">${u.is_active ? 'Active' : 'Inactive'}</td>
                   <td class="timestamp">${formatDate(u.created_at)}</td>
                   <td class="timestamp">${formatRelative(u.last_login_at)}</td>
                   <td class="actions">
-                    ${u.is_active 
-                      ? `<button class="action-btn danger" onclick="deleteUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}', false)" title="Deactivate">🚫</button>`
-                      : `<button class="action-btn success" onclick="reactivateUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}')" title="Reactivate">✓</button>`
+                    ${u.is_active
+                      ? `<button class="action-btn danger" onclick="deleteUser(${u.id}, '${escapeJsAttr(u.email)}', false)" title="Deactivate">🚫</button>`
+                      : `<button class="action-btn success" onclick="reactivateUser(${u.id}, '${escapeJsAttr(u.email)}')" title="Reactivate">✓</button>`
                     }
-                    <button class="action-btn danger" onclick="deleteUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}', true)" title="Delete Permanently">🗑</button>
+                    <button class="action-btn danger" onclick="deleteUser(${u.id}, '${escapeJsAttr(u.email)}', true)" title="Delete Permanently">🗑</button>
                   </td>
                 </tr>
               `).join('')}
@@ -1110,7 +1128,7 @@
           <div class="modal-overlay" onclick="if(event.target === this) closeModal()">
             <div class="modal">
               <div class="modal-header">
-                <h3>Church Details: ${churchId}</h3>
+                <h3>Church Details: ${escapeHtml(churchId)}</h3>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
               </div>
               <div class="modal-body">
@@ -1122,16 +1140,16 @@
                         <div class="user-item-info">
                           <span class="role-badge role-${u.role}">${u.role}</span>
                           <div>
-                            <div>${u.first_name || ''} ${u.last_name || ''}</div>
-                            <div class="timestamp">${u.email || u.mobile_number}</div>
+                            <div>${escapeHtml(u.first_name || '')} ${escapeHtml(u.last_name || '')}</div>
+                            <div class="timestamp">${escapeHtml(u.email || u.mobile_number || '')}</div>
                           </div>
                           <span class="${u.is_active ? 'status-active' : 'status-inactive'}">${u.is_active ? 'Active' : 'Inactive'}</span>
                         </div>
                         <div class="user-item-actions">
-                          <button class="transfer-btn" onclick="transferOwnership('${churchId}', ${u.id}, '${(u.email || '').replace(/'/g, "\\'")}')">Make Owner</button>
-                          ${u.is_active 
-                            ? `<button class="action-btn danger" onclick="deleteUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}', false); closeModal(); viewChurchDetails('${churchId}');">🚫</button>`
-                            : `<button class="action-btn success" onclick="reactivateUser(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}'); closeModal(); viewChurchDetails('${churchId}');">✓</button>`
+                          <button class="transfer-btn" onclick="transferOwnership('${escapeJsAttr(churchId)}', ${u.id}, '${escapeJsAttr(u.email)}')">Make Owner</button>
+                          ${u.is_active
+                            ? `<button class="action-btn danger" onclick="deleteUser(${u.id}, '${escapeJsAttr(u.email)}', false); closeModal(); viewChurchDetails('${escapeJsAttr(churchId)}');">🚫</button>`
+                            : `<button class="action-btn success" onclick="reactivateUser(${u.id}, '${escapeJsAttr(u.email)}'); closeModal(); viewChurchDetails('${escapeJsAttr(churchId)}');">✓</button>`
                           }
                         </div>
                       </div>
@@ -1181,7 +1199,7 @@
                 </div>
 
                 <div class="modal-section">
-                  <button class="action-btn danger" onclick="archiveChurch('${churchId}', true); closeModal();" style="padding: 0.5rem 1rem;">
+                  <button class="action-btn danger" onclick="archiveChurch('${escapeJsAttr(churchId)}', true); closeModal();" style="padding: 0.5rem 1rem;">
                     📦 Archive This Church
                   </button>
                 </div>
@@ -1269,16 +1287,16 @@
                   const hasRegistry = z.contents.some(c => c.isRegistry);
                   return `
                     <tr>
-                      <td style="font-family: monospace; font-size: 0.8rem;">${z.filename}</td>
+                      <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(z.filename)}</td>
                       <td>${formatBytes(z.size)}</td>
                       <td>
                         ${hasRegistry ? '<span style="color: #60a5fa;">registry</span> + ' : ''}
                         ${churches.length} church(es)
-                        <div class="timestamp">${churches.map(c => c.churchId).join(', ')}</div>
+                        <div class="timestamp">${churches.map(c => escapeHtml(c.churchId)).join(', ')}</div>
                       </td>
                       <td class="timestamp">${formatDate(z.modified)}</td>
                       <td class="actions">
-                        <button class="action-btn" onclick="restoreFromZip('${z.filename.replace(/'/g, "\\'")}')"
+                        <button class="action-btn" onclick="restoreFromZip('${escapeJsAttr(z.filename)}')"
                           style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
                           Restore All
                         </button>
@@ -1314,13 +1332,13 @@
               <tbody>
                 ${registries.map(f => `
                   <tr>
-                    <td style="font-family: monospace; font-size: 0.8rem;">${f.filename}</td>
+                    <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(f.filename)}</td>
                     <td><span style="color: #60a5fa;">registry</span></td>
                     <td>${formatBytes(f.size)}</td>
                     <td>${f.hasWal ? formatBytes(f.walSize) : '-'}</td>
                     <td class="timestamp">${formatDate(f.modified)}</td>
                     <td class="actions">
-                      <button class="action-btn" onclick="restoreLocalRegistry('${f.filename.replace(/'/g, "\\'")}')"
+                      <button class="action-btn" onclick="restoreLocalRegistry('${escapeJsAttr(f.filename)}')"
                         style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
                         Restore
                       </button>
@@ -1329,13 +1347,13 @@
                 `).join('')}
                 ${churches.map(f => `
                   <tr>
-                    <td style="font-family: monospace; font-size: 0.8rem;">${f.filename}</td>
-                    <td><code>${f.churchId}</code></td>
+                    <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(f.filename)}</td>
+                    <td><code>${escapeHtml(f.churchId)}</code></td>
                     <td>${formatBytes(f.size)}</td>
                     <td>${f.hasWal ? formatBytes(f.walSize) : '-'}</td>
                     <td class="timestamp">${formatDate(f.modified)}</td>
                     <td class="actions">
-                      <button class="action-btn" onclick="restoreLocalChurch('${f.filename.replace(/'/g, "\\'")}', '${f.churchId}')"
+                      <button class="action-btn" onclick="restoreLocalChurch('${escapeJsAttr(f.filename)}', '${escapeJsAttr(f.churchId)}')"
                         style="background: #166534; color: white; padding: 0.3rem 0.75rem;">
                         Restore
                       </button>
@@ -1668,11 +1686,11 @@
             <tbody>
               ${data.map(s => `
                 <tr>
-                  <td style="font-family: monospace; font-size: 0.8rem;">${s.filename}</td>
+                  <td style="font-family: monospace; font-size: 0.8rem;">${escapeHtml(s.filename)}</td>
                   <td>${formatBytes(s.size)}</td>
                   <td class="timestamp">${formatDate(s.lastModified)}</td>
                   ${isChurch ? `<td class="actions">
-                    <button class="action-btn" onclick="restoreSnapshot('${target}', '${s.key.replace(/'/g, "\\'")}')" title="Restore this snapshot">Restore</button>
+                    <button class="action-btn" onclick="restoreSnapshot('${escapeJsAttr(target)}', '${escapeJsAttr(s.key)}')" title="Restore this snapshot">Restore</button>
                   </td>` : ''}
                 </tr>
               `).join('')}
