@@ -1374,7 +1374,20 @@ const AttendancePage: React.FC = () => {
 
     // If any are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount === 0;
-    
+
+    // Snapshot each member's actual prior state so a failed save can restore
+    // mixed attendance correctly instead of reverting everyone to one value
+    const previousPresentById: Record<number, boolean> = {};
+    familyMemberIds.forEach(id => {
+      const presentInState = presentById[id];
+      if (presentInState !== undefined) {
+        previousPresentById[id] = presentInState;
+      } else {
+        const person = familyMembers.find(p => p.id === id);
+        previousPresentById[id] = person ? Boolean(person.present) : false;
+      }
+    });
+
     if (!selectedGathering || !selectedDate) {
       // Family operation flag clearing removed - no longer needed
       return;
@@ -1438,7 +1451,7 @@ const AttendancePage: React.FC = () => {
       setPresentById(prev => {
         const updated = { ...prev };
         familyMemberIds.forEach(id => {
-          updated[id] = !shouldCheckAll; // Revert to previous state
+          updated[id] = previousPresentById[id];
         });
         return updated;
       });
@@ -2107,7 +2120,14 @@ const AttendancePage: React.FC = () => {
     
     // If 2 or more are present, uncheck all. Otherwise, check all
     const shouldCheckAll = presentCount < 2;
-    
+
+    // Snapshot each visitor's actual prior state so a failed save can restore
+    // mixed attendance correctly instead of reverting everyone to one value
+    const previousVisitorAttendance: Record<number, boolean> = {};
+    familyVisitorIds.forEach(id => {
+      previousVisitorAttendance[id] = Boolean(visitorAttendance[id]);
+    });
+
     // Track user modifications for all family members
     const now = Date.now();
     setLastUserModification(prev => {
@@ -2161,7 +2181,7 @@ const AttendancePage: React.FC = () => {
       setVisitorAttendance(prev => {
         const updated = { ...prev };
         familyVisitorIds.forEach(id => {
-          updated[id] = !shouldCheckAll;
+          updated[id] = previousVisitorAttendance[id];
         });
         return updated;
       });
