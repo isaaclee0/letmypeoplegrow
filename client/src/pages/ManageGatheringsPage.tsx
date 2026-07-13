@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { gatheringsAPI, onboardingAPI } from '../services/api';
+import { gatheringsAPI, onboardingAPI, kioskAPI } from '../services/api';
 import logger from '../utils/logger';
 import SampleDataBanner from '../components/SampleDataBanner';
 import {
@@ -144,8 +144,17 @@ const ManageGatheringsPage: React.FC = () => {
   // Selection state
   const [selectedGatherings, setSelectedGatherings] = useState<number[]>([]);
 
+  // Self check-in / kiosk mode is off unless KIOSK_MODE_ENABLED=true on the server
+  const [kioskModeEnabled, setKioskModeEnabled] = useState(false);
+
   useEffect(() => {
     loadGatherings();
+  }, []);
+
+  useEffect(() => {
+    kioskAPI.getStatus()
+      .then(response => setKioskModeEnabled(!!response.data.enabled))
+      .catch(() => setKioskModeEnabled(false));
   }, []);
 
   // Auto-hide the arrow after 8 seconds
@@ -1132,22 +1141,24 @@ const ManageGatheringsPage: React.FC = () => {
                 {editFormData.attendanceType === 'standard' && (
                   <div className="space-y-3">
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
-                    <div>
-                      <label className="flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={editFormData.kioskEnabled || false}
-                          onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
-                          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                        />
-                        <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Self Check-in
-                        </span>
-                      </label>
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
-                        Self-service / kiosk mode where individuals check themselves in.
-                      </p>
-                    </div>
+                    {kioskModeEnabled && (
+                      <div>
+                        <label className="flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editFormData.kioskEnabled || false}
+                            onChange={(e) => setEditFormData({ ...editFormData, kioskEnabled: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                          />
+                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Self Check-in
+                          </span>
+                        </label>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
+                          Self-service / kiosk mode where individuals check themselves in.
+                        </p>
+                      </div>
+                    )}
                     <div>
                       <label className="flex items-center cursor-pointer">
                         <input
@@ -1360,22 +1371,24 @@ const ManageGatheringsPage: React.FC = () => {
                   {createGatheringData.attendanceType === 'standard' && (
                     <div className="space-y-3">
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Check-in Modes</label>
-                      <div>
-                        <label className="flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={createGatheringData.kioskEnabled || false}
-                            onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
-                          />
-                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                            Self Check-in
-                          </span>
-                        </label>
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
-                          Self-service / kiosk mode where individuals check themselves in.
-                        </p>
-                      </div>
+                      {kioskModeEnabled && (
+                        <div>
+                          <label className="flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={createGatheringData.kioskEnabled || false}
+                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, kioskEnabled: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                            />
+                            <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Self Check-in
+                            </span>
+                          </label>
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
+                            Self-service / kiosk mode where individuals check themselves in.
+                          </p>
+                        </div>
+                      )}
                       <div>
                         <label className="flex items-center cursor-pointer">
                           <input
