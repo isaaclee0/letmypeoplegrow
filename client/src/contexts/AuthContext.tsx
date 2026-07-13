@@ -100,6 +100,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               console.log('ℹ️ Could not check onboarding status (this is normal if not authenticated)');
             }
           }
+
+          try {
+            const myChurchesResponse = await authAPI.getMyChurches();
+            setMyChurches(myChurchesResponse.data.churches || []);
+          } catch (myChurchesError) {
+            console.log('ℹ️ Could not load linked churches');
+          }
         } catch (error: any) {
           // 401 errors are expected when not logged in - this is normal behavior
           if (error.response?.status === 401) {
@@ -246,9 +253,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const switchChurch = async (targetChurchId: string) => {
     const response = await authAPI.switchChurch(targetChurchId);
     localStorage.setItem('user', JSON.stringify(response.data.user));
+    setUser(response.data.user);
     // Hard navigation (not a router push) so every church-scoped query in the
     // app re-fetches cleanly against the new church context.
-    window.location.href = '/dashboard';
+    window.location.href = '/app';
   };
 
   const value: AuthContextType = {
