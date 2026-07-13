@@ -17,6 +17,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true })
 // Import database and backup service
 const Database = require('../config/database');
 const BackupService = require('../services/backup');
+const logger = require('../config/logger');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -322,6 +323,9 @@ app.post('/api/users/:churchId/:userId/link', async (req, res) => {
     }
 
     const personId = Database.linkUserLookups(churchId, Number(userId), targetChurchId, Number(targetUserId));
+    logger.info('Admin panel: manually linked user accounts', {
+      churchId, userId: Number(userId), targetChurchId, targetUserId: Number(targetUserId), personId
+    });
     res.json({ message: 'Users linked successfully', personId });
   } catch (error) {
     console.error('Link users error:', error);
@@ -337,6 +341,7 @@ app.post('/api/users/:churchId/:userId/unlink', async (req, res) => {
     if (!unlinked) {
       return res.status(404).json({ error: 'No linked account found for this user' });
     }
+    logger.info('Admin panel: manually unlinked user account', { churchId, userId: Number(userId) });
     res.json({ message: 'User unlinked successfully' });
   } catch (error) {
     console.error('Unlink user error:', error);
