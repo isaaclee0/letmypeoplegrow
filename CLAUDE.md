@@ -170,6 +170,12 @@ The application supports two attendance tracking modes:
    - Visitor tracking with family grouping
    - Tri-state attendance: present, absent, not-tracking
    - Quick add for regulars and visitors
+   - Includes an optional **self check-in / kiosk mode**, gated behind
+     `KIOSK_MODE_ENABLED` in `server/.env` (default off). It's disabled by
+     default because the current self-checkin UI loads the entire church
+     roster into the browser for use on an unattended, PIN-locked device —
+     see `docs/superpowers/specs/2026-07-13-kiosk-mode-env-gate-design.md`.
+     Only turn it on once that's redesigned.
 
 2. **Headcount Mode**: Simple headcount entry
    - Multiple attendance takers can submit counts independently
