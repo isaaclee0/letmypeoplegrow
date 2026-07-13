@@ -1263,8 +1263,8 @@ const AttendancePage: React.FC = () => {
 
     // WebSocket enabled and connected - try WebSocket first
     try {
-      await sendAttendanceUpdate(gatheringId, date, recordsWithTimestamps);
-      return null; // WebSocket doesn't return response data
+      const ack = await sendAttendanceUpdate(gatheringId, date, recordsWithTimestamps);
+      return ack || null;
     } catch (wsError) {
       if (webSocketMode.fallbackAllowed) {
         logger.warn(`⚠️ WebSocket failed, falling back to API:`, wsError);

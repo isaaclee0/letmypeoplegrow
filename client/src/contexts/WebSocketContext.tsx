@@ -27,6 +27,18 @@ export interface AttendanceUpdate {
   timestamp: string;
 }
 
+export interface AttendanceUpdateAck {
+  skippedRecords?: Array<{
+    individualId: number;
+    reason: string;
+    serverValue: boolean;
+    clientValue: boolean;
+    serverTimestamp: string;
+    clientTimestamp: string;
+  }>;
+  hasConflicts?: boolean;
+}
+
 export interface VisitorUpdate {
   type: 'visitors' | 'visitor_family_added' | 'visitor_family_updated';
   gatheringId: number;
@@ -86,7 +98,7 @@ interface WebSocketContextType {
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'offline';
   isOfflineMode: boolean;
   activeUsers: ActiveUser[];
-  sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<void>;
+  sendAttendanceUpdate: (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>) => Promise<AttendanceUpdateAck | void>;
   sendHeadcountUpdate: (gatheringId: number, date: string, headcount: number, mode?: string) => Promise<void>;
   sendKioskAction: (gatheringId: number, date: string, individualIds: number[], action: 'checkin' | 'checkout', signerName: string) => Promise<void>;
   loadAttendanceData: (gatheringId: number, date: string) => Promise<{ attendanceList: any[]; visitors: any[] }>;
@@ -697,7 +709,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
 
   // Send attendance update via WebSocket
-  const sendAttendanceUpdate = async (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>): Promise<void> => {
+  const sendAttendanceUpdate = async (gatheringId: number, date: string, records: Array<{ individualId: number; present: boolean }>): Promise<AttendanceUpdateAck | void> => {
     return new Promise((resolve, reject) => {
       if (!socket || !isConnected) {
         reject(new Error('WebSocket not connected'));
@@ -705,11 +717,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
       }
 
       console.log(`📤 Sending attendance update via WebSocket: gathering ${gatheringId}, date ${date}`, records);
-      
+
       // Set up one-time listeners for response
-      const handleSuccess = () => {
+      const handleSuccess = (ack?: AttendanceUpdateAck) => {
         socket.off('attendance_update_error', handleError);
-        resolve();
+        resolve(ack);
       };
       
       const handleError = (error: { message?: string }) => {

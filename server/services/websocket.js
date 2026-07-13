@@ -531,6 +531,9 @@ class WebSocketService {
       const Database = require('../config/database');
       const { columnExists } = require('../utils/databaseSchema');
 
+      // Track skipped records for conflict detection (same as REST endpoint)
+      const skippedRecords = [];
+
       await Database.transactionForChurch(socket.churchId, async (conn) => {
         const hasSessionsChurchId = await columnExists('attendance_sessions', 'church_id');
 
@@ -605,9 +608,42 @@ class WebSocketService {
           }
         }
 
-        // Record attendance
+        // Record attendance, with the same timestamp-based conflict detection
+        // as the REST endpoint (POST /:gatheringTypeId/:date in attendance.js)
         for (const record of records) {
           const { individualId, present } = record;
+          const clientTimestamp = record.clientTimestamp ? new Date(record.clientTimestamp) : new Date();
+
+          // Check if record already exists and get its last update time
+          const existingRecords = await conn.query(
+            'SELECT updated_at, present FROM attendance_records WHERE session_id = ? AND individual_id = ? AND church_id = ?',
+            [sessionId, individualId, socket.churchId]
+          );
+
+          // If server record is newer than client's change, skip this update
+          if (existingRecords.length > 0) {
+            const existingRecord = existingRecords[0];
+            const serverTimestamp = new Date(existingRecord.updated_at);
+
+            if (serverTimestamp > clientTimestamp) {
+              logger.debugLog('Skipping stale update via WebSocket', {
+                individualId,
+                clientTime: clientTimestamp,
+                serverTime: serverTimestamp,
+                clientValue: present,
+                serverValue: existingRecord.present
+              });
+              skippedRecords.push({
+                individualId,
+                reason: 'stale_data',
+                serverValue: existingRecord.present,
+                clientValue: present,
+                serverTimestamp,
+                clientTimestamp
+              });
+              continue;
+            }
+          }
 
           // Fetch current people_type to store as historical type
           let peopleTypeAtTime = null;
@@ -679,8 +715,16 @@ class WebSocketService {
       
       logger.debugLog(`Attendance update broadcasted to ${broadcastCount} clients in church ${socket.churchId}`);
 
-      // Send success confirmation to sender
-      socket.emit('attendance_update_success');
+      if (skippedRecords.length > 0) {
+        logger.debugLog('Skipped stale records via WebSocket', { count: skippedRecords.length, records: skippedRecords });
+      }
+
+      // Send success confirmation to sender, including any conflicts so the
+      // client can react the same way it does for the REST endpoint
+      socket.emit('attendance_update_success', {
+        skippedRecords: skippedRecords.length > 0 ? skippedRecords : undefined,
+        hasConflicts: skippedRecords.length > 0
+      });
 
       logger.info('WebSocket attendance update processed successfully', {
         userId: socket.userId,
