@@ -303,6 +303,47 @@ app.get('/api/users/:userId', async (req, res) => {
   }
 });
 
+// Manually link two user accounts (across churches) to the same person
+app.post('/api/users/:churchId/:userId/link', async (req, res) => {
+  try {
+    const { churchId, userId } = req.params;
+    const { targetChurchId, targetUserId } = req.body;
+    if (!targetChurchId || !targetUserId) {
+      return res.status(400).json({ error: 'targetChurchId and targetUserId are required' });
+    }
+    if (churchId === targetChurchId && Number(userId) === Number(targetUserId)) {
+      return res.status(400).json({ error: 'Cannot link a user to themselves' });
+    }
+
+    const sourceExists = await Database.queryForChurch(churchId, 'SELECT id FROM users WHERE id = ?', [userId]);
+    const targetExists = await Database.queryForChurch(targetChurchId, 'SELECT id FROM users WHERE id = ?', [targetUserId]);
+    if (sourceExists.length === 0 || targetExists.length === 0) {
+      return res.status(404).json({ error: 'One or both users not found' });
+    }
+
+    const personId = Database.linkUserLookups(churchId, Number(userId), targetChurchId, Number(targetUserId));
+    res.json({ message: 'Users linked successfully', personId });
+  } catch (error) {
+    console.error('Link users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manually unlink a user account from its linked person
+app.post('/api/users/:churchId/:userId/unlink', async (req, res) => {
+  try {
+    const { churchId, userId } = req.params;
+    const unlinked = Database.unlinkUserLookup(churchId, Number(userId));
+    if (!unlinked) {
+      return res.status(404).json({ error: 'No linked account found for this user' });
+    }
+    res.json({ message: 'User unlinked successfully' });
+  } catch (error) {
+    console.error('Unlink user error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Approve or unapprove a church
 app.post('/api/churches/:churchId/approve', async (req, res) => {
   try {
