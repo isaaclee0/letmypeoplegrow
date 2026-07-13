@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { useCheckIns } from '../contexts/CheckInsContext';
-import { gatheringsAPI, GatheringType } from '../services/api';
+import { gatheringsAPI, GatheringType, kioskAPI } from '../services/api';
 import { getNextGatheringDate } from '../components/checkins/GatheringDateSelector';
 import GatheringDateSelector from '../components/checkins/GatheringDateSelector';
 import CheckInHistory from '../components/checkins/CheckInHistory';
@@ -35,6 +35,9 @@ const CheckInsPage: React.FC = () => {
   // Kiosk-enabled gatherings - from cache first, then API
   const [kioskGatherings, setKioskGatherings] = useState<GatheringType[]>([]);
 
+  // Self check-in / kiosk mode is off unless KIOSK_MODE_ENABLED=true on the server
+  const [kioskModeEnabled, setKioskModeEnabled] = useState(false);
+
   // Cache-first loading: show cached data immediately, fetch fresh in background
   useEffect(() => {
     const checkGatherings = async () => {
@@ -43,7 +46,9 @@ const CheckInsPage: React.FC = () => {
         const cachedGatherings = localStorage.getItem('gatherings_cached_data');
         if (cachedGatherings) {
           const parsed = JSON.parse(cachedGatherings);
-          const all: GatheringType[] = parsed.gatherings || [];
+          const rawAll: GatheringType[] = parsed.gatherings || [];
+          // Self check-in status isn't cached; assume disabled until Step 2 confirms it
+          const all: GatheringType[] = rawAll.map(g => ({ ...g, kioskEnabled: false }));
           const kioskList = all.filter((g: GatheringType) => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
           if (kioskList.length > 0) {
             setKioskGatherings(kioskList);
@@ -55,15 +60,21 @@ const CheckInsPage: React.FC = () => {
         // ignore
       }
 
-      // Step 2: Fetch fresh data and cache for next visit
+      // Step 2: Fetch fresh data (+ kiosk status) and cache for next visit
       try {
-        const response = await gatheringsAPI.getAll();
-        const all: GatheringType[] = response.data.gatherings || [];
+        const [gatheringsResponse, statusResponse] = await Promise.all([
+          gatheringsAPI.getAll(),
+          kioskAPI.getStatus().catch(() => ({ data: { enabled: false } })),
+        ]);
+        const kioskGloballyEnabled = !!statusResponse.data.enabled;
+        setKioskModeEnabled(kioskGloballyEnabled);
+        const rawAll: GatheringType[] = gatheringsResponse.data.gatherings || [];
+        const all: GatheringType[] = kioskGloballyEnabled ? rawAll : rawAll.map(g => ({ ...g, kioskEnabled: false }));
         const kioskList = all.filter(g => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
         setKioskGatherings(kioskList);
         setNoGatherings(kioskList.length === 0);
         try {
-          localStorage.setItem('gatherings_cached_data', JSON.stringify({ gatherings: all, timestamp: Date.now() }));
+          localStorage.setItem('gatherings_cached_data', JSON.stringify({ gatherings: rawAll, timestamp: Date.now() }));
         } catch {
           // ignore cache write failures
         }
@@ -111,7 +122,7 @@ const CheckInsPage: React.FC = () => {
               name: checkIns.gatheringName || 'Gathering',
               attendanceType: 'standard',
               isActive: true,
-              kioskEnabled: true,
+              kioskEnabled: kioskGloballyEnabled,
             } as GatheringType);
             if (checkIns.selectedDate) {
               setGatheringDate(checkIns.selectedDate);
@@ -125,7 +136,9 @@ const CheckInsPage: React.FC = () => {
           const cachedGatherings = localStorage.getItem('gatherings_cached_data');
           if (cachedGatherings) {
             const parsed = JSON.parse(cachedGatherings);
-            const all: GatheringType[] = parsed.gatherings || [];
+            const rawAll: GatheringType[] = parsed.gatherings || [];
+            // Couldn't confirm kiosk status from the server; default self check-in to off
+            const all: GatheringType[] = rawAll.map(g => ({ ...g, kioskEnabled: false }));
             const kioskList = all.filter((g: GatheringType) => (g.kioskEnabled || g.leaderCheckinEnabled) && g.attendanceType === 'standard');
             setKioskGatherings(kioskList);
             setNoGatherings(kioskList.length === 0);
@@ -143,7 +156,7 @@ const CheckInsPage: React.FC = () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If locked, go directly to self check-in
-  if (checkIns.isLocked && selectedGathering && activeMode === 'self') {
+  if (kioskModeEnabled && checkIns.isLocked && selectedGathering && activeMode === 'self') {
     return (
       <SelfCheckInMode
         selectedGathering={selectedGathering}
@@ -157,7 +170,7 @@ const CheckInsPage: React.FC = () => {
   }
 
   // Self check-in mode
-  if (activeMode === 'self' && selectedGathering) {
+  if (kioskModeEnabled && activeMode === 'self' && selectedGathering) {
     return (
       <SelfCheckInMode
         selectedGathering={selectedGathering}
