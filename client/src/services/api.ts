@@ -438,6 +438,9 @@ export const attendanceAPI = {
 
 // Kiosk API
 export const kioskAPI = {
+  getStatus: () =>
+    api.get('/kiosk/status'),
+
   record: (gatheringTypeId: number, date: string, data: {
     individualIds: number[];
     action: 'checkin' | 'checkout';
