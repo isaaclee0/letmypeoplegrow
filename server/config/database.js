@@ -497,6 +497,16 @@ class Database {
     ).run(userId, email || null, mobileNumber || null, churchId);
   }
 
+  static resyncUserLookup(userId) {
+    const churchId = Database.getCurrentChurchId();
+    if (!churchId) throw new Error('resyncUserLookup requires an active church context');
+    const rows = Database.getChurchDb(churchId)
+      .prepare('SELECT email, mobile_number FROM users WHERE id = ?')
+      .get(userId);
+    if (!rows) return;
+    Database.registerUserLookup(userId, rows.email, rows.mobile_number, churchId);
+  }
+
   static lookupChurchByEmail(email) {
     if (!registryDb) return null;
     return registryDb.prepare(

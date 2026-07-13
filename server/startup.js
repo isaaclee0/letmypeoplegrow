@@ -17,7 +17,8 @@ async function runMigrations() {
       { version: 'v1.9.0_add_church_approval', name: 'add_church_approval', description: 'Add is_approved column to churches registry table and approve all existing churches' },
       { version: 'v1.10.0_add_weekly_review_settings', name: 'add_weekly_review_settings', description: 'Add weekly review email settings to church_settings' },
       { version: 'v1.11.0_add_excluded_from_stats', name: 'add_excluded_from_stats', description: 'Add excluded_from_stats column to attendance_sessions' },
-      { version: 'v1.12.0_add_caregiver_absence_threshold', name: 'add_caregiver_absence_threshold', description: 'Add caregiver_absence_threshold column to church_settings' }
+      { version: 'v1.12.0_add_caregiver_absence_threshold', name: 'add_caregiver_absence_threshold', description: 'Add caregiver_absence_threshold column to church_settings' },
+      { version: 'v2.1.6_resync_user_lookup', name: 'resync_user_lookup', description: 'Resync registry user_lookup email/mobile from each user\'s current row, repairing entries left stale by profile edits made before Database.resyncUserLookup existed' }
     ];
 
     const executedMigrations = await Database.query(
@@ -87,6 +88,14 @@ async function runMigrations() {
             await Database.query(`ALTER TABLE church_settings ADD COLUMN caregiver_absence_threshold INTEGER DEFAULT 3`);
             console.log(`  ✅ Added caregiver_absence_threshold column to church_settings`);
           }
+        }
+
+        if (migration.version === 'v2.1.6_resync_user_lookup') {
+          const users = await Database.query('SELECT id FROM users');
+          for (const u of users) {
+            Database.resyncUserLookup(u.id);
+          }
+          console.log(`  ✅ Resynced user_lookup for ${users.length} user(s)`);
         }
 
         await Database.query(

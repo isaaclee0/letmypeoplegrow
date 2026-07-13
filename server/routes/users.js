@@ -90,6 +90,10 @@ router.put('/me',
         WHERE id = ?
       `, updateValues);
 
+      if (email !== undefined || normalizedMobile !== undefined) {
+        Database.resyncUserLookup(userId);
+      }
+
       return res.json({ message: 'Profile updated successfully' });
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY') {
@@ -521,6 +525,10 @@ router.put('/:id',
         UPDATE users SET ${updateFields.join(', ')}
         WHERE id = ?
       `, updateValues);
+
+      if (email !== undefined || normalizedMobile !== undefined) {
+        Database.resyncUserLookup(parseInt(id));
+      }
 
       res.json({ message: 'User updated successfully' });
     } catch (error) {
