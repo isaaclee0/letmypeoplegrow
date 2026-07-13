@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS user_lookup (
   user_id INTEGER NOT NULL,
   email TEXT,
   mobile_number TEXT,
-  church_id TEXT NOT NULL
+  church_id TEXT NOT NULL,
+  person_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_lookup_email ON user_lookup(email);
