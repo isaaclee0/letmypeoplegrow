@@ -154,4 +154,7 @@ family-dummy-data.tsv
 server/config/database-mariadb.js
 
 # Internal planning docs
-MONETISATION.mddocker-compose.worktree-override.yml
+MONETISATION.md
+
+# Local worktree docker-compose port override
+docker-compose.worktree-override.yml
