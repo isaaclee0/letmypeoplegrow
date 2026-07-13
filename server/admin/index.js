@@ -17,6 +17,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true })
 // Import database and backup service
 const Database = require('../config/database');
 const BackupService = require('../services/backup');
+const logger = require('../config/logger');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -228,6 +229,16 @@ app.get('/api/users', async (req, res) => {
         ${whereClause}
         ORDER BY u.created_at DESC
       `, params);
+
+      const registryDb = Database.getRegistryDb();
+      const personIdRows = registryDb.prepare(
+        'SELECT user_id, person_id FROM user_lookup WHERE church_id = ?'
+      ).all(cid);
+      const personIdByUserId = new Map(personIdRows.map(r => [r.user_id, r.person_id]));
+      for (const u of users) {
+        u.person_id = personIdByUserId.get(u.id) || null;
+      }
+
       allUsers.push(...users);
     }
 
@@ -264,6 +275,10 @@ app.get('/api/users/:userId', async (req, res) => {
       const user = await Database.queryForChurch(cid, 'SELECT * FROM users WHERE id = ?', [userId]);
       if (user.length) {
         foundUser = user[0];
+        const lookupRow = Database.getRegistryDb().prepare(
+          'SELECT person_id FROM user_lookup WHERE user_id = ? AND church_id = ?'
+        ).get(userId, cid);
+        foundUser.person_id = lookupRow ? lookupRow.person_id : null;
         recentActivity = await Database.queryForChurch(cid, `
           SELECT action, entity_type, created_at
           FROM audit_log
@@ -285,6 +300,51 @@ app.get('/api/users/:userId', async (req, res) => {
     });
   } catch (error) {
     console.error('User details error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manually link two user accounts (across churches) to the same person
+app.post('/api/users/:churchId/:userId/link', async (req, res) => {
+  try {
+    const { churchId, userId } = req.params;
+    const { targetChurchId, targetUserId } = req.body;
+    if (!targetChurchId || !targetUserId) {
+      return res.status(400).json({ error: 'targetChurchId and targetUserId are required' });
+    }
+    if (churchId === targetChurchId && Number(userId) === Number(targetUserId)) {
+      return res.status(400).json({ error: 'Cannot link a user to themselves' });
+    }
+
+    const sourceExists = await Database.queryForChurch(churchId, 'SELECT id FROM users WHERE id = ?', [userId]);
+    const targetExists = await Database.queryForChurch(targetChurchId, 'SELECT id FROM users WHERE id = ?', [targetUserId]);
+    if (sourceExists.length === 0 || targetExists.length === 0) {
+      return res.status(404).json({ error: 'One or both users not found' });
+    }
+
+    const personId = Database.linkUserLookups(churchId, Number(userId), targetChurchId, Number(targetUserId));
+    logger.info('Admin panel: manually linked user accounts', {
+      churchId, userId: Number(userId), targetChurchId, targetUserId: Number(targetUserId), personId
+    });
+    res.json({ message: 'Users linked successfully', personId });
+  } catch (error) {
+    console.error('Link users error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manually unlink a user account from its linked person
+app.post('/api/users/:churchId/:userId/unlink', async (req, res) => {
+  try {
+    const { churchId, userId } = req.params;
+    const unlinked = Database.unlinkUserLookup(churchId, Number(userId));
+    if (!unlinked) {
+      return res.status(404).json({ error: 'No linked account found for this user' });
+    }
+    logger.info('Admin panel: manually unlinked user account', { churchId, userId: Number(userId) });
+    res.json({ message: 'User unlinked successfully' });
+  } catch (error) {
+    console.error('Unlink user error:', error);
     res.status(500).json({ error: error.message });
   }
 });

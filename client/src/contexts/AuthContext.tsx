@@ -1,17 +1,24 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode, useRef } from 'react';
 import { authAPI, onboardingAPI, User } from '../services/api';
 
+export interface MyChurch {
+  churchId: string;
+  churchName: string;
+}
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   needsOnboarding: boolean;
+  myChurches: MyChurch[];
   login: (token: string, userData: User) => Promise<void>;
   logout: () => void;
   updateUser: (userData: Partial<User>) => void;
   refreshOnboardingStatus: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   refreshTokenAndUserData: () => Promise<boolean>;
+  switchChurch: (targetChurchId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,6 +39,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [myChurches, setMyChurches] = useState<MyChurch[]>([]);
   const isInitializing = useRef(false);
   const lastRedirect = useRef(0); // Track last redirect time for debouncing
 
@@ -91,6 +99,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             } catch (onboardingError) {
               console.log('ℹ️ Could not check onboarding status (this is normal if not authenticated)');
             }
+          }
+
+          try {
+            const myChurchesResponse = await authAPI.getMyChurches();
+            setMyChurches(myChurchesResponse.data.churches || []);
+          } catch (myChurchesError) {
+            console.log('ℹ️ Could not load linked churches');
           }
         } catch (error: any) {
           // 401 errors are expected when not logged in - this is normal behavior
@@ -160,7 +175,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         console.error('Failed to check onboarding status:', onboardingError);
       }
     }
-    
+
+    try {
+      const myChurchesResponse = await authAPI.getMyChurches();
+      setMyChurches(myChurchesResponse.data.churches || []);
+    } catch (myChurchesError) {
+      console.error('Failed to load linked churches:', myChurchesError);
+    }
+
     console.log('✅ AuthContext: login() complete');
   };
 
@@ -228,17 +250,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const switchChurch = async (targetChurchId: string) => {
+    const response = await authAPI.switchChurch(targetChurchId);
+    localStorage.setItem('user', JSON.stringify(response.data.user));
+    setUser(response.data.user);
+    // Hard navigation (not a router push) so every church-scoped query in the
+    // app re-fetches cleanly against the new church context.
+    window.location.href = '/app';
+  };
+
   const value: AuthContextType = {
     user,
     isLoading,
     isAuthenticated: !!user,
     needsOnboarding,
+    myChurches,
     login,
     logout,
     updateUser,
     refreshOnboardingStatus,
     refreshUserData,
     refreshTokenAndUserData,
+    switchChurch,
   };
 
   return (
