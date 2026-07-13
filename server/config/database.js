@@ -30,14 +30,6 @@ class Database {
     registryDb.pragma('busy_timeout = 5000');
     registryDb.exec(REGISTRY_SCHEMA);
 
-    // Ensure the person_id index exists (separate from schema to avoid failures when adding to existing registries)
-    try {
-      registryDb.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
-    } catch (e) {
-      // If person_id column doesn't exist yet, the migration will add it and create the index
-      // This is expected for existing registries that are being upgraded
-    }
-
     console.log('✅ SQLite registry database initialized at', path.join(dataDir, 'registry.sqlite'));
   }
 
@@ -578,9 +570,9 @@ class Database {
     const lookupCols = registryDb.prepare('PRAGMA table_info(user_lookup)').all();
     if (!lookupCols.some(c => c.name === 'person_id')) {
       registryDb.exec('ALTER TABLE user_lookup ADD COLUMN person_id TEXT');
-      registryDb.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
       console.log('✅ Registry migration: added person_id column to user_lookup');
     }
+    registryDb.exec('CREATE INDEX IF NOT EXISTS idx_user_lookup_person ON user_lookup(person_id)');
   }
 
   static getRegistryDb() {
