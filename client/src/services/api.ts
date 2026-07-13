@@ -288,7 +288,6 @@ export const authAPI = {
   switchChurch: (targetChurchId: string) =>
     api.post('/auth/switch-church', { targetChurchId }),
 
-
   checkUsers: () =>
     api.get('/auth/check-users'),
 
