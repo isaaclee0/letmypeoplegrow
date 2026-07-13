@@ -8,6 +8,28 @@ const router = express.Router();
 
 router.use(verifyToken);
 
+// Self check-in / kiosk mode is off by default: the client UI loads the
+// entire church roster into the browser for an unattended, PIN-locked
+// device. See docs/superpowers/specs/2026-07-13-kiosk-mode-env-gate-design.md.
+// Only set KIOSK_MODE_ENABLED=true once that data-exposure issue is fixed.
+function kioskModeEnabled() {
+  return process.env.KIOSK_MODE_ENABLED === 'true';
+}
+
+// ===== Report whether self check-in / kiosk mode is enabled =====
+// GET /api/kiosk/status
+router.get('/status', (req, res) => {
+  res.json({ enabled: kioskModeEnabled() });
+});
+
+// Block every other kiosk route while the feature is globally disabled.
+router.use((req, res, next) => {
+  if (!kioskModeEnabled()) {
+    return res.status(403).json({ code: 'KIOSK_DISABLED', error: 'Self check-in is currently disabled.' });
+  }
+  next();
+});
+
 // Middleware to disable caching
 const disableCache = (req, res, next) => {
   res.set({
