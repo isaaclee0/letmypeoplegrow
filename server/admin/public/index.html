@@ -683,6 +683,12 @@
       return `${Math.floor(days / 30)} months ago`;
     }
 
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
     // Load stats
     async function loadStats() {
       try {
@@ -1127,6 +1133,7 @@
     }
 
     let linkModalSource = null;
+    let linkSearchRequestId = 0;
 
     // Open the "link to another account" modal
     function openLinkModal(churchId, userId, name) {
@@ -1135,7 +1142,7 @@
         <div class="modal-overlay" onclick="if(event.target === this) closeModal()">
           <div class="modal">
             <div class="modal-header">
-              <h3>Link ${name} to another account</h3>
+              <h3>Link ${escapeHtml(name)} to another account</h3>
               <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -1151,21 +1158,25 @@
     let linkSearchTimeout;
     function searchLinkCandidates() {
       clearTimeout(linkSearchTimeout);
+      const requestId = ++linkSearchRequestId;
       linkSearchTimeout = setTimeout(async () => {
         const query = document.getElementById('link-search').value;
         if (!query) {
-          document.getElementById('link-search-results').innerHTML = '';
+          if (requestId === linkSearchRequestId) {
+            document.getElementById('link-search-results').innerHTML = '';
+          }
           return;
         }
         try {
           const data = await fetchJSON(`/api/users?search=${encodeURIComponent(query)}&limit=10`);
+          if (requestId !== linkSearchRequestId) return;
           const candidates = data.users.filter(u => !(u.church_id === linkModalSource.churchId && u.id === linkModalSource.userId));
           const html = candidates.length ? candidates.map(u => `
             <div class="user-item">
               <div class="user-item-info">
                 <div>
-                  <div>${u.first_name || ''} ${u.last_name || ''}</div>
-                  <div class="timestamp">${u.email || u.mobile_number || '-'} &middot; <code>${u.church_id}</code></div>
+                  <div>${escapeHtml(u.first_name || '')} ${escapeHtml(u.last_name || '')}</div>
+                  <div class="timestamp">${escapeHtml(u.email || u.mobile_number || '-')} &middot; <code>${escapeHtml(u.church_id)}</code></div>
                 </div>
               </div>
               <div class="user-item-actions">
@@ -1173,9 +1184,13 @@
               </div>
             </div>
           `).join('') : '<div class="empty-state">No matches</div>';
-          document.getElementById('link-search-results').innerHTML = html;
+          if (requestId === linkSearchRequestId) {
+            document.getElementById('link-search-results').innerHTML = html;
+          }
         } catch (err) {
-          document.getElementById('link-search-results').innerHTML = `<div class="empty-state">Search failed: ${err.message}</div>`;
+          if (requestId === linkSearchRequestId) {
+            document.getElementById('link-search-results').innerHTML = `<div class="empty-state">Search failed: ${err.message}</div>`;
+          }
         }
       }, 300);
     }
@@ -1298,6 +1313,8 @@
 
     // Close modal
     function closeModal() {
+      clearTimeout(linkSearchTimeout);
+      linkModalSource = null;
       const modal = document.querySelector('.modal-overlay');
       if (modal) modal.remove();
     }
