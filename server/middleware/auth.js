@@ -157,7 +157,9 @@ const auditLog = (action) => {
                 }
               }
 
-              const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+              // Match SQLite's datetime('now') TEXT format ("YYYY-MM-DD HH:MM:SS") so the
+              // string comparison against audit_log.created_at is chronologically correct.
+              const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
               const existingAction = await Database.query(`
                 SELECT id, new_values FROM audit_log
                 WHERE user_id = ?
