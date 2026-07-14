@@ -503,7 +503,7 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 router.get('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const rows = await Database.query(
-      `SELECT planning_center_sync_indicator, planning_center_sync_enabled
+      `SELECT planning_center_sync_indicator, planning_center_sync_enabled, planning_center_track_background_checks
        FROM church_settings WHERE church_id = ? LIMIT 1`,
       [req.user.church_id]
     );
@@ -511,6 +511,7 @@ router.get('/integrations', requireRole(['admin']), async (req, res) => {
     res.json({
       planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
       planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
+      planningCenterTrackBackgroundChecks: !!(row.planning_center_track_background_checks),
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to retrieve integration settings.' });
@@ -519,7 +520,7 @@ router.get('/integrations', requireRole(['admin']), async (req, res) => {
 
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
-    const { planningCenterSyncIndicator, planningCenterSyncEnabled } = req.body;
+    const { planningCenterSyncIndicator, planningCenterSyncEnabled, planningCenterTrackBackgroundChecks } = req.body;
     const updates = [];
     const params = [];
     if (typeof planningCenterSyncIndicator === 'boolean') {
@@ -529,6 +530,10 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     if (typeof planningCenterSyncEnabled === 'boolean') {
       updates.push('planning_center_sync_enabled = ?');
       params.push(planningCenterSyncEnabled ? 1 : 0);
+    }
+    if (typeof planningCenterTrackBackgroundChecks === 'boolean') {
+      updates.push('planning_center_track_background_checks = ?');
+      params.push(planningCenterTrackBackgroundChecks ? 1 : 0);
     }
     if (updates.length) {
       params.push(req.user.church_id);
