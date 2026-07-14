@@ -21,6 +21,7 @@ function emptyPlan(overrides = {}) {
     unmatchedVisitors: [],
     familyNameUpdates: [],
     gatheringEligible: [],
+    pcoPeople: [],
     ...overrides,
   };
 }
@@ -215,5 +216,28 @@ test('applyPlan: insert never steals ownership of a row another batch (or a manu
     const row = await getGatheringListRow(churchId, gatheringTypeId, individualId);
     assert.ok(row, 'row should still be present');
     assert.strictEqual(row.added_by_pco_batch_id, null, 'ownership must not be reassigned to the new batch by an insert attempt');
+  });
+});
+
+test('applyPlan: a background-check sync failure is isolated — pushed to errors, does not abort the rest of the run', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId, 'Isolated', 'Case');
+
+    // A malformed pcoPeople entry (null) makes syncBackgroundCheckStatuses throw
+    // partway through its internal loop (it has no try/catch of its own — see
+    // backgroundCheckSync.js). This is a real, reproducible failure mode, not a
+    // mock: applyPlan must catch it and keep going with every other operation
+    // in the same run, the same way a link/add/archive failure would.
+    const plan = emptyPlan({
+      update: [{ individualId, firstName: 'Isolated', lastName: 'Renamed', isChild: false }],
+      pcoPeople: [null],
+    });
+
+    const result = await applyPlan(churchId, plan, null, {}, {});
+
+    assert.strictEqual(result.backgroundCheckSynced, 0, 'should stay at its initialized value when the sync call fails');
+    assert.strictEqual(result.updated, 1, 'other operations in the same run must still complete');
+    const bgErrors = result.errors.filter((e) => e.type === 'backgroundCheckSync');
+    assert.strictEqual(bgErrors.length, 1, `expected exactly one backgroundCheckSync error, got: ${JSON.stringify(result.errors)}`);
   });
 });

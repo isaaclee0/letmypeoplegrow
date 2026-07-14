@@ -2376,8 +2376,11 @@ router.get('/planning-center/sync-batches/:id/plan', async (req, res) => {
     const fullPlan = await pcoSync.computePlanForBatch(churchId, accessToken, batch, { force });
     // Batch plans omit the whole-roster buckets (archiveExtras/unmatchedVisitors) —
     // no endpoint surfaces those on their own anymore; computePlan still returns
-    // them because diffEngine.js is shared with every batch's own plan.
-    const { archiveExtras, unmatchedVisitors, ...plan } = fullPlan;
+    // them because diffEngine.js is shared with every batch's own plan. pcoPeople
+    // (the full unfiltered PCO roster, attached by computePlanForChurch for the
+    // background-check sync in apply.js) is stripped for the same reason — it's
+    // server-side-only input, never meant for the client.
+    const { archiveExtras, unmatchedVisitors, pcoPeople, ...plan } = fullPlan;
     res.json({
       success: true,
       summary: {

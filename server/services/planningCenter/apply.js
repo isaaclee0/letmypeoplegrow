@@ -40,7 +40,11 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
 
   // Unconditional, review-free: sync background-check status for every
   // already-linked person this run saw, regardless of what else changed.
-  result.backgroundCheckSynced = await syncBackgroundCheckStatuses(churchId, plan.pcoPeople || []);
+  // Error-isolated like every other operation below — a DB failure here must
+  // not abort the rest of an admin's reviewed batch apply.
+  try {
+    result.backgroundCheckSynced = await syncBackgroundCheckStatuses(churchId, plan.pcoPeople || []);
+  } catch (e) { result.errors.push({ type: 'backgroundCheckSync', error: e.message }); }
 
   const skipAdd = new Set(selections.skipAddPcoIds || []);
   const ambiguousChoices = selections.ambiguous || {};
