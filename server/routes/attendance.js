@@ -5,6 +5,7 @@ const { requireLastAttendedColumn, columnExists } = require('../utils/databaseSc
 const { processApiResponse } = require('../utils/caseConverter');
 const websocketBroadcast = require('../utils/websocketBroadcast');
 const logger = require('../config/logger');
+const { isBackgroundCheckTrackingEnabled } = require('../services/planningCenter/mode');
 
 const router = express.Router();
 
@@ -1093,14 +1094,18 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     // We could refactor to share this code, but for now keeping it inline for clarity
 
     const thresholdDays = 7; // default weekly
+    let gatheringRequiresBackgroundCheck = false;
     try {
-      const gt = await Database.query('SELECT frequency FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+      const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
       if (gt && gt.length > 0) {
         const freq = (gt[0].frequency || '').toLowerCase();
         if (freq === 'biweekly') thresholdDays = 14;
         else if (freq === 'monthly') thresholdDays = 31;
+        gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
       }
     } catch {}
+    const showBackgroundCheckStatus = gatheringRequiresBackgroundCheck
+      && await isBackgroundCheckTrackingEnabled(req.user.church_id);
 
     const thresholdDate = new Date(date);
     thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
@@ -1233,6 +1238,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     let attendanceListQuery = `
       SELECT i.id, i.first_name, i.last_name, i.is_child,
              i.badge_text, i.badge_color, i.badge_icon,
+             i.pco_background_check_cleared,
              f.family_name, f.id as family_id,
              f.family_notes,
              COALESCE(ar.present, 0) as present,
@@ -1292,6 +1298,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       const orphanedRecords = await Database.query(`
         SELECT i.id, i.first_name, i.last_name, i.is_child,
                i.badge_text, i.badge_color, i.badge_icon,
+               i.pco_background_check_cleared,
                f.family_name, f.id as family_id,
                f.family_notes,
                ar.present,
@@ -1357,6 +1364,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     const responseData = processApiResponse({
       sessionId: sessionId,
       excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
+      showBackgroundCheckStatus,
       attendanceList: attendanceList.map(attendee => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
@@ -1364,6 +1372,9 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         badgeText: attendee.badge_text || null,
         badgeColor: attendee.badge_color || null,
         badgeIcon: attendee.badge_icon || null,
+        backgroundCheckCleared: attendee.pco_background_check_cleared === null || attendee.pco_background_check_cleared === undefined
+          ? null
+          : Boolean(attendee.pco_background_check_cleared),
         familyNotes: attendee.family_notes || null,
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
