@@ -53,7 +53,7 @@ router.get('/', async (req, res) => {
         ORDER BY f.family_name
       `, [req.user.church_id]),
       Database.query(
-        `SELECT planning_center_sync_indicator FROM church_settings WHERE church_id = ? LIMIT 1`,
+        `SELECT planning_center_sync_indicator, planning_center_track_background_checks FROM church_settings WHERE church_id = ? LIMIT 1`,
         [req.user.church_id]
       )
     ]);
@@ -65,8 +65,9 @@ router.get('/', async (req, res) => {
     }));
 
     const planningCenterSyncIndicator = !!(settingsRows[0]?.planning_center_sync_indicator);
+    const planningCenterTrackBackgroundChecks = !!(settingsRows[0]?.planning_center_track_background_checks);
 
-    res.json({ families: processedFamilies, planningCenterSyncIndicator });
+    res.json({ families: processedFamilies, planningCenterSyncIndicator, planningCenterTrackBackgroundChecks });
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Failed to retrieve families.' });
