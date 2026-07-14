@@ -3,7 +3,7 @@ const { isEligible } = require('./eligibility');
 const { buildFamilyName } = require('./familyName');
 
 // Inputs:
-//   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, householdId, fieldValues}]
+//   pcoPeople:   projected [{id, firstName, lastName, status, membership, child, passedBackgroundCheck, householdId, fieldValues}]
 //   individuals: [{id, firstName, lastName, isChild, familyId, isActive(bool),
 //                  planningCenterId, peopleType, pcoLinkDeclined}]
 //   families:    [{id, planningCenterId}]   (not used directly here; reserved for callers)
