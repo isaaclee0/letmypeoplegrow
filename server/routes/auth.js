@@ -9,6 +9,7 @@ const Database = require('../config/database');
 const { sendOTCEmail, sendNewChurchApprovalEmail } = require('../utils/email');
 const { generateOTC, sendOTCSMS, getChurchCountry, validatePhoneNumber, getInternationalFormat, maskPhoneNumber } = require('../utils/sms');
 const { verifyToken } = require('../middleware/auth');
+const { checkSmsSendAllowed, recordSmsSend } = require('../utils/smsRateLimit');
 const logger = require('../config/logger');
 
 const router = express.Router();
@@ -231,21 +232,6 @@ router.post('/request-code',
         }
       }
 
-      await Database.queryForChurch(
-        churchId || user.church_id,
-        "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
-        [finalContact, finalContactMethod]
-      );
-
-      const code = generateOTC();
-      const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
-
-      await Database.queryForChurch(
-        churchId || user.church_id,
-        `INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id) VALUES (?, ?, ?, ?, ?)`,
-        [finalContact, finalContactMethod, code, expiresAt, user.church_id]
-      );
-
       const externalServices = {
         crazytel: !!(process.env.CRAZYTEL_API_KEY && process.env.CRAZYTEL_API_KEY.trim() && process.env.CRAZYTEL_FROM_NUMBER && process.env.CRAZYTEL_FROM_NUMBER.trim()),
         brevo: !!(process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim())
@@ -267,6 +253,33 @@ router.post('/request-code',
         }
       }
 
+      // Spend-abuse guard: only meaningful once we're actually about to pay
+      // for an SMS send via Crazytel (dev/unconfigured fallback costs nothing).
+      if (finalContactMethod === 'sms' && externalServices.crazytel) {
+        const rateLimitResult = await checkSmsSendAllowed(churchId || user.church_id, finalContact);
+        if (!rateLimitResult.allowed) {
+          const message = rateLimitResult.reason === 'daily_limit'
+            ? 'Daily SMS limit reached for this number. Please try again tomorrow.'
+            : 'Please wait before requesting another code.';
+          return res.status(429).json({ error: message });
+        }
+      }
+
+      await Database.queryForChurch(
+        churchId || user.church_id,
+        "DELETE FROM otc_codes WHERE contact_identifier = ? AND contact_type = ? AND (used = 1 OR expires_at < datetime('now'))",
+        [finalContact, finalContactMethod]
+      );
+
+      const code = generateOTC();
+      const expiresAt = moment().utc().add(parseInt(process.env.OTC_EXPIRE_MINUTES) || 10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+
+      await Database.queryForChurch(
+        churchId || user.church_id,
+        `INSERT INTO otc_codes (contact_identifier, contact_type, code, expires_at, church_id) VALUES (?, ?, ?, ?, ?)`,
+        [finalContact, finalContactMethod, code, expiresAt, user.church_id]
+      );
+
       setImmediate(async () => {
         try {
           if (finalContactMethod === 'email') {
@@ -277,6 +290,7 @@ router.post('/request-code',
             }
           } else {
             if (externalServices.crazytel) {
+              await recordSmsSend(churchId || user.church_id, finalContact);
               await sendOTCSMS(finalContact, code);
             } else {
               console.log(`📱 Development mode: SMS code ${code} for ${finalContact} (Crazytel not configured)`);

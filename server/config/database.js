@@ -67,6 +67,16 @@ class Database {
       // Migrate caregiver tables
       const existingTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
 
+      if (!existingTables.includes('sms_send_log')) {
+        db.exec(`CREATE TABLE IF NOT EXISTS sms_send_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          church_id TEXT,
+          contact_identifier TEXT NOT NULL,
+          sent_at TEXT DEFAULT (datetime('now'))
+        )`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_sms_send_log_contact ON sms_send_log(contact_identifier, sent_at)`);
+      }
+
       if (!existingTables.includes('contacts')) {
         db.exec(`CREATE TABLE IF NOT EXISTS contacts (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

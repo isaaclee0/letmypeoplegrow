@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS otc_codes (
 CREATE INDEX IF NOT EXISTS idx_otc_contact_code ON otc_codes(contact_identifier, code);
 CREATE INDEX IF NOT EXISTS idx_otc_expires ON otc_codes(expires_at);
 
+CREATE TABLE IF NOT EXISTS sms_send_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT,
+  contact_identifier TEXT NOT NULL,
+  sent_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sms_send_log_contact ON sms_send_log(contact_identifier, sent_at);
+
 CREATE TABLE IF NOT EXISTS church_settings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT,
