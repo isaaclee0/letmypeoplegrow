@@ -69,7 +69,17 @@ async function withTestChurchDb(fn, onReady) {
     Database.initialize();
     // Explicitly create (rather than rely on an implicit first Database.query)
     // so the schema is applied deterministically before fn runs.
-    Database.getChurchDb(churchId);
+    const db = Database.getChurchDb(churchId);
+
+    // Real churches always have exactly one `church_settings` row, inserted
+    // at registration time (see server/routes/auth.js, routes/onboarding.js,
+    // utils/churchIdGenerator.js) — schema application alone (above) creates
+    // the table but not a row. Mirror that invariant here so tests reading
+    // or writing per-church settings (e.g. UPDATE church_settings ... WHERE
+    // church_id = ?) behave the same way they would against a real church.
+    db.prepare(
+      `INSERT INTO church_settings (church_id, church_name) VALUES (?, ?)`
+    ).run(churchId, 'Test Church');
 
     if (typeof onReady === 'function') {
       onReady({ churchId, tempDir });

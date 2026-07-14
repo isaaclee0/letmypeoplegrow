@@ -26,6 +26,18 @@ async function isPcoModeActive(churchId) {
   return rows.length > 0 && !!rows[0].ind;
 }
 
+// Per-church flag for the background-check status feature. Independent of
+// isPcoModeActive — a church can track background checks without PCO being
+// source-of-truth for member identity, and vice versa.
+async function isBackgroundCheckTrackingEnabled(churchId) {
+  const rows = await Database.query(
+    `SELECT planning_center_track_background_checks AS enabled
+       FROM church_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  return rows.length > 0 && !!rows[0].enabled;
+}
+
 // A person is "linked" when they have a PCO id.
 function isIndividualLocked(individual) {
   if (!individual) return false;
@@ -62,6 +74,7 @@ function lockedResponse(message) {
 module.exports = {
   PCO_MODE_LOCKED,
   isPcoModeActive,
+  isBackgroundCheckTrackingEnabled,
   isIndividualLocked,
   getLockInfo,
   lockedResponse,
