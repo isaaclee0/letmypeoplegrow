@@ -330,6 +330,7 @@ async function computePlanForChurch(churchId, accessToken, filterConfig, { force
   const { individuals, families } = await loadChurchState(churchId);
   const plan = computePlan({ pcoPeople, individuals, families, filterConfig, householdPrimaryContacts });
   plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
+  plan.pcoPeople = pcoPeople;
   return plan;
 }
 

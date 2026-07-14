@@ -1,5 +1,6 @@
 const Database = require('../../config/database');
 const { buildFamilyName } = require('./familyName');
+const { syncBackgroundCheckStatuses } = require('./backgroundCheckSync');
 
 // Group add entries by householdId; null household => its own solo group.
 function groupAdds(adds) {
@@ -35,7 +36,12 @@ function computeGatheringRemovals(ownedIndividualIds, touchedIndividualIds) {
 // plan.archiveExtras/unmatchedVisitors — computePlan still produces those buckets
 // as shared diff output, but nothing in the batch apply path consumes them.
 async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = {}) {
-  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, gatheringRemoved: 0, familyNamesUpdated: 0, errors: [] };
+  const result = { linked: 0, added: 0, updated: 0, archived: 0, reactivated: 0, gatheringAssigned: 0, gatheringRemoved: 0, familyNamesUpdated: 0, backgroundCheckSynced: 0, errors: [] };
+
+  // Unconditional, review-free: sync background-check status for every
+  // already-linked person this run saw, regardless of what else changed.
+  result.backgroundCheckSynced = await syncBackgroundCheckStatuses(churchId, plan.pcoPeople || []);
+
   const skipAdd = new Set(selections.skipAddPcoIds || []);
   const ambiguousChoices = selections.ambiguous || {};
   const visitorChoices = selections.visitorChoices || {};
