@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS church_settings (
   planning_center_membership_cache TEXT,
   planning_center_field_definitions_cache TEXT,
   planning_center_last_notified_review TEXT,
+  planning_center_track_background_checks INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -157,6 +158,7 @@ CREATE TABLE IF NOT EXISTS gathering_types (
   kiosk_end_time TEXT,
   group_by_family INTEGER DEFAULT 1,
   individual_mode INTEGER DEFAULT 0,
+  requires_background_check INTEGER DEFAULT 0,
   is_active INTEGER DEFAULT 1,
   created_by INTEGER,
   church_id TEXT NOT NULL DEFAULT 'default',
@@ -222,6 +224,7 @@ CREATE TABLE IF NOT EXISTS individuals (
   badge_icon TEXT,
   planning_center_id TEXT,
   pco_link_declined INTEGER DEFAULT 0,
+  pco_background_check_cleared INTEGER,
   FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE SET NULL,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );

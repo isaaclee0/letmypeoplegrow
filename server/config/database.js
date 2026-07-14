@@ -229,6 +229,17 @@ class Database {
         db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_last_notified_review TEXT');
       }
 
+      // Migrate church_settings, gathering_types, individuals: background-check status feature
+      if (!settingsCols.some(c => c.name === 'planning_center_track_background_checks')) {
+        db.exec('ALTER TABLE church_settings ADD COLUMN planning_center_track_background_checks INTEGER DEFAULT 0');
+      }
+      if (!gatheringCols.some(c => c.name === 'requires_background_check')) {
+        db.exec('ALTER TABLE gathering_types ADD COLUMN requires_background_check INTEGER DEFAULT 0');
+      }
+      if (!individualsCols.some(c => c.name === 'pco_background_check_cleared')) {
+        db.exec('ALTER TABLE individuals ADD COLUMN pco_background_check_cleared INTEGER');
+      }
+
       // Create planning_center_sync_batches if missing, and seed exactly once from
       // the legacy single-filter columns (additive-only migration — the old columns
       // are left in place, unused, rather than dropped; this codebase's migrations
