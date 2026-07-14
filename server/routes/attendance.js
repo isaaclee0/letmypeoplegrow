@@ -1098,10 +1098,10 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     try {
       const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
       if (gt && gt.length > 0) {
+        gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
         const freq = (gt[0].frequency || '').toLowerCase();
         if (freq === 'biweekly') thresholdDays = 14;
         else if (freq === 'monthly') thresholdDays = 31;
-        gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
       }
     } catch {}
     const showBackgroundCheckStatus = gatheringRequiresBackgroundCheck
@@ -1365,16 +1365,18 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       sessionId: sessionId,
       excludedFromStats: sessions.length > 0 ? (sessions[0].excluded_from_stats === 1) : false,
       showBackgroundCheckStatus,
-      attendanceList: attendanceList.map(attendee => ({
+      attendanceList: attendanceList.map(({ pco_background_check_cleared, ...attendee }) => ({
         ...attendee,
         present: attendee.present === 1 || attendee.present === true,
         isChild: Boolean(attendee.is_child),
         badgeText: attendee.badge_text || null,
         badgeColor: attendee.badge_color || null,
         badgeIcon: attendee.badge_icon || null,
-        backgroundCheckCleared: attendee.pco_background_check_cleared === null || attendee.pco_background_check_cleared === undefined
-          ? null
-          : Boolean(attendee.pco_background_check_cleared),
+        ...(showBackgroundCheckStatus ? {
+          backgroundCheckCleared: pco_background_check_cleared === null || pco_background_check_cleared === undefined
+            ? null
+            : Boolean(pco_background_check_cleared)
+        } : {}),
         familyNotes: attendee.family_notes || null,
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
