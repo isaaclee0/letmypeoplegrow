@@ -184,6 +184,7 @@ export interface GatheringType {
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
+  requiresBackgroundCheck?: boolean;
   kioskMessage?: string;
   isActive: boolean;
   memberCount?: number;
@@ -204,6 +205,10 @@ export interface Individual {
   familyNotes?: string | null;
   present?: boolean;
   isSaving?: boolean;
+  // Same underlying value, from two different backend routes/response shapes:
+  // People-page endpoint (Task 9) vs. attendance `/full` endpoint (Task 10).
+  pcoBackgroundCheckCleared?: boolean | null;
+  backgroundCheckCleared?: boolean | null;
 }
 
 export interface Visitor {
@@ -322,6 +327,7 @@ export const gatheringsAPI = {
     kioskEnabled?: boolean;
     leaderCheckinEnabled?: boolean;
     individualMode?: boolean;
+    requiresBackgroundCheck?: boolean;
     setAsDefault?: boolean;
   }) =>
     api.post('/gatherings', data),
@@ -348,6 +354,7 @@ export const gatheringsAPI = {
     kioskEnabled?: boolean;
     leaderCheckinEnabled?: boolean;
     individualMode?: boolean;
+    requiresBackgroundCheck?: boolean;
   }) =>
     api.put(`/gatherings/${gatheringId}`, data),
     
@@ -804,6 +811,7 @@ export const settingsAPI = {
   updateIntegrationSettings: (data: {
     planningCenterSyncIndicator?: boolean;
     planningCenterSyncEnabled?: boolean;
+    planningCenterTrackBackgroundChecks?: boolean;
   }) => api.put('/settings/integrations', data),
 };
 
