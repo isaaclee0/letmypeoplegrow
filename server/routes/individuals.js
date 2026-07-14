@@ -152,6 +152,9 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
 // Get all individuals with their family and gathering assignments
 router.get('/', async (req, res) => {
   try {
+    const canSeeBackgroundCheckStatus = ['admin', 'coordinator'].includes(req.user.role);
+    const backgroundCheckSelect = canSeeBackgroundCheckStatus ? 'i.pco_background_check_cleared,' : '';
+
     const individuals = await Database.query(`
       SELECT
         i.id,
@@ -167,6 +170,7 @@ router.get('/', async (req, res) => {
         i.is_active,
         i.created_at,
         i.planning_center_id,
+        ${backgroundCheckSelect}
         GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
         GROUP_CONCAT(DISTINCT gt.name) as gathering_names
       FROM individuals i
@@ -177,20 +181,25 @@ router.get('/', async (req, res) => {
       GROUP BY i.id
       ORDER BY i.last_name, i.first_name
     `, [req.user.church_id]);
-    
+
     // Process gathering assignments and use systematic conversion utility
     const processedIndividuals = individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
       isChild: Boolean(individual.is_child),
       peopleType: individual.people_type,
-      gatheringAssignments: individual.gathering_ids ? 
+      ...(canSeeBackgroundCheckStatus ? {
+        pcoBackgroundCheckCleared: individual.pco_background_check_cleared === null
+          ? null
+          : Boolean(individual.pco_background_check_cleared)
+      } : {}),
+      gatheringAssignments: individual.gathering_ids ?
         individual.gathering_ids.split(',').map((id, index) => ({
           id: Number(id),
           name: individual.gathering_names.split(',')[index]
         })) : []
     }));
-    
+
     const responseData = processApiResponse({ people: processedIndividuals });
     res.json(responseData);
   } catch (error) {
