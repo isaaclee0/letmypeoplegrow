@@ -10,7 +10,7 @@ test('projectPerson maps attributes and first household id', () => {
   };
   assert.deepStrictEqual(projectPerson(raw), {
     id: '123', firstName: 'Sarah', lastName: 'Wierenga',
-    status: 'active', membership: 'Church Members', child: false, householdId: 'h1', fieldValues: {},
+    status: 'active', membership: 'Church Members', child: false, passedBackgroundCheck: false, householdId: 'h1', fieldValues: {},
   });
 });
 
@@ -109,4 +109,24 @@ test('projectPerson with no fieldDataById argument still returns an empty fieldV
   const raw = { id: '9', attributes: {}, relationships: { field_data: { data: [{ id: 'fd1' }] } } };
   const p = projectPerson(raw);
   assert.deepStrictEqual(p.fieldValues, {});
+});
+
+test('projectPerson: maps passed_background_check attribute to passedBackgroundCheck', () => {
+  const raw = {
+    id: '1',
+    attributes: { first_name: 'A', last_name: 'B', passed_background_check: true },
+    relationships: {},
+  };
+  const projected = projectPerson(raw, new Map());
+  assert.strictEqual(projected.passedBackgroundCheck, true);
+});
+
+test('projectPerson: passedBackgroundCheck is false when PCO returns false', () => {
+  const raw = {
+    id: '2',
+    attributes: { first_name: 'A', last_name: 'B', passed_background_check: false },
+    relationships: {},
+  };
+  const projected = projectPerson(raw, new Map());
+  assert.strictEqual(projected.passedBackgroundCheck, false);
 });

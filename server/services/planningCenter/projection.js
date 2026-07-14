@@ -41,6 +41,7 @@ function projectPerson(p, fieldDataById) {
     status: a.status || null,
     membership: a.membership || null,
     child: a.child === true,
+    passedBackgroundCheck: a.passed_background_check === true,
     householdId: (hh && hh[0] && hh[0].id) || null,
     fieldValues,
   };
