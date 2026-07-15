@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { gatheringsAPI, onboardingAPI, kioskAPI } from '../services/api';
+import { gatheringsAPI, onboardingAPI, kioskAPI, settingsAPI } from '../services/api';
 import logger from '../utils/logger';
 import SampleDataBanner from '../components/SampleDataBanner';
 import {
@@ -40,6 +40,7 @@ interface Gathering {
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
+  requiresBackgroundCheck?: boolean;
   isActive: boolean;
   memberCount?: number;
   recentVisitorCount?: number;
@@ -69,6 +70,7 @@ interface CreateGatheringData {
   kioskEnabled?: boolean;
   leaderCheckinEnabled?: boolean;
   individualMode?: boolean;
+  requiresBackgroundCheck?: boolean;
   customDatesText?: string;
 }
 
@@ -101,6 +103,7 @@ const ManageGatheringsPage: React.FC = () => {
     customSchedule: undefined as any,
     kioskEnabled: false,
     leaderCheckinEnabled: false,
+    requiresBackgroundCheck: false,
     customDatesText: '' as string,
   });
 
@@ -115,6 +118,7 @@ const ManageGatheringsPage: React.FC = () => {
     kioskEnabled: false,
     leaderCheckinEnabled: false,
     individualMode: false,
+    requiresBackgroundCheck: false,
   });
 
   // Confirmation modal states
@@ -146,6 +150,7 @@ const ManageGatheringsPage: React.FC = () => {
 
   // Self check-in / kiosk mode is off unless KIOSK_MODE_ENABLED=true on the server
   const [kioskModeEnabled, setKioskModeEnabled] = useState(false);
+  const [backgroundCheckTrackingEnabled, setBackgroundCheckTrackingEnabled] = useState(false);
 
   useEffect(() => {
     loadGatherings();
@@ -155,6 +160,12 @@ const ManageGatheringsPage: React.FC = () => {
     kioskAPI.getStatus()
       .then(response => setKioskModeEnabled(!!response.data.enabled))
       .catch(() => setKioskModeEnabled(false));
+  }, []);
+
+  useEffect(() => {
+    settingsAPI.getIntegrationSettings()
+      .then(r => setBackgroundCheckTrackingEnabled(!!r.data.planningCenterTrackBackgroundChecks))
+      .catch(() => {});
   }, []);
 
   // Auto-hide the arrow after 8 seconds
@@ -213,6 +224,7 @@ const ManageGatheringsPage: React.FC = () => {
       kioskEnabled: false,
       leaderCheckinEnabled: false,
       individualMode: false,
+      requiresBackgroundCheck: false,
       customDatesText: '',
     });
     setError('');
@@ -267,6 +279,7 @@ const ManageGatheringsPage: React.FC = () => {
         kioskEnabled: createGatheringData.kioskEnabled,
         leaderCheckinEnabled: createGatheringData.leaderCheckinEnabled,
         individualMode: createGatheringData.individualMode,
+        requiresBackgroundCheck: createGatheringData.requiresBackgroundCheck,
       };
 
       if (createGatheringData.attendanceType === 'standard' && createGatheringData.frequency === 'custom') {
@@ -313,6 +326,7 @@ const ManageGatheringsPage: React.FC = () => {
         kioskEnabled: gatheringData.kioskEnabled,
         leaderCheckinEnabled: gatheringData.leaderCheckinEnabled,
         individualMode: gatheringData.individualMode,
+        requiresBackgroundCheck: gatheringData.requiresBackgroundCheck,
         isActive: true,
         memberCount: 0,
         recentVisitorCount: 0
@@ -371,6 +385,7 @@ const ManageGatheringsPage: React.FC = () => {
       customSchedule: isCustomDates ? undefined : gathering.customSchedule,
       kioskEnabled: gathering.kioskEnabled || false,
       leaderCheckinEnabled: gathering.leaderCheckinEnabled || false,
+      requiresBackgroundCheck: gathering.requiresBackgroundCheck || false,
       customDatesText: isCustomDates
         ? (gathering.customSchedule!.pattern!.customDates!.join('\n'))
         : '',
@@ -1175,6 +1190,24 @@ const ManageGatheringsPage: React.FC = () => {
                         A leader checks people in and out on their behalf.
                       </p>
                     </div>
+                    {backgroundCheckTrackingEnabled && (
+                      <div>
+                        <label className="flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editFormData.requiresBackgroundCheck || false}
+                            onChange={(e) => setEditFormData({ ...editFormData, requiresBackgroundCheck: e.target.checked })}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                          />
+                          <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Requires background check
+                          </span>
+                        </label>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
+                          Shows each adult's Planning Center background-check status to whoever is taking attendance here.
+                        </p>
+                      </div>
+                    )}
                     {(editFormData.kioskEnabled || editFormData.leaderCheckinEnabled) && (
                       <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                         Uses the gathering's end time to close sign-in.
@@ -1405,6 +1438,24 @@ const ManageGatheringsPage: React.FC = () => {
                           A leader checks people in and out on their behalf.
                         </p>
                       </div>
+                      {backgroundCheckTrackingEnabled && (
+                        <div>
+                          <label className="flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={createGatheringData.requiresBackgroundCheck || false}
+                              onChange={(e) => setCreateGatheringData({ ...createGatheringData, requiresBackgroundCheck: e.target.checked })}
+                              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-500 rounded"
+                            />
+                            <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Requires background check
+                            </span>
+                          </label>
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-6">
+                            Shows each adult's Planning Center background-check status to whoever is taking attendance here.
+                          </p>
+                        </div>
+                      )}
                       {(createGatheringData.kioskEnabled || createGatheringData.leaderCheckinEnabled) && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 ml-6">
                           Uses the gathering's end time to close sign-in.
