@@ -107,10 +107,13 @@ const PeoplePage: React.FC = () => {
   const { user } = useAuth();
   const { badgeConfig, getBadgeInfo } = useBadgeSettings();
   const isAdmin = user?.role === 'admin';
+  const canSeeBackgroundCheckStatus = isAdmin || user?.role === 'coordinator';
   const [people, setPeople] = useState<Person[]>([]);
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
   const [planningCenterSyncIndicator, setPlanningCenterSyncIndicator] = useState(false);
+  const [planningCenterTrackBackgroundChecks, setPlanningCenterTrackBackgroundChecks] = useState(false);
+  const showBackgroundCheckStatus = canSeeBackgroundCheckStatus && planningCenterTrackBackgroundChecks;
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -361,6 +364,7 @@ const PeoplePage: React.FC = () => {
       const response = await familiesAPI.getAll();
       setFamilies(response.data.families || []);
       setPlanningCenterSyncIndicator(!!response.data.planningCenterSyncIndicator);
+      setPlanningCenterTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
     } catch (err: any) {
       setError('Failed to load families');
     }
@@ -1763,6 +1767,8 @@ const PeoplePage: React.FC = () => {
 
                                                        planningCenterSyncIndicator={planningCenterSyncIndicator}
 
+                                                       showBackgroundCheckStatus={showBackgroundCheckStatus}
+
                                                      />
 
                                                    );
@@ -1806,6 +1812,8 @@ const PeoplePage: React.FC = () => {
                                            variant="individual"
 
                                            planningCenterSyncIndicator={planningCenterSyncIndicator}
+
+                                           showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                          />
 
@@ -1947,6 +1955,8 @@ const PeoplePage: React.FC = () => {
                                   variant="grouped"
 
                                   planningCenterSyncIndicator={planningCenterSyncIndicator}
+
+                                  showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                 />
 
@@ -2126,6 +2136,8 @@ const PeoplePage: React.FC = () => {
                                     variant="grouped"
 
                                     planningCenterSyncIndicator={planningCenterSyncIndicator}
+
+                                    showBackgroundCheckStatus={showBackgroundCheckStatus}
 
                                   />
 

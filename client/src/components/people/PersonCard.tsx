@@ -1,5 +1,6 @@
 import React from 'react';
 import BadgeIcon, { BadgeIconType } from '../icons/BadgeIcon';
+import BackgroundCheckShield from '../icons/BackgroundCheckShield';
 
 interface Person {
   id: number;
@@ -13,6 +14,7 @@ interface Person {
   familyId?: number;
   familyName?: string;
   planningCenterId?: string;
+  pcoBackgroundCheckCleared?: boolean | null;
   gatheringAssignments?: Array<{
     id: number;
     name: string;
@@ -40,6 +42,7 @@ interface PersonCardProps {
   getBadgeInfo: (person: { isChild?: boolean; badgeText?: string | null; badgeColor?: string | null; badgeIcon?: string | null }) => BadgeInfo | null;
   variant?: 'grouped' | 'individual'; // grouped has more spacing, individual is compact
   planningCenterSyncIndicator?: boolean;
+  showBackgroundCheckStatus?: boolean;
 }
 
 const PersonCard: React.FC<PersonCardProps> = ({
@@ -52,7 +55,8 @@ const PersonCard: React.FC<PersonCardProps> = ({
   getStandardGatheringAssignments,
   getBadgeInfo,
   variant = 'grouped',
-  planningCenterSyncIndicator = false
+  planningCenterSyncIndicator = false,
+  showBackgroundCheckStatus = false
 }) => {
   const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
   const isGrouped = variant === 'grouped';
@@ -87,6 +91,9 @@ const PersonCard: React.FC<PersonCardProps> = ({
               <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
                 PCO
               </span>
+            )}
+            {showBackgroundCheckStatus && !person.isChild && (
+              <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
             )}
             <div className="flex items-center space-x-1 shrink-0">
               {standardGatherings.map(gathering => (
