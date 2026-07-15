@@ -35,6 +35,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [initialAction]);
   const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
+  const [pcTrackBackgroundChecks, setPcTrackBackgroundChecks] = useState(false);
   const [batches, setBatches] = useState<SyncBatch[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
@@ -91,6 +92,16 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     }
   };
 
+  const toggleTrackBackgroundChecks = async (value: boolean) => {
+    setPcTrackBackgroundChecks(value);
+    try {
+      await settingsAPI.updateIntegrationSettings({ planningCenterTrackBackgroundChecks: value });
+    } catch (error) {
+      logger.error('Failed to update background-check tracking setting:', error);
+      setPcTrackBackgroundChecks(!value);
+    }
+  };
+
   const deleteBatch = async (batchId: number) => {
     try {
       await integrationsAPI.deletePlanningCenterSyncBatch(batchId);
@@ -134,6 +145,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
         setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
+        setPcTrackBackgroundChecks(!!r.data.planningCenterTrackBackgroundChecks);
       }).catch(() => {});
       // Cheap probe: nudge to import check-ins only if data exists and none has
       // been imported yet.
@@ -296,6 +308,27 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   aria-checked={pcSyncIndicator}
                 >
                   <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncIndicator ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Track background check status</h5>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Syncs Planning Center's background-check status for linked people. To use it,
+                    also flag specific gathering types as "Requires background check" in Manage
+                    Gatherings — the status only shows there and on the People page. Status is only
+                    as current as the last sync (see each batch's "Last run" time below) — not real-time.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleTrackBackgroundChecks(!pcTrackBackgroundChecks)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcTrackBackgroundChecks ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                  role="switch"
+                  aria-checked={pcTrackBackgroundChecks}
+                >
+                  <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcTrackBackgroundChecks ? 'translate-x-5' : 'translate-x-0'}`} />
                 </button>
               </div>
 
