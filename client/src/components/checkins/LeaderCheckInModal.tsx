@@ -3,6 +3,7 @@ import { XMarkIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/o
 import { Individual } from '../../services/api';
 import { useBadgeSettings } from '../../hooks/useBadgeSettings';
 import BadgeIcon, { BadgeIconType } from '../icons/BadgeIcon';
+import BackgroundCheckShield from '../icons/BackgroundCheckShield';
 import Modal from '../Modal';
 
 interface LeaderCheckInModalProps {
@@ -11,6 +12,7 @@ interface LeaderCheckInModalProps {
   selectedPeople: Individual[];
   action: 'checkin' | 'checkout';
   onConfirm: (signerName: string) => Promise<void>;
+  showBackgroundCheckStatus?: boolean;
 }
 
 const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
@@ -19,6 +21,7 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
   selectedPeople,
   action,
   onConfirm,
+  showBackgroundCheckStatus = false,
 }) => {
   const [signerName, setSignerName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -104,6 +107,9 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
                           {badge.icon && <BadgeIcon type={badge.icon as BadgeIconType} className="w-3 h-3 shrink-0" />}
                           {badge.text && <span>{badge.text}</span>}
                         </span>
+                      )}
+                      {showBackgroundCheckStatus && !person.isChild && (
+                        <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4 ml-1.5" />
                       )}
                     </div>
                   );

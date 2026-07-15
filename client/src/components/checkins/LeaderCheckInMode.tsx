@@ -1077,6 +1077,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
         selectedPeople={selectedPeople}
         action={mode === 'checkout' ? 'checkout' : 'checkin'}
         onConfirm={handleConfirm}
+        showBackgroundCheckStatus={showBackgroundCheckStatus}
       />
 
       {/* Undo confirmation modal */}
