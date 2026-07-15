@@ -32,6 +32,7 @@ import {
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
+import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
 
 interface PersonForm {
   firstName: string;
@@ -70,6 +71,7 @@ const AttendancePage: React.FC = () => {
   const [headcountFullscreen, setHeadcountFullscreen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [excludedFromStats, setExcludedFromStats] = useState(false);
+  const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -1086,6 +1088,7 @@ const AttendancePage: React.FC = () => {
         localStorage.setItem('attendance_cached_data', JSON.stringify(cacheData));
         
         setExcludedFromStats(response.excludedFromStats || false);
+        setShowBackgroundCheckStatus(!!response.showBackgroundCheckStatus);
         setCurrentSessionId(response.sessionId || null);
 
         logger.log('✅ Fresh data loaded from server and cached');
@@ -3182,6 +3185,9 @@ const AttendancePage: React.FC = () => {
                                 )}
                               </span>
                             )}
+                            {showBackgroundCheckStatus && !person.isChild && (
+                              <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
+                            )}
                           </label>
                         );
                       })}
@@ -3358,6 +3364,9 @@ const AttendancePage: React.FC = () => {
                               )}
                             </span>
                           )}
+                          {showBackgroundCheckStatus && !person.isChild && (
+                            <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
+                          )}
                         </label>
                       );
                     })}
@@ -3464,6 +3473,9 @@ const AttendancePage: React.FC = () => {
                                       <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
                                     )}
                                   </span>
+                                )}
+                                {showBackgroundCheckStatus && !person.isChild && (
+                                  <BackgroundCheckShield cleared={person.backgroundCheckCleared} className="w-4 h-4" />
                                 )}
                                 {!groupByFamily && group.familyId && (
                                   <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
