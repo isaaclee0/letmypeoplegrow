@@ -20,6 +20,7 @@ import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/v
 import logger from '../utils/logger';
 import { useBadgeSettings } from '../hooks/useBadgeSettings';
 import BadgeIcon, { BadgeIconType } from '../components/icons/BadgeIcon';
+import BackgroundCheckShield from '../components/icons/BackgroundCheckShield';
 import {
   UserGroupIcon,
   MagnifyingGlassIcon,
@@ -46,6 +47,7 @@ interface Person {
   familyId?: number;
   familyName?: string;
   planningCenterId?: string;
+  pcoBackgroundCheckCleared?: boolean | null;
   lastAttendanceDate?: string;
   createdAt?: string;
   gatheringAssignments?: Array<{
@@ -2000,6 +2002,9 @@ const PeoplePage: React.FC = () => {
                                       PCO
                                     </span>
                                   )}
+                                  {showBackgroundCheckStatus && !person.isChild && (
+                                    <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
+                                  )}
                                   {(() => {
                                     const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
                                     return standardGatherings.length > 0 && (
@@ -2176,6 +2181,9 @@ const PeoplePage: React.FC = () => {
                                   />
                                   <div className="flex items-center space-x-2">
                                     <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                                    {showBackgroundCheckStatus && !person.isChild && (
+                                      <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
+                                    )}
                                     {(() => {
                                       const standardGatherings = getStandardGatheringAssignments(person.gatheringAssignments);
                                       return standardGatherings.length > 0 && (
