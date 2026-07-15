@@ -18,6 +18,7 @@ const BackgroundCheckShield: React.FC<BackgroundCheckShieldProps> = ({ cleared, 
       <ShieldCheckIcon
         className={`${className} text-green-600 dark:text-green-400 shrink-0`}
         aria-label="Background check cleared"
+        aria-hidden={false}
       />
     );
   }
@@ -25,6 +26,7 @@ const BackgroundCheckShield: React.FC<BackgroundCheckShieldProps> = ({ cleared, 
     <ShieldExclamationIcon
       className={`${className} text-amber-600 dark:text-amber-400 shrink-0`}
       aria-label="No cleared background check on file"
+      aria-hidden={false}
     />
   );
 };
