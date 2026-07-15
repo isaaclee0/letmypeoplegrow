@@ -500,7 +500,13 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 });
 
 // Get/update integration settings
-router.get('/integrations', requireRole(['admin']), async (req, res) => {
+// Read is admin+coordinator: gathering-type create/edit (ManageGatheringsPage)
+// is coordinator-accessible and needs planningCenterTrackBackgroundChecks to
+// decide whether to show the "Requires background check" checkbox. Only 3
+// booleans are exposed here (no tokens/secrets), and families.js's GET /
+// already exposes 2 of the 3 to every authenticated role, so this is not a
+// new exposure. Write stays admin-only below.
+router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
     const rows = await Database.query(
       `SELECT planning_center_sync_indicator, planning_center_sync_enabled, planning_center_track_background_checks
