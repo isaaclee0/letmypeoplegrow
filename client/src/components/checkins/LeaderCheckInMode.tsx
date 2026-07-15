@@ -4,6 +4,7 @@ import { useWebSocket, KioskSelectionUpdate, KioskSelectionCleared } from '../..
 import { useAuth } from '../../contexts/AuthContext';
 import { useBadgeSettings } from '../../hooks/useBadgeSettings';
 import BadgeIcon, { BadgeIconType } from '../icons/BadgeIcon';
+import BackgroundCheckShield from '../icons/BackgroundCheckShield';
 import LeaderCheckInModal from './LeaderCheckInModal';
 import Modal from '../Modal';
 import {
@@ -44,6 +45,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
   const [attendanceList, setAttendanceList] = useState<Individual[]>([]);
   const [familyGroups, setFamilyGroups] = useState<FamilyGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showBackgroundCheckStatus, setShowBackgroundCheckStatus] = useState(false);
 
   // Selection
   const [searchTerm, setSearchTerm] = useState('');
@@ -81,6 +83,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
     try {
       setIsLoading(true);
       const response = await attendanceAPI.getFull(selectedGathering.id, gatheringDate);
+      setShowBackgroundCheckStatus(!!response.data.showBackgroundCheckStatus);
       const regulars: Individual[] = (response.data.attendanceList || []).map((a: any) => ({
         ...a,
         present: Boolean(a.present),
@@ -101,6 +104,7 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
             lastName: v.lastName || nameParts.slice(1).join(' ') || '',
             peopleType: v.peopleType || 'local_visitor',
             isChild: v.isChild,
+            backgroundCheckCleared: v.backgroundCheckCleared,
             badgeText: v.badgeText,
             badgeColor: v.badgeColor,
             badgeIcon: v.badgeIcon,
@@ -922,6 +926,9 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                             )}
                           </span>
                         )}
+                        {showBackgroundCheckStatus && !member.isChild && (
+                          <BackgroundCheckShield cleared={member.backgroundCheckCleared} className="w-4 h-4" />
+                        )}
                       </label>
                     );
                   })}
@@ -1008,6 +1015,9 @@ const LeaderCheckInMode: React.FC<LeaderCheckInModeProps> = ({
                         <span className="text-xs font-medium whitespace-nowrap">{badgeInfo.text}</span>
                       )}
                     </span>
+                  )}
+                  {showBackgroundCheckStatus && !member.isChild && (
+                    <BackgroundCheckShield cleared={member.backgroundCheckCleared} className="w-4 h-4" />
                   )}
                 </label>
               );
