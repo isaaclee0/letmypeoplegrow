@@ -808,7 +808,7 @@ const getVisitorConfig = async (churchId) => {
  * Returns { visitors: [...], recentlyPresentIds: Set }.
  * This is the single source of truth — used by both the /full endpoint and the standalone recent visitors endpoint.
  */
-const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig) => {
+const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig, includeBackgroundCheck = false) => {
   const maxLimit = Math.max(visitorConfig.localVisitorServiceLimit, visitorConfig.travellerVisitorServiceLimit);
   const recentSessionDates = await getLastNServiceDates(gatheringTypeId, churchId, maxLimit, date);
 
@@ -823,6 +823,7 @@ const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig)
   const rows = await Database.query(`
     SELECT DISTINCT
       i.id, i.first_name, i.last_name, i.people_type, i.is_child,
+      i.pco_background_check_cleared,
       f.id as family_id, f.family_name, f.family_notes, f.family_type,
       MAX(s.session_date) as last_present_date
     FROM attendance_records ar
@@ -856,7 +857,12 @@ const getRecentVisitors = async (gatheringTypeId, churchId, date, visitorConfig)
       notes: v.family_notes,
       lastAttended: v.last_present_date,
       familyId: v.family_id,
-      familyName: v.family_name
+      familyName: v.family_name,
+      ...(includeBackgroundCheck ? {
+        backgroundCheckCleared: v.pco_background_check_cleared === null || v.pco_background_check_cleared === undefined
+          ? null
+          : Boolean(v.pco_background_check_cleared)
+      } : {})
     });
   }
   return { visitors, recentlyPresentIds };
@@ -1037,12 +1043,29 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     // We'll reuse the logic from the individual endpoints but execute in parallel where possible
     const results = {};
 
+    // Compute background-check visibility BEFORE the parallel-fetch block below so
+    // getRecentVisitors can be told whether to include the field (see Fix 3).
+    const thresholdDays = 7; // default weekly
+    let gatheringRequiresBackgroundCheck = false;
+    try {
+      const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+      if (gt && gt.length > 0) {
+        gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
+        const freq = (gt[0].frequency || '').toLowerCase();
+        if (freq === 'biweekly') thresholdDays = 14;
+        else if (freq === 'monthly') thresholdDays = 31;
+      }
+    } catch {}
+    const showBackgroundCheckStatus = gatheringRequiresBackgroundCheck
+      && await isBackgroundCheckTrackingEnabled(req.user.church_id);
+
     try {
       // PARALLEL BATCH 1: Fetch all church people (single JOIN query instead of N+1)
       const allPeoplePromise = (async () => {
         const allMembers = await Database.query(`
           SELECT
             i.id, i.first_name, i.last_name, i.people_type, i.is_child,
+            i.pco_background_check_cleared,
             f.id as family_id, f.family_name, f.family_notes, f.family_type,
             COALESCE(f.last_attended, f.created_at) as last_activity
           FROM individuals i
@@ -1063,7 +1086,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             notes: member.family_notes,
             lastAttended: member.last_activity,
             familyId: member.family_id,
-            familyName: member.family_name
+            familyName: member.family_name,
+            pco_background_check_cleared: member.pco_background_check_cleared
           };
         });
       })();
@@ -1071,7 +1095,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
       // PARALLEL BATCH 2: Fetch recent visitors (doesn't depend on main attendance)
       const recentVisitorsPromise = (async () => {
         const visitorConfig = await getVisitorConfig(req.user.church_id);
-        return await getRecentVisitors(gatheringTypeId, req.user.church_id, date, visitorConfig);
+        return await getRecentVisitors(gatheringTypeId, req.user.church_id, date, visitorConfig, showBackgroundCheckStatus);
       })();
 
       // Wait for parallel operations
@@ -1092,20 +1116,6 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     // Now fetch main attendance data (this is the bulk of the existing endpoint logic)
     // NOTE: This duplicates the logic from the main GET endpoint below
     // We could refactor to share this code, but for now keeping it inline for clarity
-
-    const thresholdDays = 7; // default weekly
-    let gatheringRequiresBackgroundCheck = false;
-    try {
-      const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
-      if (gt && gt.length > 0) {
-        gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
-        const freq = (gt[0].frequency || '').toLowerCase();
-        if (freq === 'biweekly') thresholdDays = 14;
-        else if (freq === 'monthly') thresholdDays = 31;
-      }
-    } catch {}
-    const showBackgroundCheckStatus = gatheringRequiresBackgroundCheck
-      && await isBackgroundCheckTrackingEnabled(req.user.church_id);
 
     const thresholdDate = new Date(date);
     thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
@@ -1144,6 +1154,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           i.is_child,
           i.last_attendance_date,
           i.created_at as individual_created_at,
+          i.pco_background_check_cleared,
           COALESCE(ar.people_type_at_time, i.people_type) as people_type,
           f.id as family_id,
           f.family_name,
@@ -1192,7 +1203,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
           lastAttendanceDate: individual.last_attendance_date,
           createdAt: individual.individual_created_at,
           peopleType: individual.people_type,
-          notes: null
+          notes: null,
+          pcoBackgroundCheckCleared: individual.pco_background_check_cleared
         });
       });
 
@@ -1218,7 +1230,8 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
             present: member.present,
             peopleType: member.peopleType,
             lastAttendanceDate: member.lastAttendanceDate,
-            createdAt: member.createdAt
+            createdAt: member.createdAt,
+            pcoBackgroundCheckCleared: member.pcoBackgroundCheckCleared
           };
         })
       );
@@ -1381,13 +1394,27 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
         peopleType: attendee.people_type,
         lastAttended: attendee.last_attended
       })),
-      visitors,
+      visitors: visitors.map(({ pcoBackgroundCheckCleared, ...v }) => ({
+        ...v,
+        ...(showBackgroundCheckStatus ? {
+          backgroundCheckCleared: pcoBackgroundCheckCleared === null || pcoBackgroundCheckCleared === undefined
+            ? null
+            : Boolean(pcoBackgroundCheckCleared)
+        } : {})
+      })),
       potentialVisitors: filteredPotentialVisitors.map(visitor => ({
         ...visitor,
         withinAbsenceLimit: visitor.within_absence_limit === 1 || visitor.within_absence_limit === true
       })),
       recentVisitors: results.recentVisitors || [],
-      allChurchPeople: results.allChurchPeople || []
+      allChurchPeople: (results.allChurchPeople || []).map(({ pco_background_check_cleared, ...p }) => ({
+        ...p,
+        ...(showBackgroundCheckStatus ? {
+          backgroundCheckCleared: pco_background_check_cleared === null || pco_background_check_cleared === undefined
+            ? null
+            : Boolean(pco_background_check_cleared)
+        } : {})
+      }))
     });
 
     res.json(responseData);

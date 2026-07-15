@@ -222,6 +222,7 @@ export interface Visitor {
   familyId?: number;
   familyName?: string;
   isChild?: boolean;
+  backgroundCheckCleared?: boolean | null;
 }
 
 export interface AttendanceData {
