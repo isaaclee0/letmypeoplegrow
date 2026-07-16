@@ -1045,7 +1045,7 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
 
     // Compute background-check visibility BEFORE the parallel-fetch block below so
     // getRecentVisitors can be told whether to include the field (see Fix 3).
-    const thresholdDays = 7; // default weekly
+    let thresholdDays = 7; // default weekly
     let gatheringRequiresBackgroundCheck = false;
     try {
       const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
