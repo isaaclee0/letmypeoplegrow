@@ -292,48 +292,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
           {status.connected && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">PCO is source of truth for members</h5>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Locks linked people to Planning Center — their name and age group can only be changed in PCO,
-                    and archive/reactivate/delete/merge are disabled here. Also shows a PCO badge on synced families.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => requestPcSyncIndicatorToggle(!pcSyncIndicator)}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                  role="switch"
-                  aria-checked={pcSyncIndicator}
-                >
-                  <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncIndicator ? 'translate-x-5' : 'translate-x-0'}`} />
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Track background check status</h5>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    Syncs Planning Center's background-check status for linked people. To use it,
-                    also flag specific gathering types as "Requires background check" in Manage
-                    Gatherings — the status only shows there and on the People page. Status is only
-                    as current as the last sync (see each batch's "Last run" time below) — not real-time.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => toggleTrackBackgroundChecks(!pcTrackBackgroundChecks)}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcTrackBackgroundChecks ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                  role="switch"
-                  aria-checked={pcTrackBackgroundChecks}
-                >
-                  <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcTrackBackgroundChecks ? 'translate-x-5' : 'translate-x-0'}`} />
-                </button>
-              </div>
-
               {/* Sync batches */}
-              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+              <div>
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
@@ -415,6 +375,49 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     </li>
                   ))}
                 </ul>
+              </div>
+
+              {/* PCO source-of-truth and background-check tracking */}
+              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">PCO is source of truth for members</h5>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Locks linked people to Planning Center — their name and age group can only be changed in PCO,
+                      and archive/reactivate/delete/merge are disabled here. Also shows a PCO badge on synced families.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => requestPcSyncIndicatorToggle(!pcSyncIndicator)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                    role="switch"
+                    aria-checked={pcSyncIndicator}
+                  >
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncIndicator ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Track background check status</h5>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Syncs Planning Center's background-check status for linked people. To use it,
+                      also flag specific gathering types as "Requires background check" in Manage
+                      Gatherings — the status only shows there and on the People page. Status is only
+                      as current as the last sync (see each batch's "Last run" time above) — not real-time.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleTrackBackgroundChecks(!pcTrackBackgroundChecks)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcTrackBackgroundChecks ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                    role="switch"
+                    aria-checked={pcTrackBackgroundChecks}
+                  >
+                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcTrackBackgroundChecks ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
               </div>
 
               {/* Check-in attendance import */}
