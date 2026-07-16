@@ -41,7 +41,10 @@ function projectPerson(p, fieldDataById) {
     status: a.status || null,
     membership: a.membership || null,
     child: a.child === true,
-    passedBackgroundCheck: a.passed_background_check === true,
+    // Preserve PCO's null/absent (no background-check data at all) as null —
+    // collapsing it to false would make syncBackgroundCheckStatuses write
+    // "not cleared" for someone who was simply never checked.
+    passedBackgroundCheck: typeof a.passed_background_check === 'boolean' ? a.passed_background_check : null,
     householdId: (hh && hh[0] && hh[0].id) || null,
     fieldValues,
   };

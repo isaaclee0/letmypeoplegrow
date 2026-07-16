@@ -10,7 +10,7 @@ test('projectPerson maps attributes and first household id', () => {
   };
   assert.deepStrictEqual(projectPerson(raw), {
     id: '123', firstName: 'Sarah', lastName: 'Wierenga',
-    status: 'active', membership: 'Church Members', child: false, passedBackgroundCheck: false, householdId: 'h1', fieldValues: {},
+    status: 'active', membership: 'Church Members', child: false, passedBackgroundCheck: null, householdId: 'h1', fieldValues: {},
   });
 });
 
@@ -129,4 +129,14 @@ test('projectPerson: passedBackgroundCheck is false when PCO returns false', () 
   };
   const projected = projectPerson(raw, new Map());
   assert.strictEqual(projected.passedBackgroundCheck, false);
+});
+
+test('projectPerson: passedBackgroundCheck is null (not false) when PCO has no background-check data', () => {
+  const raw = {
+    id: '3',
+    attributes: { first_name: 'A', last_name: 'B', passed_background_check: null },
+    relationships: {},
+  };
+  const projected = projectPerson(raw, new Map());
+  assert.strictEqual(projected.passedBackgroundCheck, null);
 });

@@ -15,6 +15,21 @@ const router = express.Router();
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
 
+// GROUP_CONCAT(DISTINCT gt.id) and GROUP_CONCAT(DISTINCT gt.name) as separate
+// columns can desync: SQLite dedupes each independently, so two gatherings
+// sharing a name collapse the names list to fewer entries than the ids list,
+// shifting every pairing after that point. Concatenating "id<unit-sep>name"
+// as a single expression (queried as `gt.id || char(31) || gt.name`) keeps
+// each pair atomic regardless of duplicate names; char(31) (unit separator)
+// is used instead of ':' so a name containing a colon can't confuse the split.
+const parseGatheringPairs = (pairsStr) => {
+  if (!pairsStr) return [];
+  return pairsStr.split(',').map((pair) => {
+    const sepIndex = pair.indexOf('\x1f');
+    return { id: Number(pair.slice(0, sepIndex)), name: pair.slice(sepIndex + 1) };
+  });
+};
+
 // Get potential duplicates based on name matching
 router.get('/duplicates', requireRole(['admin']), async (req, res) => {
   try {
@@ -27,8 +42,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
         f.family_name,
         i.is_active,
         i.created_at,
-        GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
-        GROUP_CONCAT(DISTINCT gt.name) as gathering_names,
+        GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs,
         COUNT(*) OVER (PARTITION BY LOWER(i.first_name), LOWER(i.last_name)) as name_count
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
@@ -39,7 +53,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
       HAVING name_count > 1
       ORDER BY LOWER(i.last_name), LOWER(i.first_name), i.created_at
     `, [req.user.church_id]);
-    
+
     // Convert BigInt values to regular numbers and process gathering assignments
     const processedIndividuals = individuals.map(individual => ({
       id: Number(individual.id),
@@ -49,11 +63,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
       familyName: individual.family_name,
       isActive: Boolean(individual.is_active),
       createdAt: individual.created_at,
-      gatheringAssignments: individual.gathering_ids ? 
-        individual.gathering_ids.split(',').map((id, index) => ({
-          id: Number(id),
-          name: individual.gathering_names.split(',')[index]
-        })) : [],
+      gatheringAssignments: parseGatheringPairs(individual.gathering_pairs),
       nameCount: Number(individual.name_count)
     }));
     
@@ -171,8 +181,7 @@ router.get('/', async (req, res) => {
         i.created_at,
         i.planning_center_id,
         ${backgroundCheckSelect}
-        GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
-        GROUP_CONCAT(DISTINCT gt.name) as gathering_names
+        GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
@@ -193,11 +202,7 @@ router.get('/', async (req, res) => {
           ? null
           : Boolean(individual.pco_background_check_cleared)
       } : {}),
-      gatheringAssignments: individual.gathering_ids ?
-        individual.gathering_ids.split(',').map((id, index) => ({
-          id: Number(id),
-          name: individual.gathering_names.split(',')[index]
-        })) : []
+      gatheringAssignments: parseGatheringPairs(individual.gathering_pairs)
     }));
 
     const responseData = processApiResponse({ people: processedIndividuals });
@@ -225,8 +230,7 @@ router.get('/archived', async (req, res) => {
         f.family_name,
         i.is_active,
         i.created_at,
-        GROUP_CONCAT(DISTINCT gt.id) as gathering_ids,
-        GROUP_CONCAT(DISTINCT gt.name) as gathering_names
+        GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
       LEFT JOIN gathering_lists gl ON i.id = gl.individual_id
@@ -241,11 +245,7 @@ router.get('/archived', async (req, res) => {
       isActive: Boolean(individual.is_active),
       isChild: Boolean(individual.is_child),
       peopleType: individual.people_type,
-      gatheringAssignments: individual.gathering_ids ? 
-        individual.gathering_ids.split(',').map((id, index) => ({
-          id: Number(id),
-          name: individual.gathering_names.split(',')[index]
-        })) : []
+      gatheringAssignments: parseGatheringPairs(individual.gathering_pairs)
     }));
 
     const responseData = processApiResponse({ people: processedIndividuals });

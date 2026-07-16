@@ -1211,9 +1211,9 @@ const AttendancePage: React.FC = () => {
           setAllRecentVisitorsPool(recentResponse.data.visitors || []);
           
           // Refresh all church people to include the newly added visitor
-          const allPeopleResponse = await attendanceAPI.getAllPeople();
+          const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
           setAllChurchVisitors(allPeopleResponse.data.visitors || []);
-          
+
           logger.log('✅ Refreshed all visitor data after adding recent visitor');
         } catch (refreshErr) {
           logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
@@ -1848,9 +1848,9 @@ const AttendancePage: React.FC = () => {
           setAllRecentVisitorsPool(recentResponse.data.visitors || []);
           
           // Refresh all church people to include the newly added visitor
-          const allPeopleResponse = await attendanceAPI.getAllPeople();
+          const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
           setAllChurchVisitors(allPeopleResponse.data.visitors || []);
-          
+
           logger.log('✅ Refreshed all visitor data after visitor operation');
         } catch (refreshErr) {
           logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
@@ -2210,9 +2210,9 @@ const AttendancePage: React.FC = () => {
         setAllRecentVisitorsPool(recentResponse.data.visitors || []);
         
         // Refresh all church people to reflect the change
-        const allPeopleResponse = await attendanceAPI.getAllPeople();
+        const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
         setAllChurchVisitors(allPeopleResponse.data.visitors || []);
-        
+
         logger.log('✅ Refreshed all visitor data after adding visitor family from all church people');
       } catch (refreshErr) {
         logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);
@@ -2253,9 +2253,9 @@ const AttendancePage: React.FC = () => {
         setAllRecentVisitorsPool(recentResponse.data.visitors || []);
         
         // Refresh all church people to reflect the change
-        const allPeopleResponse = await attendanceAPI.getAllPeople();
+        const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
         setAllChurchVisitors(allPeopleResponse.data.visitors || []);
-        
+
         logger.log('✅ Refreshed all visitor data after adding individual from all church people');
       } catch (refreshErr) {
         logger.warn('⚠️ Failed to refresh some visitor data:', refreshErr);

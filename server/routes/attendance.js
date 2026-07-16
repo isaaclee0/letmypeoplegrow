@@ -773,6 +773,26 @@ const getLastNServiceDates = async (gatheringTypeId, churchId, serviceCount, upT
   }
 };
 
+// Whether background-check status should be surfaced for a given gathering:
+// the gathering itself must be flagged AND the church must have PCO
+// background-check tracking enabled. Mirrors the gating logic in the /full
+// endpoint below, factored out so other endpoints that return people for a
+// specific gathering (recent visitors, all-church-people) apply the same
+// rule instead of always omitting the field.
+const getShowBackgroundCheckStatus = async (gatheringTypeId, churchId) => {
+  if (!gatheringTypeId) return false;
+  try {
+    const gt = await Database.query(
+      'SELECT requires_background_check FROM gathering_types WHERE id = ? AND church_id = ?',
+      [gatheringTypeId, churchId]
+    );
+    if (!gt || gt.length === 0 || !gt[0].requires_background_check) return false;
+  } catch {
+    return false;
+  }
+  return await isBackgroundCheckTrackingEnabled(churchId);
+};
+
 // Helper function to get visitor configuration for a church
 const getVisitorConfig = async (churchId) => {
   try {
@@ -888,8 +908,11 @@ const filterVisitorsByAbsence = (visitors, options) => {
 // Church-wide people (all gatherings, all time) — define BEFORE param routes to avoid shadowing
 router.get('/people/all', disableCache, async (req, res) => {
   try {
+    const { gatheringTypeId } = req.query;
+    const showBackgroundCheckStatus = await getShowBackgroundCheckStatus(gatheringTypeId, req.user.church_id);
+
     const allFamilies = await Database.query(`
-      SELECT DISTINCT 
+      SELECT DISTINCT
         f.id as family_id,
         f.family_name,
         f.family_notes,
@@ -906,7 +929,7 @@ router.get('/people/all', disableCache, async (req, res) => {
     const processedPeople = [];
     for (const family of allFamilies) {
       const familyMembers = await Database.query(`
-        SELECT id, first_name, last_name, people_type, is_child
+        SELECT id, first_name, last_name, people_type, is_child, pco_background_check_cleared
         FROM individuals
         WHERE family_id = ? AND is_active = 1 AND church_id = ?
         ORDER BY first_name
@@ -923,7 +946,12 @@ router.get('/people/all', disableCache, async (req, res) => {
           notes: family.family_notes,
           lastAttended: family.last_activity,
           familyId: family.family_id,
-          familyName: family.family_name
+          familyName: family.family_name,
+          ...(showBackgroundCheckStatus ? {
+            backgroundCheckCleared: member.pco_background_check_cleared === null || member.pco_background_check_cleared === undefined
+              ? null
+              : Boolean(member.pco_background_check_cleared)
+          } : {})
         });
       }
     }
@@ -1048,14 +1076,19 @@ router.get('/:gatheringTypeId/:date/full', disableCache, requireGatheringAccess,
     let thresholdDays = 7; // default weekly
     let gatheringRequiresBackgroundCheck = false;
     try {
-      const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+      const gt = await Database.query('SELECT frequency, requires_background_check FROM gathering_types WHERE id = ? AND church_id = ?', [gatheringTypeId, req.user.church_id]);
       if (gt && gt.length > 0) {
         gatheringRequiresBackgroundCheck = !!gt[0].requires_background_check;
         const freq = (gt[0].frequency || '').toLowerCase();
         if (freq === 'biweekly') thresholdDays = 14;
         else if (freq === 'monthly') thresholdDays = 31;
       }
-    } catch {}
+    } catch (err) {
+      // Swallowed on purpose (falls back to the weekly default above), but
+      // logged — a silent catch here previously hid a `const` reassignment
+      // TypeError for months (see fix 6a27bb1).
+      console.error('Error looking up gathering frequency/background-check flag:', err);
+    }
     const showBackgroundCheckStatus = gatheringRequiresBackgroundCheck
       && await isBackgroundCheckTrackingEnabled(req.user.church_id);
 
@@ -1433,14 +1466,16 @@ router.get('/:gatheringTypeId/:date', disableCache, requireGatheringAccess, asyn
     // Determine gathering frequency to compute an "infrequent" threshold
     let thresholdDays = 7; // default weekly
     try {
-      const gt = await Database.query('SELECT frequency FROM gathering_types WHERE id = ?', [gatheringTypeId]);
+      const gt = await Database.query('SELECT frequency FROM gathering_types WHERE id = ? AND church_id = ?', [gatheringTypeId, req.user.church_id]);
       if (gt && gt.length > 0) {
         const freq = (gt[0].frequency || '').toLowerCase();
         if (freq === 'biweekly') thresholdDays = 14;
         else if (freq === 'monthly') thresholdDays = 31;
         else thresholdDays = 7;
       }
-    } catch {}
+    } catch (err) {
+      console.error('Error looking up gathering frequency:', err);
+    }
     const thresholdDate = new Date(date);
     thresholdDate.setDate(thresholdDate.getDate() - thresholdDays);
     const thresholdDateStr = thresholdDate.toISOString().split('T')[0];
@@ -2277,7 +2312,8 @@ router.get('/:gatheringTypeId/visitors/recent', disableCache, requireGatheringAc
     const { gatheringTypeId } = req.params;
     const today = new Date().toISOString().split('T')[0];
     const visitorConfig = await getVisitorConfig(req.user.church_id);
-    const { visitors } = await getRecentVisitors(gatheringTypeId, req.user.church_id, today, visitorConfig);
+    const showBackgroundCheckStatus = await getShowBackgroundCheckStatus(gatheringTypeId, req.user.church_id);
+    const { visitors } = await getRecentVisitors(gatheringTypeId, req.user.church_id, today, visitorConfig, showBackgroundCheckStatus);
     res.json({ visitors });
   } catch (error) {
     console.error('Get recent visitors error:', error);

@@ -24,6 +24,10 @@ const LoginPage: React.FC = () => {
   const [hasExpiredToken, setHasExpiredToken] = useState<boolean | null>(null);
   const [availableChurches, setAvailableChurches] = useState<{ churchId: string; churchName: string }[]>([]);
   const [selectedChurchId, setSelectedChurchId] = useState<string | undefined>(undefined);
+  // Only set when the server confirms AUTH_DEV_BYPASS is actually enabled —
+  // NODE_ENV alone isn't a reliable signal, since a dev-mode server can still
+  // require the full OTC flow.
+  const [devBypass, setDevBypass] = useState<{ devUser: string; devCode: string } | null>(null);
   
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -62,8 +66,18 @@ const LoginPage: React.FC = () => {
         setHasUsers(true);
         setHasNonAdminUsers(true);
       }
+
+      try {
+        const statusResponse = await authAPI.getStatus();
+        const development = statusResponse.data.development;
+        if (development?.devUser && development?.devCode) {
+          setDevBypass({ devUser: development.devUser, devCode: development.devCode });
+        }
+      } catch (error) {
+        // Bypass box just won't show; not worth surfacing an error for this.
+      }
     };
-    
+
     checkUsersAndAuth();
   }, []);
 
@@ -354,16 +368,17 @@ const LoginPage: React.FC = () => {
           </form>
         )}
 
-        {/* Development Mode Instructions */}
-        {process.env.NODE_ENV === 'development' && (
+        {/* Development Mode Instructions — only shown when the server confirms
+            AUTH_DEV_BYPASS is actually enabled, not just NODE_ENV=development */}
+        {devBypass && (
           <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
             <div className="text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Development Mode</p>
               <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md p-4">
                 <div className="text-sm text-blue-800 dark:text-blue-300">
                   <p className="font-medium mb-1">Quick Development Login:</p>
-                  <p>Email: <code className="bg-blue-100 px-1 rounded">dev@church.local</code></p>
-                  <p>Code: <code className="bg-blue-100 px-1 rounded">000000</code></p>
+                  <p>Email: <code className="bg-blue-100 px-1 rounded">{devBypass.devUser}</code></p>
+                  <p>Code: <code className="bg-blue-100 px-1 rounded">{devBypass.devCode}</code></p>
                 </div>
               </div>
             </div>

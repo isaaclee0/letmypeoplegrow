@@ -54,6 +54,11 @@ const LeaderCheckInModal: React.FC<LeaderCheckInModalProps> = ({
   const isCheckout = action === 'checkout';
 
   const handleSubmit = async () => {
+    // The signer-name input's onKeyDown calls this directly on Enter, bypassing
+    // the submit button's disabled={isSubmitting} guard — without this, a
+    // second Enter press while the first check-in/out is still in flight fires
+    // onConfirm twice.
+    if (isSubmitting) return;
     if (hasChildren && isCheckout && !signerName.trim()) {
       setError('Please enter the authorised person\'s name.');
       return;

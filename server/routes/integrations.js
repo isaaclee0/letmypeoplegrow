@@ -1,7 +1,8 @@
 const express = require('express');
 const https = require('https');
 const Database = require('../config/database');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, requireRole } = require('../middleware/auth');
+const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
 const { tallyField } = require('../services/planningCenter/summary');
@@ -30,6 +31,11 @@ router.use((req, res, next) => {
 
 // All routes require authentication
 router.use(verifyToken);
+router.use(ensureChurchIsolation);
+// Elvanto/PCO connect, sync, and import all mutate church-wide data with no
+// per-item review on some paths (e.g. batch "Run now") — admin-only, matching
+// every other data-mutating router in this app.
+router.use(requireRole(['admin']));
 
 // Log after auth passes
 router.use((req, res, next) => {

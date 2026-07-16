@@ -300,7 +300,7 @@ const AddVisitorModal: React.FC<AddVisitorModalProps> = ({
           setRecentVisitors(recentResponse.data.visitors || []);
           setAllRecentVisitorsPool(recentResponse.data.visitors || []);
 
-          const allPeopleResponse = await attendanceAPI.getAllPeople();
+          const allPeopleResponse = await attendanceAPI.getAllPeople(selectedGathering.id);
           setAllChurchVisitors(allPeopleResponse.data.visitors || []);
 
           logger.log('✅ Refreshed all visitor data after visitor operation');

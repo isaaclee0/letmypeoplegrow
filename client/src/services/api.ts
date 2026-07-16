@@ -65,8 +65,16 @@ api.interceptors.response.use(
       const originalRequest = error.config;
       const requestUrl = originalRequest.url;
       
-      // Skip refresh for auth endpoints to prevent infinite loops
-      if (requestUrl.includes('/auth/refresh') || requestUrl.includes('/auth/logout')) {
+      // Skip refresh for auth endpoints to prevent infinite loops. verify-code/
+      // request-code are unauthenticated by design — a 401 there is "wrong
+      // code", not "your session expired", so attempting a refresh just
+      // replaces that error with a useless refresh-failure message.
+      if (
+        requestUrl.includes('/auth/refresh') ||
+        requestUrl.includes('/auth/logout') ||
+        requestUrl.includes('/auth/verify-code') ||
+        requestUrl.includes('/auth/request-code')
+      ) {
         console.log('🔒 Auth endpoint 401 - not attempting refresh:', requestUrl);
         return Promise.reject(error);
       }
@@ -247,6 +255,12 @@ export interface AddVisitorData {
 
 // Auth API
 export const authAPI = {
+  // Service status, including whether the server's dev-login bypass
+  // (AUTH_DEV_BYPASS) is actually enabled — the login page uses this to
+  // decide whether to advertise the dev@church.local / 000000 shortcut.
+  getStatus: () =>
+    api.get('/auth'),
+
   requestCode: (contact: string, churchId?: string) =>
     api.post('/auth/request-code', { contact, ...(churchId && { churchId }) }),
 
@@ -399,9 +413,11 @@ export const attendanceAPI = {
   getAllVisitors: () =>
     api.get('/attendance/visitors/all'),
 
-  // Church-wide people (all gatherings, all time - including regular members)
-  getAllPeople: () =>
-    api.get('/attendance/people/all'),
+  // Church-wide people (all gatherings, all time - including regular members).
+  // Pass the currently selected gathering so the server can decide whether to
+  // include backgroundCheckCleared (gated on that gathering's own flag).
+  getAllPeople: (gatheringTypeId?: number) =>
+    api.get('/attendance/people/all', { params: gatheringTypeId ? { gatheringTypeId } : {} }),
     
   addVisitor: (gatheringTypeId: number, date: string, visitor: AddVisitorData) => 
     api.post(`/attendance/${gatheringTypeId}/${date}/visitors`, visitor),
