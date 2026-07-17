@@ -155,6 +155,7 @@ server/config/database-mariadb.js
 
 # Internal planning docs
 MONETISATION.md
+docs/
 
 # Local worktree docker-compose port override
 docker-compose.worktree-override.yml
