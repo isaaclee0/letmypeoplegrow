@@ -62,7 +62,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     try {
       const res = await integrationsAPI.getPlanningCenterSyncStats();
       setSyncStats({ totalPeople: res.data.totalPeople, syncedPeople: res.data.syncedPeople });
-    } catch (e) {
+    } catch {
       // Silent — this is a nice-to-have gap indicator, not worth an error banner.
       setSyncStats(null);
     }
@@ -374,11 +374,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
                           <button type="button" onClick={() => {
-                            const closing = reviewingBatchId === batch.id;
-                            setReviewingBatchId(closing ? null : batch.id);
-                            // Applies happen inside the review panel — closing it is the
-                            // signal that a sync may have just changed who's linked.
-                            if (closing) loadSyncStats();
+                            setReviewingBatchId(reviewingBatchId === batch.id ? null : batch.id);
+                            // Applies happen inside the review panel — refresh on every toggle (open
+                            // or close) since switching directly from reviewing one batch to another
+                            // implicitly closes the first without a dedicated "closing" click.
+                            loadSyncStats();
                           }}
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
