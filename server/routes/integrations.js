@@ -1741,6 +1741,37 @@ router.get('/planning-center/status', async (req, res) => {
   }
 });
 
+// Local DB-only coverage stat: how many active individuals are linked to a
+// PCO Person record, versus the church's total active people. Deliberately
+// separate from /planning-center/status (which verifies the live OAuth
+// connection) since this is pure local data — no PCO API call, no token
+// lookup — so it's cheap to refetch often (e.g. after every batch mutation).
+async function getPlanningCenterSyncStats(churchId) {
+  const rows = await Database.query(
+    `SELECT COUNT(*) as total,
+            SUM(CASE WHEN planning_center_id IS NOT NULL THEN 1 ELSE 0 END) as synced
+       FROM individuals
+      WHERE church_id = ? AND is_active = 1`,
+    [churchId]
+  );
+  const row = rows[0] || {};
+  return {
+    // SUM() over zero matching rows comes back as SQL NULL, not 0.
+    totalPeople: row.total || 0,
+    syncedPeople: row.synced || 0,
+  };
+}
+
+router.get('/planning-center/sync-stats', async (req, res) => {
+  try {
+    const stats = await getPlanningCenterSyncStats(req.user.church_id);
+    res.json({ success: true, ...stats });
+  } catch (error) {
+    logger.error('PCO sync stats error:', error);
+    res.status(500).json({ error: 'Failed to load sync stats.' });
+  }
+});
+
 // Derive the OAuth redirect URI from the incoming request so the same app can
 // serve multiple production domains (e.g. app.letmypeoplegrow.com.au and
 // letmypeoplegrow.app). Each domain must still be registered as a valid callback
@@ -2889,3 +2920,4 @@ router.post('/planning-center/import-checkins/execute', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.getPlanningCenterSyncStats = getPlanningCenterSyncStats;
