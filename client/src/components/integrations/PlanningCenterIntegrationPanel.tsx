@@ -39,6 +39,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batches, setBatches] = useState<SyncBatch[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
+  const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
   const [editingBatch, setEditingBatch] = useState<SyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -54,6 +55,16 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       setBatchesError(e.response?.data?.error || 'Failed to load sync batches.');
     } finally {
       setBatchesLoading(false);
+    }
+  }, []);
+
+  const loadSyncStats = useCallback(async () => {
+    try {
+      const res = await integrationsAPI.getPlanningCenterSyncStats();
+      setSyncStats({ totalPeople: res.data.totalPeople, syncedPeople: res.data.syncedPeople });
+    } catch (e) {
+      // Silent — this is a nice-to-have gap indicator, not worth an error banner.
+      setSyncStats(null);
     }
   }, []);
 
@@ -106,6 +117,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     try {
       await integrationsAPI.deletePlanningCenterSyncBatch(batchId);
       await loadBatches();
+      await loadSyncStats();
     } catch (e: any) {
       setPlanningCenterError(e.response?.data?.error || 'Failed to delete sync batch.');
     }
@@ -142,6 +154,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   useEffect(() => {
     if (status.connected) {
       loadBatches();
+      loadSyncStats();
       settingsAPI.getIntegrationSettings().then(r => {
         setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
         setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
@@ -156,7 +169,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
         })
         .catch(() => setCheckinAvailable(false));
     }
-  }, [status.connected, loadBatches]);
+  }, [status.connected, loadBatches, loadSyncStats]);
 
   return (
     <div>
@@ -329,7 +342,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div className="mt-3">
                     <PlanningCenterBatchEditor
                       batch={editingBatch === 'new' ? null : editingBatch}
-                      onSaved={() => { setEditingBatch(null); loadBatches(); }}
+                      onSaved={() => { setEditingBatch(null); loadBatches(); loadSyncStats(); }}
                       onCancel={() => setEditingBatch(null)}
                     />
                   </div>
@@ -360,7 +373,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
-                          <button type="button" onClick={() => setReviewingBatchId(reviewingBatchId === batch.id ? null : batch.id)}
+                          <button type="button" onClick={() => {
+                            const closing = reviewingBatchId === batch.id;
+                            setReviewingBatchId(closing ? null : batch.id);
+                            // Applies happen inside the review panel — closing it is the
+                            // signal that a sync may have just changed who's linked.
+                            if (closing) loadSyncStats();
+                          }}
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
                           </button>
