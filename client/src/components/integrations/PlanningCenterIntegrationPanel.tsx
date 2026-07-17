@@ -325,6 +325,24 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </button>
                 </div>
 
+                {syncStats && (
+                  <div className="mt-4">
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {syncStats.totalPeople === 0
+                        ? 'No active people yet'
+                        : `${syncStats.syncedPeople} of ${syncStats.totalPeople} people synced with Planning Center`}
+                    </p>
+                    {syncStats.totalPeople > 0 && (
+                      <div className="mt-1.5 h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-600">
+                        <div
+                          className="h-1.5 rounded-full bg-green-600"
+                          style={{ width: `${Math.min(100, (syncStats.syncedPeople / syncStats.totalPeople) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="mt-4 flex items-center justify-between">
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync batches</p>
                   {editingBatch === null && (
