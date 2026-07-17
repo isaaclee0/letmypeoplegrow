@@ -894,6 +894,7 @@ export const integrationsAPI = {
 
   // Planning Center integration - OAuth based
   getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
+  getPlanningCenterSyncStats: () => api.get('/integrations/planning-center/sync-stats'),
   authorizePlanningCenter: (returnTo?: string) =>
     api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
