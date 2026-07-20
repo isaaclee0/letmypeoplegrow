@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS user_lookup (
 CREATE INDEX IF NOT EXISTS idx_user_lookup_email ON user_lookup(email);
 CREATE INDEX IF NOT EXISTS idx_user_lookup_mobile ON user_lookup(mobile_number);
 CREATE INDEX IF NOT EXISTS idx_user_lookup_church ON user_lookup(church_id);
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
 `;
 
 const CHURCH_SCHEMA = `
