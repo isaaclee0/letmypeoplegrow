@@ -143,7 +143,14 @@ services:
       - tunnel
 
 volumes:
+  # External + fixed name so every git worktree resolves to the SAME volume
+  # (Compose normally prefixes volume names with the project/directory name,
+  # which would give each worktree its own empty database). Points at the
+  # volume already in use by the main checkout - see docker-compose.worktree-override.yml.example
+  # for how to run a worktree's stack against this same data.
   server_data_dev:
+    external: true
+    name: letmypeoplegrow_server_data_dev
 
 networks:
   app-network-dev:

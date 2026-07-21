@@ -1,0 +1,40 @@
+# Copy this file to docker-compose.worktree-override.yml inside a worktree
+# (that exact filename is gitignored, so each worktree keeps its own copy
+# and its own port choices without touching git).
+#
+# Usage, from inside the worktree:
+#   docker-compose -f docker-compose.dev.yml -f docker-compose.worktree-override.yml up -d
+#
+# Why: docker-compose.dev.yml pins server_data_dev to an external volume
+# (letmypeoplegrow_server_data_dev), so this stack reads/writes the SAME
+# church databases as your main checkout's dev environment - no reseeding
+# needed to test a branch. It also means the data is NOT isolated: changes
+# made here (attendance, users, settings) show up in main's dev env too,
+# and vice versa. Schema changes are additive-only by convention, so an
+# older checkout tolerates new columns/tables it doesn't use - but don't
+# run destructive migrations from a worktree while main is relying on the
+# same data.
+#
+# Only container_name + host ports need overriding here - everything else
+# (build context, bind-mounted source, node_modules volume) is already
+# relative to whichever checkout runs the command, so it naturally picks up
+# the worktree's code.
+
+services:
+  server:
+    container_name: church_attendance_server_dev_worktree
+
+  client:
+    container_name: church_attendance_client_dev_worktree
+    ports:
+      - "3100:3000"
+
+  admin:
+    container_name: church_attendance_admin_dev_worktree
+    ports:
+      - "127.0.0.1:7778:7777"
+
+  nginx:
+    container_name: church_attendance_nginx_dev_worktree
+    ports:
+      - "8080:80"
