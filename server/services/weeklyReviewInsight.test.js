@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { composeSystemPrompt, truncateGuidance, BASE_SYSTEM_PROMPT } = require('./weeklyReviewInsight');
+const { composeSystemPrompt, truncateGuidance, resolveModel, BASE_SYSTEM_PROMPT } = require('./weeklyReviewInsight');
 
 test('composeSystemPrompt returns base prompt unchanged when guidance is empty', () => {
   assert.strictEqual(composeSystemPrompt(''), BASE_SYSTEM_PROMPT);
@@ -29,4 +29,12 @@ test('truncateGuidance trims to the cap and strips trailing whitespace', () => {
 test('truncateGuidance handles empty input', () => {
   assert.strictEqual(truncateGuidance('', 10), '');
   assert.strictEqual(truncateGuidance(null, 10), '');
+});
+
+test('resolveModel prefers the override when one is set', () => {
+  assert.strictEqual(resolveModel('claude-sonnet-5', 'claude-haiku-4-5-20251001'), 'claude-sonnet-5');
+});
+
+test('resolveModel falls back to the default when override is null', () => {
+  assert.strictEqual(resolveModel(null, 'claude-haiku-4-5-20251001'), 'claude-haiku-4-5-20251001');
 });

@@ -32,6 +32,14 @@ function composeSystemPrompt(guidance) {
 }
 
 /**
+ * Choose which model to use for a platform AI call: an admin-configured
+ * override if one exists, otherwise the code-level default. Pure.
+ */
+function resolveModel(override, fallback) {
+  return override || fallback;
+}
+
+/**
  * Check minimum data thresholds for enriched insight.
  */
 function meetsMinimumThresholds(reviewData) {
@@ -179,6 +187,7 @@ async function generateInsight(reviewData, options = {}) {
 
     // Lazy require to avoid a circular dependency (database -> ... -> this module).
     const Database = require('../config/database');
+    const platformAiSettings = require('./platformAiSettings');
     let guidance = '';
     try {
       const rows = await Database.query(
@@ -196,14 +205,16 @@ async function generateInsight(reviewData, options = {}) {
     let response = null;
     if (PLATFORM_API_KEY) {
       try {
-        response = await callClaude(context, systemPrompt);
+        const model = resolveModel(await platformAiSettings.getModel('anthropic'), platformAiSettings.DEFAULT_MODELS.anthropic);
+        response = await callClaude(context, systemPrompt, model);
       } catch (err) {
         console.warn('Weekly review: Claude failed, trying Grok fallback:', err.message);
       }
     }
     if (!response && PLATFORM_XAI_API_KEY) {
       try {
-        response = await callGrok(context, systemPrompt);
+        const model = resolveModel(await platformAiSettings.getModel('xai'), platformAiSettings.DEFAULT_MODELS.xai);
+        response = await callGrok(context, systemPrompt, model);
       } catch (err) {
         console.warn('Weekly review: Grok fallback also failed:', err.message);
       }
@@ -221,10 +232,10 @@ async function generateInsight(reviewData, options = {}) {
   }
 }
 
-function callClaude(context, systemPrompt) {
+function callClaude(context, systemPrompt, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model,
       max_tokens: 150,
       system: systemPrompt,
       messages: [{ role: 'user', content: context }]
@@ -270,10 +281,10 @@ function callClaude(context, systemPrompt) {
   });
 }
 
-function callGrok(context, systemPrompt) {
+function callGrok(context, systemPrompt, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'grok-4-fast',
+      model,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: context }
@@ -393,4 +404,4 @@ async function saveInsightAsConversation(churchId, userId, insight, weekLabel) {
   }
 }
 
-module.exports = { generateInsight, saveInsightAsConversation, composeSystemPrompt, truncateGuidance, BASE_SYSTEM_PROMPT };
+module.exports = { generateInsight, saveInsightAsConversation, composeSystemPrompt, truncateGuidance, resolveModel, BASE_SYSTEM_PROMPT };
