@@ -1719,7 +1719,10 @@
         const res = await fetch(`/api/ai-settings/${provider}/models`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        select.innerHTML = data.models.map(m =>
+        const models = data.models.some(m => m.id === currentModel)
+          ? data.models
+          : [{ id: currentModel, displayName: `${currentModel} (current)` }, ...data.models];
+        select.innerHTML = models.map(m =>
           `<option value="${escapeHtml(m.id)}" ${m.id === currentModel ? 'selected' : ''}>${escapeHtml(m.displayName)}</option>`
         ).join('');
       } catch (err) {
