@@ -18,6 +18,8 @@ require('dotenv').config({ path: path.join(__dirname, '../.env'), quiet: true })
 const Database = require('../config/database');
 const BackupService = require('../services/backup');
 const logger = require('../config/logger');
+const platformAiSettings = require('../services/platformAiSettings');
+const platformAiModelCatalog = require('../services/platformAiModelCatalog');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -1141,6 +1143,78 @@ function checkpointAndCopy(srcPath, destPath) {
   // Copy the checkpointed sqlite file
   fs.copyFileSync(srcPath, destPath);
 }
+
+// ============================================
+// Platform AI Settings (model picker for the weekly review insight
+// generator and guidance distiller — both use the platform's own
+// PLATFORM_ANTHROPIC_API_KEY / PLATFORM_XAI_API_KEY, not a church's BYOK).
+// ============================================
+
+const AI_PROVIDERS = {
+  anthropic: 'PLATFORM_ANTHROPIC_API_KEY',
+  xai: 'PLATFORM_XAI_API_KEY',
+};
+
+app.get('/api/ai-settings', async (req, res) => {
+  try {
+    const [anthropicOverride, xaiOverride] = await Promise.all([
+      platformAiSettings.getModel('anthropic'),
+      platformAiSettings.getModel('xai'),
+    ]);
+    res.json({
+      anthropic: {
+        configured: !!process.env.PLATFORM_ANTHROPIC_API_KEY,
+        currentModel: anthropicOverride || platformAiSettings.DEFAULT_MODELS.anthropic,
+        isOverride: !!anthropicOverride,
+      },
+      xai: {
+        configured: !!process.env.PLATFORM_XAI_API_KEY,
+        currentModel: xaiOverride || platformAiSettings.DEFAULT_MODELS.xai,
+        isOverride: !!xaiOverride,
+      },
+    });
+  } catch (error) {
+    console.error('AI settings status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/ai-settings/:provider/models', async (req, res) => {
+  try {
+    const { provider } = req.params;
+    const envVar = AI_PROVIDERS[provider];
+    if (!envVar) {
+      return res.status(400).json({ error: 'Provider must be "anthropic" or "xai".' });
+    }
+    const apiKey = process.env[envVar];
+    if (!apiKey) {
+      return res.status(400).json({ error: `${envVar} is not set.` });
+    }
+    const models = await platformAiModelCatalog.listModels(provider, apiKey);
+    res.json({ models });
+  } catch (error) {
+    console.error('AI settings model list error:', error);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.post('/api/ai-settings/:provider', async (req, res) => {
+  try {
+    const { provider } = req.params;
+    if (!AI_PROVIDERS[provider]) {
+      return res.status(400).json({ error: 'Provider must be "anthropic" or "xai".' });
+    }
+    const { model } = req.body;
+    if (model !== null && (typeof model !== 'string' || !model.trim())) {
+      return res.status(400).json({ error: 'model must be a non-empty string or null.' });
+    }
+    await platformAiSettings.setModel(provider, model);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('AI settings save error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Serve admin UI
 app.get('*splat', (req, res) => {
