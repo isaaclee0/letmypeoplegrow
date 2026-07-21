@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { buildDistillerUserMessage, shouldNudgeForGuidance, DISTILLER_SYSTEM_PROMPT } = require('./weeklyReviewGuidance');
+const { buildDistillerUserMessage, shouldNudgeForGuidance, resolveModel, DISTILLER_SYSTEM_PROMPT } = require('./weeklyReviewGuidance');
 
 test('buildDistillerUserMessage includes focus, per-gathering notes, and avoid list', () => {
   const msg = buildDistillerUserMessage({
@@ -60,4 +60,12 @@ test('shouldNudgeForGuidance false with no gatherings or no people', () => {
   assert.strictEqual(shouldNudgeForGuidance({
     hasGuidance: false, gatheringCount: 2, peopleCount: 0, weeksTracked: 5, pendingNudge: false,
   }), false);
+});
+
+test('resolveModel prefers the override when one is set', () => {
+  assert.strictEqual(resolveModel('grok-3-mini', 'grok-4-fast'), 'grok-3-mini');
+});
+
+test('resolveModel falls back to the default when override is null', () => {
+  assert.strictEqual(resolveModel(null, 'grok-4-fast'), 'grok-4-fast');
 });

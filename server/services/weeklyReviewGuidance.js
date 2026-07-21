@@ -49,6 +49,14 @@ function shouldNudgeForGuidance({ hasGuidance, gatheringCount, peopleCount, week
 }
 
 /**
+ * Choose which model to use for a platform AI call: an admin-configured
+ * override if one exists, otherwise the code-level default. Pure.
+ */
+function resolveModel(override, fallback) {
+  return override || fallback;
+}
+
+/**
  * Distill structured answers into a short guidance summary using the platform LLM.
  * Returns '' if no usable context or all providers fail. Never throws.
  */
@@ -56,9 +64,13 @@ async function distillGuidance(answers) {
   const userMessage = buildDistillerUserMessage(answers);
   if (!userMessage.trim()) return '';
 
+  // Lazy require to avoid a circular dependency, mirroring weeklyReviewInsight.js.
+  const platformAiSettings = require('./platformAiSettings');
+
   if (PLATFORM_API_KEY) {
     try {
-      const out = await callClaudeDistiller(userMessage);
+      const model = resolveModel(await platformAiSettings.getModel('anthropic'), platformAiSettings.DEFAULT_MODELS.anthropic);
+      const out = await callClaudeDistiller(userMessage, model);
       if (out !== null) return out.trim();
     } catch (e) {
       console.warn('Guidance distiller: Claude failed, trying Grok:', e.message);
@@ -66,7 +78,8 @@ async function distillGuidance(answers) {
   }
   if (PLATFORM_XAI_API_KEY) {
     try {
-      const out = await callGrokDistiller(userMessage);
+      const model = resolveModel(await platformAiSettings.getModel('xai'), platformAiSettings.DEFAULT_MODELS.xai);
+      const out = await callGrokDistiller(userMessage, model);
       if (out !== null) return out.trim();
     } catch (e) {
       console.warn('Guidance distiller: Grok failed:', e.message);
@@ -75,10 +88,10 @@ async function distillGuidance(answers) {
   return '';
 }
 
-function callClaudeDistiller(userMessage) {
+function callClaudeDistiller(userMessage, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model,
       max_tokens: 200,
       system: DISTILLER_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
@@ -107,10 +120,10 @@ function callClaudeDistiller(userMessage) {
   });
 }
 
-function callGrokDistiller(userMessage) {
+function callGrokDistiller(userMessage, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'grok-4-fast',
+      model,
       messages: [
         { role: 'system', content: DISTILLER_SYSTEM_PROMPT },
         { role: 'user', content: userMessage },
@@ -144,6 +157,7 @@ module.exports = {
   buildDistillerUserMessage,
   shouldNudgeForGuidance,
   distillGuidance,
+  resolveModel,
   DISTILLER_SYSTEM_PROMPT,
   MIN_WEEKS_FOR_NUDGE,
 };
