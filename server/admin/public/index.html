@@ -477,6 +477,7 @@
       <button class="tab" onclick="showView('users')">All Users</button>
       <button class="tab" onclick="showView('audit')">Audit Log</button>
       <button class="tab" onclick="showView('backups')">Backups</button>
+      <button class="tab" onclick="showView('ai-settings')">AI Settings</button>
     </div>
 
     <!-- Dashboard View -->
@@ -646,6 +647,28 @@
         </div>
         <div id="snapshots-table">
           <div class="empty-state">Select a target and click Refresh</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-ai-settings" style="display: none;">
+      <div class="section">
+        <div class="section-header">
+          <h2>Anthropic (Claude)</h2>
+          <div id="ai-anthropic-status" style="font-size: 0.875rem; color: #94a3b8;">Loading...</div>
+        </div>
+        <div class="modal-body" id="ai-anthropic-content">
+          <div class="loading">Loading...</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <h2>xAI (Grok)</h2>
+          <div id="ai-xai-status" style="font-size: 0.875rem; color: #94a3b8;">Loading...</div>
+        </div>
+        <div class="modal-body" id="ai-xai-content">
+          <div class="loading">Loading...</div>
         </div>
       </div>
     </div>
@@ -959,6 +982,7 @@
       if (view === 'users') loadAllUsers(1);
       if (view === 'audit') loadAuditLog();
       if (view === 'backups') loadBackupStatus();
+      if (view === 'ai-settings') loadAiSettings();
     }
 
     // Debounced search
@@ -1642,6 +1666,99 @@
       } catch (err) {
         document.getElementById('backup-status-content').innerHTML =
           `<div style="color: #fca5a5; padding: 1rem;">Failed to load status: ${err.message}</div>`;
+      }
+    }
+
+    async function loadAiSettings() {
+      try {
+        const settings = await fetchJSON('/api/ai-settings');
+        renderAiProviderCard('anthropic', 'PLATFORM_ANTHROPIC_API_KEY', settings.anthropic);
+        renderAiProviderCard('xai', 'PLATFORM_XAI_API_KEY', settings.xai);
+      } catch (err) {
+        ['anthropic', 'xai'].forEach(provider => {
+          document.getElementById(`ai-${provider}-status`).innerHTML = '<span style="color: #fca5a5;">Error</span>';
+          document.getElementById(`ai-${provider}-content`).innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(err.message)}</div>`;
+        });
+      }
+    }
+
+    function renderAiProviderCard(provider, envVarName, info) {
+      const statusEl = document.getElementById(`ai-${provider}-status`);
+      const contentEl = document.getElementById(`ai-${provider}-content`);
+
+      if (!info.configured) {
+        statusEl.innerHTML = '<span style="color: #f59e0b;">Not Configured</span>';
+        contentEl.innerHTML = `<div style="color: #64748b;">Set <code>${envVarName}</code> to configure this provider.</div>`;
+        return;
+      }
+
+      statusEl.innerHTML = '<span style="color: #22c55e;">Configured</span>';
+      contentEl.innerHTML = `
+        <div style="margin-bottom: 0.75rem;">
+          <span style="font-size: 0.75rem; color: #94a3b8;">Current model</span><br>
+          <strong>${escapeHtml(info.currentModel)}</strong>
+          <span style="color: #94a3b8;">(${info.isOverride ? 'custom' : 'default'})</span>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <select id="ai-${provider}-select" class="search-box" style="width: auto; min-width: 260px;">
+            <option value="">Loading models...</option>
+          </select>
+          <button class="tab active" style="cursor: pointer; padding: 0.4rem 0.75rem;" onclick="saveAiModel('${provider}')">Save</button>
+          <button class="tab" style="cursor: pointer; padding: 0.4rem 0.75rem;" ${info.isOverride ? '' : 'disabled'} onclick="resetAiModel('${provider}')">Reset to default</button>
+        </div>
+        <div id="ai-${provider}-msg" style="margin-top: 0.5rem; font-size: 0.875rem;"></div>
+      `;
+
+      loadAiModelOptions(provider, info.currentModel);
+    }
+
+    async function loadAiModelOptions(provider, currentModel) {
+      const select = document.getElementById(`ai-${provider}-select`);
+      const msgEl = document.getElementById(`ai-${provider}-msg`);
+      try {
+        const res = await fetch(`/api/ai-settings/${provider}/models`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        select.innerHTML = data.models.map(m =>
+          `<option value="${escapeHtml(m.id)}" ${m.id === currentModel ? 'selected' : ''}>${escapeHtml(m.displayName)}</option>`
+        ).join('');
+      } catch (err) {
+        select.innerHTML = '<option value="">Couldn\'t load models</option>';
+        msgEl.innerHTML = `<span style="color: #fca5a5;">${escapeHtml(err.message)}</span> <a href="#" onclick="loadAiSettings(); return false;">Retry</a>`;
+      }
+    }
+
+    async function saveAiModel(provider) {
+      const select = document.getElementById(`ai-${provider}-select`);
+      const msgEl = document.getElementById(`ai-${provider}-msg`);
+      if (!select.value) {
+        msgEl.innerHTML = '<span style="color: #fca5a5;">Model list hasn\'t loaded yet.</span>';
+        return;
+      }
+      await postAiModel(provider, select.value, msgEl);
+    }
+
+    async function resetAiModel(provider) {
+      const msgEl = document.getElementById(`ai-${provider}-msg`);
+      await postAiModel(provider, null, msgEl);
+    }
+
+    async function postAiModel(provider, model, msgEl) {
+      msgEl.innerHTML = '<span style="color: #94a3b8;">Saving...</span>';
+      try {
+        const res = await fetch(`/api/ai-settings/${provider}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          loadAiSettings();
+        } else {
+          msgEl.innerHTML = `<span style="color: #fca5a5;">${escapeHtml(data.error)}</span>`;
+        }
+      } catch (err) {
+        msgEl.innerHTML = `<span style="color: #fca5a5;">Error: ${escapeHtml(err.message)}</span>`;
       }
     }
 
