@@ -1208,7 +1208,7 @@ app.post('/api/ai-settings/:provider', async (req, res) => {
     if (model !== null && (typeof model !== 'string' || !model.trim())) {
       return res.status(400).json({ error: 'model must be a non-empty string or null.' });
     }
-    await platformAiSettings.setModel(provider, model);
+    await platformAiSettings.setModel(provider, model === null ? null : model.trim());
     res.json({ success: true });
   } catch (error) {
     console.error('AI settings save error:', error);
