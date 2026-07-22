@@ -236,7 +236,7 @@ function callClaude(context, systemPrompt, model) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       model,
-      max_tokens: 150,
+      max_tokens: 400,
       system: systemPrompt,
       messages: [{ role: 'user', content: context }]
     });
@@ -289,7 +289,7 @@ function callGrok(context, systemPrompt, model) {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: context }
       ],
-      max_tokens: 150,
+      max_tokens: 400,
       temperature: 0.3
     });
 
