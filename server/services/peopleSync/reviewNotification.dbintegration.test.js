@@ -90,6 +90,35 @@ test('all-zero counts never notify and never touch the fingerprint', async () =>
   });
 });
 
+test('an all-zero call after a real notification never clears the existing fingerprint', async () => {
+  // This is the exact property this whole notification system exists to
+  // protect (see this file's history / the Task 10 scheduler bug this
+  // generalizes away from): a subsequent all-zero-count call (e.g. a run
+  // that legitimately found nothing pending) must never reset a still-
+  // valid, still-unresolved fingerprint back to null — doing so would make
+  // the SAME still-unresolved items look "new" again the next time a real
+  // review-required run recurs, re-notifying admins who already saw them.
+  await withTestChurchDb(async (churchId) => {
+    await seedAdmin(churchId);
+    const firstRun = await seedRun(churchId, 'elvanto');
+    await notifyReviewRequired({ churchId, provider: 'elvanto', runId: firstRun, counts: { ambiguousPeople: 2 } });
+    const fingerprintAfterRealNotify = await findLatestReviewNotificationFingerprint(churchId, 'elvanto');
+    assert.ok(fingerprintAfterRealNotify, 'a real notification must have set a fingerprint');
+
+    const secondRun = await seedRun(churchId, 'elvanto');
+    const result = await notifyReviewRequired({
+      churchId, provider: 'elvanto', runId: secondRun,
+      counts: { ambiguousPeople: 0, familyConflicts: 0, unmatchedLocalRegulars: 0, renameFamily: 0 },
+    });
+    assert.equal(result.notified, false);
+    assert.equal(
+      await findLatestReviewNotificationFingerprint(churchId, 'elvanto'),
+      fingerprintAfterRealNotify,
+      'an all-zero call must never clear an existing, still-unresolved fingerprint'
+    );
+  });
+});
+
 test('dedup fingerprint is scoped per provider, not shared across providers', async () => {
   await withTestChurchDb(async (churchId) => {
     const admin = await seedAdmin(churchId);

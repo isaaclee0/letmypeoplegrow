@@ -237,16 +237,26 @@ function countsFromPlan(plan) {
 }
 
 // Merges apply.js's actually-applied counts with the PLAN's own review-only
-// bucket sizes (apply.js always reports these as 0 — see its own
-// emptyResult() comment — since it never mutates anything off them
-// directly), so the audit trail and any notification reflect "how many
-// items are pending review", not just "how many mutations ran".
+// bucket sizes (apply.js always reports ambiguousPeople/familyConflicts/
+// unmatchedLocalRegulars/skipped as 0 — see its own emptyResult() comment —
+// since it never mutates anything off them directly), so the audit trail
+// and any notification reflect "how many items are pending review", not
+// just "how many mutations ran". renameFamily is included in this same
+// override for consistency with the other three held-review buckets
+// (plan.js does not populate renameFamily yet, so this is currently a
+// no-op, but keeps the run's audit counts from under-reporting a pending
+// rename once a producer exists) — this does NOT lose the "how many
+// renames were actually applied" fact: apply.js increments
+// familyNamesUpdated in lockstep with renameFamily for every accepted
+// rename it actually applies (see apply.js step 10), and that field is
+// left untouched here.
 function mergeAppliedCounts(applyResult, plan) {
   return {
     ...applyResult,
     ambiguousPeople: plan.ambiguousPeople.length,
     familyConflicts: plan.familyConflicts.length,
     unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
+    renameFamily: plan.renameFamily.length,
     skipped: plan.skipped.length,
   };
 }
@@ -488,9 +498,13 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
   assertChurchId(churchId);
   assertProvider(provider);
 
+  // Validate preconditions BEFORE staging the switch: if the church isn't
+  // connected, has no enabled batches, etc., we must not leave
+  // pending_authority_provider set with no review token ever issued — that
+  // would be confusing, lingering state for a preview that never happened.
+  const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
   await deps.beginAuthoritySwitch(churchId, provider);
 
-  const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
   const run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
   try {
     const body = await runPipelineBody({
@@ -542,10 +556,16 @@ function reviewTokenErrorMessage(code) {
 // detected via people_sync_settings.pending_authority_provider === provider
 // — the signal beginAuthoritySwitch left behind at preview time), verifies
 // the caller's token against the FRESH digest, validates selections, then
-// applies inside apply.js's one critical transaction. commitAuthoritySwitch
-// only runs after that transaction has already committed; presence is
-// persisted once after that, best-effort (a presence-accounting failure is
-// logged and never triggers a second apply attempt).
+// applies inside apply.js's one critical transaction.
+//
+// IMPORTANT: once applyPeopleSyncPlan has committed, real church data has
+// already been durably mutated (people created/archived/linked). Nothing
+// after that point may ever cause this run's audit record to read
+// 'failed' — that would misrepresent a successful import/archive as
+// having not happened. commitAuthoritySwitch, presence accounting, and
+// finishRun itself are therefore each independently best-effort from here
+// on: a failure in any of them is logged and does not roll anything back,
+// does not retry the apply, and does not reach safeFailRun.
 async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -561,8 +581,17 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const trigger = isAuthoritySwitch ? 'authority_switch' : 'manual';
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
+
+  // Everything that can still legitimately fail THIS run (fetch,
+  // local-state loading, matching, plan computation, stale-token
+  // detection, selection validation, and the apply itself) is caught here
+  // and reported through failRun — apply is never reached once any of it
+  // has failed. Once applyPeopleSyncPlan below returns successfully, we
+  // exit this try/catch entirely; see the best-effort tail beneath it.
+  let body;
+  let applyResult;
   try {
-    const body = await runPipelineBody({
+    body = await runPipelineBody({
       churchId, provider, trigger, mode: 'full', watermark: undefined,
       authoritative, activeAuthority, batches: pre.batches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
@@ -580,35 +609,58 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
     }
 
-    // 8. apply
-    const applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections, userId });
-
-    // Only after applyPeopleSyncPlan has succeeded/committed does the
-    // authority switch itself become real.
-    if (isAuthoritySwitch) {
-      await deps.commitAuthoritySwitch(churchId, provider);
-    }
-
-    // 9. persist full-fetch presence at most once. applyReviewed always
-    // re-fetched a full snapshot above, so this is unconditional here
-    // (unlike runUnattended, which may see an incremental snapshot).
-    if (isCompleteFullSnapshot(body.snapshot)) {
-      try {
-        await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
-      } catch (presenceErr) {
-        logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-      }
-    }
-
-    const counts = mergeAppliedCounts(applyResult, body.plan);
-    // 10. finish audit run
-    await deps.finishRun({ churchId, provider, runId: run.id, status: 'applied', counts, externalWatermark: body.snapshot.watermark });
-
-    return { runId: run.id, status: 'applied', applied: applyResult, summary: summarizePlan(body.plan) };
+    // 8. apply — the last step that may still cause this run to be
+    // recorded as failed.
+    applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections, userId });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
     throw err;
   }
+
+  // applyPeopleSyncPlan has committed. Only after that does the authority
+  // switch itself become real — but a failure here (e.g. a concurrent
+  // settings change moved pending_authority_provider between preview and
+  // apply) must not retroactively fail a run that already imported/
+  // archived real people; it is logged so an operator can retry the
+  // switch commit separately.
+  let authorityCommitError = null;
+  if (isAuthoritySwitch) {
+    try {
+      await deps.commitAuthoritySwitch(churchId, provider);
+    } catch (commitErr) {
+      authorityCommitError = commitErr.message;
+      logger.error(
+        `peopleSync orchestrator: authority switch commit failed after a successful apply for church ${churchId} run ${run.id}: ${commitErr.message}`
+      );
+    }
+  }
+
+  // 9. persist full-fetch presence at most once. applyReviewed always
+  // re-fetched a full snapshot above, so this is unconditional here
+  // (unlike runUnattended, which may see an incremental snapshot).
+  if (isCompleteFullSnapshot(body.snapshot)) {
+    try {
+      await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
+    } catch (presenceErr) {
+      logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
+    }
+  }
+
+  const counts = mergeAppliedCounts(applyResult, body.plan);
+  // 10. finish audit run — best-effort: if this itself fails, the run row
+  // is left 'running' rather than misreported as 'failed'.
+  try {
+    await deps.finishRun({ churchId, provider, runId: run.id, status: 'applied', counts, externalWatermark: body.snapshot.watermark });
+  } catch (finishErr) {
+    logger.error(
+      `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${run.id}: ${finishErr.message}`
+    );
+  }
+
+  return {
+    runId: run.id, status: 'applied', applied: applyResult, summary: summarizePlan(body.plan),
+    ...(authorityCommitError ? { authorityCommitError } : {}),
+  };
 }
 
 // ─── runUnattended ───────────────────────────────────────────────────────────
@@ -652,8 +704,15 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   const mode = (forceFull || !batch.lastExternalWatermark) ? 'full' : 'incremental';
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
+
+  // Same principle as applyReviewed: once applyPeopleSyncPlan below has
+  // committed, real church data has already been mutated, so nothing
+  // after it may cause this run to be recorded 'failed' — see the
+  // best-effort tail beneath this try/catch.
+  let body;
+  let applyResult;
   try {
-    const body = await runPipelineBody({
+    body = await runPipelineBody({
       churchId, provider, trigger, mode, watermark: batch.lastExternalWatermark || undefined,
       authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
@@ -662,43 +721,57 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     // 8. apply safe unattended actions (no selections — ambiguous/conflict/
     // rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
-    const applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections: {}, userId: null });
-
-    // 9. persist full-fetch presence at most once, only for a complete full snapshot.
-    if (isCompleteFullSnapshot(body.snapshot)) {
-      try {
-        await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
-      } catch (presenceErr) {
-        logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-      }
-    }
-
-    const status = hasHeldItems(body.plan) ? 'review_required' : 'applied';
-    const counts = mergeAppliedCounts(applyResult, body.plan);
-
-    // 10. finish audit run
-    await deps.finishRun({ churchId, provider, runId: run.id, status, counts, externalWatermark: body.snapshot.watermark });
-
-    if (status === 'review_required') {
-      try {
-        await deps.notifyReviewRequired({ churchId, provider, runId: run.id, counts: heldCountsFromPlan(body.plan) });
-      } catch (notifyErr) {
-        logger.error(`peopleSync orchestrator: review notification failed for church ${churchId} run ${run.id}: ${notifyErr.message}`);
-      }
-    }
-
-    return {
-      runId: run.id,
-      status,
-      counts,
-      fetchMode: mode,
-      complete: body.snapshot.complete,
-      externalWatermark: body.snapshot.watermark,
-    };
+    applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections: {}, userId: null });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
     throw err;
   }
+
+  // 9. persist full-fetch presence at most once, only for a complete full
+  // snapshot. Best-effort: a failure here is logged and never retried.
+  if (isCompleteFullSnapshot(body.snapshot)) {
+    try {
+      await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
+    } catch (presenceErr) {
+      logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
+    }
+  }
+
+  const status = hasHeldItems(body.plan) ? 'review_required' : 'applied';
+  const counts = mergeAppliedCounts(applyResult, body.plan);
+
+  // 10. finish audit run — best-effort: if this itself fails, the run row
+  // is left 'running' rather than misreported as 'failed' for a batch
+  // that already applied real mutations.
+  try {
+    await deps.finishRun({ churchId, provider, runId: run.id, status, counts, externalWatermark: body.snapshot.watermark });
+  } catch (finishErr) {
+    logger.error(
+      `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${run.id}: ${finishErr.message}`
+    );
+  }
+
+  if (status === 'review_required') {
+    try {
+      // Held-bucket counts only (see HELD_REVIEW_BUCKETS) — note all four
+      // are currently church-wide/batch-invariant in practice (matching/
+      // unmatched-local review does not vary per batch today), which is
+      // what makes per-provider (not per-batch) notification dedup safe;
+      // revisit if a held bucket ever becomes batch-scoped.
+      await deps.notifyReviewRequired({ churchId, provider, runId: run.id, counts: heldCountsFromPlan(body.plan) });
+    } catch (notifyErr) {
+      logger.error(`peopleSync orchestrator: review notification failed for church ${churchId} run ${run.id}: ${notifyErr.message}`);
+    }
+  }
+
+  return {
+    runId: run.id,
+    status,
+    counts,
+    fetchMode: mode,
+    complete: body.snapshot.complete,
+    externalWatermark: body.snapshot.watermark,
+  };
 }
 
 module.exports = {

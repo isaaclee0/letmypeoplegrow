@@ -5,6 +5,16 @@ const EXPIRED = Object.freeze({ ok: false, code: 'SYNC_REVIEW_EXPIRED' });
 const STALE = Object.freeze({ ok: false, code: 'SYNC_PLAN_STALE' });
 const VOLATILE_PATHS = new Set([
   'snapshot.fetchedAt',
+  // A provider's fetch watermark (e.g. Elvanto's max(date_modified) across
+  // every fetched person) can advance from an edit to a field LMPG doesn't
+  // even track (e.g. a phone number) — that must never, on its own, make a
+  // re-fetched plan look "stale" when none of its actual buckets changed.
+  // snapshot.mode is included alongside it for the same reason even though
+  // it is always 'full' for every buildReview/applyReviewed/
+  // previewAuthoritySwitch call today (see orchestrator.js), so it can
+  // never actually differ between a preview and its later apply; excluding
+  // it here is defensive parity with watermark rather than a live gap.
+  'snapshot.watermark', 'snapshot.mode',
   'runId', 'run_id', 'syncRunId', 'sync_run_id', 'run.id',
   'display.generatedAt', 'display.updatedAt',
   'metadataCache.cachedAt', 'metadataCache.updatedAt',

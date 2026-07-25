@@ -464,8 +464,10 @@ async function deleteBatch(churchId, batchId) {
 // Persist a batch's sync summary to both the canonical generic row and (while
 // legacy_provider_batch_id is present) the legacy table — same dual-write
 // posture as createBatch/updateBatch. Shared by the interactive apply route
-// (routes/integrations.js) and the unattended scheduled path (runBatchSync
-// below) so the two never drift.
+// (routes/integrations.js) and runBatchSync (below) so the two never drift.
+// runBatchSync itself is no longer the unattended scheduled path as of
+// Task 15 — see the header note above start()/stop()/runNow() — it is kept
+// here, and still exported, purely for any caller outside the cron path.
 async function recordBatchSyncResult(churchId, batch, summary) {
   const summaryJson = JSON.stringify(summary);
   if (batch.legacyProviderBatchId) {
@@ -552,8 +554,11 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
 // peopleSync/scheduler.js — provider-neutral, and the only cron job that gets
 // started (see server/index.js). start/stop/runNow/isDueToday are kept here,
 // delegating, purely for compatibility with existing callers of this module.
-// scheduler.js's default batch executor calls runBatchSync (below) for any
-// planning_center batch, so this function stays exported and unchanged.
+// As of Task 15, scheduler.js's per-batch execution delegates to
+// orchestrator.runUnattended (provider-neutral) instead of calling
+// runBatchSync (below) — runBatchSync is no longer on the unattended cron
+// path for any provider. It stays exported unchanged since nothing in this
+// task removes it; it is simply unused by the scheduler now.
 const scheduler = require('./peopleSync/scheduler');
 
 const isDueToday = scheduler.isDueToday;

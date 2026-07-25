@@ -175,16 +175,27 @@ test('a missing connection throws before any run is started (nothing to failRun)
 
 // ─── previewAuthoritySwitch ──────────────────────────────────────────────────
 
-test('previewAuthoritySwitch stages the switch first, then reviews as-if authoritative, and never applies', async () => {
+test('previewAuthoritySwitch validates preconditions BEFORE staging the switch, then reviews as-if authoritative, and never applies', async () => {
   const { deps, calls } = makeDeps({ authorityState: { active: 'none', pending: null } });
   const review = await previewAuthoritySwitch({ churchId: 'church-a', provider: 'elvanto' }, deps);
 
   assert.deepEqual(calls, [
-    'beginAuthoritySwitch', 'getConnection', 'listBatches', 'startRun', 'fetchSnapshot',
+    'getConnection', 'listBatches', 'beginAuthoritySwitch', 'startRun', 'fetchSnapshot',
     'listLocalIndividuals', 'matchPeople', 'computePeopleSyncPlan', 'createReviewToken', 'finishRun',
   ]);
   assert.equal(review.authority.pending, 'elvanto');
   assert.equal(review.summary.addPeople, 1, 'plan must be computed AS IF elvanto were already authoritative');
+});
+
+test('previewAuthoritySwitch never stages a switch when preconditions fail (no lingering pending state)', async () => {
+  const { deps, calls } = makeDeps();
+  deps.getConnection = record(calls, 'getConnection', async () => null);
+
+  await assert.rejects(
+    previewAuthoritySwitch({ churchId: 'church-a', provider: 'elvanto' }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_NOT_CONNECTED'
+  );
+  assert.equal(calls.includes('beginAuthoritySwitch'), false);
 });
 
 // ─── runUnattended ───────────────────────────────────────────────────────────
@@ -251,6 +262,16 @@ test('a presence-accounting failure in runUnattended is swallowed: the run still
   assert.equal(calls.includes('failRun'), false, 'a presence hiccup must never fail the whole run');
 });
 
+test('a finishRun failure in runUnattended after a successful apply is logged, not treated as a run failure', async () => {
+  const { deps, calls } = makeDeps({
+    extra: { finishRun: async () => { throw new Error('db locked'); } },
+  });
+  const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: true }, deps);
+  assert.equal(result.status, 'applied', 'the function must still report the apply succeeded');
+  assert.equal(calls.includes('applyPeopleSyncPlan'), true);
+  assert.equal(calls.includes('failRun'), false, 'a run that already applied real mutations must never be recorded failed');
+});
+
 test('runUnattended requires a batchId', async () => {
   const { deps } = makeDeps();
   await assert.rejects(
@@ -304,6 +325,37 @@ test('applyReviewed for a pending authority switch commits the switch only after
   const presenceIndex = calls.indexOf('recordFullFetchPresence');
   assert.ok(applyIndex >= 0 && commitIndex > applyIndex, 'commit must happen after apply succeeds');
   assert.ok(presenceIndex > commitIndex, 'presence must be recorded after the switch commits');
+});
+
+test('a commitAuthoritySwitch failure after a successful apply is logged, not treated as a run failure', async () => {
+  // The Important fix from code review: applyPeopleSyncPlan has already
+  // committed real church-data mutations (people created/archived/linked)
+  // by the time commitAuthoritySwitch runs. A failure there (e.g. a
+  // concurrent settings change) must never retroactively mark this run
+  // 'failed' — that would misrepresent a successful import as not having
+  // happened.
+  const { deps, calls } = makeDeps({
+    authorityState: { active: 'none', pending: 'elvanto' },
+    extra: { commitAuthoritySwitch: async () => { throw new Error('pending authority switch changed before commit'); } },
+  });
+  const result = await applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: null, reviewToken: 'tok' }, deps);
+
+  assert.equal(result.status, 'applied', 'the function must still report the apply succeeded');
+  assert.equal(result.authorityCommitError, 'pending authority switch changed before commit');
+  assert.equal(calls.includes('applyPeopleSyncPlan'), true);
+  assert.equal(calls.includes('recordFullFetchPresence'), true, 'presence must still be recorded despite the commit failure');
+  assert.equal(calls.includes('finishRun'), true, 'the run must still be finished (as applied), not abandoned');
+  assert.equal(calls.includes('failRun'), false, 'a run that already applied real mutations must never be recorded failed');
+});
+
+test('a finishRun failure in applyReviewed after a successful apply is logged, not treated as a run failure', async () => {
+  const { deps, calls } = makeDeps({
+    extra: { finishRun: async () => { throw new Error('db locked'); } },
+  });
+  const result = await applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: 1, reviewToken: 'tok' }, deps);
+  assert.equal(result.status, 'applied');
+  assert.equal(calls.includes('applyPeopleSyncPlan'), true);
+  assert.equal(calls.includes('failRun'), false);
 });
 
 test('applyReviewed does not commit an authority switch when nothing is pending for this provider', async () => {

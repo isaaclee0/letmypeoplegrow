@@ -74,13 +74,29 @@ test('digest removes only volatile snapshot, run, display, and cache metadata', 
     metadataCache: { cachedAt: '2026-07-25T01:00:00.000Z', values: ['group-1'] },
   });
   const later = plan({
-    snapshot: { fetchedAt: '2026-07-25T02:00:00.000Z', watermark: 'wm-1', mode: 'full' },
+    // fetchedAt AND watermark both differ from `first` (and mode is
+    // repeated as the same value here only because it never actually
+    // varies in practice — see planDigest.js's own VOLATILE_PATHS
+    // comment) — none of these three snapshot fields may affect the
+    // digest, since only actual plan bucket content should ever trigger a
+    // stale-plan re-review.
+    snapshot: { fetchedAt: '2026-07-25T02:00:00.000Z', watermark: 'wm-2', mode: 'full' },
     runId: 99,
     display: { generatedAt: '2026-07-25T02:00:00.000Z', title: 'Review' },
     metadataCache: { cachedAt: '2026-07-25T02:00:00.000Z', values: ['group-1'] },
   });
 
   assert.equal(digestPlan(first), digestPlan(later));
+});
+
+test('a fetch watermark change alone never makes a re-fetched plan look stale', () => {
+  // A provider's watermark (e.g. Elvanto's max(date_modified) across every
+  // fetched person) can legitimately advance from an edit to a field LMPG
+  // doesn't even track (a phone number, say) — that alone must never make
+  // an otherwise-identical re-fetched plan register as changed.
+  const baseline = digestPlan(plan());
+  const watermarkOnly = digestPlan(plan({ snapshot: { fetchedAt: 'later', watermark: 'wm-2', mode: 'full' } }));
+  assert.equal(watermarkOnly, baseline);
 });
 
 test('volatile pruning is exact-path and retains durable cachedAt action values', () => {
@@ -126,10 +142,9 @@ test('canonical JSON rejects non-finite numbers instead of collapsing them to nu
     /finite number/i);
 });
 
-test('digest retains watermarks, action values, IDs, selections, and conflicts', () => {
+test('digest retains action values, IDs, selections, and conflicts', () => {
   const baseline = digestPlan(plan());
   const changed = [
-    plan({ snapshot: { fetchedAt: 'later', watermark: 'wm-2', mode: 'full' } }),
     plan({ addPeople: [{ id: 'addPeople:e1', externalPersonId: 'e1', firstName: 'Grace', selected: true }] }),
     plan({ addPeople: [{ id: 'addPeople:e2', externalPersonId: 'e1', firstName: 'Ada', selected: true }] }),
     plan({ addPeople: [{ id: 'addPeople:e1', externalPersonId: 'e1', firstName: 'Ada', selected: false }] }),
@@ -137,7 +152,7 @@ test('digest retains watermarks, action values, IDs, selections, and conflicts',
       candidateIndividualIds: [1, 2], reason: 'duplicate_name' }] }),
   ];
 
-  assert.deepEqual(changed.map((value) => digestPlan(value) === baseline), [false, false, false, false, false]);
+  assert.deepEqual(changed.map((value) => digestPlan(value) === baseline), [false, false, false, false]);
 });
 
 test('review token is bound to church, provider, batch, and plan digest', () => withSecret('review-secret', () => {
