@@ -596,13 +596,18 @@ async function startServer() {
       console.warn('⚠️  Weekly review scheduler initialization failed:', error.message);
     }
 
-    // Initialize Planning Center sync scheduler
+    // Initialize the provider-neutral people-sync scheduler (Task 10). This is
+    // the ONLY people-sync cron job started — planningCenterSync.start()
+    // (kept only for external/back-compat callers) delegates to this exact
+    // same module, so starting both here would register two cron jobs
+    // running the identical work twice a night. Always require/start via
+    // peopleSync/scheduler directly at startup, never via planningCenterSync.
     try {
-      const planningCenterSync = require('./services/planningCenterSync');
-      planningCenterSync.start();
-      console.log('✅ Planning Center sync scheduler initialized');
+      const peopleSyncScheduler = require('./services/peopleSync/scheduler');
+      peopleSyncScheduler.start();
+      console.log('✅ People-sync scheduler initialized');
     } catch (error) {
-      console.warn('⚠️  Planning Center sync scheduler initialization failed:', error.message);
+      console.warn('⚠️  People-sync scheduler initialization failed:', error.message);
     }
 
     // Start the server
@@ -625,7 +630,7 @@ process.on('SIGTERM', () => {
   console.log('🛑 Received SIGTERM, shutting down gracefully...');
   webSocketService.shutdown();
   try { require('./services/weeklyReviewScheduler').stop(); } catch (_) {}
-  try { require('./services/planningCenterSync').stop(); } catch (_) {}
+  try { require('./services/peopleSync/scheduler').stop(); } catch (_) {}
   process.exit(0);
 });
 
@@ -633,7 +638,7 @@ process.on('SIGINT', () => {
   console.log('🛑 Received SIGINT, shutting down gracefully...');
   webSocketService.shutdown();
   try { require('./services/weeklyReviewScheduler').stop(); } catch (_) {}
-  try { require('./services/planningCenterSync').stop(); } catch (_) {}
+  try { require('./services/peopleSync/scheduler').stop(); } catch (_) {}
   process.exit(0);
 });
 

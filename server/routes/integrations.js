@@ -12,6 +12,7 @@ const metadataCache = require('../services/planningCenter/metadataCache');
 const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
+const connectionStore = require('../services/peopleSync/connectionStore');
 
 const router = express.Router();
 
@@ -1615,24 +1616,38 @@ router.post('/elvanto/import', async (req, res) => {
 
 // Helper function to get Planning Center OAuth tokens
 // Token persistence, refresh, and single-flight coalescing all live in
-// planningCenterSync.js — the canonical implementation, shared by these routes
-// and the cron/service layer. PCO rotates the refresh token on every use, so
-// having more than one independent refresh path risks a race where one caller
-// overwrites a freshly rotated token with a stale one; keeping a single
-// implementation (with one in-flight guard) avoids that.
-const savePlanningCenterTokens = pcoSync.savePlanningCenterTokens;
+// planningCenterSync.js (backed by peopleSync/pcoCredentialMigration.js and
+// the encrypted, church-scoped integration_connections table — see Task 10)
+// — the canonical implementation, shared by these routes and the scheduler.
+// PCO rotates the refresh token on every use, so having more than one
+// independent refresh path risks a race where one caller overwrites a
+// freshly rotated token with a stale one; keeping a single implementation
+// (with one in-flight guard, keyed per church) avoids that.
 const ensureValidPlanningCenterTokens = pcoSync.ensureValidPlanningCenterTokens;
 
 // The PCO connection is church-wide, not per-admin — any admin should see (and
 // be able to use) the same connection regardless of which admin completed the
-// OAuth flow. Tokens are stored keyed by that connecting admin's user_id purely
-// as a storage detail (see planningCenterSync.js), so routes representing "is
-// this church connected" must look up by church, not by the current viewer —
-// getPlanningCenterTokens(req.user.id, ...) only finds a row for the admin who
-// originally connected, making every other admin see "Not Connected".
+// OAuth flow. integration_connections is naturally church-scoped (one row per
+// church+provider), so there is no "which admin's tokens" ambiguity any more;
+// `ownerUserId` is kept in the returned shape only for call-site compatibility
+// with makePlanningCenterRequest/fetchAllCheckins below and is always null.
+//
+// If this church has legacy (pre-Task-10) tokens from two DIFFERENT admins
+// that disagree, pcoSync.getTokensForChurch refuses to guess and throws a
+// PcoReconnectRequiredError (err.code === pcoSync.PCO_RECONNECT_REQUIRED) —
+// caught here and surfaced as a distinct, non-crashing "reconnect required"
+// result rather than an uncaught 500.
 async function getChurchPlanningCenterTokens(churchId) {
-  const owned = await pcoSync.getTokensForChurch(churchId);
-  return owned ? { ownerUserId: owned.userId, tokens: owned.tokens } : null;
+  try {
+    const owned = await pcoSync.getTokensForChurch(churchId);
+    return owned ? { ownerUserId: owned.userId, tokens: owned.tokens, reconnectRequired: false } : null;
+  } catch (error) {
+    if (error && error.code === pcoSync.PCO_RECONNECT_REQUIRED) {
+      logger.warn(`Planning Center: church ${churchId} has ambiguous legacy connections — reconnect required`);
+      return { ownerUserId: null, tokens: null, reconnectRequired: true };
+    }
+    throw error;
+  }
 }
 
 // Helper function to make authenticated Planning Center API requests
@@ -1681,6 +1696,22 @@ router.get('/planning-center/status', async (req, res) => {
 
     const owned = await getChurchPlanningCenterTokens(churchId);
     const tokens = owned && owned.tokens;
+
+    if (owned && owned.reconnectRequired) {
+      // Two different admins' legacy tokens disagreed (see
+      // getChurchPlanningCenterTokens above) — surface this distinctly rather
+      // than reporting a plain "not connected", so the UI can prompt an
+      // explicit reconnect instead of leaving an admin to wonder why a
+      // previously-working connection now shows as unconfigured.
+      return res.json({
+        enabled: true,
+        configured: true,
+        connected: false,
+        planningCenterAccount: null,
+        error: 'PCO_RECONNECT_REQUIRED',
+        reconnectRequired: true,
+      });
+    }
 
     if (!tokens || !tokens.access_token) {
       return res.json({
@@ -1849,12 +1880,15 @@ router.get('/planning-center/callback', async (req, res) => {
       return res.status(400).send('Authorization code missing');
     }
 
-    // Decode state to get user info
-    let userId, churchId, returnTo, stateRedirectUri;
+    // Decode state — only for returnTo/redirectUri (both are pure UX/protocol
+    // concerns, not security-sensitive). `state` is opaque, unsigned, and
+    // round-tripped through PCO's redirect, so it is never trusted for
+    // "which user/church" — that comes from req.user (the verified JWT
+    // identity) below instead. Still validated for well-formedness so a
+    // malformed/tampered value fails closed rather than silently proceeding.
+    let returnTo, stateRedirectUri;
     try {
       const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
-      userId = stateData.userId;
-      churchId = stateData.churchId;
       returnTo = stateData.returnTo; // may be undefined for older flows
       stateRedirectUri = stateData.redirectUri; // may be undefined for older flows
     } catch (e) {
@@ -1898,17 +1932,47 @@ router.get('/planning-center/callback', async (req, res) => {
       return res.status(500).send('Failed to obtain access token');
     }
 
-    const tokens = response.data;
-    tokens.expires_at = Date.now() + (tokens.expires_in * 1000); // Calculate expiration time
+    const tokenResponse = response.data;
 
-    // Save tokens to database
-    await savePlanningCenterTokens(userId, churchId, tokens);
+    // Task 10: store credentials on the encrypted, church-scoped
+    // integration_connections table (via connectionStore) rather than the
+    // legacy per-admin user_preferences row. Uses req.user (the verified JWT
+    // identity — this whole router runs behind verifyToken) rather than the
+    // userId/churchId decoded from `state` above: `state` is an opaque,
+    // unsigned value round-tripped through PCO's redirect, so it must not be
+    // trusted as the destination for where a credential gets written.
+    const connectChurchId = req.user.church_id;
+    const connectUserId = req.user.id;
+
+    // Best-effort account name for connection metadata — a failure here must
+    // not block the connection itself (the account name is cosmetic; the
+    // live "/planning-center/status" check re-derives it on every read).
+    let accountName = null;
+    try {
+      const validation = await pcoSync.validatePlanningCenterToken(tokenResponse.access_token);
+      accountName = validation.accountName;
+    } catch (e) {
+      logger.warn('PCO connect-time account name lookup failed:', e.message);
+    }
+
+    await connectionStore.upsertConnection({
+      churchId: connectChurchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: {
+        accessToken: tokenResponse.access_token,
+        refreshToken: tokenResponse.refresh_token,
+        expiresAt: Date.now() + Number(tokenResponse.expires_in) * 1000,
+      },
+      connectedBy: connectUserId,
+      metadata: { accountName },
+    });
 
     // Warm the membership/field-definitions cache as soon as PCO is connected, so the
     // batch editor has something to show immediately the first time someone opens it,
     // instead of blocking on a live fetch. Fire-and-forget — errors are logged, not
     // surfaced, and must not delay the redirect below.
-    metadataCache.refreshMetadataForChurch(churchId, tokens.access_token)
+    metadataCache.refreshMetadataForChurch(connectChurchId, tokenResponse.access_token)
       .catch((e) => logger.error('PCO connect-time metadata refresh error:', e));
 
     // Re-validate returnTo on the way out (defense in depth).
@@ -1933,6 +1997,14 @@ router.post('/planning-center/disconnect', async (req, res) => {
     // "theirs" any more than any other admin's, and status/connect are already
     // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
     // or a non-connecting admin's click would silently no-op.
+    await connectionStore.disconnectConnection(churchId, 'planning_center');
+
+    // Belt-and-suspenders: also clear any legacy (pre-Task-10) per-admin
+    // tokens. This matters even after the migration to integration_connections
+    // — without it, a church that never had its legacy tokens read (so they
+    // were never migrated/deleted, see pcoCredentialMigration.js) could have
+    // its connection "resurrected" by those stale rows the next time
+    // getTokensForChurch runs, right after the admin explicitly disconnected.
     await Database.query(`
       DELETE FROM user_preferences
       WHERE church_id = ? AND preference_key = 'planning_center_tokens'
@@ -2117,7 +2189,7 @@ router.get('/planning-center/checkins/events', async (req, res) => {
     const { startDate, endDate } = resolveRange(req.query.startDate, req.query.endDate);
 
     const owned = await getChurchPlanningCenterTokens(churchId);
-    if (!owned || !owned.tokens.access_token) {
+    if (!owned || !owned.tokens || !owned.tokens.access_token) {
       return res.status(400).json({ error: 'Planning Center not connected.' });
     }
 
@@ -2177,7 +2249,7 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
     }
 
     const owned = await getChurchPlanningCenterTokens(churchId);
-    if (!owned || !owned.tokens.access_token) {
+    if (!owned || !owned.tokens || !owned.tokens.access_token) {
       return res.json({ success: true, hasImported: false, available: false, peopleLinked });
     }
 
@@ -2637,7 +2709,7 @@ async function runCheckinImport({ req, commit }) {
   // "assign to me"); the PCO connection itself is church-wide, so the token
   // lookup uses whichever admin actually owns the stored tokens.
   const owned = await getChurchPlanningCenterTokens(churchId);
-  if (!owned || !owned.tokens.access_token) {
+  if (!owned || !owned.tokens || !owned.tokens.access_token) {
     const err = new Error('Planning Center not connected.');
     err.statusCode = 400;
     throw err;

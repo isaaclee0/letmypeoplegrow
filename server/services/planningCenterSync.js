@@ -1,14 +1,10 @@
 const https = require('https');
-const cron = require('node-cron');
 const Database = require('../config/database');
 const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
 const { applyPlan } = require('./planningCenter/apply');
-const { reviewNotificationDecision, buildPcoReviewMessage } = require('./planningCenter/reviewNotification');
 const batchRepository = require('./peopleSync/batchRepository');
-
-let cronJob = null;
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
 // Fetching every person from Planning Center is the slow part of a sync — several
@@ -102,55 +98,58 @@ function httpsPost(url, body) {
 
 // ─── Token helpers ───────────────────────────────────────────────────────────
 //
-// This module is the single implementation of PCO OAuth token persistence and
-// refresh. server/routes/integrations.js delegates to these rather than keeping
-// its own copies — PCO rotates the refresh token on every use, so more than one
-// independent refresh path risks two callers racing to refresh at once, with
-// the loser persisting a token PCO has already rotated away from and silently
-// breaking the connection.
+// Task 10: token persistence and refresh now live on the encrypted,
+// church-scoped integration_connections table (see peopleSync/connectionStore.js),
+// via peopleSync/pcoCredentialMigration.js — not the legacy per-admin
+// user_preferences row this module used before. That module is also the
+// single implementation of PCO OAuth token refresh (with its own per-church
+// mutex); this file's job is only to supply the actual HTTPS call it injects,
+// and to keep the same snake_case token shape (`access_token`/`refresh_token`/
+// `expires_at`) every existing caller in this file and in routes/integrations.js
+// already expects, so nothing downstream needs to change.
+//
+// pcoCredentialMigration.getOrMigrateCredentials transparently migrates any
+// pre-existing legacy user_preferences tokens the first time they're read,
+// and throws a PcoReconnectRequiredError (code PCO_RECONNECT_REQUIRED) if two
+// different admins' legacy tokens disagree — this module does not catch that
+// error, so callers that want to handle it specially (e.g. surfacing a
+// "reconnect required" status) can check `err.code`.
+const pcoCredentialMigration = require('./peopleSync/pcoCredentialMigration');
+const { PCO_RECONNECT_REQUIRED } = pcoCredentialMigration;
 
-async function getTokensForChurch(churchId) {
-  // Find any user in this church who has PCO tokens stored
-  const rows = await Database.query(
-    `SELECT up.user_id, up.preference_value
-     FROM user_preferences up
-     WHERE up.church_id = ? AND up.preference_key = 'planning_center_tokens'
-     LIMIT 1`,
-    [churchId]
-  );
-  if (!rows.length) return null;
-  const pref = rows[0].preference_value;
+function toLegacyTokenShape(credentials) {
+  if (!credentials) return null;
   return {
-    userId: rows[0].user_id,
-    tokens: typeof pref === 'string' ? JSON.parse(pref) : pref,
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+    expires_at: credentials.expiresAt,
   };
 }
 
-// Load a specific user's PCO tokens — as opposed to getTokensForChurch, which
-// grabs whichever user in the church happens to have tokens. Used by
-// request-scoped routes that already know which user is asking.
-async function getPlanningCenterTokens(userId, churchId) {
-  const rows = await Database.query(
-    `SELECT preference_value FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?
-      LIMIT 1`,
-    [userId, churchId]
-  );
-  if (!rows.length) return null;
-  const pref = rows[0].preference_value;
-  return typeof pref === 'string' ? JSON.parse(pref) : pref;
+function toStoredCredentials(tokens) {
+  return {
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    expiresAt: tokens.expires_at,
+  };
 }
 
-async function savePlanningCenterTokens(userId, churchId, tokens) {
-  await Database.query(
-    `DELETE FROM user_preferences WHERE user_id = ? AND preference_key = 'planning_center_tokens' AND church_id = ?`,
-    [userId, churchId]
-  );
-  await Database.query(
-    `INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
-     VALUES (?, 'planning_center_tokens', ?, ?)`,
-    [userId, JSON.stringify(tokens), churchId]
-  );
+// Church-wide PCO connection — integration_connections has exactly one row
+// per church+provider, so there is no "which user's tokens" ambiguity any
+// more. `userId` is returned as null and exists only so callers destructuring
+// `{ userId, tokens }` (unchanged since before this task) keep working.
+async function getTokensForChurch(churchId) {
+  const credentials = await pcoCredentialMigration.getOrMigrateCredentials(churchId);
+  if (!credentials) return null;
+  return { userId: null, tokens: toLegacyTokenShape(credentials) };
+}
+
+// Retained for any caller still asking for "a specific user's" PCO tokens;
+// since connections are church-scoped, this simply ignores userId and
+// returns the same church connection getTokensForChurch does.
+async function getPlanningCenterTokens(userId, churchId) {
+  const owned = await getTokensForChurch(churchId);
+  return owned ? owned.tokens : null;
 }
 
 // Tolerate the British "CENTRE" spelling so a .env typo can't break token refresh.
@@ -158,55 +157,38 @@ function pcoEnv(suffix) {
   return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
 }
 
-async function refreshToken(refreshTokenValue) {
+// The one place this codebase calls PCO's token-refresh endpoint. Injected
+// into pcoCredentialMigration's refresh manager (which owns the per-church
+// mutex and the encrypted persistence) rather than that module reaching back
+// into HTTPS itself — keeps all HTTP/PCO-wire-format concerns in this file,
+// and avoids a circular require between the two modules.
+async function requestPcoTokenRefresh(refreshTokenValue) {
   const response = await httpsPost('https://api.planningcenteronline.com/oauth/token', {
     grant_type: 'refresh_token',
     refresh_token: refreshTokenValue,
     client_id: pcoEnv('CLIENT_ID'),
     client_secret: pcoEnv('CLIENT_SECRET'),
   });
-  return response.status === 200 ? response.data : null;
+  if (response.status !== 200 || !response.data || !response.data.access_token) return null;
+  return {
+    accessToken: response.data.access_token,
+    refreshToken: response.data.refresh_token || null,
+    expiresAt: Date.now() + ((response.data.expires_in || 7200) * 1000),
+  };
 }
 
-// Refresh proactively if the token is expired or expiring soon, ONCE, coalescing
-// concurrent callers (e.g. a scheduled batch sync and a concurrent check-in
-// import for the same church) onto a single in-flight refresh via a per
-// user+church single-flight guard. Without this, two independent refreshes can
-// race and the second one persists a token PCO already rotated away from.
-const PCO_TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000; // refresh if <10 min of life left
-const pcoRefreshInFlight = new Map(); // `${userId}|${churchId}` -> Promise<tokens|null>
-
+// Refreshes `tokens` if expiring soon (via pcoCredentialMigration's per-church
+// single-flight manager) and returns the (possibly unchanged) result in the
+// same snake_case shape callers already use. `userId` is accepted only for
+// call-site compatibility with every existing caller (makePlanningCenterRequest,
+// fetchAllCheckinsUncached, getAccessTokenForChurch below) — PCO connections
+// are church-scoped, so it is otherwise unused.
 async function ensureValidPlanningCenterTokens(userId, churchId, tokens) {
-  if (!tokens || !tokens.refresh_token) return tokens || null;
-  const expiringSoon = tokens.expires_at && Date.now() >= (tokens.expires_at - PCO_TOKEN_REFRESH_MARGIN_MS);
-  if (!expiringSoon) return tokens;
-
-  const key = `${userId}|${churchId}`;
-  if (pcoRefreshInFlight.has(key)) return pcoRefreshInFlight.get(key);
-
-  const refreshPromise = (async () => {
-    const fresh = await refreshToken(tokens.refresh_token);
-    if (!fresh || !fresh.access_token) {
-      // Refresh failed (e.g. refresh token revoked). If the token is already past
-      // its actual expiry there's nothing usable left, so signal that clearly.
-      // If it's merely expiring soon, hand back what we have so a caller mid-flight
-      // can still use it before it's actually rejected.
-      const trulyExpired = tokens.expires_at && Date.now() >= tokens.expires_at;
-      return trulyExpired ? null : tokens;
-    }
-    const saved = {
-      ...tokens,
-      ...fresh, // new access_token AND (usually) rotated refresh_token
-      expires_at: Date.now() + ((fresh.expires_in || 7200) * 1000),
-    };
-    if (!saved.refresh_token) saved.refresh_token = tokens.refresh_token;
-    await savePlanningCenterTokens(userId, churchId, saved);
-    return saved;
-  })();
-
-  pcoRefreshInFlight.set(key, refreshPromise);
-  try { return await refreshPromise; }
-  finally { pcoRefreshInFlight.delete(key); }
+  if (!tokens) return null;
+  const fresh = await pcoCredentialMigration.ensureFreshCredentials(
+    churchId, toStoredCredentials(tokens), requestPcoTokenRefresh
+  );
+  return toLegacyTokenShape(fresh);
 }
 
 async function getValidAccessToken(churchId, userId, tokens) {
@@ -519,29 +501,6 @@ async function applyForChurch(churchId, plan, userId, selections, batchConfig = 
   return applyPlan(churchId, plan, userId, selections, batchConfig);
 }
 
-// ─── Scheduling ──────────────────────────────────────────────────────────────
-
-// Decides whether a church's sync is due to run "tonight" given its configured
-// frequency/day. Weekly day-of-week: 0=Sunday..6=Saturday (JS Date convention).
-// Monthly day-of-month: 1-31, clamped to the last day of shorter months (e.g.
-// day 31 runs on April 30th; day 29 runs on Feb 28th outside leap years).
-function isDueToday(frequency, day, now = new Date()) {
-  if (frequency === 'daily') return true;
-  if (frequency === 'monthly') {
-    // A stored day < 1 (e.g. a legacy row saved as day=0 back when this
-    // column meant "day of week" for every frequency, before monthly got
-    // its own 1-31 validation) must fall back to a safe default rather
-    // than resolve to Math.min(0, lastDayOfMonth) === 0, which would never
-    // match any date and silently stop the schedule from ever firing again.
-    const targetDay = typeof day === 'number' && day >= 1 ? day : 1;
-    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    return now.getDate() === Math.min(targetDay, lastDayOfMonth);
-  }
-  // weekly (default, and fallback for unrecognized frequencies)
-  const targetDay = typeof day === 'number' ? day : 1;
-  return now.getDay() === targetDay;
-}
-
 // ─── Per-church sync ─────────────────────────────────────────────────────────
 
 async function runBatchSync(churchId, accessToken, batch, userId) {
@@ -586,130 +545,29 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
   }
 }
 
-// ─── Review-needed notifications ─────────────────────────────────────────────
+// ─── Scheduling ──────────────────────────────────────────────────────────────
+//
+// Task 10: the actual scheduler (cron wiring, per-church/per-batch iteration,
+// authority gating, review notification, audit trail) now lives in
+// peopleSync/scheduler.js — provider-neutral, and the only cron job that gets
+// started (see server/index.js). start/stop/runNow/isDueToday are kept here,
+// delegating, purely for compatibility with existing callers of this module.
+// scheduler.js's default batch executor calls runBatchSync (below) for any
+// planning_center batch, so this function stays exported and unchanged.
+const scheduler = require('./peopleSync/scheduler');
 
-async function maybeNotifyPcoReviewNeeded(churchId, totals) {
-  const rows = await Database.query(
-    `SELECT planning_center_last_notified_review AS last FROM church_settings WHERE church_id = ? LIMIT 1`,
-    [churchId]
-  );
-  const prev = rows.length && rows[0].last ? JSON.parse(rows[0].last) : null;
-  const decision = reviewNotificationDecision(prev, totals);
-
-  if (decision.clear) {
-    await Database.query(
-      `UPDATE church_settings SET planning_center_last_notified_review = NULL WHERE church_id = ?`,
-      [churchId]
-    );
-  }
-  if (!decision.notify) return;
-
-  const message = buildPcoReviewMessage(totals);
-  const admins = await Database.query(
-    `SELECT id FROM users WHERE role IN ('admin', 'coordinator') AND is_active = 1 AND church_id = ?`,
-    [churchId]
-  );
-  for (const admin of admins) {
-    await Database.query(
-      `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
-       VALUES (?, ?, ?, 'system', ?)`,
-      [admin.id, 'Planning Center sync needs your review', message, churchId]
-    );
-  }
-  await Database.query(
-    `UPDATE church_settings SET planning_center_last_notified_review = ? WHERE church_id = ?`,
-    [JSON.stringify(totals), churchId]
-  );
-  logger.info(`PCO review notification: church ${churchId} notified ${admins.length} admin(s) — ${JSON.stringify(totals)}`);
-}
-
-async function syncChurch(church, { skipScheduleCheck = false } = {}) {
-  const churchId = church.church_id;
-  await Database.setChurchContext(churchId, async () => {
-    try {
-      const settings = await Database.query(
-        `SELECT planning_center_sync_enabled AS enabled,
-                (SELECT user_id FROM user_preferences WHERE church_id = ? AND preference_key = 'planning_center_tokens' LIMIT 1) AS token_user
-           FROM church_settings WHERE church_id = ? LIMIT 1`,
-        [churchId, churchId]
-      );
-      if (!settings.length || !settings[0].enabled) return;
-      const userId = settings[0].token_user || null;
-
-      const batches = await listBatches(churchId);
-      const dueBatches = batches.filter((batch) => {
-        if (!batch.scheduleEnabled) return false;
-        return skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay);
-      });
-
-      if (!dueBatches.length) return;
-
-      const accessToken = await getAccessTokenForChurch(churchId);
-      if (!accessToken) { logger.warn(`PCO sync: no valid token for church ${churchId}`); return; }
-
-      // Warm the PCO people cache once for this whole run — every due batch below
-      // reuses it (force: false) rather than each re-fetching.
-      await getCachedPcoPeople(churchId, accessToken, { force: true });
-
-      const totals = { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 };
-      for (const batch of dueBatches) {
-        const summary = await runBatchSync(churchId, accessToken, batch, userId);
-        if (summary) {
-          totals.ambiguous += summary.ambiguous;
-          totals.visitorMatches += summary.visitorMatches;
-          totals.familyNameUpdatesPending += summary.familyNameUpdatesPending;
-        }
-      }
-
-      await maybeNotifyPcoReviewNeeded(churchId, totals);
-    } catch (err) {
-      logger.error(`PCO sync: error for church ${churchId}: ${err.message}`);
-    }
-  });
-}
-
-// ─── Scheduler ───────────────────────────────────────────────────────────────
-
-function start() {
-  if (cronJob) cronJob.stop();
-
-  // Run daily at 2 AM server time
-  cronJob = cron.schedule('0 2 * * *', async () => {
-    try {
-      const churches = Database.listChurches();
-      for (const church of churches) {
-        await syncChurch(church);
-      }
-    } catch (err) {
-      logger.error(`PCO sync scheduler error: ${err.message}`);
-    }
-  });
-
-  logger.info('PCO sync scheduler started (daily at 2 AM)');
-}
-
-function stop() {
-  if (cronJob) {
-    cronJob.stop();
-    cronJob = null;
-  }
-}
-
-// Allow manual trigger for testing — runs unconditionally, bypassing the
-// frequency/day schedule gate (the user explicitly asked for it right now).
-async function runNow() {
-  const churches = Database.listChurches();
-  for (const church of churches) {
-    await syncChurch(church, { skipScheduleCheck: true });
-  }
-}
+const isDueToday = scheduler.isDueToday;
+function start() { return scheduler.start(); }
+function stop() { return scheduler.stop(); }
+function runNow() { return scheduler.runNow(); }
 
 module.exports = {
-  start, stop, runNow, syncChurch, isDueToday,
+  start, stop, runNow, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, createBatch, updateBatch, deleteBatch,
   batchFilterConfig, computePlanForBatch, recordBatchSyncResult, toLegacyPcoBatchDto,
-  getPlanningCenterTokens, savePlanningCenterTokens, ensureValidPlanningCenterTokens,
+  getPlanningCenterTokens, ensureValidPlanningCenterTokens,
   getTokensForChurch, validatePlanningCenterToken,
+  runBatchSync, PCO_RECONNECT_REQUIRED,
 };
