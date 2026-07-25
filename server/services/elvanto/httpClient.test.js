@@ -68,6 +68,19 @@ test('createElvantoClient accepts a custom timeoutMs and passes it through', asy
   assert.equal(seenTimeout, 5000);
 });
 
+// ─── Happy path ─────────────────────────────────────────────────────────────
+
+test('get() resolves to the parsed response body on success', async () => {
+  const client = createElvantoClient({
+    apiKey: 'key',
+    request: async () => ({ status: 200, data: { status: 'ok', people: { total: 1, person: { id: 'p1' } } } }),
+  });
+
+  const result = await client.get('/people/getInfo.json', { id: 'p1' });
+
+  assert.deepEqual(result, { status: 'ok', people: { total: 1, person: { id: 'p1' } } });
+});
+
 // ─── Status / body errors ───────────────────────────────────────────────────
 
 test('get() throws ELVANTO_AUTH on a 401 response', async () => {
@@ -164,6 +177,24 @@ test('get() throws ELVANTO_UNAVAILABLE when the transport rejects', async () => 
 
 // ─── Secret redaction ───────────────────────────────────────────────────────
 
+test('ElvantoError never leaks a bare base64 auth blob lacking the "Basic " prefix', async () => {
+  const apiKey = 'super-secret-key';
+  const bareBase64 = Buffer.from(`${apiKey}:x`).toString('base64');
+  const client = createElvantoClient({
+    apiKey,
+    request: async () => { throw new Error(`upstream proxy logged credential ${bareBase64} on the wire`); },
+  });
+
+  await assert.rejects(
+    () => client.get('/people/getAll.json', {}),
+    (err) => {
+      assert.equal(err.code, ELVANTO_UNAVAILABLE);
+      assert.ok(!err.message.includes(bareBase64), 'message must not contain the bare base64 auth blob');
+      return true;
+    }
+  );
+});
+
 test('ElvantoError never leaks the API key from an underlying transport error message', async () => {
   const apiKey = 'super-secret-key';
   const authHeader = basicAuthFor(apiKey);
@@ -232,7 +263,12 @@ test('getAll() normalizes a single-object collection into a one-element array', 
     },
   });
 
-  assert.deepEqual(await client.getAll('/people/getAll.json', {}, 'people', 'person'), [{ id: 'p1' }]);
+  const result = await client.getAll('/people/getAll.json', {}, 'people', 'person');
+
+  assert.deepEqual(result.items, [{ id: 'p1' }]);
+  assert.equal(result.complete, true);
+  assert.equal(result.pages, 1);
+  assert.equal(result.total, 1);
 });
 
 // ─── Page size ──────────────────────────────────────────────────────────────
@@ -302,7 +338,7 @@ test('getAll() paginates until the cumulative total is reached, then stops', asy
   const result = await client.getAll('/people/getAll.json', { page_size: 10 }, 'people', 'person');
 
   assert.equal(callCount, 3);
-  assert.deepEqual(result, allPeople);
+  assert.deepEqual(result.items, allPeople);
   assert.equal(result.complete, true);
   assert.equal(result.pages, 3);
   assert.equal(result.total, 25);
@@ -316,7 +352,7 @@ test('getAll() stops requesting once a page returns fewer items than total with 
 
   const result = await client.getAll('/people/getAll.json', {}, 'people', 'person');
 
-  assert.equal(result.length, 1);
+  assert.equal(result.items.length, 1);
   assert.equal(result.pages, 1);
 });
 

@@ -30,16 +30,20 @@ const https = require('https');
 //     the response mirrors `page` but reports size as `per_page` and a
 //     cumulative `total`, per the spec's test example.
 //
-// Return-shape note: the Task 11 spec gives two descriptions of getAll()'s
-// return value that are not both literally satisfiable — its own test
-// example asserts `getAll(...)` resolves to a bare array
-// (`[{ id: 'p1' }]`), while the surrounding prose says it must "return
-// `{ items, complete: true, pages, total }`". Resolved by returning the items
-// array itself (so it deep-equals a plain array, matching the authoritative
-// test) with `complete` / `pages` / `total` attached as non-enumerable own
-// properties. Array equality checks (deepEqual/deepStrictEqual, spreading,
-// JSON.stringify) never see the extra properties, but a caller that knows to
-// read `result.total` / `result.pages` / `result.complete` (Tasks 12-13) can.
+// Return shape: getAll() resolves to a plain object
+// `{ items, complete: true, pages, total }` — matching the surrounding prose
+// in the Task 11 spec, and the same shape PCO's pcoAdapter.js fetchSnapshot()
+// already returns (`complete` as an ordinary enumerable property). An earlier
+// revision of this file returned the bare `items` array with `complete`/
+// `pages`/`total` attached as non-enumerable properties, to also literally
+// satisfy the spec's illustrative `assert.deepEqual(result, [{ id: 'p1' }])`
+// test line. That was reviewed and rejected: anything that does
+// `result.map()`/`.filter()`/`.slice()`/`[...result]`/`Array.from(result)`/
+// `structuredClone(result)`/`JSON.stringify(result)` silently drops
+// `complete`/`pages`/`total`, and Task 14's fetchFullSnapshot needs `complete`
+// to gate archive-on-missing logic — too dangerous a footgun to keep. Callers
+// read `result.items` for the array and `result.complete`/`.pages`/`.total`
+// for pagination metadata.
 
 const DEFAULT_BASE_URL = 'https://api.elvanto.com/v1';
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -138,18 +142,21 @@ function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEF
   }
 
   // Never included in any ElvantoError's .message or .details.
-  const authHeader = `Basic ${Buffer.from(`${apiKey}:x`).toString('base64')}`;
+  const authValue = Buffer.from(`${apiKey}:x`).toString('base64');
+  const authHeader = `Basic ${authValue}`;
 
   // Defense in depth: even though we never deliberately embed the API key or
   // the Authorization header in an error, an underlying transport error or an
   // Elvanto-supplied error message could in principle echo either back
-  // (e.g. a proxy's "auth header was <value>" diagnostic). Strip both before
-  // any external string is folded into an ElvantoError.
+  // (e.g. a proxy's "auth header was <value>" diagnostic). Strip the raw key,
+  // the full "Basic <base64>" header, and a bare base64 blob lacking the
+  // "Basic " prefix, before any external string is folded into an ElvantoError.
   function redact(text) {
     if (typeof text !== 'string' || !text) return 'Elvanto request error';
     return text
       .split(apiKey).join('[REDACTED]')
       .split(authHeader).join('[REDACTED]')
+      .split(authValue).join('[REDACTED]')
       .replace(/Basic\s+[A-Za-z0-9+/=]+/gi, 'Basic [REDACTED]');
   }
 
@@ -269,10 +276,12 @@ function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEF
 
       const done = total !== null ? items.length >= total : normalized.length === 0;
       if (done) {
-        Object.defineProperty(items, 'complete', { value: true, enumerable: false, configurable: true });
-        Object.defineProperty(items, 'pages', { value: page, enumerable: false, configurable: true });
-        Object.defineProperty(items, 'total', { value: total === null ? items.length : total, enumerable: false, configurable: true });
-        return items;
+        return {
+          items,
+          complete: true,
+          pages: page,
+          total: total === null ? items.length : total,
+        };
       }
 
       page += 1;
