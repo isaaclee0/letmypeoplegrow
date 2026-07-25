@@ -213,6 +213,21 @@ async function getValidAccessToken(churchId, userId, tokens) {
   return fresh ? fresh.access_token : null;
 }
 
+// Validate that an access token actually works against PCO, by hitting the
+// (cheap, single-record) "me" endpoint. This is additive — routes/integrations.js's
+// existing '/planning-center/status' route has its own inline connection check via
+// makePlanningCenterRequest() there, and is left untouched. This export exists so the
+// provider-neutral PCO adapter (peopleSync/pcoAdapter.js) has a dependency-injectable
+// token validator built on the same httpsGet() helper as everything else in this file,
+// without duplicating the HTTPS plumbing or reaching into routes/integrations.js.
+async function validatePlanningCenterToken(accessToken) {
+  if (!accessToken) return { connected: false, accountName: null };
+  const response = await httpsGet('https://api.planningcenteronline.com/people/v2/me', accessToken);
+  if (response.status !== 200) return { connected: false, accountName: null, status: response.status };
+  const accountName = (response.data && response.data.data && response.data.data.attributes && response.data.data.attributes.name) || null;
+  return { connected: true, accountName };
+}
+
 // ─── Sync pipeline helpers ───────────────────────────────────────────────────
 
 // Token accessor for endpoints/cron (wraps existing helpers).
@@ -543,5 +558,5 @@ module.exports = {
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, batchFilterConfig, computePlanForBatch,
   getPlanningCenterTokens, savePlanningCenterTokens, ensureValidPlanningCenterTokens,
-  getTokensForChurch,
+  getTokensForChurch, validatePlanningCenterToken,
 };

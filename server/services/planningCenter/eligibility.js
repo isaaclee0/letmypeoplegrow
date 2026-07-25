@@ -24,4 +24,24 @@ function isEligible(person, filterConfig) {
   return false;
 }
 
-module.exports = { isEligible };
+// ─── Provider-neutral adapter helper (Task 8) ──────────────────────────────
+//
+// isEligible() above is the canonical PCO filter-evaluation logic and is
+// used unchanged by the existing diffEngine.js pipeline. The provider-neutral
+// adapter contract (providerRegistry.js) calls adapter.isEligible(person,
+// filterConfig) with a *normalized* person (projection.js's
+// toNormalizedPcoPerson shape: { attributes: { membership, fieldValues } },
+// among other fields) rather than PCO's own projected shape ({ membership,
+// fieldValues } at the top level). fromNormalized() converts back so the one
+// isEligible() implementation above stays the single source of truth for PCO
+// filter semantics — nothing here duplicates or reinterprets its rules.
+function fromNormalized(person) {
+  const attributes = (person && person.attributes) || {};
+  return {
+    id: person && person.id,
+    membership: attributes.membership ?? null,
+    fieldValues: attributes.fieldValues || {},
+  };
+}
+
+module.exports = { isEligible, fromNormalized };

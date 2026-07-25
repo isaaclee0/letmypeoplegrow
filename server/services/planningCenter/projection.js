@@ -50,4 +50,64 @@ function projectPerson(p, fieldDataById) {
   };
 }
 
-module.exports = { projectPerson };
+// ─── Provider-neutral adapter helpers (Task 8) ─────────────────────────────
+//
+// Below wraps projectPerson's output (and PCO's household data) into the
+// normalized shapes the provider-neutral matcher/plan engine (Task 5/6)
+// expects: { provider, id, firstName, lastName, child, state, familyId,
+// attributes }. This is purely an additive projection on top of the existing
+// data — it does not change projectPerson or anything that currently
+// consumes its output (diffEngine.js, apply.js, etc).
+//
+// PCO's Person.attributes.status is a plain 'active' | 'inactive' — see
+// diffEngine.js, which only ever compares against those two literal strings.
+// There is no separate PCO "contact"/"deceased" person state to preserve, so
+// 'inactive' maps to the generic engine's 'archived' terminal state (the
+// generic engine's archive/no-longer-eligible handling for a terminal state
+// mirrors exactly what diffEngine.js already does for status === 'inactive').
+function toNormalizedPcoPerson(pcoPerson) {
+  return {
+    provider: 'planning_center',
+    id: pcoPerson.id,
+    firstName: pcoPerson.firstName,
+    lastName: pcoPerson.lastName,
+    child: typeof pcoPerson.child === 'boolean' ? pcoPerson.child : null,
+    state: pcoPerson.status === 'active' ? 'active' : 'archived',
+    familyId: pcoPerson.householdId ?? null,
+    // Carries whatever eligibility.js's isEligible() needs (membership,
+    // fieldValues) plus passedBackgroundCheck, namespaced so the generic
+    // engine never has to know PCO-specific field names. eligibility.js's
+    // fromNormalized() is the inverse of this projection.
+    attributes: {
+      membership: pcoPerson.membership ?? null,
+      passedBackgroundCheck: typeof pcoPerson.passedBackgroundCheck === 'boolean' ? pcoPerson.passedBackgroundCheck : null,
+      fieldValues: pcoPerson.fieldValues || {},
+    },
+  };
+}
+
+// Projects PCO Households (as seen via each projected person's householdId,
+// plus the household->primary-contact map already collected in
+// fetchAllPcoPeople) into the normalized family shape. Not yet consumed by
+// any current PCO code path — it exists so a provider-neutral snapshot has
+// something structurally reasonable to return for `families` ahead of the
+// generic engine's family-matching support (Task 5/6 do not implement family
+// actions yet; see plan.js's addFamilies/linkFamilies/moveFamily/renameFamily
+// buckets, which are currently always empty).
+function projectPcoHouseholds(people, householdPrimaryContacts) {
+  const memberIdsByHousehold = new Map();
+  for (const person of people || []) {
+    if (!person || !person.householdId) continue;
+    if (!memberIdsByHousehold.has(person.householdId)) memberIdsByHousehold.set(person.householdId, []);
+    memberIdsByHousehold.get(person.householdId).push(person.id);
+  }
+  const primaryContacts = householdPrimaryContacts instanceof Map ? householdPrimaryContacts : new Map();
+  const families = [...memberIdsByHousehold.entries()].map(([householdId, memberExternalIds]) => ({
+    id: householdId,
+    memberExternalIds: [...memberExternalIds].sort(),
+    primaryContactExternalId: primaryContacts.get(householdId) || null,
+  }));
+  return families.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+module.exports = { projectPerson, toNormalizedPcoPerson, projectPcoHouseholds };
