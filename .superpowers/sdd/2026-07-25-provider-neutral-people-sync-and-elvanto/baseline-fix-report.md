@@ -1,7 +1,7 @@
 # Client Test Baseline Fix Report
 
 - Status: `DONE`
-- Commit hash: `PENDING`
+- Commit hash: `585b666d827eeb5d2db3b6c032f910106f7b99fb`
 
 ## Root cause and evidence
 
