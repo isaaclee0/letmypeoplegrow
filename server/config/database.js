@@ -11,6 +11,91 @@ const churchTxLocks = new Map(); // Mutex per church to prevent concurrent trans
 let registryDb = null;
 let dataDir = null;
 
+function ensureProviderNeutralSyncSchema(db) {
+  db.exec(CHURCH_SCHEMA);
+
+  const gatheringListColumns = db.prepare('PRAGMA table_info(gathering_lists)').all();
+  if (!gatheringListColumns.some((column) => column.name === 'added_by_sync_batch_id')) {
+    db.exec('ALTER TABLE gathering_lists ADD COLUMN added_by_sync_batch_id INTEGER REFERENCES people_sync_batches(id) ON DELETE SET NULL');
+  }
+}
+
+function parseLegacyFilterJson(value) {
+  try {
+    return JSON.parse(value || '[]');
+  } catch (_) {
+    return [];
+  }
+}
+
+function backfillProviderNeutralSync(db, churchId) {
+  db.prepare(`INSERT OR IGNORE INTO people_sync_settings
+    (church_id, authority_provider)
+    SELECT church_id,
+      CASE WHEN planning_center_sync_indicator = 1 THEN 'planning_center' ELSE 'none' END
+    FROM church_settings WHERE church_id = ?`).run(churchId);
+
+  db.prepare(`INSERT OR IGNORE INTO external_person_links
+    (church_id, provider, external_person_id, individual_id, link_source, last_seen_at)
+    SELECT church_id, 'planning_center', planning_center_id, id, 'legacy_backfill', datetime('now')
+    FROM individuals
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''`).run(churchId);
+
+  db.prepare(`INSERT OR IGNORE INTO external_family_links
+    (church_id, provider, external_family_id, family_id, link_source, last_seen_at)
+    SELECT church_id, 'planning_center', planning_center_id, id, 'legacy_backfill', datetime('now')
+    FROM families
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''`).run(churchId);
+
+  const legacyBatches = db.prepare(
+    `SELECT * FROM planning_center_sync_batches WHERE church_id = ?`
+  ).all(churchId);
+  const insertBatch = db.prepare(
+    `INSERT OR IGNORE INTO people_sync_batches
+      (church_id, provider, name, enabled, filter_schema_version, filter_config,
+       default_people_type, gathering_type_id, gathering_auto_remove_enabled,
+       schedule_enabled, schedule_frequency, schedule_day, legacy_provider_batch_id,
+       last_sync_at, last_sync_result)
+     VALUES (?, 'planning_center', ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const row of legacyBatches) {
+    const filterConfig = JSON.stringify({
+      membershipFilterEnabled: !!row.membership_filter_enabled,
+      membershipAllowlist: parseLegacyFilterJson(row.membership_allowlist),
+      fieldFilterEnabled: !!row.field_filter_enabled,
+      fieldFilters: parseLegacyFilterJson(row.field_filters)
+    });
+    insertBatch.run(
+      churchId,
+      row.name,
+      filterConfig,
+      row.default_people_type || 'regular',
+      row.gathering_type_id,
+      row.gathering_auto_remove_enabled || 0,
+      row.schedule_enabled || 0,
+      row.schedule_frequency || 'weekly',
+      row.schedule_day === null || row.schedule_day === undefined ? 1 : row.schedule_day,
+      row.id,
+      row.last_sync_at,
+      row.last_sync_result
+    );
+  }
+
+  db.prepare(
+    `UPDATE gathering_lists
+     SET added_by_sync_batch_id = (
+       SELECT people_sync_batches.id
+       FROM people_sync_batches
+       WHERE people_sync_batches.church_id = gathering_lists.church_id
+         AND people_sync_batches.provider = 'planning_center'
+         AND people_sync_batches.legacy_provider_batch_id = gathering_lists.added_by_pco_batch_id
+     )
+     WHERE church_id = ?
+       AND added_by_pco_batch_id IS NOT NULL
+       AND added_by_sync_batch_id IS NULL`
+  ).run(churchId);
+}
+
 function getChurchTxLock(churchId) {
   if (!churchTxLocks.has(churchId)) {
     churchTxLocks.set(churchId, { queue: Promise.resolve(), pending: 0 });
@@ -316,6 +401,9 @@ class Database {
       if (!glCols.some(c => c.name === 'added_by_pco_batch_id')) {
         db.exec('ALTER TABLE gathering_lists ADD COLUMN added_by_pco_batch_id INTEGER REFERENCES planning_center_sync_batches(id) ON DELETE SET NULL');
       }
+
+      ensureProviderNeutralSyncSchema(db);
+      backfillProviderNeutralSync(db, churchId);
     }
 
     churchDbs.set(churchId, db);
@@ -324,8 +412,13 @@ class Database {
 
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
-    db.exec(CHURCH_SCHEMA);
+    ensureProviderNeutralSyncSchema(db);
     db.exec(UPDATED_AT_TRIGGERS);
+    backfillProviderNeutralSync(db, churchId);
+  }
+
+  static backfillProviderNeutralSync(db, churchId) {
+    return backfillProviderNeutralSync(db, churchId);
   }
 
   static setChurchContext(churchId, callback) {

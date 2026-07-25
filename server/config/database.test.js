@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const path = require('path');
+const BetterSqlite3 = require('better-sqlite3');
 const Database = require('./database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 
@@ -244,6 +246,71 @@ test('unlinkUserLookup: returns false when no matching row exists', async () => 
     const result = Database.unlinkUserLookup(churchIdA, 9999);
 
     assert.strictEqual(result, false, 'should return false when no user_lookup row matches');
+  });
+});
+
+test('getChurchDb migrates an existing PCO database to generic provenance and backfills it once', async () => {
+  // Catches an upgrade that creates neutral tables for new churches but leaves
+  // existing PCO roster ownership and links unavailable after restart.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    const familyId = Number(db.prepare(
+      'INSERT INTO families (family_name, church_id, planning_center_id) VALUES (?, ?, ?)'
+    ).run('Migrated Household', churchId, 'legacy-family').lastInsertRowid);
+    const individualId = Number(db.prepare(
+      'INSERT INTO individuals (first_name, last_name, church_id, family_id, planning_center_id) VALUES (?, ?, ?, ?, ?)'
+    ).run('Migrated', 'Person', churchId, familyId, 'legacy-person').lastInsertRowid);
+    const gatheringId = Number(db.prepare(
+      'INSERT INTO gathering_types (name, church_id) VALUES (?, ?)'
+    ).run('Migrated Gathering', churchId).lastInsertRowid);
+    const legacyBatchId = Number(db.prepare(
+      "INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters) VALUES (?, ?, '[]', '[]')"
+    ).run(churchId, 'Migrated Batch').lastInsertRowid);
+
+    Database.closeAll();
+    const dbPath = path.join(process.env.CHURCH_DATA_DIR, 'churches', `${churchId}.sqlite`);
+    const legacyDb = new BetterSqlite3(dbPath);
+    legacyDb.pragma('foreign_keys = OFF');
+    legacyDb.exec(`
+      DROP TRIGGER IF EXISTS ensure_people_sync_settings;
+      DROP TABLE gathering_lists;
+      DROP TABLE people_sync_runs;
+      DROP TABLE people_sync_batches;
+      DROP TABLE external_person_links;
+      DROP TABLE external_family_links;
+      DROP TABLE integration_connections;
+      DROP TABLE people_sync_settings;
+      CREATE TABLE gathering_lists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gathering_type_id INTEGER NOT NULL,
+        individual_id INTEGER NOT NULL,
+        added_by INTEGER,
+        church_id TEXT,
+        added_at TEXT DEFAULT (datetime('now')),
+        added_by_pco_batch_id INTEGER,
+        FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE CASCADE,
+        FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+        FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (added_by_pco_batch_id) REFERENCES planning_center_sync_batches(id) ON DELETE SET NULL,
+        UNIQUE(gathering_type_id, individual_id)
+      );
+    `);
+    legacyDb.prepare(
+      'INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id, added_by_pco_batch_id) VALUES (?, ?, ?, ?)'
+    ).run(gatheringId, individualId, churchId, legacyBatchId);
+    legacyDb.close();
+
+    const migrated = Database.getChurchDb(churchId);
+    const genericBatch = migrated.prepare(
+      'SELECT id FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
+    ).get(churchId, 'planning_center', legacyBatchId);
+    const roster = migrated.prepare('SELECT added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?').get(churchId);
+
+    assert.ok(genericBatch, 'legacy PCO batch should be represented by one generic batch');
+    assert.strictEqual(roster.added_by_sync_batch_id, genericBatch.id);
+    assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ?').get(churchId).count, 1);
+    assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_family_links WHERE church_id = ?').get(churchId).count, 1);
+    assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_center_sync_batches'").get(), 'legacy PCO batch table must remain');
   });
 });
 
