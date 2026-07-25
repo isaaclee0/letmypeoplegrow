@@ -2232,6 +2232,13 @@ function validateBatchBody(body) {
   return null;
 }
 
+// Old/stale clients (dismissible PWA update banner) may omit gatheringAutoRemoveEnabled
+// entirely; default to false rather than rejecting the whole request. Shared by the
+// create and update sync-batch routes below.
+function resolveGatheringAutoRemoveEnabled(body) {
+  return typeof body.gatheringAutoRemoveEnabled === 'boolean' ? body.gatheringAutoRemoveEnabled : false;
+}
+
 // Search PCO people by name for manual linking (ambiguous / unmatched-extra review).
 // Excludes anyone already linked to an existing individual in this church.
 router.get('/planning-center/people-search', async (req, res) => {
@@ -2274,20 +2281,12 @@ router.post('/planning-center/sync-batches', async (req, res) => {
     const churchId = req.user.church_id;
     const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
             defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
-    // Old/stale clients (dismissible PWA update banner) may omit this field entirely;
-    // default to false rather than rejecting the whole request.
-    const gatheringAutoRemoveEnabled = typeof req.body.gatheringAutoRemoveEnabled === 'boolean'
-      ? req.body.gatheringAutoRemoveEnabled : false;
-    const insRes = await Database.query(
-      `INSERT INTO planning_center_sync_batches
-         (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
-          default_people_type, gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [churchId, name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
-       fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
-       gatheringAutoRemoveEnabled ? 1 : 0, scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay]
-    );
-    const batch = await pcoSync.getBatch(churchId, insRes.insertId);
+    const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
+    const batch = await pcoSync.createBatch(churchId, {
+      name: name.trim(), membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+      defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
+      scheduleEnabled, scheduleFrequency, scheduleDay,
+    });
     res.json({ success: true, batch });
   } catch (error) {
     logger.error('Create PCO sync batch error:', error);
@@ -2306,22 +2305,12 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
     const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
             defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
-    // Old/stale clients (dismissible PWA update banner) may omit this field entirely;
-    // default to false rather than rejecting the whole request.
-    const gatheringAutoRemoveEnabled = typeof req.body.gatheringAutoRemoveEnabled === 'boolean'
-      ? req.body.gatheringAutoRemoveEnabled : false;
-    await Database.query(
-      `UPDATE planning_center_sync_batches
-          SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
-              field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
-              gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
-              updated_at = datetime('now')
-        WHERE id = ? AND church_id = ?`,
-      [name.trim(), membershipFilterEnabled ? 1 : 0, JSON.stringify(membershipAllowlist),
-       fieldFilterEnabled ? 1 : 0, JSON.stringify(fieldFilters), defaultPeopleType, gatheringTypeId || null,
-       gatheringAutoRemoveEnabled ? 1 : 0, scheduleEnabled ? 1 : 0, scheduleFrequency, scheduleDay, batchId, churchId]
-    );
-    const batch = await pcoSync.getBatch(churchId, batchId);
+    const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
+    const batch = await pcoSync.updateBatch(churchId, batchId, {
+      name: name.trim(), membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+      defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
+      scheduleEnabled, scheduleFrequency, scheduleDay,
+    });
 
     // Backfill: the moment this toggle flips off -> on for a batch with a
     // gathering assigned, claim ownership of existing gathering_lists rows this
@@ -2351,9 +2340,15 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
             const person = pcoById.get(row.pcoId);
             if (person && person.status === 'active' && isEligible(person, filterConfig)) {
               try {
+                // batch.id is the canonical people_sync_batches id
+                // (added_by_sync_batch_id); batch.legacyProviderBatchId is the
+                // dual-written planning_center_sync_batches id
+                // (added_by_pco_batch_id, the column the candidates query above
+                // and the auto-remove ownership query further up this file
+                // still filter by) — see toLegacyPcoBatchDto in planningCenterSync.js.
                 await Database.query(
-                  `UPDATE gathering_lists SET added_by_pco_batch_id = ? WHERE id = ? AND church_id = ?`,
-                  [batch.id, row.id, churchId]
+                  `UPDATE gathering_lists SET added_by_pco_batch_id = ?, added_by_sync_batch_id = ? WHERE id = ? AND church_id = ?`,
+                  [batch.legacyProviderBatchId, batch.id, row.id, churchId]
                 );
                 claimed++;
               } catch (e) {
@@ -2392,7 +2387,7 @@ router.delete('/planning-center/sync-batches/:id', async (req, res) => {
     const batchId = Number(req.params.id);
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
-    await Database.query(`DELETE FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`, [batchId, churchId]);
+    await pcoSync.deleteBatch(churchId, batchId);
     res.json({ success: true });
   } catch (error) {
     logger.error('Delete PCO sync batch error:', error);
@@ -2500,7 +2495,11 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
     const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds, skipFamilyNameUpdateIds };
 
     const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
-      batchId: batch.id,
+      // batch.id is the canonical people_sync_batches id (added_by_sync_batch_id);
+      // batch.legacyProviderBatchId is the dual-written planning_center_sync_batches
+      // id (added_by_pco_batch_id) — see toLegacyPcoBatchDto in planningCenterSync.js.
+      batchId: batch.legacyProviderBatchId,
+      syncBatchId: batch.id,
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
       gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
@@ -2517,10 +2516,7 @@ router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
       visitorMatches: (plan.visitorMatches || []).length,
       errors: result.errors.length,
     };
-    await Database.query(
-      `UPDATE planning_center_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-      [JSON.stringify(summary), batch.id, churchId]
-    );
+    await pcoSync.recordBatchSyncResult(churchId, batch, summary);
     res.json({ success: true, result, summary });
   } catch (error) {
     logger.error('PCO batch sync apply error:', error);
@@ -2921,3 +2917,5 @@ router.post('/planning-center/import-checkins/execute', async (req, res) => {
 
 module.exports = router;
 module.exports.getPlanningCenterSyncStats = getPlanningCenterSyncStats;
+module.exports.validateBatchBody = validateBatchBody;
+module.exports.resolveGatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled;

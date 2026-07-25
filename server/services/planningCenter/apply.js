@@ -1,6 +1,7 @@
 const Database = require('../../config/database');
 const { buildFamilyName } = require('./familyName');
 const { syncBackgroundCheckStatuses } = require('./backgroundCheckSync');
+const linkRepository = require('../peopleSync/linkRepository');
 
 // Group add entries by householdId; null household => its own solo group.
 function groupAdds(adds) {
@@ -53,6 +54,12 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
   const defaultPeopleType = batchConfig.defaultPeopleType || 'regular';
   const gatheringTypeId = batchConfig.gatheringTypeId || null;
   const batchId = batchConfig.batchId || null;
+  // Generic people_sync_batches id (Task 9) — dual-written into
+  // gathering_lists.added_by_sync_batch_id alongside the legacy batchId
+  // above (added_by_pco_batch_id). Optional: callers that only know the
+  // legacy batch (e.g. existing tests seeding planning_center_sync_batches
+  // directly) simply leave this unset, and only the legacy column is set.
+  const syncBatchId = batchConfig.syncBatchId || null;
   const gatheringAutoRemoveEnabled = !!batchConfig.gatheringAutoRemoveEnabled;
   // Every individual this run links, restores, promotes, or creates, PLUS every
   // already-linked individual who's currently active and eligible for this batch's
@@ -64,17 +71,27 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
   const touchedIndividualIds = new Set();
   for (const g of (plan.gatheringEligible || [])) touchedIndividualIds.add(g.individualId);
 
-  // links (high-confidence active matches + any ambiguous resolved by the reviewer)
-  const links = [...(plan.link || [])];
+  // links (high-confidence active matches + any ambiguous resolved by the reviewer).
+  // Each link write is dual-written into external_person_links (Task 9) in the
+  // SAME transaction as the individuals.planning_center_id update, so the two
+  // can never diverge — either both land or (on any failure, e.g. a link
+  // collision) neither does, same as a bare UPDATE failure already behaved
+  // before this table existed.
+  const links = [...(plan.link || []).map((l) => ({ ...l, linkSource: 'matched' }))];
   for (const [individualId, pcoId] of Object.entries(ambiguousChoices)) {
-    if (pcoId) links.push({ individualId: Number(individualId), pcoId });
+    if (pcoId) links.push({ individualId: Number(individualId), pcoId, linkSource: 'manual' });
   }
   for (const l of links) {
     try {
-      await Database.query(
-        `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
-        [l.pcoId, l.individualId, churchId]
-      );
+      await Database.transaction(async (conn) => {
+        await conn.query(
+          `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+          [l.pcoId, l.individualId, churchId]
+        );
+        await linkRepository.upsertPersonLinkWithConnection(conn, {
+          churchId, provider: 'planning_center', externalPersonId: l.pcoId, individualId: l.individualId, linkSource: l.linkSource,
+        });
+      });
       result.linked++;
       touchedIndividualIds.add(l.individualId);
     } catch (e) { result.errors.push({ type: 'link', id: l.individualId, error: e.message }); }
@@ -83,11 +100,16 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
   // restore: archived LMPG individual whose name matches a PCO person -> link + reactivate.
   for (const r of (plan.restore || [])) {
     try {
-      await Database.query(
-        `UPDATE individuals SET planning_center_id = ?, is_active = 1, updated_at = datetime('now')
-           WHERE id = ? AND church_id = ?`,
-        [r.pcoId, r.individualId, churchId]
-      );
+      await Database.transaction(async (conn) => {
+        await conn.query(
+          `UPDATE individuals SET planning_center_id = ?, is_active = 1, updated_at = datetime('now')
+             WHERE id = ? AND church_id = ?`,
+          [r.pcoId, r.individualId, churchId]
+        );
+        await linkRepository.upsertPersonLinkWithConnection(conn, {
+          churchId, provider: 'planning_center', externalPersonId: r.pcoId, individualId: r.individualId, linkSource: 'matched',
+        });
+      });
       result.linked++;
       result.reactivated++;
       touchedIndividualIds.add(r.individualId);
@@ -104,12 +126,17 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
     if (!offer) continue;
     try {
       if (choice === 'promote') {
-        await Database.query(
-          `UPDATE individuals
-             SET planning_center_id = ?, people_type = 'regular', updated_at = datetime('now')
-             WHERE id = ? AND church_id = ?`,
-          [offer.candidate.pcoId, id, churchId]
-        );
+        await Database.transaction(async (conn) => {
+          await conn.query(
+            `UPDATE individuals
+               SET planning_center_id = ?, people_type = 'regular', updated_at = datetime('now')
+               WHERE id = ? AND church_id = ?`,
+            [offer.candidate.pcoId, id, churchId]
+          );
+          await linkRepository.upsertPersonLinkWithConnection(conn, {
+            churchId, provider: 'planning_center', externalPersonId: offer.candidate.pcoId, individualId: id, linkSource: 'manual',
+          });
+        });
         result.linked++;
         touchedIndividualIds.add(id);
       } else if (choice === 'keep') {
@@ -206,6 +233,16 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
           familyId = famRes.insertId;
           if (g.householdId) created = familyId;
         }
+        // Dual-write the family link (Task 9) only when this run itself
+        // created the family AND PCO gave it a real household id — a solo
+        // add (no householdId) has nothing to link, and a family resolved
+        // from familyByHousehold (already existing) already has its link
+        // from when IT was created or from backfillProviderNeutralSync.
+        if (created && g.householdId) {
+          await linkRepository.upsertFamilyLinkWithConnection(conn, {
+            churchId, provider: 'planning_center', externalFamilyId: g.householdId, familyId, linkSource: 'created',
+          });
+        }
         const ids = [];
         for (const m of g.members) {
           const insRes = await conn.query(
@@ -214,6 +251,9 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
             [churchId, familyId, m.firstName, m.lastName, defaultPeopleType, m.isChild ? 1 : 0, userId, m.pcoId]
           );
           ids.push(insRes.insertId);
+          await linkRepository.upsertPersonLinkWithConnection(conn, {
+            churchId, provider: 'planning_center', externalPersonId: m.pcoId, individualId: insRes.insertId, linkSource: 'created',
+          });
         }
         return { createdHouseholdFamilyId: created, newIds: ids };
       });
@@ -238,9 +278,9 @@ async function applyPlan(churchId, plan, userId, selections = {}, batchConfig = 
     for (const individualId of touchedIndividualIds) {
       try {
         const insertResult = await Database.query(
-          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id, added_by_pco_batch_id)
-           VALUES (?, ?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
-          [gatheringTypeId, individualId, userId, churchId, batchId]
+          `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id, added_by_pco_batch_id, added_by_sync_batch_id)
+           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
+          [gatheringTypeId, individualId, userId, churchId, batchId, syncBatchId]
         );
         if (insertResult.affectedRows > 0) result.gatheringAssigned++;
       } catch (e) { result.errors.push({ type: 'gatheringAssign', id: individualId, error: e.message }); }

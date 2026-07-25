@@ -6,6 +6,7 @@ const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
 const { applyPlan } = require('./planningCenter/apply');
 const { reviewNotificationDecision, buildPcoReviewMessage } = require('./planningCenter/reviewNotification');
+const batchRepository = require('./peopleSync/batchRepository');
 
 let cronJob = null;
 
@@ -287,54 +288,214 @@ async function loadChurchState(churchId) {
   return { individuals, families };
 }
 
-// Row shape from planning_center_sync_batches -> the shape everything else expects.
-function rowToBatch(row) {
-  let membershipAllowlist = [];
-  let fieldFilters = [];
-  let lastSyncResult = null;
-  if (row.membershipAllowlistRaw) { try { membershipAllowlist = JSON.parse(row.membershipAllowlistRaw); } catch (_) {} }
-  if (row.fieldFiltersRaw) { try { fieldFilters = JSON.parse(row.fieldFiltersRaw); } catch (_) {} }
-  if (row.lastSyncResultRaw) { try { lastSyncResult = JSON.parse(row.lastSyncResultRaw); } catch (_) {} }
-  return {
-    id: row.id,
-    name: row.name,
-    membershipFilterEnabled: !!row.membershipFilterEnabled,
-    membershipAllowlist,
-    fieldFilterEnabled: !!row.fieldFilterEnabled,
-    fieldFilters,
-    defaultPeopleType: row.defaultPeopleType || 'regular',
-    gatheringTypeId: row.gatheringTypeId || null,
-    gatheringAutoRemoveEnabled: !!row.gatheringAutoRemoveEnabled,
-    scheduleEnabled: !!row.scheduleEnabled,
-    scheduleFrequency: row.scheduleFrequency || 'weekly',
-    scheduleDay: typeof row.scheduleDay === 'number' ? row.scheduleDay : 1,
-    lastSyncAt: row.lastSyncAt || null,
-    lastSyncResult,
+// ─── PCO sync batches ─────────────────────────────────────────────────────────
+//
+// Task 9: people_sync_batches (via batchRepository) is now the canonical store
+// for PCO batches. planning_center_sync_batches (the legacy table) is dual-
+// written during the compatibility window — every generic PCO batch row keeps
+// a matching legacy row, whose id is recorded on the generic row as
+// legacy_provider_batch_id (see backfillProviderNeutralSync in
+// config/database.js, which already produces exactly this shape for
+// pre-existing batches). This lets gathering_lists keep populating its legacy
+// added_by_pco_batch_id FK column (still referencing planning_center_sync_batches)
+// alongside the new added_by_sync_batch_id column, and lets the legacy table's
+// last_sync_at/last_sync_result stay populated for anything not yet migrated
+// off it.
+//
+// The DTO shape returned to callers (routes/integrations.js, and from there
+// the PCO batch UI) is UNCHANGED from before this refactor — same field names,
+// same types — plus one additive field, legacyProviderBatchId, used internally
+// by routes/integrations.js to populate added_by_pco_batch_id when applying.
+
+function safeJsonParse(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch (_) { return fallback; }
+}
+
+// filterConfig for a saved batch. Accepts either a generic batch object
+// (people_sync_batches shape, via batchRepository, with `.filterConfig`
+// already parsed) or the legacy-shaped object every existing caller in this
+// file and in routes/integrations.js has always passed (membershipFilterEnabled
+// etc. as direct fields) — this must keep resolving the legacy shape exactly
+// as it did before Task 9.
+function batchFilterConfig(batch) {
+  return batch.filterConfig || {
+    membershipFilterEnabled: batch.membershipFilterEnabled,
+    membershipAllowlist: batch.membershipAllowlist,
+    fieldFilterEnabled: batch.fieldFilterEnabled,
+    fieldFilters: batch.fieldFilters,
   };
 }
 
-const BATCH_SELECT = `SELECT id, name, membership_filter_enabled AS membershipFilterEnabled,
-         membership_allowlist AS membershipAllowlistRaw,
-         field_filter_enabled AS fieldFilterEnabled,
-         field_filters AS fieldFiltersRaw,
-         default_people_type AS defaultPeopleType,
-         gathering_type_id AS gatheringTypeId,
-         gathering_auto_remove_enabled AS gatheringAutoRemoveEnabled,
-         schedule_enabled AS scheduleEnabled,
-         schedule_frequency AS scheduleFrequency,
-         schedule_day AS scheduleDay,
-         last_sync_at AS lastSyncAt,
-         last_sync_result AS lastSyncResultRaw
-    FROM planning_center_sync_batches`;
+// Generic batch (batchRepository shape) -> the legacy PCO batch DTO shape
+// /planning-center/sync-batches has always returned.
+function toLegacyPcoBatchDto(batch) {
+  const filterConfig = batchFilterConfig(batch);
+  return {
+    id: batch.id,
+    name: batch.name,
+    membershipFilterEnabled: !!filterConfig.membershipFilterEnabled,
+    membershipAllowlist: filterConfig.membershipAllowlist || [],
+    fieldFilterEnabled: !!filterConfig.fieldFilterEnabled,
+    fieldFilters: filterConfig.fieldFilters || [],
+    defaultPeopleType: batch.defaultPeopleType || 'regular',
+    gatheringTypeId: batch.gatheringTypeId ?? null,
+    gatheringAutoRemoveEnabled: !!batch.gatheringAutoRemoveEnabled,
+    scheduleEnabled: !!batch.scheduleEnabled,
+    scheduleFrequency: batch.scheduleFrequency || 'weekly',
+    scheduleDay: typeof batch.scheduleDay === 'number' ? batch.scheduleDay : 1,
+    lastSyncAt: batch.lastSyncAt || null,
+    lastSyncResult: safeJsonParse(batch.lastSyncResult, null),
+    // Additive (not part of the pre-Task-9 contract): the legacy
+    // planning_center_sync_batches id this generic batch is dual-written to,
+    // if any. routes/integrations.js reads this to keep tagging
+    // gathering_lists.added_by_pco_batch_id alongside the now-canonical
+    // added_by_sync_batch_id. Existing clients simply ignore fields they don't
+    // recognize, so this does not change the response shape they depend on.
+    legacyProviderBatchId: batch.legacyProviderBatchId ?? null,
+  };
+}
 
 async function listBatches(churchId) {
-  const rows = await Database.query(`${BATCH_SELECT} WHERE church_id = ? ORDER BY id`, [churchId]);
-  return rows.map(rowToBatch);
+  const batches = await batchRepository.listBatches(churchId, 'planning_center');
+  return batches.map(toLegacyPcoBatchDto);
 }
 
 async function getBatch(churchId, batchId) {
-  const rows = await Database.query(`${BATCH_SELECT} WHERE id = ? AND church_id = ? LIMIT 1`, [batchId, churchId]);
-  return rows.length ? rowToBatch(rows[0]) : null;
+  const batch = await batchRepository.getBatch(churchId, 'planning_center', batchId);
+  return batch ? toLegacyPcoBatchDto(batch) : null;
+}
+
+// Legacy-shaped filter fields (as every PCO batch caller has always passed
+// them) -> the filterConfig blob people_sync_batches stores, matching the
+// exact shape backfillProviderNeutralSync produces from the legacy table.
+function buildFilterConfigInput(input) {
+  return {
+    membershipFilterEnabled: !!input.membershipFilterEnabled,
+    membershipAllowlist: input.membershipAllowlist || [],
+    fieldFilterEnabled: !!input.fieldFilterEnabled,
+    fieldFilters: input.fieldFilters || [],
+  };
+}
+
+// Create a new PCO sync batch. Canonical storage is people_sync_batches (via
+// batchRepository); during the compatibility window we also create a matching
+// planning_center_sync_batches row (legacy schema — never dropped, see
+// CLAUDE.md's additive-only migration convention) and record its id back onto
+// the generic row as legacy_provider_batch_id.
+async function createBatch(churchId, input) {
+  const filterConfig = buildFilterConfigInput(input);
+  const generic = await batchRepository.createBatch({
+    churchId,
+    provider: 'planning_center',
+    name: input.name,
+    enabled: true,
+    filterSchemaVersion: 1,
+    filterConfig,
+    defaultPeopleType: input.defaultPeopleType,
+    gatheringTypeId: input.gatheringTypeId || null,
+    gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,
+    scheduleEnabled: !!input.scheduleEnabled,
+    scheduleFrequency: input.scheduleFrequency,
+    scheduleDay: input.scheduleDay,
+    legacyProviderBatchId: null,
+  });
+
+  const legacyRes = await Database.query(
+    `INSERT INTO planning_center_sync_batches
+       (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
+        default_people_type, gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [churchId, generic.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
+     filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), generic.defaultPeopleType,
+     generic.gatheringTypeId, generic.gatheringAutoRemoveEnabled ? 1 : 0, generic.scheduleEnabled ? 1 : 0,
+     generic.scheduleFrequency, generic.scheduleDay]
+  );
+
+  await batchRepository.updateBatch({
+    churchId, provider: 'planning_center', batchId: generic.id, legacyProviderBatchId: legacyRes.insertId,
+  });
+
+  return getBatch(churchId, generic.id);
+}
+
+// Update an existing PCO sync batch (batchId is the canonical people_sync_batches
+// id, as returned by listBatches/getBatch/createBatch). Dual-writes the legacy
+// row when one is linked (always true for a batch created during/after Task 9,
+// and for anything backfillProviderNeutralSync has already backfilled).
+async function updateBatch(churchId, batchId, input) {
+  const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
+  if (!current) return null;
+  const filterConfig = buildFilterConfigInput(input);
+
+  await batchRepository.updateBatch({
+    churchId,
+    provider: 'planning_center',
+    batchId,
+    name: input.name,
+    filterConfig,
+    defaultPeopleType: input.defaultPeopleType,
+    gatheringTypeId: input.gatheringTypeId || null,
+    gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,
+    scheduleEnabled: !!input.scheduleEnabled,
+    scheduleFrequency: input.scheduleFrequency,
+    scheduleDay: input.scheduleDay,
+  });
+
+  if (current.legacyProviderBatchId) {
+    await Database.query(
+      `UPDATE planning_center_sync_batches
+          SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
+              field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
+              gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
+              updated_at = datetime('now')
+        WHERE id = ? AND church_id = ?`,
+      [input.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
+       filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), input.defaultPeopleType,
+       input.gatheringTypeId || null, input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
+       input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
+    );
+  }
+
+  return getBatch(churchId, batchId);
+}
+
+// Delete a PCO sync batch (both the generic row and its dual-written legacy
+// row, when one exists). Neither row's FK from gathering_lists is RESTRICT —
+// both added_by_sync_batch_id and added_by_pco_batch_id are ON DELETE SET
+// NULL, so existing roster rows this batch created are left in place, just
+// un-owned — same "does not unlink or archive anyone" behavior as before.
+async function deleteBatch(churchId, batchId) {
+  const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
+  if (!current) return false;
+  await batchRepository.deleteBatch(churchId, 'planning_center', batchId);
+  if (current.legacyProviderBatchId) {
+    await Database.query(
+      `DELETE FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`,
+      [current.legacyProviderBatchId, churchId]
+    );
+  }
+  return true;
+}
+
+// Persist a batch's sync summary to both the canonical generic row and (while
+// legacy_provider_batch_id is present) the legacy table — same dual-write
+// posture as createBatch/updateBatch. Shared by the interactive apply route
+// (routes/integrations.js) and the unattended scheduled path (runBatchSync
+// below) so the two never drift.
+async function recordBatchSyncResult(churchId, batch, summary) {
+  const summaryJson = JSON.stringify(summary);
+  if (batch.legacyProviderBatchId) {
+    await Database.query(
+      `UPDATE planning_center_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+      [summaryJson, batch.legacyProviderBatchId, churchId]
+    );
+  }
+  await Database.query(
+    `UPDATE people_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ? AND provider = 'planning_center'`,
+    [summaryJson, batch.id, churchId]
+  );
 }
 
 // Compute a plan for a church against an explicit filterConfig (current church
@@ -347,16 +508,6 @@ async function computePlanForChurch(churchId, accessToken, filterConfig, { force
   plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
   plan.pcoPeople = pcoPeople;
   return plan;
-}
-
-// filterConfig for a saved batch.
-function batchFilterConfig(batch) {
-  return {
-    membershipFilterEnabled: batch.membershipFilterEnabled,
-    membershipAllowlist: batch.membershipAllowlist,
-    fieldFilterEnabled: batch.fieldFilterEnabled,
-    fieldFilters: batch.fieldFilters,
-  };
 }
 
 async function computePlanForBatch(churchId, accessToken, batch, opts) {
@@ -402,7 +553,11 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
     // reappears next time someone opens the interactive Sync Review screen.
     const skipFamilyNameUpdateIds = (plan.familyNameUpdates || []).map((f) => f.familyId);
     const result = await applyForChurch(churchId, plan, userId, { skipFamilyNameUpdateIds }, {
-      batchId: batch.id,
+      // batch.id is the canonical people_sync_batches id (added_by_sync_batch_id);
+      // batch.legacyProviderBatchId is the dual-written planning_center_sync_batches
+      // id (added_by_pco_batch_id) — see toLegacyPcoBatchDto above.
+      batchId: batch.legacyProviderBatchId,
+      syncBatchId: batch.id,
       defaultPeopleType: batch.defaultPeopleType,
       gatheringTypeId: batch.gatheringTypeId,
       gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
@@ -422,10 +577,7 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
       familyNameUpdatesPending: skipFamilyNameUpdateIds.length,
       errors: result.errors.length,
     };
-    await Database.query(
-      `UPDATE planning_center_sync_batches SET last_sync_at = datetime('now'), last_sync_result = ?, updated_at = datetime('now') WHERE id = ?`,
-      [JSON.stringify(summary), batch.id]
-    );
+    await recordBatchSyncResult(churchId, batch, summary);
     logger.info(`PCO batch sync: church ${churchId} batch ${batch.id} (${batch.name}) done — ${JSON.stringify(summary)}`);
     return summary;
   } catch (err) {
@@ -556,7 +708,8 @@ module.exports = {
   start, stop, runNow, syncChurch, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
-  listBatches, getBatch, batchFilterConfig, computePlanForBatch,
+  listBatches, getBatch, createBatch, updateBatch, deleteBatch,
+  batchFilterConfig, computePlanForBatch, recordBatchSyncResult, toLegacyPcoBatchDto,
   getPlanningCenterTokens, savePlanningCenterTokens, ensureValidPlanningCenterTokens,
   getTokensForChurch, validatePlanningCenterToken,
 };

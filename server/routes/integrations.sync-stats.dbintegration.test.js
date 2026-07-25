@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
-const { getPlanningCenterSyncStats } = require('./integrations');
+const { getPlanningCenterSyncStats, validateBatchBody, resolveGatheringAutoRemoveEnabled } = require('./integrations');
 
 async function seedIndividual(churchId, { active = 1, pcoId = null } = {}) {
   const res = await Database.query(
@@ -62,4 +62,46 @@ test('getPlanningCenterSyncStats returns zeros, not an error, for a church with 
     assert.strictEqual(stats.totalPeople, 0);
     assert.strictEqual(stats.syncedPeople, 0);
   });
+});
+
+// Task 9: PCO batch create/update routes now delegate persistence to
+// pcoSync.createBatch/updateBatch (generic people_sync_batches, dual-written
+// to the legacy planning_center_sync_batches table), but the request-body
+// validation and defaulting in routes/integrations.js are untouched by that
+// refactor. These pin exactly the "old client compatibility" contract:
+// gatheringAutoRemoveEnabled is not a required field, and a request that
+// omits it entirely must still resolve to `false` rather than being rejected.
+function validBatchBody(overrides = {}) {
+  return {
+    name: 'Test Batch',
+    membershipFilterEnabled: false,
+    membershipAllowlist: [],
+    fieldFilterEnabled: false,
+    fieldFilters: [],
+    defaultPeopleType: 'regular',
+    gatheringTypeId: null,
+    scheduleEnabled: false,
+    scheduleFrequency: 'weekly',
+    scheduleDay: 1,
+    ...overrides,
+  };
+}
+
+test('validateBatchBody accepts a body that omits gatheringAutoRemoveEnabled entirely', () => {
+  const body = validBatchBody();
+  assert.strictEqual('gatheringAutoRemoveEnabled' in body, false);
+  assert.strictEqual(validateBatchBody(body), null);
+});
+
+test('resolveGatheringAutoRemoveEnabled defaults to false when an old client omits the field', () => {
+  assert.strictEqual(resolveGatheringAutoRemoveEnabled({}), false);
+});
+
+test('resolveGatheringAutoRemoveEnabled passes through explicit booleans', () => {
+  assert.strictEqual(resolveGatheringAutoRemoveEnabled({ gatheringAutoRemoveEnabled: true }), true);
+  assert.strictEqual(resolveGatheringAutoRemoveEnabled({ gatheringAutoRemoveEnabled: false }), false);
+});
+
+test('resolveGatheringAutoRemoveEnabled defaults to false for a non-boolean value', () => {
+  assert.strictEqual(resolveGatheringAutoRemoveEnabled({ gatheringAutoRemoveEnabled: 'true' }), false);
 });

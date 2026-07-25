@@ -1,6 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { isDueToday } = require('./planningCenterSync');
+const Database = require('../config/database');
+const { withTestChurchDb } = require('../test-helpers/testChurchDb');
+const pcoSync = require('./planningCenterSync');
+const { isDueToday } = pcoSync;
 
 test('isDueToday: daily is always due', () => {
   const monday = new Date('2026-07-06T02:00:00'); // a Monday
@@ -73,4 +76,138 @@ test('isDueToday: monthly falls back to day 1 for a legacy day=0 value', () => {
   const the2nd = new Date('2026-07-02T02:00:00');
   assert.strictEqual(isDueToday('monthly', 0, the1st), true);
   assert.strictEqual(isDueToday('monthly', 0, the2nd), false);
+});
+
+// ─── Task 9: PCO batches routed through the generic people_sync_batches /
+// batchRepository, with legacy planning_center_sync_batches dual-written for
+// compatibility. These tests pin the exact response shape the PCO batch UI
+// (client/src/components/planningCenter/*) and existing routes already
+// depend on — Task 9 must change internals only, never this shape. ───────────
+
+test('listBatches/getBatch return the existing legacy PCO batch DTO shape for a batch backfilled from the legacy table', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    const gatheringId = Number(db.prepare(
+      `INSERT INTO gathering_types (name, church_id) VALUES (?, ?)`
+    ).run('Sunday Service', churchId).lastInsertRowid);
+    db.prepare(
+      `INSERT INTO planning_center_sync_batches
+        (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
+         default_people_type, gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency,
+         schedule_day, last_sync_at, last_sync_result)
+       VALUES (?, ?, 1, ?, 0, '[]', 'regular', ?, 1, 1, 'weekly', 2, '2026-07-01T00:00:00Z', '{"added":3}')`
+    ).run(churchId, 'Members', '["Members"]', gatheringId);
+
+    // Simulates the migration path every existing church db already goes
+    // through (see ensureChurchSchema/getChurchDb in config/database.js) —
+    // by the time any route runs, the backfilled generic row already exists.
+    Database.backfillProviderNeutralSync(db, churchId);
+
+    const batches = await pcoSync.listBatches(churchId);
+    assert.strictEqual(batches.length, 1);
+    const batch = batches[0];
+    assert.strictEqual(batch.name, 'Members');
+    assert.strictEqual(batch.membershipFilterEnabled, true);
+    assert.deepEqual(batch.membershipAllowlist, ['Members']);
+    assert.strictEqual(batch.fieldFilterEnabled, false);
+    assert.deepEqual(batch.fieldFilters, []);
+    assert.strictEqual(batch.defaultPeopleType, 'regular');
+    assert.strictEqual(batch.gatheringTypeId, gatheringId);
+    assert.strictEqual(batch.gatheringAutoRemoveEnabled, true);
+    assert.strictEqual(batch.scheduleEnabled, true);
+    assert.strictEqual(batch.scheduleFrequency, 'weekly');
+    assert.strictEqual(batch.scheduleDay, 2);
+    assert.strictEqual(batch.lastSyncAt, '2026-07-01T00:00:00Z');
+    assert.deepEqual(batch.lastSyncResult, { added: 3 });
+
+    const single = await pcoSync.getBatch(churchId, batch.id);
+    assert.deepEqual(single, batch);
+  });
+});
+
+test('createBatch/updateBatch/deleteBatch dual-write the generic and legacy PCO batch tables', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const created = await pcoSync.createBatch(churchId, {
+      name: 'Youth',
+      membershipFilterEnabled: false,
+      membershipAllowlist: [],
+      fieldFilterEnabled: false,
+      fieldFilters: [],
+      defaultPeopleType: 'regular',
+      gatheringTypeId: null,
+      gatheringAutoRemoveEnabled: false,
+      scheduleEnabled: false,
+      scheduleFrequency: 'weekly',
+      scheduleDay: 1,
+    });
+    assert.ok(created.id, 'created batch should have an id');
+
+    const genericRows = await Database.query(
+      'SELECT * FROM people_sync_batches WHERE church_id = ? AND provider = ?', [churchId, 'planning_center']
+    );
+    assert.strictEqual(genericRows.length, 1);
+    assert.ok(genericRows[0].legacy_provider_batch_id, 'generic row should carry the legacy batch id');
+
+    const legacyRows = await Database.query(
+      'SELECT * FROM planning_center_sync_batches WHERE church_id = ?', [churchId]
+    );
+    assert.strictEqual(legacyRows.length, 1);
+    assert.strictEqual(legacyRows[0].id, genericRows[0].legacy_provider_batch_id);
+    assert.strictEqual(legacyRows[0].name, 'Youth');
+
+    const updated = await pcoSync.updateBatch(churchId, created.id, {
+      name: 'Youth Group',
+      membershipFilterEnabled: true,
+      membershipAllowlist: ['Youth'],
+      fieldFilterEnabled: false,
+      fieldFilters: [],
+      defaultPeopleType: 'regular',
+      gatheringTypeId: null,
+      gatheringAutoRemoveEnabled: false,
+      scheduleEnabled: false,
+      scheduleFrequency: 'weekly',
+      scheduleDay: 1,
+    });
+    assert.strictEqual(updated.name, 'Youth Group');
+    assert.deepEqual(updated.membershipAllowlist, ['Youth']);
+
+    const legacyAfterUpdate = await Database.query(
+      'SELECT name, membership_allowlist FROM planning_center_sync_batches WHERE id = ? AND church_id = ?',
+      [legacyRows[0].id, churchId]
+    );
+    assert.strictEqual(legacyAfterUpdate[0].name, 'Youth Group');
+    assert.deepEqual(JSON.parse(legacyAfterUpdate[0].membership_allowlist), ['Youth']);
+
+    const deleted = await pcoSync.deleteBatch(churchId, created.id);
+    assert.strictEqual(deleted, true);
+
+    const genericAfterDelete = await Database.query(
+      'SELECT * FROM people_sync_batches WHERE church_id = ? AND provider = ?', [churchId, 'planning_center']
+    );
+    assert.strictEqual(genericAfterDelete.length, 0);
+    const legacyAfterDelete = await Database.query(
+      'SELECT * FROM planning_center_sync_batches WHERE church_id = ?', [churchId]
+    );
+    assert.strictEqual(legacyAfterDelete.length, 0);
+  });
+});
+
+test('createBatch defaults gatheringAutoRemoveEnabled to false when the caller omits it (old client compatibility)', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await pcoSync.createBatch(churchId, {
+      name: 'Legacy client batch',
+      membershipFilterEnabled: false,
+      membershipAllowlist: [],
+      fieldFilterEnabled: false,
+      fieldFilters: [],
+      defaultPeopleType: 'regular',
+      gatheringTypeId: null,
+      scheduleEnabled: false,
+      scheduleFrequency: 'weekly',
+      scheduleDay: 1,
+      // gatheringAutoRemoveEnabled intentionally omitted — an old/stale
+      // client (dismissible PWA update banner) may never send it.
+    });
+    assert.strictEqual(batch.gatheringAutoRemoveEnabled, false);
+  });
 });
