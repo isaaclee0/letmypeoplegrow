@@ -46,6 +46,25 @@
 // Elvanto's group-membership endpoints return, nor how Task 14's adapter will
 // assemble this map, is specified anywhere upstream of this task.
 //
+// Task 13 (server/services/elvanto/filter.js, metadata.js) resolves that open
+// question and requires it be followed here: every group/serviceType/location
+// entry in the `memberships` bundle above, and every key AND value in
+// `raw.custom_fields`, MUST be Elvanto's stable ID — never a display name or
+// label — even though the fixtures/tests in *this* file use plain names
+// ('Choir', 'Sunday AM', 'Main Campus') as opaque strings to exercise
+// dedupe/sort only. filter.js's isElvantoEligible() matches
+// attributes.groups/serviceTypes/locations against config.{groups,
+// serviceTypes,locations}.ids, and attributes.customFields is looked up by
+// config.customFields[].fieldId with values compared against
+// config.customFields[].values — both sides of every comparison are IDs
+// sourced from metadata.js's definition lists (groups[].id, customFields[].id,
+// customFields[].values[].id, etc). Whoever assembles the real `memberships`/
+// `groupMemberships` bundle (Task 14's adapter) must key/populate it with
+// those same stable IDs, or eligibility and member counts will silently
+// compute to zero with no error anywhere. attributes.departments is the one
+// exception — Elvanto's departments endpoint has no separate ID, so it stays
+// a flat array of department NAME strings (see metadata.js's header note).
+//
 // Per this project's global constraint, LMPG individuals do not store email
 // or mobile, so neither field is read here even if present on a raw record —
 // they are simply never copied into the normalized shape or its attributes.
