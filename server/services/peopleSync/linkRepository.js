@@ -177,4 +177,9 @@ module.exports = {
   upsertFamilyLinkWithConnection,
   markPeopleSeen,
   recordFullFetchPresence,
+  // Exported so apply.js (Task 7) can defend against a plan/selection
+  // referencing a family or individual ID that belongs to a different
+  // church — the same church-ownership check this module already relies
+  // on internally before ever writing a link row.
+  assertLocalRecord,
 };

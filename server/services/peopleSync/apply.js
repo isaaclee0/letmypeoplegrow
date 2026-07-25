@@ -1,0 +1,464 @@
+const Database = require('../../config/database');
+const linkRepository = require('./linkRepository');
+const authority = require('./authority');
+const { BUCKETS } = require('./plan');
+
+const PROVIDERS = new Set(['planning_center', 'elvanto']);
+const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
+
+// Buckets that mutate an EXISTING individual's own fields/lifecycle/family.
+// Buckets that only create new records or establish an identity link
+// (linkPeople, linkFamilies, addPeople, addFamilies, addToGathering) are not
+// subject to the authority lock — see enforceAuthorityLock() below for why.
+const INDIVIDUAL_MUTATION_BUCKETS = [
+  'updateManagedFields', 'promoteToRegular', 'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily',
+];
+
+function assertProvider(provider) {
+  if (!PROVIDERS.has(provider)) throw new Error(`Unsupported people-sync provider: ${provider}`);
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function toPositiveInt(value, label) {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error(`${label} must be a valid positive integer ID`);
+  return id;
+}
+
+function emptyResult() {
+  const result = {};
+  for (const bucket of BUCKETS) result[bucket] = 0;
+  result.familyNamesUpdated = 0;
+  result.gatheringAssigned = 0;
+  result.gatheringRemoved = 0;
+  return result;
+}
+
+/**
+ * Pure, DB-free validation of a reviewer's selections against a plan.
+ *
+ * The selection payload is intentionally narrow:
+ *   {
+ *     ambiguous: { [externalPersonId]: individualId },
+ *     skipExternalPersonIds: [],
+ *     visitorChoices: { [externalPersonId]: 'promote' | 'keep' },
+ *     acceptArchiveIndividualIds: [],
+ *     acceptFamilyRenameIds: [],
+ *   }
+ *
+ * Every choice must resolve against something the plan itself already
+ * offered (an ambiguousPeople candidate, a reviewRequired linkPeople
+ * suggestion, an addPeople addition, an unmatchedLocalRegulars/ambiguous
+ * candidate individual, or a renameFamily action id). Because the plan was
+ * computed server-side against this church's own local people, restricting
+ * every selection to values already present in the plan is what prevents a
+ * selection from reaching into another church via an arbitrary local ID —
+ * validateSelections never accepts a bare ID it hasn't first verified
+ * appears somewhere in the plan's own review buckets.
+ */
+function validateSelections(plan, selections = {}) {
+  if (!plan || typeof plan !== 'object') throw new Error('A plan is required to validate selections against');
+
+  const ambiguousByExternal = new Map(asArray(plan.ambiguousPeople).map((a) => [a.externalPersonId, a]));
+  const addByExternal = new Map(asArray(plan.addPeople).map((a) => [a.externalPersonId, a]));
+  const reviewLinksByExternal = new Map(
+    asArray(plan.linkPeople).filter((a) => a.reviewRequired).map((a) => [a.externalPersonId, a])
+  );
+  const establishedLinks = asArray(plan.linkPeople).filter((a) => !a.reviewRequired);
+  const unmatchedLocalIds = new Set(asArray(plan.unmatchedLocalRegulars).map((a) => a.individualId));
+  const renameById = new Map(asArray(plan.renameFamily).map((a) => [a.id, a]));
+
+  const acceptedLinks = [];
+  const claimedExternalIds = new Set(establishedLinks.map((a) => a.externalPersonId));
+  const claimedIndividualIds = new Set(establishedLinks.map((a) => a.individualId));
+
+  const claimLink = (externalPersonId, individualId, sourceLabel) => {
+    if (claimedExternalIds.has(externalPersonId) || claimedIndividualIds.has(individualId)) {
+      throw new Error(`${sourceLabel} selection for ${externalPersonId} collides with another accepted link or addition`);
+    }
+    claimedExternalIds.add(externalPersonId);
+    claimedIndividualIds.add(individualId);
+  };
+
+  for (const [externalPersonId, rawIndividualId] of Object.entries(asRecord(selections.ambiguous))) {
+    const entry = ambiguousByExternal.get(externalPersonId);
+    if (!entry) throw new Error(`Ambiguous selection references a person not offered for review in this plan: ${externalPersonId}`);
+    const individualId = toPositiveInt(rawIndividualId, 'Ambiguous selection individual ID');
+    const candidateIds = entry.candidateIndividualIds || [];
+    if (!candidateIds.includes(individualId)) {
+      throw new Error(`Ambiguous selection for ${externalPersonId} must choose one of this plan's own candidate individuals`);
+    }
+    claimLink(externalPersonId, individualId, 'Ambiguous');
+    acceptedLinks.push({ externalPersonId, individualId, linkSource: 'manual' });
+  }
+
+  for (const [externalPersonId, choice] of Object.entries(asRecord(selections.visitorChoices))) {
+    const entry = reviewLinksByExternal.get(externalPersonId);
+    if (!entry) throw new Error(`Visitor choice references a person not offered for review in this plan: ${externalPersonId}`);
+    if (choice !== 'promote' && choice !== 'keep') {
+      throw new Error(`Visitor choice for ${externalPersonId} must be "promote" or "keep"`);
+    }
+    if (choice === 'promote') {
+      claimLink(externalPersonId, entry.individualId, 'Visitor');
+      acceptedLinks.push({ externalPersonId, individualId: entry.individualId, linkSource: 'manual' });
+    }
+  }
+
+  const skipExternalPersonIds = new Set();
+  for (const externalPersonId of asArray(selections.skipExternalPersonIds)) {
+    if (!addByExternal.has(externalPersonId)) {
+      throw new Error(`Cannot skip an addition not offered in this plan: ${externalPersonId}`);
+    }
+    skipExternalPersonIds.add(externalPersonId);
+  }
+
+  const acceptedArchiveIndividualIds = new Set();
+  for (const rawIndividualId of asArray(selections.acceptArchiveIndividualIds)) {
+    const individualId = toPositiveInt(rawIndividualId, 'Archive selection individual ID');
+    const inAmbiguousCandidates = asArray(plan.ambiguousPeople)
+      .some((a) => (a.candidateIndividualIds || []).includes(individualId));
+    if (!unmatchedLocalIds.has(individualId) && !inAmbiguousCandidates) {
+      throw new Error(`Cannot archive an individual not surfaced for review in this plan: ${individualId}`);
+    }
+    if (claimedIndividualIds.has(individualId)) {
+      throw new Error(`Archive selection for ${individualId} collides with an accepted link`);
+    }
+    acceptedArchiveIndividualIds.add(individualId);
+  }
+
+  const acceptedFamilyRenameIds = new Set();
+  for (const actionId of asArray(selections.acceptFamilyRenameIds)) {
+    if (!renameById.has(actionId)) {
+      throw new Error(`Cannot accept a family rename not offered in this plan: ${actionId}`);
+    }
+    acceptedFamilyRenameIds.add(actionId);
+  }
+
+  return { acceptedLinks, skipExternalPersonIds, acceptedArchiveIndividualIds, acceptedFamilyRenameIds };
+}
+
+function collectTouchedIndividualIds(plan, acceptedArchiveIndividualIds) {
+  const ids = new Set();
+  for (const bucket of INDIVIDUAL_MUTATION_BUCKETS) {
+    for (const action of asArray(plan[bucket])) ids.add(action.individualId);
+  }
+  for (const individualId of acceptedArchiveIndividualIds) ids.add(individualId);
+  return [...ids];
+}
+
+function collectTouchedFamilyIds(plan) {
+  const ids = new Set();
+  for (const action of asArray(plan.moveFamily)) if (action.familyId != null) ids.add(Number(action.familyId));
+  for (const action of asArray(plan.renameFamily)) if (action.familyId != null) ids.add(Number(action.familyId));
+  return [...ids];
+}
+
+// Defense in depth: Task 6's plan.js already refuses to generate managed
+// mutations for a person/family locked by a DIFFERENT active authority (see
+// plan.js's `canManage`/`activeAuthority` gating). This re-checks the same
+// invariant directly against the database inside the transaction, so a
+// stale, hand-built, or buggy plan can never mutate an authority-linked
+// record just because it slipped past plan computation. Pure identity
+// actions (linkPeople/linkFamilies/addPeople/addFamilies/addToGathering)
+// are exempt: tracking which external IDs correspond to a person across
+// multiple providers is authority-agnostic — only mutating that person's
+// own fields/lifecycle/family is restricted to the current authority.
+async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveIndividualIds) {
+  const authorityState = await authority.getAuthority(churchId);
+  if (authorityState.active === 'none' || authorityState.active === provider) return;
+
+  const touchedIndividualIds = collectTouchedIndividualIds(plan, acceptedArchiveIndividualIds);
+  if (touchedIndividualIds.length > 0) {
+    const managedLinks = await authority.getManagedLinks(churchId, touchedIndividualIds);
+    for (const individualId of touchedIndividualIds) {
+      if (authority.isPersonLocked(authorityState.active, managedLinks.get(individualId))) {
+        throw new Error(
+          `Individual ${individualId} is managed by the active people-sync authority (${authorityState.active}); ` +
+          `a non-authoritative ${provider} plan cannot modify it`
+        );
+      }
+    }
+  }
+
+  const touchedFamilyIds = collectTouchedFamilyIds(plan);
+  if (touchedFamilyIds.length > 0) {
+    const managedFamilyIds = await authority.getManagedFamilyIds(churchId, touchedFamilyIds, authorityState.active);
+    for (const familyId of touchedFamilyIds) {
+      if (managedFamilyIds.has(familyId)) {
+        throw new Error(
+          `Family ${familyId} is managed by the active people-sync authority (${authorityState.active}); ` +
+          `a non-authoritative ${provider} plan cannot modify it`
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Applies a provider-neutral sync plan (see plan.js's computePeopleSyncPlan)
+ * inside ONE critical database transaction. Unlike the legacy PCO apply
+ * service, this never catches-and-continues per item: any failure in a
+ * person/family/link mutation throws and rolls back everything this call
+ * did. Optional, non-critical provider extras (e.g. PCO background-check
+ * projection) are NOT this function's concern — they belong outside/after
+ * the critical transaction, in whichever caller wires up that provider.
+ */
+async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId }) {
+  assertProvider(provider);
+  if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
+  if (!plan || typeof plan !== 'object') throw new Error('A plan is required to apply');
+  if (plan.provider && plan.provider !== provider) {
+    throw new Error(`Plan was computed for provider "${plan.provider}", not "${provider}"`);
+  }
+
+  const accepted = validateSelections(plan, selections);
+
+  return Database.transactionForChurch(churchId, async (conn) => {
+    await enforceAuthorityLock(churchId, provider, plan, accepted.acceptedArchiveIndividualIds);
+
+    const result = emptyResult();
+
+    // 1. Person links: auto-approved matches plus reviewer-accepted
+    // ambiguous/visitor choices. Must run before addPeople/archive/etc so an
+    // auto-linked-then-archived person (see plan.js's carried-forward note)
+    // ends up linked, then archived — not archived against a link that
+    // doesn't exist yet.
+    const linkActions = [...asArray(plan.linkPeople).filter((a) => !a.reviewRequired), ...accepted.acceptedLinks];
+    for (const action of linkActions) {
+      await linkRepository.upsertPersonLinkWithConnection(conn, {
+        churchId, provider, externalPersonId: action.externalPersonId,
+        individualId: action.individualId, linkSource: action.linkSource || 'matched',
+      });
+      if (provider === 'planning_center') {
+        await conn.query(
+          `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+          [action.externalPersonId, action.individualId, churchId]
+        );
+      }
+      result.linkPeople++;
+    }
+
+    // 2. Family links (symmetric to person links). plan.js does not populate
+    // this bucket yet (family matching is future work) — handled here
+    // defensively/forward-compatibly so a later plan.js change can populate
+    // it without a matching apply.js change.
+    for (const action of asArray(plan.linkFamilies)) {
+      await linkRepository.upsertFamilyLinkWithConnection(conn, {
+        churchId, provider, externalFamilyId: action.externalFamilyId,
+        familyId: action.familyId, linkSource: action.linkSource || 'matched',
+      });
+      if (provider === 'planning_center') {
+        await conn.query(
+          `UPDATE families SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+          [action.externalFamilyId, action.familyId, churchId]
+        );
+      }
+      result.linkFamilies++;
+    }
+
+    // 3. New families. The reviewed name must already be on the action —
+    // apply never derives/rebuilds a family name from member data.
+    for (const action of asArray(plan.addFamilies)) {
+      const familyName = typeof action.familyName === 'string' ? action.familyName.trim() : '';
+      if (!familyName) throw new Error(`addFamilies action ${action.id} is missing a reviewed family name`);
+      const insertResult = await conn.query(
+        `INSERT INTO families (church_id, family_name, created_by, created_at) VALUES (?, ?, ?, datetime('now'))`,
+        [churchId, familyName, userId || null]
+      );
+      const familyId = insertResult.insertId;
+      if (action.externalFamilyId) {
+        await linkRepository.upsertFamilyLinkWithConnection(conn, {
+          churchId, provider, externalFamilyId: action.externalFamilyId, familyId, linkSource: 'created',
+        });
+        if (provider === 'planning_center') {
+          await conn.query(
+            `UPDATE families SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+            [action.externalFamilyId, familyId, churchId]
+          );
+        }
+      }
+      result.addFamilies++;
+    }
+
+    // 4. New people. familyId, if present, must already be an existing
+    // local family belonging to this church (validated below) — apply
+    // never invents a family or a family name for a newly added person; a
+    // null familyId simply leaves the individual family-less.
+    const newIndividualIdByExternal = new Map();
+    for (const action of asArray(plan.addPeople)) {
+      if (accepted.skipExternalPersonIds.has(action.externalPersonId)) continue;
+      const peopleType = action.peopleType;
+      if (!PEOPLE_TYPES.has(peopleType)) throw new Error(`addPeople action ${action.id} has an invalid people type`);
+      let familyId = null;
+      if (action.familyId !== null && action.familyId !== undefined) {
+        familyId = toPositiveInt(action.familyId, 'addPeople familyId');
+        await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
+      }
+      const insertResult = await conn.query(
+        `INSERT INTO individuals
+           (church_id, family_id, first_name, last_name, people_type, is_child, is_active, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, datetime('now'))`,
+        [churchId, familyId, action.firstName, action.lastName, peopleType, action.isChild === true ? 1 : 0, userId || null]
+      );
+      const individualId = insertResult.insertId;
+      newIndividualIdByExternal.set(action.externalPersonId, individualId);
+      await linkRepository.upsertPersonLinkWithConnection(conn, {
+        churchId, provider, externalPersonId: action.externalPersonId, individualId, linkSource: 'created',
+      });
+      if (provider === 'planning_center') {
+        await conn.query(
+          `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+          [action.externalPersonId, individualId, churchId]
+        );
+      }
+      result.addPeople++;
+    }
+
+    // 5. Managed field updates. Defensively ignore an isChild change whose
+    // externalValue is null/undefined — never write an unknown child state
+    // into is_child, even if a plan somehow carried one (plan.js itself
+    // never emits such a change; this is belt-and-braces).
+    for (const action of asArray(plan.updateManagedFields)) {
+      const setClauses = [];
+      const params = [];
+      for (const change of asArray(action.changes)) {
+        if (change.field === 'firstName') { setClauses.push('first_name = ?'); params.push(change.externalValue); }
+        else if (change.field === 'lastName') { setClauses.push('last_name = ?'); params.push(change.externalValue); }
+        else if (change.field === 'isChild') {
+          if (change.externalValue === null || change.externalValue === undefined) continue;
+          setClauses.push('is_child = ?'); params.push(change.externalValue ? 1 : 0);
+        }
+      }
+      if (setClauses.length === 0) continue;
+      params.push(action.individualId, churchId);
+      await conn.query(
+        `UPDATE individuals SET ${setClauses.join(', ')}, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        params
+      );
+      result.updateManagedFields++;
+    }
+
+    // 6. People-type alignment.
+    for (const action of asArray(plan.promoteToRegular)) {
+      await conn.query(
+        `UPDATE individuals SET people_type = 'regular', updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [action.individualId, churchId]
+      );
+      result.promoteToRegular++;
+    }
+    for (const action of asArray(plan.demoteToLocalVisitor)) {
+      await conn.query(
+        `UPDATE individuals SET people_type = 'local_visitor', updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [action.individualId, churchId]
+      );
+      result.demoteToLocalVisitor++;
+    }
+
+    // 7. Archive: plan-driven (lifecycle/presence based) plus any extra
+    // individuals the reviewer explicitly chose to archive instead of
+    // linking/leaving unmatched.
+    for (const action of asArray(plan.archive)) {
+      await conn.query(
+        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [action.individualId, churchId]
+      );
+      result.archive++;
+    }
+    for (const individualId of accepted.acceptedArchiveIndividualIds) {
+      await conn.query(
+        `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [individualId, churchId]
+      );
+      result.archive++;
+    }
+
+    // 8. Reactivate.
+    for (const action of asArray(plan.reactivate)) {
+      await conn.query(
+        `UPDATE individuals SET is_active = 1, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [action.individualId, churchId]
+      );
+      result.reactivate++;
+    }
+
+    // 9. Move family (defensive/forward-compatible — plan.js does not
+    // populate this bucket yet). familyId must already belong to this church.
+    for (const action of asArray(plan.moveFamily)) {
+      const familyId = toPositiveInt(action.familyId, 'moveFamily familyId');
+      await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
+      await conn.query(
+        `UPDATE individuals SET family_id = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [familyId, action.individualId, churchId]
+      );
+      result.moveFamily++;
+    }
+
+    // 10. Rename family: only ever the ones the reviewer explicitly
+    // accepted, using the reviewed name already on the action — apply never
+    // invents or recomputes a family name.
+    for (const action of asArray(plan.renameFamily)) {
+      if (!accepted.acceptedFamilyRenameIds.has(action.id)) continue;
+      const familyName = typeof action.familyName === 'string' ? action.familyName.trim() : '';
+      if (!familyName) throw new Error(`renameFamily action ${action.id} is missing a reviewed family name`);
+      const familyId = toPositiveInt(action.familyId, 'renameFamily familyId');
+      await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
+      await conn.query(
+        `UPDATE families SET family_name = ?, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
+        [familyName, familyId, churchId]
+      );
+      result.renameFamily++;
+      result.familyNamesUpdated++;
+    }
+
+    // 11. Gathering roster additions. individualId is null on an
+    // addToGathering action exactly when it targets a brand-new addPeople
+    // person — resolve it via the externalPersonId -> new individual map
+    // built in step 4 (which must therefore run before this step).
+    for (const action of asArray(plan.addToGathering)) {
+      const individualId = action.individualId ?? newIndividualIdByExternal.get(action.externalPersonId);
+      if (!individualId) continue; // the person this targeted was never created (e.g. skipped) — nothing to add.
+      const insertResult = await conn.query(
+        `INSERT INTO gathering_lists (gathering_type_id, individual_id, added_by, church_id, added_by_sync_batch_id)
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT(gathering_type_id, individual_id) DO NOTHING`,
+        [action.gatheringTypeId, individualId, userId || null, churchId, action.batchId]
+      );
+      result.addToGathering++;
+      if (insertResult.affectedRows > 0) result.gatheringAssigned++;
+    }
+
+    // 12. Gathering roster removals. A sync batch may only ever remove a
+    // roster row that carries its OWN provenance (added_by_sync_batch_id =
+    // this action's batchId) — manual rows (NULL) and other batches' rows
+    // never match that WHERE clause. As a second, redundant safety net on
+    // top of plan.js's own eligibility computation, also skip deleting any
+    // (gatheringTypeId, individualId) pair that this SAME plan's own
+    // addToGathering set says should remain — protects against a stale or
+    // internally-inconsistent plan even though a correctly-computed plan
+    // never proposes both for the same pair.
+    const staying = new Set(asArray(plan.addToGathering).map((a) => {
+      const individualId = a.individualId ?? newIndividualIdByExternal.get(a.externalPersonId);
+      return `${a.gatheringTypeId}:${individualId}`;
+    }));
+    for (const action of asArray(plan.removeFromGathering)) {
+      if (staying.has(`${action.gatheringTypeId}:${action.individualId}`)) continue;
+      const deleteResult = await conn.query(
+        `DELETE FROM gathering_lists
+          WHERE gathering_type_id = ? AND individual_id = ? AND added_by_sync_batch_id = ? AND church_id = ?`,
+        [action.gatheringTypeId, action.individualId, action.batchId, churchId]
+      );
+      result.removeFromGathering++;
+      if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
+    }
+
+    return result;
+  });
+}
+
+module.exports = { applyPeopleSyncPlan, validateSelections };
