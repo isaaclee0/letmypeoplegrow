@@ -35,4 +35,39 @@ function getProvider(name) {
   return adapter;
 }
 
-module.exports = { registerProvider, getProvider, validateAdapter };
+// Wires both real providers (Planning Center, Elvanto) into this module's
+// one live registry, for production startup to call exactly once (e.g. from
+// server/index.js's boot sequence). pcoAdapter.js and elvanto/adapter.js
+// both deliberately do NOT call registerProvider() at require time (see
+// each module's own header note) specifically so this is the one place
+// responsible for real registration.
+//
+// Idempotent per-provider (checks `adapters.has(name)` before registering,
+// rather than a single "have I run yet" flag) rather than throwing on a
+// second call: a production process may reasonably call this more than
+// once (e.g. a hot-reload path, or two independent boot steps that both
+// want to guarantee providers are registered before use), and re-registering
+// an already-registered provider must never crash startup. This does NOT
+// change registerProvider()'s own duplicate-registration guard above, which
+// is what protects a genuinely buggy caller trying to register a SECOND,
+// DIFFERENT adapter under a name that's already taken.
+//
+// Test isolation: node:test runs each test file in its own process by
+// default, so every *.test.js file that requires this module already gets
+// a fresh, empty `adapters` map with no extra setup needed — this function
+// is simply never called by a test that wants to exercise registerProvider/
+// getProvider/validateAdapter against a known-empty registry (see
+// providerRegistry.test.js, which is unaffected by this addition since it
+// never calls registerBuiltInProviders()).
+function registerBuiltInProviders() {
+  if (!adapters.has('planning_center')) {
+    const { createPcoAdapter } = require('./pcoAdapter');
+    registerProvider('planning_center', createPcoAdapter());
+  }
+  if (!adapters.has('elvanto')) {
+    const { createElvantoAdapter } = require('../elvanto/adapter');
+    registerProvider('elvanto', createElvantoAdapter());
+  }
+}
+
+module.exports = { registerProvider, getProvider, validateAdapter, registerBuiltInProviders };
