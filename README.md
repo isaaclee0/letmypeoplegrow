@@ -419,6 +419,9 @@ ANTHROPIC_API_KEY=your_anthropic_api_key # For Claude models
 # Elvanto Integration - OPTIONAL
 ELVANTO_API_KEY=your_elvanto_api_key
 
+# Integration Credential Encryption - REQUIRED before saving provider credentials
+INTEGRATION_CREDENTIALS_KEY=your_base64_encoded_32_byte_key
+
 # Logging (Optional - defaults shown)
 LOG_LEVEL=info                           # debug, info, warn, error
 CONSOLE_LOG_LEVEL=debug                  # Console logging level
@@ -429,6 +432,8 @@ LOG_HTTP_START=false                     # Log HTTP request start
 # Development Only
 AUTH_DEV_BYPASS=false                    # WARNING: Bypass auth in dev only
 ```
+
+Generate the integration credential encryption key with `openssl rand -base64 32`, then set the result as `INTEGRATION_CREDENTIALS_KEY` for every server replica. This key must remain stable across restarts and replicas and must be backed up separately. Losing it makes saved integration credentials unrecoverable.
 
 ### Client Environment Variables
 
@@ -659,4 +664,4 @@ http://localhost:7777
 
 ---
 
-**Let My People Grow** - Empowering churches to grow their communities through better member management and attendance tracking. 
+**Let My People Grow** - Empowering churches to grow their communities through better member management and attendance tracking.

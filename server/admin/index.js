@@ -20,6 +20,7 @@ const BackupService = require('../services/backup');
 const logger = require('../config/logger');
 const platformAiSettings = require('../services/platformAiSettings');
 const platformAiModelCatalog = require('../services/platformAiModelCatalog');
+const { rowsToCsv } = require('../routes/takeout');
 
 const app = express();
 const ADMIN_PORT = process.env.ADMIN_PORT || 7777;
@@ -628,17 +629,19 @@ app.get('/api/churches/:churchId/export', async (req, res) => {
       'attendance_records', 'headcount_records', 'kiosk_checkins',
       'notification_rules', 'notifications', 'visitor_config', 'audit_log',
       'ai_chat_conversations', 'ai_chat_messages', 'user_preferences',
+      'integration_connections',
     ];
-    const REDACT_COLUMNS = ['brevo_api_key', 'anthropic_api_key', 'openai_api_key', 'elvanto_api_key'];
-
-    function escapeCsvValue(val) {
-      if (val === null || val === undefined) return '';
-      const str = String(val);
-      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-        return '"' + str.replace(/"/g, '""') + '"';
-      }
-      return str;
-    }
+    const REDACT_COLUMNS = [
+      'brevo_api_key',
+      'anthropic_api_key',
+      'openai_api_key',
+      'elvanto_api_key',
+      'planning_center_tokens',
+      'credential_ciphertext',
+      'credential_nonce',
+      'credential_auth_tag',
+      'credential_key_version',
+    ];
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${churchId}-export-${new Date().toISOString().split('T')[0]}.zip"`);
@@ -654,10 +657,8 @@ app.get('/api/churches/:churchId/export', async (req, res) => {
       try {
         const rows = await Database.queryForChurch(churchId, `SELECT * FROM ${table}`);
         if (rows.length > 0) {
-          const columns = Object.keys(rows[0]).filter(c => !REDACT_COLUMNS.includes(c));
-          const header = columns.map(escapeCsvValue).join(',');
-          const lines = rows.map(row => columns.map(col => escapeCsvValue(row[col])).join(','));
-          archive.append(header + '\n' + lines.join('\n') + '\n', { name: `${table}.csv` });
+          const csv = rowsToCsv(rows, REDACT_COLUMNS);
+          if (csv) archive.append(csv, { name: `${table}.csv` });
         }
       } catch (err) {
         console.warn(`Export: skipped table ${table}:`, err.message);

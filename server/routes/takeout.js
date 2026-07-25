@@ -27,10 +27,22 @@ const EXPORT_TABLES = [
   'ai_chat_conversations',
   'ai_chat_messages',
   'user_preferences',
+  'integration_connections',
 ];
 
 // Columns to redact from export (sensitive data)
-const REDACT_COLUMNS = ['brevo_api_key', 'anthropic_api_key', 'openai_api_key', 'elvanto_api_key'];
+const REDACT_COLUMNS = [
+  'brevo_api_key',
+  'anthropic_api_key',
+  'openai_api_key',
+  'elvanto_api_key',
+  'planning_center_tokens',
+  'credential_ciphertext',
+  'credential_nonce',
+  'credential_auth_tag',
+  'credential_key_version',
+];
+const REDACT_PREFERENCE_KEYS = new Set(['elvanto_api_key', 'planning_center_tokens']);
 
 function escapeCsvValue(val) {
   if (val === null || val === undefined) return '';
@@ -41,11 +53,13 @@ function escapeCsvValue(val) {
   return str;
 }
 
-function rowsToCsv(rows) {
+function rowsToCsv(rows, redactColumns = REDACT_COLUMNS) {
   if (!rows || rows.length === 0) return '';
-  const columns = Object.keys(rows[0]).filter(c => !REDACT_COLUMNS.includes(c));
+  const safeRows = rows.filter(row => !REDACT_PREFERENCE_KEYS.has(row.preference_key));
+  if (safeRows.length === 0) return '';
+  const columns = Object.keys(safeRows[0]).filter(c => !redactColumns.includes(c));
   const header = columns.map(escapeCsvValue).join(',');
-  const lines = rows.map(row =>
+  const lines = safeRows.map(row =>
     columns.map(col => escapeCsvValue(row[col])).join(',')
   );
   return header + '\n' + lines.join('\n') + '\n';
@@ -157,3 +171,4 @@ router.post('/delete', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.rowsToCsv = rowsToCsv;
