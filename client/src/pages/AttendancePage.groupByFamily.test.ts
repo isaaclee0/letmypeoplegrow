@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
+describe('client test environment', () => {
+  it('provides usable JSDOM localStorage to client tests', () => {
+    expect(window.localStorage).toBeDefined();
+
+    localStorage.setItem('test-storage-key', 'test-storage-value');
+
+    expect(localStorage.getItem('test-storage-key')).toBe('test-storage-value');
+  });
+});
+
 // Pure logic helper — mirrors the initialisation logic we'll add
 function initialGroupByFamily(
   individualMode: boolean | undefined,
