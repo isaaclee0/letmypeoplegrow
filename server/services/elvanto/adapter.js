@@ -72,7 +72,10 @@
 //     adapter reads them back out under that same convention in
 //     attachCustomFieldMap() below, which is also where the request-side ID
 //     convention becomes the response-side ID convention (see the "ID, not
-//     name" rule above).
+//     name" rule above). The field is confirmed keyed by ID this way; the
+//     VALUE at that key is a separate, still-unconfirmed assumption — see
+//     attachCustomFieldMap()'s own inline note for why a value-side
+//     label-vs-ID ambiguity is not resolved here.
 //   - Per-container membership lookup: this task's own spec text confirms
 //     `fields[]=people` for the GROUPS endpoint only. normalizer.js's
 //     header note (Task 12) already established that ALL FOUR membership
@@ -186,6 +189,26 @@ function buildPeopleFields(customFieldIds) {
 // its shape/keying is unconfirmed (see normalizer.js's own header note), so
 // merging it in could silently reintroduce name-keyed entries alongside
 // the ID-keyed ones this adapter builds.
+//
+// *** UNCONFIRMED WIRE-FORMAT ASSUMPTION — flag for Task 22 verification
+// against a live account: the VALUE at `raw[custom_<id>]` is passed through
+// verbatim below, on the assumption that for a select/multi-select-style
+// custom field Elvanto returns the selected OPTION'S STABLE ID (matching
+// metadata.js's customFields[].values[].id and this file's config.
+// customFields[].values), not that option's display label. Nothing in this
+// repo exercises a real custom-field response, so this is genuinely
+// unconfirmed — only the KEY (the field ID itself) is independently
+// confirmed by this task's own spec text ("custom field names are
+// requested using custom_<id>"). If Elvanto actually returns the label
+// instead of the ID, filter.js's isElvantoEligible() customFields rule
+// would silently match nobody (comparing a label against metadata.js's ID
+// list) — the exact silent-zero-match failure mode the groups/
+// serviceTypes/locations ID convention exists to prevent. This adapter
+// deliberately does NOT attempt to build a label-to-ID mapping layer here:
+// doing so without confirmed real data risks introducing an incorrect
+// "fix" for an unconfirmed assumption, and a free-text (non-select) custom
+// field has no option ID to map to in the first place, so passthrough is
+// the only sound default absent live confirmation either way. ***
 function attachCustomFieldMap(raw, customFieldIds) {
   const custom_fields = {};
   for (const rawId of customFieldIds || []) {
@@ -399,7 +422,7 @@ async function fetchIncrementalSnapshot(client, watermark, customFieldIds, now) 
 
 // ─── Adapter composition ────────────────────────────────────────────────────
 
-function createElvantoAdapter({ clientFactory = createElvantoClient, now = () => new Date() } = {}) {
+function createElvantoAdapter({ clientFactory = createElvantoClient, now = () => new Date(), store } = {}) {
   return {
     provider: 'elvanto',
 
@@ -423,9 +446,35 @@ function createElvantoAdapter({ clientFactory = createElvantoClient, now = () =>
         : fetchFullSnapshot(client, customFieldIds, now);
     },
 
-    async fetchMetadata({ credentials, snapshot } = {}) {
+    // Task 5's actual adapter contract is fetchMetadata({ churchId,
+    // credentials, force }) — see the project plan's Task 5 pseudocode.
+    // This task's OWN Step 4 pseudocode (fetchMetadata({ credentials,
+    // snapshot })) omitted churchId, which silently made Task 13's
+    // stale-cache-on-outage fallback (fetchElvantoMetadata's
+    // options.churchId branch — see metadata.js's own header note) dead
+    // code when reached only through this adapter: with no churchId,
+    // metadata.js always takes its "no caching" path and a live Elvanto
+    // outage during metadata discovery throws instead of serving the
+    // last-known-good cached filter picker data. Fixed after review: accept
+    // and thread churchId through.
+    //
+    // `force` is accepted for contract-shape parity with PCO's
+    // fetchMetadata (which threads it into a genuine TTL-bypass cache
+    // read), but is a deliberate no-op here: unlike PCO's people cache,
+    // fetchElvantoMetadata never preferentially serves a cache when a live
+    // fetch succeeds — it always calls out to Elvanto fresh and only ever
+    // falls back to the persisted cache when that live fetch fails. There
+    // is no "prefer cache" mode here for `force` to bypass.
+    //
+    // `store` is only ever supplied by a test via createElvantoAdapter's
+    // own `store` option (see above) — omitted entirely in production so
+    // fetchElvantoMetadata falls through to its own real default
+    // (connectionStore.js, the actual DB-backed cache).
+    async fetchMetadata({ churchId, credentials, force, snapshot } = {}) {
       const client = clientFactory({ apiKey: credentials && credentials.apiKey });
-      return fetchElvantoMetadata(client, snapshot);
+      const options = { churchId };
+      if (store) options.store = store;
+      return fetchElvantoMetadata(client, snapshot, options);
     },
 
     validateFilter: validateElvantoFilter,

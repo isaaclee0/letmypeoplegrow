@@ -234,14 +234,21 @@ test('fetchSnapshot(full) handles a single-member people list arriving as a bare
 });
 
 test('custom field values come back keyed by the custom field ID, not its name', async () => {
-  const rawPerson = { ...fixtures.person(), id: '3001', firstname: 'Cara', lastname: 'Custom', custom_501: 'Blue' };
+  // The value 'v1' is deliberately ID-shaped (matching filter.test.js's/
+  // metadata.test.js's own option-ID convention), NOT a display label like
+  // 'Blue' — this pins attachCustomFieldMap()'s documented, unconfirmed
+  // assumption that Elvanto returns a select-style custom field's value as
+  // the selected option's stable ID, not its label (see that function's own
+  // header note for why this can't be confirmed from this repo, and why no
+  // label-to-ID mapping layer is built on top of an unconfirmed guess).
+  const rawPerson = { ...fixtures.person(), id: '3001', firstname: 'Cara', lastname: 'Custom', custom_501: 'v1' };
   const client = fakeClient({ people: [rawPerson] });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
 
   const snapshot = await adapter.fetchSnapshot({ credentials: { apiKey: 'k' }, mode: 'full', customFieldIds: ['501'] });
 
   const person = snapshot.people.find((p) => p.id === '3001');
-  assert.deepEqual(person.attributes.customFields, { 501: 'Blue' });
+  assert.deepEqual(person.attributes.customFields, { 501: 'v1' });
 });
 
 test('fetchSnapshot(full) includes Active, Contact, Archived, and Deceased people — none filtered out', async () => {
@@ -381,6 +388,21 @@ test('fetchSnapshot(incremental) throws when a membership dimension page fails, 
 
 // ─── fetchMetadata delegation ────────────────────────────────────────────────
 
+function fakeStore(overrides = {}) {
+  const calls = { getConnection: [], updateMetadataCache: [] };
+  return {
+    calls,
+    async getConnection(churchId, provider) {
+      calls.getConnection.push({ churchId, provider });
+      return overrides.getConnection ? overrides.getConnection(churchId, provider) : null;
+    },
+    async updateMetadataCache(churchId, provider, metadata) {
+      calls.updateMetadataCache.push({ churchId, provider, metadata });
+      if (overrides.updateMetadataCache) return overrides.updateMetadataCache(churchId, provider, metadata);
+    },
+  };
+}
+
 test('fetchMetadata delegates to fetchElvantoMetadata using the injected client and the given snapshot', async () => {
   const client = fakeClient({ groups: [{ id: 'g-1', name: 'Youth' }] });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
@@ -389,6 +411,86 @@ test('fetchMetadata delegates to fetchElvantoMetadata using the injected client 
   const metadata = await adapter.fetchMetadata({ credentials: { apiKey: 'k' }, snapshot });
 
   assert.equal(typeof metadata.fetchedAt, 'string');
+  assert.deepEqual(metadata.groups, [{ id: 'g-1', name: 'Youth', status: null, memberCount: 0 }]);
+});
+
+test('fetchMetadata without a churchId performs a pure fetch and never touches the store (matches metadata.js\'s "no churchId, no caching" contract)', async () => {
+  const client = fakeClient({ groups: [{ id: 'g-1', name: 'Youth' }] });
+  const store = fakeStore();
+  const adapter = createElvantoAdapter({ clientFactory: () => client, store, now: () => new Date() });
+
+  await adapter.fetchMetadata({ credentials: { apiKey: 'k' }, snapshot: { people: [], families: [], skipped: [] } });
+
+  assert.equal(store.calls.getConnection.length, 0);
+  assert.equal(store.calls.updateMetadataCache.length, 0);
+});
+
+test('fetchMetadata threads churchId through to the cache write-through on a successful fetch', async () => {
+  const client = fakeClient({ groups: [{ id: 'g-1', name: 'Youth' }] });
+  const store = fakeStore();
+  const adapter = createElvantoAdapter({ clientFactory: () => client, store, now: () => new Date() });
+
+  await adapter.fetchMetadata({
+    churchId: 'church-1', credentials: { apiKey: 'k' }, snapshot: { people: [], families: [], skipped: [] },
+  });
+
+  assert.equal(store.calls.updateMetadataCache.length, 1);
+  assert.equal(store.calls.updateMetadataCache[0].churchId, 'church-1');
+  assert.equal(store.calls.updateMetadataCache[0].provider, 'elvanto');
+});
+
+// This is the review gap this file was fixed for: without churchId reaching
+// fetchElvantoMetadata, a live outage during metadata discovery always threw
+// instead of ever reaching Task 13's stale-cache fallback. This test proves
+// the fallback is reachable THROUGH THE ADAPTER, not just directly against
+// metadata.js (already covered by metadata.test.js).
+test('fetchMetadata threads churchId through so Task 13\'s stale-cache-on-outage fallback actually engages', async () => {
+  const cachedMetadata = {
+    fetchedAt: '2020-01-01T00:00:00.000Z',
+    categories: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [],
+    groups: [{ id: 'g-1', name: 'Old Group', status: null, memberCount: 0 }],
+  };
+  const store = fakeStore({
+    getConnection: async () => ({ metadata: { syncMetadata: cachedMetadata }, metadataCachedAt: '2020-01-02T00:00:00.000Z' }),
+  });
+  const client = fakeClient({ errors: { [DEFINITION_ENDPOINTS.groups.path]: new Error('Elvanto outage') } });
+  const adapter = createElvantoAdapter({ clientFactory: () => client, store, now: () => new Date() });
+
+  const result = await adapter.fetchMetadata({
+    churchId: 'church-1', credentials: { apiKey: 'k' }, snapshot: { people: [], families: [], skipped: [] },
+  });
+
+  assert.deepEqual(result, {
+    metadata: cachedMetadata,
+    stale: true,
+    refreshing: false,
+    metadataCachedAt: '2020-01-02T00:00:00.000Z',
+  });
+  assert.equal(store.calls.getConnection[0].churchId, 'church-1');
+  assert.equal(store.calls.getConnection[0].provider, 'elvanto');
+  // Never writes through a cache update on a failed fetch.
+  assert.equal(store.calls.updateMetadataCache.length, 0);
+});
+
+test('fetchMetadata propagates the original error when churchId is given, the fetch fails, and no cache exists', async () => {
+  const store = fakeStore({ getConnection: async () => null });
+  const client = fakeClient({ errors: { [DEFINITION_ENDPOINTS.groups.path]: new Error('Elvanto outage, no cache') } });
+  const adapter = createElvantoAdapter({ clientFactory: () => client, store, now: () => new Date() });
+
+  await assert.rejects(
+    () => adapter.fetchMetadata({ churchId: 'church-1', credentials: { apiKey: 'k' }, snapshot: { people: [], families: [], skipped: [] } }),
+    /Elvanto outage, no cache/
+  );
+});
+
+test('fetchMetadata accepts a force flag without erroring, matching Task 5\'s { churchId, credentials, force } contract shape (a deliberate no-op here — see the adapter\'s own inline note)', async () => {
+  const client = fakeClient({ groups: [{ id: 'g-1', name: 'Youth' }] });
+  const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
+
+  const metadata = await adapter.fetchMetadata({
+    credentials: { apiKey: 'k' }, force: true, snapshot: { people: [], families: [], skipped: [] },
+  });
+
   assert.deepEqual(metadata.groups, [{ id: 'g-1', name: 'Youth', status: null, memberCount: 0 }]);
 });
 
