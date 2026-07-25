@@ -247,6 +247,11 @@ test('only active-authority person links lock managed fields while local badges 
   await withRouteChurchDb(async (churchId) => {
     const elvantoManaged = await seedIndividual(churchId);
     const pcoOnly = await seedIndividual(churchId);
+    const managedFamily = await seedFamily(churchId, 'Managed Badge Family');
+    await Database.query(
+      `UPDATE individuals SET family_id = ? WHERE id = ? AND church_id = ?`,
+      [managedFamily, elvantoManaged, churchId]
+    );
     await linkPerson(churchId, elvantoManaged, 'elvanto', 'elvanto-managed');
     await linkPerson(churchId, elvantoManaged, 'planning_center', 'pco-also-linked');
     await linkPerson(churchId, pcoOnly, 'planning_center', 'pco-only');
@@ -266,6 +271,15 @@ test('only active-authority person links lock managed fields while local badges 
       });
       assert.strictEqual(badge.status, 200);
 
+      const productionShapeBadge = await app.request(`/api/individuals/${elvantoManaged}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          firstName: 'Test', lastName: 'Person', familyId: managedFamily,
+          peopleType: 'regular', isChild: false, badgeText: 'Production payload badge',
+        }),
+      });
+      assert.strictEqual(productionShapeBadge.status, 200);
+
       const inactiveProvider = await app.request(`/api/individuals/${pcoOnly}`, {
         method: 'PUT',
         body: JSON.stringify({ firstName: 'Locally', lastName: 'Changed' }),
@@ -277,7 +291,7 @@ test('only active-authority person links lock managed fields while local badges 
         [elvantoManaged, pcoOnly, churchId]
       );
       assert.strictEqual(rows.find((row) => row.id === elvantoManaged).first_name, 'Test');
-      assert.strictEqual(rows.find((row) => row.id === elvantoManaged).badge_text, 'Local badge');
+      assert.strictEqual(rows.find((row) => row.id === elvantoManaged).badge_text, 'Production payload badge');
       assert.strictEqual(rows.find((row) => row.id === pcoOnly).first_name, 'Locally');
     } finally {
       await app.close();
@@ -387,6 +401,45 @@ test('member moves also lock when the source or destination family is authority-
   });
 });
 
+test('merge-individuals locks an unlinked selection inherited from its source family', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const directlyManagedFamily = await seedFamily(churchId, 'Direct Family');
+    const siblingManagedFamily = await seedFamily(churchId, 'Sibling Family');
+    const directUnlinked = await seedIndividual(churchId);
+    const siblingUnlinked = await seedIndividual(churchId);
+    const linkedSibling = await seedIndividual(churchId);
+    await Database.query(
+      `UPDATE individuals SET family_id = ? WHERE id = ? AND church_id = ?`,
+      [directlyManagedFamily, directUnlinked, churchId]
+    );
+    await Database.query(
+      `UPDATE individuals SET family_id = ? WHERE id IN (?, ?) AND church_id = ?`,
+      [siblingManagedFamily, siblingUnlinked, linkedSibling, churchId]
+    );
+    await linkFamily(churchId, directlyManagedFamily, 'elvanto', 'elvanto-direct-family');
+    await linkPerson(churchId, linkedSibling, 'elvanto', 'elvanto-linked-sibling');
+    await activateAuthority(churchId, 'elvanto');
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const directFamily = await app.request('/api/families/merge-individuals', {
+        method: 'POST',
+        body: JSON.stringify({ individualIds: [directUnlinked], familyName: 'New Direct Family' }),
+      });
+      assert.strictEqual(directFamily.status, 403);
+      assert.strictEqual(directFamily.body.action, 'move-family-member');
+
+      const linkedSiblingFamily = await app.request('/api/families/merge-individuals', {
+        method: 'POST',
+        body: JSON.stringify({ individualIds: [siblingUnlinked], familyName: 'New Sibling Family' }),
+      });
+      assert.strictEqual(linkedSiblingFamily.status, 403);
+      assert.strictEqual(linkedSiblingFamily.body.action, 'move-family-member');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test('legacy planning_center_id records remain locked while Planning Center is authoritative', async () => {
   await withRouteChurchDb(async (churchId) => {
     const individualId = await Database.query(
@@ -433,6 +486,28 @@ test('people and family reads expose external links and the active manager', asy
         planning_center: 'pco-family', elvanto: 'elvanto-family',
       });
       assert.strictEqual(family.managedBy, 'elvanto');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('family DTO inherits managedBy from a managed member without fabricating family external links', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const familyId = await seedFamily(churchId, 'Inherited Manager');
+    const individualId = await seedIndividual(churchId);
+    await Database.query(
+      `UPDATE individuals SET family_id = ? WHERE id = ? AND church_id = ?`,
+      [familyId, individualId, churchId]
+    );
+    await linkPerson(churchId, individualId, 'elvanto', 'elvanto-family-member');
+    await activateAuthority(churchId, 'elvanto');
+    const app = await startPeopleRouteApp(churchId);
+    try {
+      const response = await app.request('/api/families');
+      const family = response.body.families.find((candidate) => candidate.id === familyId);
+      assert.strictEqual(family.managedBy, 'elvanto');
+      assert.deepStrictEqual(family.externalLinks, {});
     } finally {
       await app.close();
     }

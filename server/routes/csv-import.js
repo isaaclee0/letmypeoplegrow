@@ -8,15 +8,15 @@ const { body, validationResult } = require('express-validator');
 const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog, requireGatheringAccess } = require('../middleware/auth');
 const { secureFileUpload, createSecurityRateLimit, sanitizeString } = require('../middleware/security');
-const { isPcoModeActive, lockedResponse } = require('../services/planningCenter/mode');
+const { getAuthority, lockedResponse } = require('../services/peopleSync/authority');
 
-// Block creation-style imports while PCO source-of-truth mode is on. Visitors are
-// not added via CSV; new regulars must come from PCO. Existing-people updates and
-// gathering assignment changes pass through.
-async function blockImportsWhenPcoMode(req, res, next) {
+// CSV upload creates regular people, so every configured people authority owns
+// this path. Existing-people updates and gathering assignment changes pass through.
+async function blockImportsWhenAuthority(req, res, next) {
   try {
-    if (await isPcoModeActive(req.user.church_id)) {
-      return res.status(403).json(lockedResponse('CSV import of people is disabled while Planning Center is the source of truth. Add members in PCO.'));
+    const { active } = await getAuthority(req.user.church_id);
+    if (active !== 'none') {
+      return res.status(403).json(lockedResponse(active, 'import'));
     }
     next();
   } catch (e) { next(e); }
@@ -46,7 +46,7 @@ router.use(verifyToken);
 router.post('/upload/:gatheringId',
   requireRole(['admin', 'coordinator']),
   requireGatheringAccess,
-  blockImportsWhenPcoMode,
+  blockImportsWhenAuthority,
   createSecurityRateLimit(15 * 60 * 1000, 5), // 5 uploads per 15 minutes
   upload.single('csvFile'),
   secureFileUpload(['text/csv'], 5 * 1024 * 1024), // 5MB limit
@@ -270,7 +270,7 @@ router.get('/template', verifyToken, async (req, res) => {
 // Copy & Paste import with optional service assignment
 router.post('/copy-paste{/:gatheringId}',
   requireRole(['admin', 'coordinator']),
-  blockImportsWhenPcoMode,
+  blockImportsWhenAuthority,
   createSecurityRateLimit(15 * 60 * 1000, 10), // 10 imports per 15 minutes
   auditLog('COPY_PASTE_IMPORT'),
   async (req, res) => {
@@ -1089,4 +1089,4 @@ router.post('/update-existing',
   }
 );
 
-module.exports = router; 
+module.exports = router;

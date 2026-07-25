@@ -9,6 +9,7 @@ const {
   commitAuthoritySwitch,
   disableAuthority,
   getManagedLinks,
+  getManagedFamilyIds,
   isPersonLocked,
   lockedResponse,
 } = require('./authority');
@@ -88,6 +89,45 @@ test('requesting the active provider cancels a pending authority switch', async 
   });
 });
 
+test('a competing begin waits for commit so commit cannot report success after losing its pending provider', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await beginAuthoritySwitch(churchId, 'elvanto');
+
+    const originalExecute = Database._executeQuery;
+    let releaseCommitRead;
+    const commitReadGate = new Promise((resolve) => { releaseCommitRead = resolve; });
+    let commitReadReached;
+    const commitReadReachedPromise = new Promise((resolve) => { commitReadReached = resolve; });
+    let held = false;
+    Database._executeQuery = async function(db, sql, params) {
+      const result = await originalExecute.call(this, db, sql, params);
+      if (!held && /SELECT pending_authority_provider[\s\S]*FROM people_sync_settings/.test(sql)) {
+        held = true;
+        commitReadReached();
+        await commitReadGate;
+      }
+      return result;
+    };
+
+    try {
+      const commitPromise = commitAuthoritySwitch(churchId, 'elvanto');
+      await commitReadReachedPromise;
+      const competingBegin = beginAuthoritySwitch(churchId, 'planning_center');
+      await new Promise((resolve) => setImmediate(resolve));
+      releaseCommitRead();
+
+      assert.deepEqual(await commitPromise, { active: 'elvanto', pending: null });
+      await competingBegin;
+      assert.deepEqual(await getAuthority(churchId), {
+        active: 'elvanto', pending: 'planning_center',
+      });
+    } finally {
+      Database._executeQuery = originalExecute;
+      releaseCommitRead();
+    }
+  });
+});
+
 test('managed link reads include both providers and the temporary legacy PCO fallback', async () => {
   await withTestChurchDb(async (churchId) => {
     const both = await seedIndividual(churchId, { firstName: 'Both' });
@@ -102,6 +142,46 @@ test('managed link reads include both providers and the temporary legacy PCO fal
     assert.deepEqual([...links.get(elvantoOnly)], ['elvanto']);
     assert.deepEqual([...links.get(legacyPco)], ['planning_center']);
     assert.equal(links.has(9999), false);
+  });
+});
+
+test('managed family ids include direct family links and inherited member links only for the active provider', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const direct = await Database.query(
+      `INSERT INTO families (church_id, family_name) VALUES (?, 'Direct')`, [churchId]
+    );
+    const inherited = await Database.query(
+      `INSERT INTO families (church_id, family_name) VALUES (?, 'Inherited')`, [churchId]
+    );
+    const inactiveProvider = await Database.query(
+      `INSERT INTO families (church_id, family_name) VALUES (?, 'Inactive Provider')`, [churchId]
+    );
+    const member = await seedIndividual(churchId, { firstName: 'Managed Member' });
+    await Database.query(
+      `UPDATE individuals SET family_id = ? WHERE id = ? AND church_id = ?`,
+      [inherited.insertId, member, churchId]
+    );
+    await Database.query(
+      `INSERT INTO external_family_links
+         (church_id, provider, external_family_id, family_id, link_source)
+       VALUES (?, 'elvanto', 'elvanto-family', ?, 'matched')`,
+      [churchId, direct.insertId]
+    );
+    await Database.query(
+      `INSERT INTO external_family_links
+         (church_id, provider, external_family_id, family_id, link_source)
+       VALUES (?, 'planning_center', 'pco-family', ?, 'matched')`,
+      [churchId, inactiveProvider.insertId]
+    );
+    await linkPerson(churchId, member, 'elvanto', 'elvanto-member');
+
+    const managed = await getManagedFamilyIds(
+      churchId,
+      [direct.insertId, inherited.insertId, inactiveProvider.insertId],
+      'elvanto'
+    );
+    assert.deepEqual([...managed].sort((a, b) => a - b),
+      [Number(direct.insertId), Number(inherited.insertId)]);
   });
 });
 

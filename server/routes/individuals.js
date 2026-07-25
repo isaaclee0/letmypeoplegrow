@@ -7,10 +7,11 @@ const { processApiResponse } = require('../utils/caseConverter');
 const {
   getAuthority,
   getManagedLinks,
+  getManagedFamilyIds,
   isPersonLocked,
   lockedResponse,
 } = require('../services/peopleSync/authority');
-const { listPersonLinks, listFamilyLinks } = require('../services/peopleSync/linkRepository');
+const { listPersonLinks } = require('../services/peopleSync/linkRepository');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -54,38 +55,7 @@ async function getPersonAuthorityLock(churchId, individualIds) {
 
 async function getFamilyMembershipAuthorityLock(churchId, familyIds, active) {
   const ids = [...new Set((familyIds || []).map(Number).filter(Number.isInteger))];
-  const lockedFamilyIds = new Set();
-  if (active === 'none' || ids.length === 0) {
-    return () => false;
-  }
-  const directLinks = await listFamilyLinks(churchId, active);
-  const idSet = new Set(ids);
-  for (const link of directLinks) {
-    if (idSet.has(link.familyId)) lockedFamilyIds.add(link.familyId);
-  }
-  const placeholders = ids.map(() => '?').join(',');
-  const [members, legacyFamilies] = await Promise.all([
-    Database.query(
-      `SELECT id, family_id FROM individuals
-        WHERE church_id = ? AND family_id IN (${placeholders})`,
-      [churchId, ...ids]
-    ),
-    active === 'planning_center'
-      ? Database.query(
-        `SELECT id FROM families
-          WHERE church_id = ? AND id IN (${placeholders})
-            AND planning_center_id IS NOT NULL AND planning_center_id <> ''`,
-        [churchId, ...ids]
-      )
-      : [],
-  ]);
-  for (const family of legacyFamilies) lockedFamilyIds.add(Number(family.id));
-  const memberLinks = await getManagedLinks(churchId, members.map((member) => Number(member.id)));
-  for (const member of members) {
-    if (isPersonLocked(active, memberLinks.get(Number(member.id)))) {
-      lockedFamilyIds.add(Number(member.family_id));
-    }
-  }
+  const lockedFamilyIds = await getManagedFamilyIds(churchId, ids, active);
   return (familyId) => lockedFamilyIds.has(Number(familyId));
 }
 
@@ -97,6 +67,22 @@ function restoreProviderLinkKeys(people) {
     }
   }
   return people;
+}
+
+function normalizeFamilyId(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : value;
+}
+
+function hasManagedPersonChanges(current, submitted) {
+  if (Object.hasOwn(submitted, 'firstName') && submitted.firstName !== current.first_name) return true;
+  if (Object.hasOwn(submitted, 'lastName') && submitted.lastName !== current.last_name) return true;
+  if (Object.hasOwn(submitted, 'familyId') &&
+      normalizeFamilyId(submitted.familyId) !== normalizeFamilyId(current.family_id)) return true;
+  if (Object.hasOwn(submitted, 'peopleType') && submitted.peopleType !== current.people_type) return true;
+  if (Object.hasOwn(submitted, 'isChild') && Boolean(submitted.isChild) !== Boolean(current.is_child)) return true;
+  return false;
 }
 
 // GROUP_CONCAT(DISTINCT gt.id) and GROUP_CONCAT(DISTINCT gt.name) as separate
@@ -403,7 +389,8 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType, isChild, badgeText, badgeColor, badgeIcon });
 
     const currentIndividual = await Database.query(
-      'SELECT family_id FROM individuals WHERE id = ? AND church_id = ?',
+      `SELECT first_name, last_name, family_id, people_type, is_child
+         FROM individuals WHERE id = ? AND church_id = ?`,
       [id, req.user.church_id]
     );
 
@@ -413,13 +400,14 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
 
     const oldFamilyId = currentIndividual[0].family_id;
     const newFamilyId = familyId !== undefined ? familyId : oldFamilyId;
+    const familyChanged = Object.hasOwn(req.body, 'familyId') &&
+      normalizeFamilyId(familyId) !== normalizeFamilyId(oldFamilyId);
 
     const lock = await getPersonAuthorityLock(req.user.church_id, [Number(id)]);
-    const managedFields = ['firstName', 'lastName', 'familyId', 'peopleType', 'isChild'];
-    if (lock.isLocked(id) && managedFields.some((field) => Object.hasOwn(req.body, field))) {
+    if (lock.isLocked(id) && hasManagedPersonChanges(currentIndividual[0], req.body)) {
       return res.status(403).json(lockedResponse(lock.active, 'update'));
     }
-    if (Object.hasOwn(req.body, 'familyId')) {
+    if (familyChanged) {
       const isFamilyLocked = await getFamilyMembershipAuthorityLock(
         req.user.church_id,
         [oldFamilyId, newFamilyId],

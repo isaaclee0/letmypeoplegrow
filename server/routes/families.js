@@ -5,6 +5,7 @@ const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const {
   getAuthority,
   getManagedLinks,
+  getManagedFamilyIds,
   isPersonLocked,
   lockedResponse,
 } = require('../services/peopleSync/authority');
@@ -17,9 +18,10 @@ router.use(ensureChurchIsolation);
 const PEOPLE_SYNC_PROVIDERS = ['planning_center', 'elvanto'];
 
 async function addFamilyAuthorityMetadata(churchId, families) {
-  const [{ active }, providerLinks] = await Promise.all([
-    getAuthority(churchId),
+  const { active } = await getAuthority(churchId);
+  const [providerLinks, managedFamilyIds] = await Promise.all([
     Promise.all(PEOPLE_SYNC_PROVIDERS.map((provider) => listFamilyLinks(churchId, provider))),
+    getManagedFamilyIds(churchId, families.map((family) => Number(family.id)), active),
   ]);
   const linksByFamily = new Map();
   for (const link of providerLinks.flat()) {
@@ -35,7 +37,7 @@ async function addFamilyAuthorityMetadata(churchId, families) {
     return {
       ...family,
       externalLinks,
-      managedBy: active !== 'none' && externalLinks[active] ? active : null,
+      managedBy: managedFamilyIds.has(id) ? active : null,
     };
   });
 }
@@ -43,35 +45,7 @@ async function addFamilyAuthorityMetadata(churchId, families) {
 async function getFamilyAuthorityLocks(churchId, familyIds) {
   const ids = [...new Set((familyIds || []).map(Number).filter(Number.isInteger))];
   const { active } = await getAuthority(churchId);
-  const lockedFamilyIds = new Set();
-  if (active === 'none' || ids.length === 0) {
-    return { active, isLocked: () => false };
-  }
-  const placeholders = ids.map(() => '?').join(',');
-  const [familyLinks, members] = await Promise.all([
-    Database.query(
-      `SELECT f.id
-         FROM families f
-         LEFT JOIN external_family_links efl
-           ON efl.family_id = f.id AND efl.church_id = f.church_id AND efl.provider = ?
-        WHERE f.church_id = ? AND f.id IN (${placeholders})
-          AND (efl.id IS NOT NULL OR (? = 'planning_center'
-            AND f.planning_center_id IS NOT NULL AND f.planning_center_id <> ''))`,
-      [active, churchId, ...ids, active]
-    ),
-    Database.query(
-      `SELECT id, family_id FROM individuals
-        WHERE church_id = ? AND family_id IN (${placeholders})`,
-      [churchId, ...ids]
-    ),
-  ]);
-  for (const row of familyLinks) lockedFamilyIds.add(Number(row.id));
-  const memberLinks = await getManagedLinks(churchId, members.map((member) => Number(member.id)));
-  for (const member of members) {
-    if (isPersonLocked(active, memberLinks.get(Number(member.id)))) {
-      lockedFamilyIds.add(Number(member.family_id));
-    }
-  }
+  const lockedFamilyIds = await getManagedFamilyIds(churchId, ids, active);
   return { active, isLocked: (id) => lockedFamilyIds.has(Number(id)) };
 }
 
@@ -447,6 +421,21 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
     const managed = await getManagedLinks(req.user.church_id, individualIds);
     if (individualIds.some((id) => isPersonLocked(active, managed.get(Number(id))))) {
       return res.status(403).json(lockedResponse(active, 'merge'));
+    }
+    const selectedPeople = await Database.query(
+      `SELECT family_id FROM individuals WHERE church_id = ? AND id IN (?)`,
+      [req.user.church_id, individualIds]
+    );
+    const sourceFamilyIds = selectedPeople
+      .map((person) => Number(person.family_id))
+      .filter(Number.isInteger);
+    const managedSourceFamilies = await getManagedFamilyIds(
+      req.user.church_id,
+      sourceFamilyIds,
+      active
+    );
+    if (managedSourceFamilies.size > 0) {
+      return res.status(403).json(lockedResponse(active, 'move-family-member'));
     }
 
     if (!familyName) {
