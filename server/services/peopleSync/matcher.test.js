@@ -69,6 +69,16 @@ test('does not auto-match on email because local people do not model it', () => 
   assert.deepEqual(result.unmatchedLocalIds, [1]);
 });
 
+test('does not auto-match on a shared custom identifier', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e1', 'Different', 'Name', { customId: 'church-123' })],
+    localPeople: [local(1, 'Local', 'Person', { customId: 'church-123' })],
+  }));
+
+  assert.deepEqual(result.unmatchedExternalIds, ['e1']);
+  assert.deepEqual(result.unmatchedLocalIds, [1]);
+});
+
 test('uses known child state to narrow an otherwise duplicate name', () => {
   const result = matchPeople(input({
     externalPeople: [external('e1', 'Sam', 'Lee', { child: true })],
@@ -172,6 +182,37 @@ test('does not let same-name visitor or archived records prevent a regular match
   assert.deepEqual(result.archivedMatches, []);
 });
 
+test('keeps a same-name visitor and archived person together for review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e1', 'Robin', 'Review')],
+    localPeople: [
+      local(1, 'Robin', 'Review', { peopleType: 'local_visitor' }),
+      local(2, 'Robin', 'Review', { isActive: false }),
+    ],
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'e1', candidateIndividualIds: [1, 2], reason: 'review_candidates',
+  }]);
+  assert.deepEqual(result.visitorMatches, []);
+  assert.deepEqual(result.archivedMatches, []);
+});
+
+test('keeps multiple visitors and an archived person together for review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e1', 'Robin', 'Review')],
+    localPeople: [
+      local(1, 'Robin', 'Review', { peopleType: 'local_visitor' }),
+      local(2, 'Robin', 'Review', { peopleType: 'traveller_visitor' }),
+      local(3, 'Robin', 'Review', { isActive: false }),
+    ],
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'e1', candidateIndividualIds: [1, 2, 3], reason: 'review_candidates',
+  }]);
+});
+
 test('never reuses duplicate durable-link candidates', () => {
   const result = matchPeople(input({
     externalPeople: [external('e-a', 'A', 'Person'), external('e-b', 'B', 'Person')],
@@ -187,6 +228,64 @@ test('never reuses duplicate durable-link candidates', () => {
   }, {
     externalPersonId: 'e-b', candidateIndividualIds: [1], reason: 'conflicting_existing_link',
   }]);
+});
+
+test('surfaces a stale durable link instead of falling back to a name match', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e1', 'Sarah', 'Jones')],
+    localPeople: [local(1, 'Sarah', 'Jones')],
+    existingLinks: [{ externalPersonId: 'e1', individualId: 99 }],
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'e1', candidateIndividualIds: [99], reason: 'stale_link',
+  }]);
+  assert.deepEqual(result.matches, []);
+});
+
+test('surfaces mixed stale and valid durable-link claims for review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e1', 'Sarah', 'Jones')],
+    localPeople: [local(1, 'Sarah', 'Jones')],
+    existingLinks: [
+      { externalPersonId: 'e1', individualId: 1 }, { externalPersonId: 'e1', individualId: 99 },
+    ],
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'e1', candidateIndividualIds: [1, 99], reason: 'stale_link',
+  }]);
+  assert.deepEqual(result.linked, []);
+});
+
+test('keeps reciprocal contention ambiguous instead of assigning one local by external sort order', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('e-b', 'Alex', 'Lee'), external('e-a', 'Alex', 'Lee')],
+    localPeople: [local(1, 'Alex', 'Lee')],
+  }));
+
+  assert.deepEqual(result.matches, []);
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'e-a', candidateIndividualIds: [1], reason: 'contended_unique_name',
+  }, {
+    externalPersonId: 'e-b', candidateIndividualIds: [1], reason: 'contended_unique_name',
+  }]);
+});
+
+test('keeps conflicting duplicate external records review-safe after input reordering', () => {
+  const first = input({
+    externalPeople: [external('e1', 'Alex', 'Lee'), external('e1', 'Blair', 'Lee')],
+    localPeople: [local(1, 'Alex', 'Lee'), local(2, 'Blair', 'Lee')],
+  });
+  const second = input({ ...first, externalPeople: [...first.externalPeople].reverse() });
+  const expected = {
+    ...emptyResult(),
+    ambiguous: [{ externalPersonId: 'e1', candidateIndividualIds: [], reason: 'duplicate_external_id' }],
+    unmatchedLocalIds: [1, 2],
+  };
+
+  assert.deepEqual(matchPeople(first), expected);
+  assert.deepEqual(matchPeople(second), expected);
 });
 
 test('orders results deterministically and never matches blank names', () => {

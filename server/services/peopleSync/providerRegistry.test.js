@@ -53,3 +53,28 @@ test('registerProvider rejects a mismatched adapter provider', () => {
     { message: 'Adapter provider mismatch: elvanto-secondary' }
   );
 });
+
+for (const method of ['validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible']) {
+  test(`validateAdapter rejects a missing ${method} method`, () => {
+    const incomplete = adapter('planning_center', { [method]: undefined });
+
+    assert.throws(
+      () => validateAdapter(incomplete),
+      { message: `Provider planning_center missing ${method}` }
+    );
+  });
+}
+
+test('registerProvider only accepts the two supported provider names', () => {
+  assert.throws(
+    () => registerProvider('test_provider', adapter('test_provider')),
+    { message: 'Unsupported provider: test_provider' }
+  );
+});
+
+test('validateAdapter rejects extra keys so test-only APIs cannot enter production', () => {
+  assert.throws(
+    () => validateAdapter(adapter('planning_center', { resetForTests() {} })),
+    { message: 'Provider planning_center has unexpected resetForTests' }
+  );
+});
