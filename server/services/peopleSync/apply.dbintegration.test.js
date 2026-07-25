@@ -484,27 +484,52 @@ test('moveFamily rejects a family id from another church', async () => {
   });
 });
 
-test('addPeople rejects a familyId that does not belong to this church', async () => {
+test('addPeople.familyId is the EXTERNAL household id and resolves through external_family_links when linked', async () => {
   await withTestChurchDb(async (churchId) => {
-    const otherChurchId = `${churchId}_other`;
-    Database.getChurchDb(otherChurchId);
-    await Database.queryForChurch(otherChurchId, `INSERT INTO church_settings (church_id, church_name) VALUES (?, 'Other')`, [otherChurchId]);
-    const otherFamilyId = await Database.queryForChurch(
-      otherChurchId, `INSERT INTO families (church_id, family_name) VALUES (?, 'Other Family')`, [otherChurchId]
-    ).then((r) => Number(r.insertId));
+    const familyId = await seedFamily(churchId, 'Lovelace Household');
+    await Database.query(
+      `INSERT INTO external_family_links (church_id, provider, external_family_id, family_id, link_source)
+       VALUES (?, 'elvanto', 'external-a', ?, 'matched')`,
+      [churchId, familyId]
+    );
 
-    await assert.rejects(applyPeopleSyncPlan({
+    const result = await applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({
         addPeople: [{
-          id: 'addPeople:x', externalPersonId: 'ext-1', firstName: 'A', lastName: 'B',
-          isChild: false, familyId: otherFamilyId, peopleType: 'regular',
+          // A non-numeric external household id — exactly the shape
+          // plan.js/matcher.js produce (externalPerson.familyId), never a
+          // local families.id.
+          id: 'addPeople:x', externalPersonId: 'ext-1', firstName: 'Ada', lastName: 'Lovelace',
+          isChild: false, familyId: 'external-a', peopleType: 'regular',
         }],
       }),
-    }), /outside this church/i);
+    });
 
-    const { individuals } = await counts(churchId);
-    assert.equal(individuals, 0);
+    assert.equal(result.addPeople, 1);
+    const [row] = await Database.query('SELECT family_id FROM individuals WHERE church_id = ?', [churchId]);
+    assert.equal(row.family_id, familyId);
+  });
+});
+
+test('addPeople.familyId with no matching external_family_links row leaves the person family-less, not an error', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto',
+      plan: emptyPlan({
+        addPeople: [{
+          id: 'addPeople:x', externalPersonId: 'ext-1', firstName: 'Ada', lastName: 'Lovelace',
+          isChild: false, familyId: 'external-unlinked', peopleType: 'regular',
+        }],
+      }),
+    });
+
+    assert.equal(result.addPeople, 1);
+    const [row] = await Database.query('SELECT family_id FROM individuals WHERE church_id = ?', [churchId]);
+    assert.equal(row.family_id, null);
+    // Apply must never invent a family (or a family name) on this path.
+    const { families } = await counts(churchId);
+    assert.equal(families, 0);
   });
 });
 

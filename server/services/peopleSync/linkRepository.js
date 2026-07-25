@@ -124,6 +124,23 @@ async function upsertFamilyLinkWithConnection(conn, input) {
     FROM external_family_links WHERE id = ? AND church_id = ? AND provider = ?`, [result.insertId, churchId, provider]))[0];
 }
 
+// Resolves an external provider's household/family id to the local family it
+// is already linked to, scoped to this church and provider. Returns null
+// when no such link exists yet — callers (e.g. apply.js when creating a new
+// person whose external record carries a household id nobody has linked to
+// a local family yet) must treat that as "no family", never as an error and
+// never as license to invent one.
+async function findFamilyIdByExternalId(conn, churchId, provider, externalFamilyId) {
+  assertProvider(provider);
+  if (!churchId || !externalFamilyId) return null;
+  const rows = await conn.query(
+    `SELECT family_id FROM external_family_links
+      WHERE church_id = ? AND provider = ? AND external_family_id = ?`,
+    [churchId, provider, String(externalFamilyId)]
+  );
+  return rows[0] ? rows[0].family_id : null;
+}
+
 async function upsertPersonLink(input) {
   return Database.transaction(async (conn) => toPersonLink(await upsertPersonLinkWithConnection(conn, input)));
 }
@@ -177,6 +194,7 @@ module.exports = {
   upsertFamilyLinkWithConnection,
   markPeopleSeen,
   recordFullFetchPresence,
+  findFamilyIdByExternalId,
   // Exported so apply.js (Task 7) can defend against a plan/selection
   // referencing a family or individual ID that belongs to a different
   // church — the same church-ownership check this module already relies

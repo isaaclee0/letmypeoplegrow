@@ -32,6 +32,16 @@ function toPositiveInt(value, label) {
   return id;
 }
 
+// The returned result object shares summarizePlan's bucket KEYS, but each
+// count means "actions actually applied this call", not "plan bucket size" —
+// the two can and do diverge. Review-only buckets (ambiguousPeople,
+// familyConflicts, unmatchedLocalRegulars, skipped) always stay 0 here since
+// apply never mutates anything directly off them; their resolutions surface
+// through other counters instead (e.g. an accepted ambiguousPeople selection
+// increments linkPeople, not ambiguousPeople). linkPeople itself can be
+// LARGER than plan.linkPeople.length (accepted ambiguous/visitor selections
+// add extra links not counted in that array) or SMALLER (a reviewRequired
+// linkPeople suggestion nobody accepted this call contributes 0).
 function emptyResult() {
   const result = {};
   for (const bucket of BUCKETS) result[bucket] = 0;
@@ -287,10 +297,15 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       result.addFamilies++;
     }
 
-    // 4. New people. familyId, if present, must already be an existing
-    // local family belonging to this church (validated below) — apply
-    // never invents a family or a family name for a newly added person; a
-    // null familyId simply leaves the individual family-less.
+    // 4. New people. IMPORTANT: action.familyId here is the EXTERNAL
+    // provider's household/family id (see plan.js's
+    // `familyId: externalPerson.familyId ?? null` — the same raw value
+    // matcher.js treats as an external-side key throughout), NOT a local
+    // families.id. Resolve it through external_family_links, scoped to this
+    // church and provider; if that household hasn't been linked to a local
+    // family, leave the new person family-less. Apply never invents a
+    // family (or a name for one) on this path — that stays reserved for an
+    // explicit addFamilies action carrying a reviewed name.
     const newIndividualIdByExternal = new Map();
     for (const action of asArray(plan.addPeople)) {
       if (accepted.skipExternalPersonIds.has(action.externalPersonId)) continue;
@@ -298,8 +313,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       if (!PEOPLE_TYPES.has(peopleType)) throw new Error(`addPeople action ${action.id} has an invalid people type`);
       let familyId = null;
       if (action.familyId !== null && action.familyId !== undefined) {
-        familyId = toPositiveInt(action.familyId, 'addPeople familyId');
-        await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
+        familyId = await linkRepository.findFamilyIdByExternalId(conn, churchId, provider, action.familyId);
       }
       const insertResult = await conn.query(
         `INSERT INTO individuals
@@ -388,8 +402,15 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       result.reactivate++;
     }
 
-    // 9. Move family (defensive/forward-compatible — plan.js does not
-    // populate this bucket yet). familyId must already belong to this church.
+    // 9. Move family. SPECULATIVE / UNVALIDATED: unlike linkFamilies,
+    // addFamilies, and renameFamily (which read reasonably off the plan.js
+    // spec even though plan.js doesn't populate them yet either), moveFamily
+    // has no anchor in plan.js or in any spec text at all — there is no
+    // producer for this bucket and no shape documented anywhere. The handling
+    // below (and its dbintegration test) is only this author's guess at what
+    // a future "move an individual to a different existing family" action
+    // might look like; do not treat the synthetic test as proof the real
+    // contract matches once a producer for this bucket actually exists.
     for (const action of asArray(plan.moveFamily)) {
       const familyId = toPositiveInt(action.familyId, 'moveFamily familyId');
       await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
@@ -436,12 +457,20 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // 12. Gathering roster removals. A sync batch may only ever remove a
     // roster row that carries its OWN provenance (added_by_sync_batch_id =
     // this action's batchId) — manual rows (NULL) and other batches' rows
-    // never match that WHERE clause. As a second, redundant safety net on
-    // top of plan.js's own eligibility computation, also skip deleting any
-    // (gatheringTypeId, individualId) pair that this SAME plan's own
-    // addToGathering set says should remain — protects against a stale or
-    // internally-inconsistent plan even though a correctly-computed plan
-    // never proposes both for the same pair.
+    // never match that WHERE clause.
+    //
+    // The actual correctness guarantee that "another enabled batch still
+    // qualifying this person keeps them on the roster" comes from plan.js's
+    // addGatheringActions/remainsEligible, which already checks eligibility
+    // across ALL enabled batches targeting this gathering before it ever
+    // proposes a removal (see plan.js) — apply itself has no independent way
+    // to re-derive batch eligibility (that requires live provider data plan
+    // computation already folded in). The `staying` check below is only
+    // belt-and-braces on top of that: it catches this SAME plan proposing a
+    // contradictory addToGathering for the same pair, not a scenario apply
+    // could detect on its own. If a future orchestrator ever computes a
+    // single-batch (not combined) plan, this check alone would NOT be
+    // sufficient to protect a row another batch's plan still wants kept.
     const staying = new Set(asArray(plan.addToGathering).map((a) => {
       const individualId = a.individualId ?? newIndividualIdByExternal.get(a.externalPersonId);
       return `${a.gatheringTypeId}:${individualId}`;
