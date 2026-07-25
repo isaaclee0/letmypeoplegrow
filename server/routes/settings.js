@@ -2,6 +2,7 @@ const express = require('express');
 const https = require('https');
 const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const { getAuthority } = require('../services/peopleSync/authority');
 
 const router = express.Router();
 router.use(verifyToken);
@@ -508,14 +509,27 @@ router.put('/weekly-review', requireRole(['admin']), async (req, res) => {
 // new exposure. Write stays admin-only below.
 router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, res) => {
   try {
-    const rows = await Database.query(
-      `SELECT planning_center_sync_indicator, planning_center_sync_enabled, planning_center_track_background_checks
-       FROM church_settings WHERE church_id = ? LIMIT 1`,
-      [req.user.church_id]
-    );
+    const [rows, authorityRows, authority] = await Promise.all([
+      Database.query(
+        `SELECT planning_center_sync_enabled, planning_center_track_background_checks
+           FROM church_settings WHERE church_id = ? LIMIT 1`,
+        [req.user.church_id]
+      ),
+      Database.query(
+        `SELECT elvanto_include_contacts, elvanto_align_people_type
+           FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+        [req.user.church_id]
+      ),
+      getAuthority(req.user.church_id),
+    ]);
     const row = rows[0] || {};
+    const syncSettings = authorityRows[0] || {};
     res.json({
-      planningCenterSyncIndicator: !!(row.planning_center_sync_indicator),
+      authorityProvider: authority.active,
+      pendingAuthorityProvider: authority.pending,
+      elvantoIncludeContacts: !!syncSettings.elvanto_include_contacts,
+      elvantoAlignPeopleType: !!syncSettings.elvanto_align_people_type,
+      planningCenterSyncIndicator: authority.active === 'planning_center',
       planningCenterSyncEnabled: !!(row.planning_center_sync_enabled),
       planningCenterTrackBackgroundChecks: !!(row.planning_center_track_background_checks),
     });
@@ -543,10 +557,27 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
     }
     if (updates.length) {
       params.push(req.user.church_id);
-      await Database.query(
-        `UPDATE church_settings SET ${updates.join(', ')} WHERE church_id = ?`,
-        params
-      );
+      await Database.transaction(async (conn) => {
+        await conn.query(
+          `UPDATE church_settings SET ${updates.join(', ')} WHERE church_id = ?`,
+          params
+        );
+        // Temporary compatibility bridge for the existing PCO settings UI.
+        // Task 21 removes this direct activation path after reviewed authority
+        // switching is available to every client.
+        if (typeof planningCenterSyncIndicator === 'boolean') {
+          await conn.query(
+            `INSERT INTO people_sync_settings
+               (church_id, authority_provider, pending_authority_provider)
+             VALUES (?, ?, NULL)
+             ON CONFLICT(church_id) DO UPDATE SET
+               authority_provider = excluded.authority_provider,
+               pending_authority_provider = NULL,
+               updated_at = datetime('now')`,
+            [req.user.church_id, planningCenterSyncIndicator ? 'planning_center' : 'none']
+          );
+        }
+      });
     }
     res.json({ message: 'Integration settings updated.' });
   } catch (error) {

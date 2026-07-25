@@ -55,6 +55,15 @@ async function listPersonLinks(churchId, provider) {
   return rows.map(toPersonLink);
 }
 
+async function listFamilyLinks(churchId, provider) {
+  assertProvider(provider);
+  const rows = await Database.queryForChurch(churchId, `SELECT id, church_id, provider,
+      external_family_id, family_id, link_source, linked_at, last_seen_at
+    FROM external_family_links
+    WHERE church_id = ? AND provider = ? ORDER BY id`, [churchId, provider]);
+  return rows.map(toFamilyLink);
+}
+
 async function assertLocalRecord(conn, table, id, churchId) {
   const rows = await conn.query(`SELECT id FROM ${table} WHERE id = ? AND church_id = ?`, [id, churchId]);
   if (!rows[0]) throw new Error(`Cannot link a ${table} record outside this church`);
@@ -161,6 +170,7 @@ async function recordFullFetchPresence(churchId, provider, seenExternalIds, { co
 
 module.exports = {
   listPersonLinks,
+  listFamilyLinks,
   upsertPersonLink,
   upsertPersonLinkWithConnection,
   upsertFamilyLink,

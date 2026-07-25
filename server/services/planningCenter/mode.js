@@ -1,8 +1,4 @@
-// Helpers for the PCO source-of-truth mode.
-//
-// Mode is "active" for a church when church_settings.planning_center_sync_indicator = 1.
-// This is the same signal that drives the "PCO" badge on the People page, so the
-// lock and the badge stay consistent.
+// Temporary PCO compatibility adapter over provider-neutral people authority.
 //
 // While mode is active:
 //   - linked individuals (planning_center_id set) become read-only for name/age
@@ -11,19 +7,12 @@
 //   - sync converges LMPG's regular population to PCO.
 
 const Database = require('../../config/database');
+const { getAuthority } = require('../peopleSync/authority');
 
 const PCO_MODE_LOCKED = 'PCO_MODE_LOCKED';
 
-// Per-church mode flag. Reads church_settings within the current AsyncLocalStorage
-// church context, so the caller must already be inside a request (or a
-// Database.setChurchContext block).
 async function isPcoModeActive(churchId) {
-  const rows = await Database.query(
-    `SELECT planning_center_sync_indicator AS ind
-       FROM church_settings WHERE church_id = ? LIMIT 1`,
-    [churchId]
-  );
-  return rows.length > 0 && !!rows[0].ind;
+  return (await getAuthority(churchId)).active === 'planning_center';
 }
 
 // Per-church flag for the background-check status feature. Independent of

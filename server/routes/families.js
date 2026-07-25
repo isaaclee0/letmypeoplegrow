@@ -3,14 +3,77 @@ const Database = require('../config/database');
 const { verifyToken, requireRole, auditLog } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const {
-  isPcoModeActive,
-  isIndividualLocked,
+  getAuthority,
+  getManagedLinks,
+  isPersonLocked,
   lockedResponse,
-} = require('../services/planningCenter/mode');
+} = require('../services/peopleSync/authority');
+const { listFamilyLinks } = require('../services/peopleSync/linkRepository');
 
 const router = express.Router();
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
+
+const PEOPLE_SYNC_PROVIDERS = ['planning_center', 'elvanto'];
+
+async function addFamilyAuthorityMetadata(churchId, families) {
+  const [{ active }, providerLinks] = await Promise.all([
+    getAuthority(churchId),
+    Promise.all(PEOPLE_SYNC_PROVIDERS.map((provider) => listFamilyLinks(churchId, provider))),
+  ]);
+  const linksByFamily = new Map();
+  for (const link of providerLinks.flat()) {
+    if (!linksByFamily.has(link.familyId)) linksByFamily.set(link.familyId, {});
+    linksByFamily.get(link.familyId)[link.provider] = link.externalFamilyId;
+  }
+  return families.map((family) => {
+    const id = Number(family.id);
+    const externalLinks = { ...(linksByFamily.get(id) || {}) };
+    if (!externalLinks.planning_center && family.planningCenterId) {
+      externalLinks.planning_center = family.planningCenterId;
+    }
+    return {
+      ...family,
+      externalLinks,
+      managedBy: active !== 'none' && externalLinks[active] ? active : null,
+    };
+  });
+}
+
+async function getFamilyAuthorityLocks(churchId, familyIds) {
+  const ids = [...new Set((familyIds || []).map(Number).filter(Number.isInteger))];
+  const { active } = await getAuthority(churchId);
+  const lockedFamilyIds = new Set();
+  if (active === 'none' || ids.length === 0) {
+    return { active, isLocked: () => false };
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const [familyLinks, members] = await Promise.all([
+    Database.query(
+      `SELECT f.id
+         FROM families f
+         LEFT JOIN external_family_links efl
+           ON efl.family_id = f.id AND efl.church_id = f.church_id AND efl.provider = ?
+        WHERE f.church_id = ? AND f.id IN (${placeholders})
+          AND (efl.id IS NOT NULL OR (? = 'planning_center'
+            AND f.planning_center_id IS NOT NULL AND f.planning_center_id <> ''))`,
+      [active, churchId, ...ids, active]
+    ),
+    Database.query(
+      `SELECT id, family_id FROM individuals
+        WHERE church_id = ? AND family_id IN (${placeholders})`,
+      [churchId, ...ids]
+    ),
+  ]);
+  for (const row of familyLinks) lockedFamilyIds.add(Number(row.id));
+  const memberLinks = await getManagedLinks(churchId, members.map((member) => Number(member.id)));
+  for (const member of members) {
+    if (isPersonLocked(active, memberLinks.get(Number(member.id)))) {
+      lockedFamilyIds.add(Number(member.family_id));
+    }
+  }
+  return { active, isLocked: (id) => lockedFamilyIds.has(Number(id)) };
+}
 
 // Assign every individual in `individualIds` to the union of gathering types
 // any of them already belonged to (used when merging individuals/families so
@@ -53,18 +116,18 @@ router.get('/', async (req, res) => {
         ORDER BY f.family_name
       `, [req.user.church_id]),
       Database.query(
-        `SELECT planning_center_sync_indicator, planning_center_track_background_checks FROM church_settings WHERE church_id = ? LIMIT 1`,
+        `SELECT planning_center_track_background_checks FROM church_settings WHERE church_id = ? LIMIT 1`,
         [req.user.church_id]
       )
     ]);
 
-    const processedFamilies = families.map((family) => ({
+    const processedFamilies = await addFamilyAuthorityMetadata(req.user.church_id, families.map((family) => ({
       ...family,
       id: Number(family.id),
       memberCount: Number(family.memberCount)
-    }));
+    })));
 
-    const planningCenterSyncIndicator = !!(settingsRows[0]?.planning_center_sync_indicator);
+    const planningCenterSyncIndicator = (await getAuthority(req.user.church_id)).active === 'planning_center';
     const planningCenterTrackBackgroundChecks = !!(settingsRows[0]?.planning_center_track_background_checks);
 
     res.json({ families: processedFamilies, planningCenterSyncIndicator, planningCenterTrackBackgroundChecks });
@@ -84,6 +147,7 @@ router.get('/all', requireRole(['admin']), async (req, res) => {
         f.family_notes AS familyNotes,
         f.family_type AS familyType,
         f.last_attended AS lastAttended,
+        f.planning_center_id AS planningCenterId,
         COUNT(CASE WHEN i.is_active = 1 THEN i.id END) AS activeMemberCount,
         COUNT(i.id) AS totalMemberCount
       FROM families f
@@ -94,12 +158,12 @@ router.get('/all', requireRole(['admin']), async (req, res) => {
     `, [req.user.church_id]);
 
     // Convert BigInt values to regular numbers to avoid JSON serialization issues
-    const processedFamilies = families.map((family) => ({
+    const processedFamilies = await addFamilyAuthorityMetadata(req.user.church_id, families.map((family) => ({
       ...family,
       id: Number(family.id),
       activeMemberCount: Number(family.activeMemberCount),
       totalMemberCount: Number(family.totalMemberCount)
-    }));
+    })));
 
     res.json({ families: processedFamilies });
   } catch (error) {
@@ -132,6 +196,13 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_FAMIL
 
     if (!familyName && !familyType && familyNotes === undefined) {
       return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    if (familyName || familyType) {
+      const lock = await getFamilyAuthorityLocks(req.user.church_id, [Number(id)]);
+      if (lock.isLocked(id)) {
+        return res.status(403).json(lockedResponse(lock.active, 'update-family'));
+      }
     }
 
     const fields = [];
@@ -188,6 +259,11 @@ router.delete('/:id', requireRole(['admin']), auditLog('DELETE_FAMILY_IF_EMPTY')
   try {
     const { id } = req.params;
 
+    const lock = await getFamilyAuthorityLocks(req.user.church_id, [Number(id)]);
+    if (lock.isLocked(id)) {
+      return res.status(403).json(lockedResponse(lock.active, 'archive-family'));
+    }
+
     // Check active member count
     const members = await Database.query(
       'SELECT COUNT(1) as cnt FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
@@ -221,6 +297,11 @@ router.post('/visitor', requireRole(['admin', 'coordinator', 'attendance_taker']
 
     if (!familyName || !peopleType || !people || people.length === 0) {
       return res.status(400).json({ error: 'Family name, people type, and people are required' });
+    }
+
+    const { active } = await getAuthority(req.user.church_id);
+    if (active !== 'none' && !['local_visitor', 'traveller_visitor'].includes(peopleType)) {
+      return res.status(403).json(lockedResponse(active, 'create'));
     }
 
     const payload = await Database.transaction(async (conn) => {
@@ -295,20 +376,10 @@ router.post('/merge', requireRole(['admin']), auditLog('MERGE_FAMILIES'), async 
       return res.status(400).json({ error: 'Invalid request. Must provide keepFamilyId and mergeFamilyIds array.' });
     }
 
-    // PCO source-of-truth lock: refuse if any individual in any involved family is PCO-linked.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const familyIds = [Number(keepFamilyId), ...mergeFamilyIds.map(Number)];
-      const placeholders = familyIds.map(() => '?').join(',');
-      const lockedRows = await Database.query(
-        `SELECT id FROM individuals
-           WHERE church_id = ? AND family_id IN (${placeholders})
-             AND planning_center_id IS NOT NULL AND planning_center_id <> ''
-           LIMIT 1`,
-        [req.user.church_id, ...familyIds]
-      );
-      if (lockedRows.length) {
-        return res.status(403).json(lockedResponse('Cannot merge families containing Planning Center–linked people. Manage households in PCO.'));
-      }
+    const familyIds = [Number(keepFamilyId), ...mergeFamilyIds.map(Number)];
+    const familyLock = await getFamilyAuthorityLocks(req.user.church_id, familyIds);
+    if (familyIds.some(familyLock.isLocked)) {
+      return res.status(403).json(lockedResponse(familyLock.active, 'merge-family'));
     }
 
     // Start a transaction
@@ -372,19 +443,10 @@ router.post('/merge-individuals', requireRole(['admin']), auditLog('MERGE_INDIVI
       return res.status(400).json({ error: 'Invalid request. Must provide individualIds array.' });
     }
 
-    // PCO source-of-truth lock: refuse if any involved individual is PCO-linked.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const placeholders = individualIds.map(() => '?').join(',');
-      const lockedRows = await Database.query(
-        `SELECT id FROM individuals
-           WHERE church_id = ? AND id IN (${placeholders})
-             AND planning_center_id IS NOT NULL AND planning_center_id <> ''
-           LIMIT 1`,
-        [req.user.church_id, ...individualIds]
-      );
-      if (lockedRows.length) {
-        return res.status(403).json(lockedResponse('Cannot merge Planning Center–linked people into a new family. Manage households in PCO.'));
-      }
+    const { active } = await getAuthority(req.user.church_id);
+    const managed = await getManagedLinks(req.user.church_id, individualIds);
+    if (individualIds.some((id) => isPersonLocked(active, managed.get(Number(id))))) {
+      return res.status(403).json(lockedResponse(active, 'merge'));
     }
 
     if (!familyName) {

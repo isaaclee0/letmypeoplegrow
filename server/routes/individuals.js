@@ -5,15 +5,99 @@ const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const { requireIsVisitorColumn } = require('../utils/databaseSchema');
 const { processApiResponse } = require('../utils/caseConverter');
 const {
-  isPcoModeActive,
-  isIndividualLocked,
-  getLockInfo,
+  getAuthority,
+  getManagedLinks,
+  isPersonLocked,
   lockedResponse,
-} = require('../services/planningCenter/mode');
+} = require('../services/peopleSync/authority');
+const { listPersonLinks, listFamilyLinks } = require('../services/peopleSync/linkRepository');
 
 const router = express.Router();
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
+
+const PEOPLE_SYNC_PROVIDERS = ['planning_center', 'elvanto'];
+
+async function addPeopleAuthorityMetadata(churchId, individuals) {
+  const [{ active }, providerLinks] = await Promise.all([
+    getAuthority(churchId),
+    Promise.all(PEOPLE_SYNC_PROVIDERS.map((provider) => listPersonLinks(churchId, provider))),
+  ]);
+  const linksByIndividual = new Map();
+  for (const link of providerLinks.flat()) {
+    if (!linksByIndividual.has(link.individualId)) linksByIndividual.set(link.individualId, {});
+    linksByIndividual.get(link.individualId)[link.provider] = link.externalPersonId;
+  }
+  return individuals.map((individual) => {
+    const id = Number(individual.id);
+    const externalLinks = { ...(linksByIndividual.get(id) || {}) };
+    const legacyPlanningCenterId = individual.planning_center_id || individual.planningCenterId;
+    if (!externalLinks.planning_center && legacyPlanningCenterId) {
+      externalLinks.planning_center = legacyPlanningCenterId;
+    }
+    return {
+      ...individual,
+      externalLinks,
+      managedBy: active !== 'none' && externalLinks[active] ? active : null,
+    };
+  });
+}
+
+async function getPersonAuthorityLock(churchId, individualIds) {
+  const { active } = await getAuthority(churchId);
+  const links = await getManagedLinks(churchId, individualIds);
+  return {
+    active,
+    isLocked: (id) => isPersonLocked(active, links.get(Number(id))),
+  };
+}
+
+async function getFamilyMembershipAuthorityLock(churchId, familyIds, active) {
+  const ids = [...new Set((familyIds || []).map(Number).filter(Number.isInteger))];
+  const lockedFamilyIds = new Set();
+  if (active === 'none' || ids.length === 0) {
+    return () => false;
+  }
+  const directLinks = await listFamilyLinks(churchId, active);
+  const idSet = new Set(ids);
+  for (const link of directLinks) {
+    if (idSet.has(link.familyId)) lockedFamilyIds.add(link.familyId);
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const [members, legacyFamilies] = await Promise.all([
+    Database.query(
+      `SELECT id, family_id FROM individuals
+        WHERE church_id = ? AND family_id IN (${placeholders})`,
+      [churchId, ...ids]
+    ),
+    active === 'planning_center'
+      ? Database.query(
+        `SELECT id FROM families
+          WHERE church_id = ? AND id IN (${placeholders})
+            AND planning_center_id IS NOT NULL AND planning_center_id <> ''`,
+        [churchId, ...ids]
+      )
+      : [],
+  ]);
+  for (const family of legacyFamilies) lockedFamilyIds.add(Number(family.id));
+  const memberLinks = await getManagedLinks(churchId, members.map((member) => Number(member.id)));
+  for (const member of members) {
+    if (isPersonLocked(active, memberLinks.get(Number(member.id)))) {
+      lockedFamilyIds.add(Number(member.family_id));
+    }
+  }
+  return (familyId) => lockedFamilyIds.has(Number(familyId));
+}
+
+function restoreProviderLinkKeys(people) {
+  for (const person of people) {
+    if (person.externalLinks?.planningCenter) {
+      person.externalLinks.planning_center = person.externalLinks.planningCenter;
+      delete person.externalLinks.planningCenter;
+    }
+  }
+  return people;
+}
 
 // GROUP_CONCAT(DISTINCT gt.id) and GROUP_CONCAT(DISTINCT gt.name) as separate
 // columns can desync: SQLite dedupes each independently, so two gatherings
@@ -41,6 +125,7 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
         i.family_id,
         f.family_name,
         i.is_active,
+        i.planning_center_id,
         i.created_at,
         GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs,
         COUNT(*) OVER (PARTITION BY LOWER(i.first_name), LOWER(i.last_name)) as name_count
@@ -55,17 +140,18 @@ router.get('/duplicates', requireRole(['admin']), async (req, res) => {
     `, [req.user.church_id]);
 
     // Convert BigInt values to regular numbers and process gathering assignments
-    const processedIndividuals = individuals.map(individual => ({
+    const processedIndividuals = await addPeopleAuthorityMetadata(req.user.church_id, individuals.map(individual => ({
       id: Number(individual.id),
       firstName: individual.first_name,
       lastName: individual.last_name,
       familyId: individual.family_id ? Number(individual.family_id) : null,
       familyName: individual.family_name,
       isActive: Boolean(individual.is_active),
+      planningCenterId: individual.planning_center_id,
       createdAt: individual.created_at,
       gatheringAssignments: parseGatheringPairs(individual.gathering_pairs),
       nameCount: Number(individual.name_count)
-    }));
+    })));
     
     // Group by name for easier review
     const duplicateGroups = [];
@@ -104,14 +190,10 @@ router.post('/deduplicate', requireRole(['admin']), auditLog('DEDUPLICATE_INDIVI
       return res.status(400).json({ error: 'Invalid request. Must provide keepId and deleteIds array.' });
     }
 
-    // PCO source-of-truth lock: refuse if any involved person is PCO-linked.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const involvedIds = [Number(keepId), ...deleteIds.map(Number)];
-      const info = await getLockInfo(req.user.church_id, involvedIds);
-      const lockedInvolved = involvedIds.filter((iid) => isIndividualLocked(info.get(iid)));
-      if (lockedInvolved.length) {
-        return res.status(403).json(lockedResponse('Cannot deduplicate Planning Center–linked people. Resolve duplicates in PCO.'));
-      }
+    const involvedIds = [Number(keepId), ...deleteIds.map(Number)];
+    const lock = await getPersonAuthorityLock(req.user.church_id, involvedIds);
+    if (involvedIds.some(lock.isLocked)) {
+      return res.status(403).json(lockedResponse(lock.active, 'deduplicate'));
     }
 
     // Start a transaction
@@ -192,7 +274,7 @@ router.get('/', async (req, res) => {
     `, [req.user.church_id]);
 
     // Process gathering assignments and use systematic conversion utility
-    const processedIndividuals = individuals.map(individual => ({
+    const processedIndividuals = await addPeopleAuthorityMetadata(req.user.church_id, individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
       isChild: Boolean(individual.is_child),
@@ -203,9 +285,10 @@ router.get('/', async (req, res) => {
           : Boolean(individual.pco_background_check_cleared)
       } : {}),
       gatheringAssignments: parseGatheringPairs(individual.gathering_pairs)
-    }));
+    })));
 
     const responseData = processApiResponse({ people: processedIndividuals });
+    restoreProviderLinkKeys(responseData.people);
     res.json(responseData);
   } catch (error) {
     console.error('Get individuals error:', error);
@@ -230,6 +313,7 @@ router.get('/archived', async (req, res) => {
         f.family_name,
         i.is_active,
         i.created_at,
+        i.planning_center_id,
         GROUP_CONCAT(DISTINCT gt.id || char(31) || gt.name) as gathering_pairs
       FROM individuals i
       LEFT JOIN families f ON i.family_id = f.id
@@ -240,15 +324,16 @@ router.get('/archived', async (req, res) => {
       ORDER BY i.last_name, i.first_name
     `, [req.user.church_id]);
 
-    const processedIndividuals = individuals.map(individual => ({
+    const processedIndividuals = await addPeopleAuthorityMetadata(req.user.church_id, individuals.map(individual => ({
       ...individual,
       isActive: Boolean(individual.is_active),
       isChild: Boolean(individual.is_child),
       peopleType: individual.people_type,
       gatheringAssignments: parseGatheringPairs(individual.gathering_pairs)
-    }));
+    })));
 
     const responseData = processApiResponse({ people: processedIndividuals });
+    restoreProviderLinkKeys(responseData.people);
     res.json(responseData);
   } catch (error) {
     console.error('Get archived individuals error:', error);
@@ -261,10 +346,9 @@ router.post('/', requireRole(['admin', 'coordinator']), auditLog('CREATE_INDIVID
   try {
     const { firstName, lastName, familyId, isChild } = req.body;
 
-    // PCO source-of-truth mode: this route only creates regulars. Block it; visitors
-    // go through families.js /visitor (which remains open).
-    if (await isPcoModeActive(req.user.church_id)) {
-      return res.status(403).json(lockedResponse('Add members in Planning Center while PCO sync is on. You can still add visitors.'));
+    const { active } = await getAuthority(req.user.church_id);
+    if (active !== 'none') {
+      return res.status(403).json(lockedResponse(active, 'create'));
     }
 
     const result = await Database.query(`
@@ -287,6 +371,10 @@ async function syncFamilyTypeIfUnified(familyId, churchId) {
   if (!familyId) return;
   
   try {
+    const { active } = await getAuthority(churchId);
+    const isFamilyLocked = await getFamilyMembershipAuthorityLock(churchId, [familyId], active);
+    if (isFamilyLocked(familyId)) return;
+
     // Get all active family members' people_type
     const familyMembers = await Database.query(
       'SELECT DISTINCT people_type FROM individuals WHERE family_id = ? AND is_active = 1 AND church_id = ?',
@@ -314,10 +402,8 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
 
     console.log(`Updating individual ${id} with:`, { firstName, lastName, familyId, peopleType, isChild, badgeText, badgeColor, badgeIcon });
 
-    // Get current family_id + planning_center_id before update (to sync old family
-    // if familyId is changing, and to enforce PCO source-of-truth lock).
     const currentIndividual = await Database.query(
-      'SELECT family_id, planning_center_id FROM individuals WHERE id = ? AND church_id = ?',
+      'SELECT family_id FROM individuals WHERE id = ? AND church_id = ?',
       [id, req.user.church_id]
     );
 
@@ -328,20 +414,31 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
     const oldFamilyId = currentIndividual[0].family_id;
     const newFamilyId = familyId !== undefined ? familyId : oldFamilyId;
 
-    // PCO source-of-truth lock: when mode is on and this individual is linked,
-    // strip first_name/last_name/is_child — these are PCO-owned. Other fields
-    // (family, people_type, badges) proceed normally.
-    const pcoModeOn = await isPcoModeActive(req.user.church_id);
-    const linked = isIndividualLocked(currentIndividual[0]);
-    const lockNameAge = pcoModeOn && linked;
+    const lock = await getPersonAuthorityLock(req.user.church_id, [Number(id)]);
+    const managedFields = ['firstName', 'lastName', 'familyId', 'peopleType', 'isChild'];
+    if (lock.isLocked(id) && managedFields.some((field) => Object.hasOwn(req.body, field))) {
+      return res.status(403).json(lockedResponse(lock.active, 'update'));
+    }
+    if (Object.hasOwn(req.body, 'familyId')) {
+      const isFamilyLocked = await getFamilyMembershipAuthorityLock(
+        req.user.church_id,
+        [oldFamilyId, newFamilyId],
+        lock.active
+      );
+      if (isFamilyLocked(oldFamilyId) || isFamilyLocked(newFamilyId)) {
+        return res.status(403).json(lockedResponse(lock.active, 'move-family-member'));
+      }
+    }
 
-    // Build dynamic update - only include fields that are actually provided.
-    // When lockNameAge, omit first_name/last_name entirely so they cannot change.
     const fields = [];
     const values = [];
-    if (!lockNameAge) {
-      fields.push('first_name = ?', 'last_name = ?');
-      values.push(firstName, lastName);
+    if (firstName !== undefined) {
+      fields.push('first_name = ?');
+      values.push(firstName);
+    }
+    if (lastName !== undefined) {
+      fields.push('last_name = ?');
+      values.push(lastName);
     }
 
     // Only update familyId if it's explicitly provided (not undefined)
@@ -355,7 +452,7 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
       values.push(peopleType);
     }
 
-    if (isChild !== undefined && !lockNameAge) {
+    if (isChild !== undefined) {
       fields.push('is_child = ?');
       values.push(isChild ? true : false);
     }
@@ -376,10 +473,8 @@ router.put('/:id', requireRole(['admin', 'coordinator']), auditLog('UPDATE_INDIV
       values.push(badgeIcon || null);
     }
 
-    // Nothing left to update (e.g. only PCO-locked fields were sent for a linked
-    // person). Return a success no-op rather than running an empty UPDATE.
     if (fields.length === 0) {
-      return res.json({ message: 'Individual unchanged', id: Number(id), locked: lockNameAge });
+      return res.json({ message: 'Individual unchanged', id: Number(id) });
     }
 
     values.push(id, req.user.church_id);
@@ -424,12 +519,9 @@ router.delete('/:id', requireRole(['admin', 'coordinator']), auditLog('DELETE_IN
   try {
     const { id } = req.params;
 
-    // PCO source-of-truth lock: linked people are archived by sync, not by hand.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const info = await getLockInfo(req.user.church_id, [Number(id)]);
-      if (isIndividualLocked(info.get(Number(id)))) {
-        return res.status(403).json(lockedResponse('This person is managed by Planning Center. Change their status in PCO and re-sync.'));
-      }
+    const lock = await getPersonAuthorityLock(req.user.church_id, [Number(id)]);
+    if (lock.isLocked(id)) {
+      return res.status(403).json(lockedResponse(lock.active, 'archive'));
     }
 
     const result = await Database.query(`
@@ -457,12 +549,9 @@ router.delete('/:id/permanent', requireRole(['admin']), auditLog('PERMANENT_DELE
   try {
     const { id } = req.params;
 
-    // PCO source-of-truth lock: cannot permanently delete a PCO-linked person.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const info = await getLockInfo(req.user.church_id, [Number(id)]);
-      if (isIndividualLocked(info.get(Number(id)))) {
-        return res.status(403).json(lockedResponse('This person is managed by Planning Center. Remove them in PCO instead.'));
-      }
+    const lock = await getPersonAuthorityLock(req.user.church_id, [Number(id)]);
+    if (lock.isLocked(id)) {
+      return res.status(403).json(lockedResponse(lock.active, 'permanent-delete'));
     }
 
     await Database.transaction(async (conn) => {
@@ -507,12 +596,9 @@ router.post('/:id/restore', requireRole(['admin', 'coordinator']), auditLog('RES
   try {
     const { id } = req.params;
 
-    // PCO source-of-truth lock: linked people are reactivated by sync, not by hand.
-    if (await isPcoModeActive(req.user.church_id)) {
-      const info = await getLockInfo(req.user.church_id, [Number(id)]);
-      if (isIndividualLocked(info.get(Number(id)))) {
-        return res.status(403).json(lockedResponse('This person is managed by Planning Center. Reactivate them in PCO and re-sync.'));
-      }
+    const lock = await getPersonAuthorityLock(req.user.church_id, [Number(id)]);
+    if (lock.isLocked(id)) {
+      return res.status(403).json(lockedResponse(lock.active, 'restore'));
     }
 
     const result = await Database.query(`
@@ -761,4 +847,4 @@ router.get('/:id/attendance-history', verifyToken, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
