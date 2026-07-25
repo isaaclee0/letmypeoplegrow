@@ -1,7 +1,15 @@
 const crypto = require('node:crypto');
 
 function keyBuffer() {
-  const key = Buffer.from(process.env.INTEGRATION_CREDENTIALS_KEY || '', 'base64');
+  const encodedKey = process.env.INTEGRATION_CREDENTIALS_KEY || '';
+  const canonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+  if (!canonicalBase64.test(encodedKey)) {
+    throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+  }
+  const key = Buffer.from(encodedKey, 'base64');
+  if (key.toString('base64') !== encodedKey) {
+    throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+  }
   if (key.length !== 32) throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
   return key;
 }

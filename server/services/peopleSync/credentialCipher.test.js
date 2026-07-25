@@ -33,6 +33,26 @@ test('credential cipher rejects an invalid key', () => {
   });
 });
 
+test('credential cipher rejects a 32-byte key with invalid base64 trailing characters', () => {
+  // Catches permissive base64 decoding that silently ignores non-alphabet
+  // characters after an otherwise valid 32-byte key.
+  const validKey = Buffer.alloc(32, 7).toString('base64');
+  withCredentialKey(`${validKey}!!!!`, () => {
+    assert.throws(() => encryptCredential({ apiKey: 'x' }), /base64-encoded/);
+  });
+});
+
+test('credential cipher rejects non-canonical base64 padding that still decodes to 32 bytes', () => {
+  // Catches excess padding accepted by Buffer.from(value, 'base64') even
+  // though it is not the canonical encoding emitted by openssl.
+  const validKey = Buffer.alloc(32, 7).toString('base64');
+  const malformedPadding = `${validKey.slice(0, -1)}===`;
+  assert.equal(Buffer.from(malformedPadding, 'base64').length, 32);
+  withCredentialKey(malformedPadding, () => {
+    assert.throws(() => encryptCredential({ apiKey: 'x' }), /base64-encoded/);
+  });
+});
+
 test('credential cipher rejects tampered ciphertext', () => {
   // Catches decryption that does not authenticate the stored ciphertext.
   withCredentialKey(Buffer.alloc(32, 7).toString('base64'), () => {
