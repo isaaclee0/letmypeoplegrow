@@ -170,19 +170,26 @@ async function runChurch(churchId, options = {}) {
 
   return Database.setChurchContext(churchId, async () => {
     const totals = { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 };
-    // Tracks whether we actually got far enough to dispatch at least one
-    // batch this run (past due/authority/connection/token gating — see
-    // below). notify() must only run when this is true: the old syncChurch
-    // returned immediately when nothing was due, before ever touching the
-    // review-notification logic. If notify() ran unconditionally on a
-    // nothing-due night, reviewNotificationDecision sees all-zero totals
-    // against an existing dedup marker and CLEARS it — so the next time the
-    // same unresolved items reappear (e.g. the following week, for a weekly
-    // batch), they look "new" again and re-notify admins who already saw and
-    // haven't resolved them. Skipping notify entirely (rather than just
-    // skipping the clear) also means it does not spuriously NOTIFY on a
-    // nothing-ran night either — there is nothing new to report either way.
-    let anyBatchDispatched = false;
+    // Tracks whether at least one batch actually PRODUCED A SUMMARY this run
+    // (not merely "was dispatched" — a dispatched batch that throws or
+    // returns null contributes nothing here). notify() must only run when
+    // this is true, for two related reasons:
+    //   - the old syncChurch returned immediately when nothing was due,
+    //     before ever touching the review-notification logic, so a
+    //     nothing-due night must not touch it either;
+    //   - defaultNotify/buildPcoReviewMessage only ever report review TOTALS,
+    //     never failures, so calling it after every dispatched batch failed
+    //     communicates nothing failure-specific — its only real effect would
+    //     be reviewNotificationDecision seeing all-zero totals against an
+    //     existing dedup marker and clearing it, so the same still-unresolved
+    //     items look "new" again the next time this batch actually succeeds,
+    //     re-notifying admins who already saw and haven't resolved them.
+    // Gating on "produced a summary" (rather than "dispatched") therefore
+    // covers both a quiet night AND an all-failed night the same way, while
+    // still notifying — and still allowing a genuinely-resolved marker to
+    // clear — the moment at least one batch completes for real, even with
+    // all-zero counts.
+    let anySummaryProduced = false;
     let authorityState;
     try {
       authorityState = await getAuthority(churchId);
@@ -246,8 +253,6 @@ async function runChurch(churchId, options = {}) {
       }
       if (!accessToken) continue;
 
-      anyBatchDispatched = true;
-
       for (const batch of dueBatches) {
         let run = null;
         try {
@@ -282,6 +287,7 @@ async function runChurch(churchId, options = {}) {
           continue;
         }
 
+        anySummaryProduced = true;
         totals.ambiguous += summary.ambiguous || 0;
         totals.visitorMatches += summary.visitorMatches || 0;
         totals.familyNameUpdatesPending += summary.familyNameUpdatesPending || 0;
@@ -300,7 +306,7 @@ async function runChurch(churchId, options = {}) {
       }
     }
 
-    if (anyBatchDispatched) {
+    if (anySummaryProduced) {
       try {
         await notify(churchId, totals);
       } catch (err) {

@@ -187,6 +187,77 @@ test('a church whose only due batch is skipped for authority reasons does not cl
   assert.equal(notifyCalls, 0);
 });
 
+test('an all-failed run (executeBatch throws) does not clear or re-fire an existing review notification marker', async () => {
+  // Regression: unlike the "nothing due" case, this batch WAS dispatched
+  // (authority matched, connection fine, token obtained) but never produced
+  // a summary. notify() must still be skipped — reviewNotificationDecision
+  // has nothing failure-specific to report, and running it on an all-zero
+  // totals object would clear an existing marker for items that are, as far
+  // as anyone knows, still unresolved (the batch never actually re-checked).
+  let notifyCalls = 0;
+  let failed = null;
+  await runChurch('church-a', {
+    now: MONDAY,
+    providers: ['planning_center'],
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    listBatches: async () => [baseBatch({ id: 70 })],
+    getConnection: async () => ({ connectionStatus: 'connected' }),
+    getAccessToken: async () => 'token-a',
+    executeBatch: async () => { throw new Error('PCO request failed'); },
+    startRun: async () => ({ id: 100 }),
+    finishRun: async () => { throw new Error('finishRun should not be called — no summary was produced'); },
+    failRun: async (input) => { failed = input; },
+    notify: async () => { notifyCalls++; },
+  });
+  assert.equal(failed.errorCode, 'BATCH_EXECUTION_ERROR');
+  assert.equal(notifyCalls, 0, 'notify must not run when every dispatched batch failed');
+});
+
+test('an all-failed run (executeBatch returns null) does not clear or re-fire an existing review notification marker', async () => {
+  // Reachable in production when getBatch finds no matching legacy row.
+  let notifyCalls = 0;
+  let failed = null;
+  await runChurch('church-a', {
+    now: MONDAY,
+    providers: ['planning_center'],
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    listBatches: async () => [baseBatch({ id: 71 })],
+    getConnection: async () => ({ connectionStatus: 'connected' }),
+    getAccessToken: async () => 'token-a',
+    executeBatch: async () => null,
+    startRun: async () => ({ id: 101 }),
+    finishRun: async () => { throw new Error('finishRun should not be called — no summary was produced'); },
+    failRun: async (input) => { failed = input; },
+    notify: async () => { notifyCalls++; },
+  });
+  assert.equal(failed.errorCode, 'BATCH_EXECUTION_FAILED');
+  assert.equal(notifyCalls, 0, 'notify must not run when every dispatched batch returned no summary');
+});
+
+test('a mix of a failed batch and a successful batch still notifies, using only the successful summary', async () => {
+  // The three-way behavior must not regress: at least one REAL summary
+  // (even alongside a failure) is enough to run notify and let a genuinely
+  // resolved marker clear.
+  let notified = null;
+  await runChurch('church-a', {
+    now: MONDAY,
+    providers: ['planning_center'],
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    listBatches: async () => [baseBatch({ id: 72 }), baseBatch({ id: 73 })],
+    getConnection: async () => ({ connectionStatus: 'connected' }),
+    getAccessToken: async () => 'token-a',
+    executeBatch: async (churchId, batch) => {
+      if (batch.id === 72) throw new Error('simulated failure');
+      return { added: 1, ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 };
+    },
+    startRun: async () => ({ id: 102 }),
+    finishRun: async () => {},
+    failRun: async () => {},
+    notify: async (churchId, totals) => { notified = totals; },
+  });
+  assert.deepEqual(notified, { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 });
+});
+
 test('review-required counts produce a sanitized notification summary and a review_required run', async () => {
   let notified = null;
   let finished = null;
