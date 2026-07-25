@@ -1,0 +1,713 @@
+// Provider-neutral sync orchestrator (Task 15 of the provider-neutral
+// people-sync project). This is the ONE place that composes every prior
+// task into a single fetch -> match -> plan -> review/apply -> audit
+// pipeline: routes (Task 16) must call buildReview/applyReviewed/
+// runUnattended/previewAuthoritySwitch exclusively and must never call an
+// adapter, matcher, plan, or apply module directly.
+//
+// ─── The 10-step pipeline ───────────────────────────────────────────────────
+//
+// Every public function below runs (a prefix or all of) this exact order:
+//   1. load connection
+//   2. load/validate batches and settings
+//   3. start audit run
+//   4. fetch snapshot
+//   5. load local state/links and existing missing counters
+//   6. match
+//   7. compute the plan (including the projected next missing count, via
+//      plan.js's own presenceProjection — see below)
+//   8. create a review token, OR apply safe unattended actions
+//   9. persist full-fetch presence at most once (only for an applied
+//      review or a completed unattended reconciliation — NEVER for a pure
+//      preview)
+//   10. finish audit run
+//
+// Steps 1-2 (and the startRun call that begins step 3) happen BEFORE any
+// run row exists, so a failure there propagates directly — there is
+// nothing to failRun yet. From the moment startRun succeeds onward, any
+// error (fetch, local-state loading, matching, plan computation, stale
+// review-token detection, selection validation, or apply itself) is
+// caught, reported via failRun, and rethrown — apply is never reached
+// once any of that has failed.
+//
+// ─── Missing-counter integrity (the most safety-critical property here) ───
+//
+// plan.js's own computePeopleSyncPlan already computes the FULL projected
+// missing-count bookkeeping (plan.presenceProjection) from whatever
+// `personLinks` this module passes in — this module does not re-derive
+// that counting logic, it only decides WHEN the durable counters in
+// external_person_links get written via linkRepository.recordFullFetchPresence:
+//   - buildReview/previewAuthoritySwitch (pure previews): NEVER call it.
+//   - applyReviewed: calls it exactly once, AFTER applyPeopleSyncPlan's
+//     transaction has committed, using the fresh full snapshot it just
+//     fetched for verification. A stale-plan re-fetch inside a retried
+//     applyReviewed never double-counts because the write only happens
+//     after a successful apply, and only once per successful call.
+//   - runUnattended: calls it exactly once per completed classification
+//     (whether the run ends 'applied' or 'review_required') for a
+//     COMPLETE FULL snapshot only — never for an incremental snapshot.
+'use strict';
+
+const logger = require('../../config/logger');
+const Database = require('../../config/database');
+const connectionStore = require('./connectionStore');
+const batchRepository = require('./batchRepository');
+const runRepository = require('./runRepository');
+const linkRepository = require('./linkRepository');
+const authority = require('./authority');
+const providerRegistry = require('./providerRegistry');
+const { matchPeople } = require('./matcher');
+const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
+const { applyPeopleSyncPlan, validateSelections } = require('./apply');
+const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
+const { notifyReviewRequired } = require('./reviewNotification');
+
+const PROVIDERS = new Set(['planning_center', 'elvanto']);
+const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
+const UNATTENDED_TRIGGERS = new Set(['scheduled', 'run_now']);
+const HELD_REVIEW_BUCKETS = ['ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
+const REVIEW_TOKEN_TTL_SECONDS = 30 * 60;
+const RAW_FIELD_DENYLIST = new Set(['attributes', 'customFields', 'custom_fields', 'raw', 'rawPayload', 'demographics']);
+
+class OrchestratorError extends Error {
+  constructor(code, message, status = 400) {
+    super(message);
+    this.name = 'OrchestratorError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function assertProvider(provider) {
+  if (!PROVIDERS.has(provider)) throw new OrchestratorError('SYNC_PROVIDER_INVALID', `Unsupported people-sync provider: ${provider}`, 400);
+}
+
+function assertChurchId(churchId) {
+  if (!churchId || typeof churchId !== 'string') {
+    throw new OrchestratorError('SYNC_CHURCH_REQUIRED', 'A churchId is required', 400);
+  }
+}
+
+// ─── Default (production) collaborators ─────────────────────────────────────
+
+async function defaultListLocalIndividuals(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT id, first_name, last_name, people_type, family_id, is_child, is_active, planning_center_id
+       FROM individuals WHERE church_id = ?`,
+    [churchId]
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    firstName: row.first_name,
+    lastName: row.last_name,
+    peopleType: row.people_type,
+    familyId: row.family_id === null || row.family_id === undefined ? null : Number(row.family_id),
+    isChild: !!row.is_child,
+    isActive: !!row.is_active,
+    planningCenterId: row.planning_center_id || null,
+  }));
+}
+
+async function defaultListLocalFamilies(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT id, family_name, family_identifier, planning_center_id FROM families WHERE church_id = ?`,
+    [churchId]
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    familyName: row.family_name,
+    familyIdentifier: row.family_identifier,
+    planningCenterId: row.planning_center_id || null,
+  }));
+}
+
+async function defaultListGatheringMemberships(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT gathering_type_id, individual_id, added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?`,
+    [churchId]
+  );
+  return rows.map((row) => ({
+    gatheringTypeId: Number(row.gathering_type_id),
+    individualId: Number(row.individual_id),
+    addedBySyncBatchId: row.added_by_sync_batch_id === null || row.added_by_sync_batch_id === undefined
+      ? null : Number(row.added_by_sync_batch_id),
+  }));
+}
+
+// Church-wide sync settings (people_sync_settings). Column names are
+// elvanto-prefixed for historical reasons (only Elvanto currently ever
+// produces a 'contact' state — see plan.js/normalizeState — so these are
+// the only provider whose behaviour they visibly change today), but the
+// table holds exactly one row per church, and plan.js's own
+// input.settings.includeContacts/alignPeopleType usage is fully
+// provider-neutral, so this loader is shared by every provider.
+async function defaultGetSyncSettings(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT elvanto_include_contacts, elvanto_align_people_type FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  const row = rows[0] || {};
+  return {
+    includeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
+    alignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
+  };
+}
+
+const defaultDeps = {
+  getConnection: connectionStore.getConnection,
+  getCredentials: connectionStore.getCredentials,
+  listBatches: batchRepository.listBatches,
+  getBatch: batchRepository.getBatch,
+  getSyncSettings: defaultGetSyncSettings,
+  getAuthority: authority.getAuthority,
+  beginAuthoritySwitch: authority.beginAuthoritySwitch,
+  commitAuthoritySwitch: authority.commitAuthoritySwitch,
+  startRun: runRepository.startRun,
+  finishRun: runRepository.finishRun,
+  failRun: runRepository.failRun,
+  getProvider: providerRegistry.getProvider,
+  listPersonLinks: linkRepository.listPersonLinks,
+  listFamilyLinks: linkRepository.listFamilyLinks,
+  recordFullFetchPresence: linkRepository.recordFullFetchPresence,
+  listLocalIndividuals: defaultListLocalIndividuals,
+  listLocalFamilies: defaultListLocalFamilies,
+  listGatheringMemberships: defaultListGatheringMemberships,
+  matchPeople,
+  computePeopleSyncPlan,
+  applyPeopleSyncPlan,
+  validateSelections,
+  digestPlan,
+  createReviewToken,
+  verifyReviewToken,
+  notifyReviewRequired,
+};
+
+function mergeDeps(overrides) {
+  return { ...defaultDeps, ...overrides };
+}
+
+// ─── Small pure helpers ──────────────────────────────────────────────────────
+
+function collectCustomFieldIds(batches) {
+  const ids = new Set();
+  for (const batch of batches) {
+    const customFields = batch.filterConfig && Array.isArray(batch.filterConfig.customFields)
+      ? batch.filterConfig.customFields : [];
+    for (const rule of customFields) {
+      if (rule && rule.fieldId !== undefined && rule.fieldId !== null) ids.add(String(rule.fieldId));
+    }
+  }
+  return [...ids];
+}
+
+function buildEligibleByBatch(batches, people, adapter) {
+  const eligibleByBatch = new Map();
+  for (const batch of batches) {
+    const eligible = new Set();
+    for (const person of people) {
+      if (adapter.isEligible(person, batch.filterConfig)) eligible.add(String(person.id));
+    }
+    eligibleByBatch.set(batch.id, eligible);
+  }
+  return eligibleByBatch;
+}
+
+function groupMembersByFamily(people) {
+  const map = new Map();
+  for (const person of people) {
+    if (person.familyId === null || person.familyId === undefined) continue;
+    const key = String(person.familyId);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push({ id: person.id });
+  }
+  return map;
+}
+
+function countsFromPlan(plan) {
+  const counts = {};
+  for (const bucket of BUCKETS) counts[bucket] = plan[bucket].length;
+  counts.familyNamesUpdated = 0;
+  counts.gatheringAssigned = 0;
+  counts.gatheringRemoved = 0;
+  return counts;
+}
+
+// Merges apply.js's actually-applied counts with the PLAN's own review-only
+// bucket sizes (apply.js always reports these as 0 — see its own
+// emptyResult() comment — since it never mutates anything off them
+// directly), so the audit trail and any notification reflect "how many
+// items are pending review", not just "how many mutations ran".
+function mergeAppliedCounts(applyResult, plan) {
+  return {
+    ...applyResult,
+    ambiguousPeople: plan.ambiguousPeople.length,
+    familyConflicts: plan.familyConflicts.length,
+    unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
+    skipped: plan.skipped.length,
+  };
+}
+
+function heldCountsFromPlan(plan) {
+  return {
+    ambiguousPeople: plan.ambiguousPeople.length,
+    familyConflicts: plan.familyConflicts.length,
+    renameFamily: plan.renameFamily.length,
+    unmatchedLocalRegulars: plan.unmatchedLocalRegulars.length,
+  };
+}
+
+function hasHeldItems(plan) {
+  return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].length > 0);
+}
+
+function isCompleteFullSnapshot(snapshot) {
+  return !!snapshot && snapshot.mode === 'full' && snapshot.complete === true;
+}
+
+function seenExternalIdsFrom(snapshot) {
+  return new Set((snapshot.people || []).map((person) => String(person.id)));
+}
+
+function stripRawFields(action) {
+  if (!action || typeof action !== 'object') return action;
+  const clean = {};
+  for (const [key, value] of Object.entries(action)) {
+    if (RAW_FIELD_DENYLIST.has(key)) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
+// Drops raw attributes/custom-field maps not needed to explain an action —
+// plan.js's own bucket shapes are already lean (scalar fields only), but
+// this stays defensive against a future plan.js change embedding a raw
+// external-person fragment on an action.
+function sanitizePlanForReview(plan) {
+  const sanitized = {
+    provider: plan.provider,
+    authoritative: plan.authoritative,
+    snapshot: { fetchedAt: plan.snapshot.fetchedAt, mode: plan.snapshot.mode },
+  };
+  for (const bucket of BUCKETS) {
+    sanitized[bucket] = (plan[bucket] || []).map(stripRawFields);
+  }
+  return sanitized;
+}
+
+function safeErrorCode(error) {
+  const code = error && typeof error.code === 'string' ? error.code : null;
+  return code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'SYNC_RUN_FAILED';
+}
+
+function safeErrorMessage(error) {
+  const raw = error && typeof error.message === 'string' ? error.message : 'Unknown error';
+  const cleaned = raw.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 500);
+  return cleaned || 'Unknown error';
+}
+
+// Records a run failure without ever letting a failRun problem (e.g. the
+// error message itself tripping runRepository's own credential/payload
+// detector) mask the ORIGINAL error, and without leaving the run
+// permanently stuck in 'running' if the first attempt is rejected.
+async function safeFailRun(deps, { churchId, provider, runId, error }) {
+  const errorCode = safeErrorCode(error);
+  const errorMessage = safeErrorMessage(error);
+  try {
+    await deps.failRun({ churchId, provider, runId, errorCode, errorMessage });
+  } catch (failErr) {
+    try {
+      await deps.failRun({ churchId, provider, runId, errorCode, errorMessage: 'Sync run failed; see server logs for details.' });
+    } catch (fallbackErr) {
+      logger.error(`peopleSync orchestrator: failed to record run failure for church ${churchId} run ${runId}: ${fallbackErr.message}`);
+    }
+  }
+}
+
+// ─── Steps 1-2: load connection, batches, settings, authority ───────────────
+
+async function loadPreconditions({ churchId, provider, batchId, deps }) {
+  // 1. load connection
+  const connection = await deps.getConnection(churchId, provider);
+  if (!connection) throw new OrchestratorError('SYNC_NOT_CONNECTED', `No ${provider} connection for this church`, 400);
+  if (connection.connectionStatus === 'invalid') {
+    throw new OrchestratorError('SYNC_CONNECTION_INVALID', `The ${provider} connection is marked invalid`, 400);
+  }
+  const credentials = await deps.getCredentials(churchId, provider);
+  if (!credentials) throw new OrchestratorError('SYNC_NOT_CONNECTED', `No ${provider} credentials for this church`, 400);
+
+  const adapter = deps.getProvider(provider);
+
+  // 2. load/validate batches and settings
+  let batches;
+  if (batchId !== null && batchId !== undefined) {
+    const batch = await deps.getBatch(churchId, provider, batchId);
+    if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${provider}`, 404);
+    if (!batch.enabled) throw new OrchestratorError('SYNC_BATCH_DISABLED', `Batch ${batchId} is disabled`, 400);
+    batches = [batch];
+  } else {
+    const all = await deps.listBatches(churchId, provider);
+    batches = (all || []).filter((batch) => batch.enabled);
+    if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);
+  }
+
+  for (const batch of batches) {
+    const validation = adapter.validateFilter(batch.filterConfig, batch.filterSchemaVersion);
+    if (!validation || validation.ok !== true) {
+      throw new OrchestratorError('SYNC_BATCH_FILTER_INVALID', `Batch ${batch.id} has an invalid ${provider} filter`, 400);
+    }
+  }
+
+  const settings = await deps.getSyncSettings(churchId);
+  const authorityState = await deps.getAuthority(churchId);
+
+  return { connection, credentials, adapter, batches, settings, authorityState };
+}
+
+// ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
+
+async function runPipelineBody({
+  churchId, provider, trigger, mode, watermark, authoritative, activeAuthority,
+  batches, settings, credentials, adapter, deps,
+}) {
+  // 4. fetch snapshot
+  const customFieldIds = collectCustomFieldIds(batches);
+  const snapshot = await adapter.fetchSnapshot({ churchId, credentials, mode, watermark, customFieldIds });
+  if (!snapshot || snapshot.complete !== true) {
+    throw new OrchestratorError('SYNC_FETCH_INCOMPLETE', `${provider} fetch did not return a complete snapshot`, 502);
+  }
+
+  // 5. load local state/links and existing missing counters
+  const [individuals, families, personLinks, familyLinks, gatheringMemberships] = await Promise.all([
+    deps.listLocalIndividuals(churchId),
+    deps.listLocalFamilies(churchId),
+    deps.listPersonLinks(churchId, provider),
+    deps.listFamilyLinks(churchId, provider),
+    deps.listGatheringMemberships(churchId),
+  ]);
+
+  // 6. match
+  const matcherResult = deps.matchPeople({
+    externalPeople: snapshot.people,
+    localPeople: individuals,
+    existingLinks: personLinks.map((link) => ({ externalPersonId: link.externalPersonId, individualId: link.individualId })),
+    externalFamilyMembers: groupMembersByFamily(snapshot.people),
+    localFamilyMembers: groupMembersByFamily(individuals),
+  });
+
+  // 7. compute the plan (plan.js's own presenceProjection computes the
+  // projected next missing count for a complete full snapshot from the
+  // personLinks passed in here — this module never re-derives that logic).
+  const eligibleByBatch = buildEligibleByBatch(batches, snapshot.people, adapter);
+  const plan = deps.computePeopleSyncPlan({
+    provider,
+    externalPeople: snapshot.people,
+    localPeople: individuals,
+    matcher: matcherResult,
+    batches,
+    eligibleByBatch,
+    settings,
+    authoritative,
+    activeAuthority,
+    trigger,
+    personLinks: personLinks.map((link) => ({
+      externalPersonId: link.externalPersonId, individualId: link.individualId, missingFullSyncCount: link.missingFullSyncCount,
+    })),
+    snapshot: { fetchedAt: snapshot.fetchedAt, watermark: snapshot.watermark, mode: snapshot.mode, complete: snapshot.complete },
+    familyConflicts: [],
+    gatheringMemberships,
+  });
+
+  return { snapshot, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
+}
+
+// ─── buildReview ─────────────────────────────────────────────────────────────
+//
+// Always uses a full snapshot for onboarding, manual, "review & sync", and
+// (via previewAuthoritySwitch) authority switching. Never applies anything,
+// never increments missing counters — a pure preview, however many times
+// it is called.
+async function buildReview({ churchId, provider, batchId = null, trigger, forceFull } = {}, overrides = {}) {
+  void forceFull; // accepted for interface parity; buildReview is always a full-snapshot preview.
+  const deps = mergeDeps(overrides);
+  assertChurchId(churchId);
+  assertProvider(provider);
+  if (!BUILD_REVIEW_TRIGGERS.has(trigger)) {
+    throw new OrchestratorError('SYNC_TRIGGER_INVALID', `Invalid buildReview trigger: ${trigger}`, 400);
+  }
+
+  const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const authoritative = pre.authorityState.active === provider;
+  const activeAuthority = pre.authorityState.active;
+
+  const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
+  try {
+    const body = await runPipelineBody({
+      churchId, provider, trigger, mode: 'full', watermark: undefined,
+      authoritative, activeAuthority, batches: pre.batches, settings: pre.settings,
+      credentials: pre.credentials, adapter: pre.adapter, deps,
+    });
+
+    const planDigest = deps.digestPlan(body.plan);
+    const reviewToken = deps.createReviewToken({
+      churchId, provider, batchId, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
+    });
+
+    await deps.finishRun({
+      churchId, provider, runId: run.id, status: 'review_required',
+      counts: countsFromPlan(body.plan), externalWatermark: body.snapshot.watermark,
+    });
+
+    return {
+      runId: run.id,
+      reviewToken,
+      summary: summarizePlan(body.plan),
+      plan: sanitizePlanForReview(body.plan),
+      snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
+    };
+  } catch (err) {
+    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    throw err;
+  }
+}
+
+// ─── previewAuthoritySwitch ──────────────────────────────────────────────────
+//
+// Stages the switch (beginAuthoritySwitch sets pending_authority_provider)
+// and builds a full reconciliation review AS IF `provider` were already
+// authoritative (authoritative: true, activeAuthority: provider), even
+// though people_sync_settings.authority_provider itself does not flip
+// until a later applyReviewed call succeeds and calls commitAuthoritySwitch.
+// Always review-only — never applies anything, never touches presence
+// counters.
+async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {}) {
+  const deps = mergeDeps(overrides);
+  assertChurchId(churchId);
+  assertProvider(provider);
+
+  await deps.beginAuthoritySwitch(churchId, provider);
+
+  const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
+  const run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
+  try {
+    const body = await runPipelineBody({
+      churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
+      authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
+      credentials: pre.credentials, adapter: pre.adapter, deps,
+    });
+
+    const planDigest = deps.digestPlan(body.plan);
+    const reviewToken = deps.createReviewToken({
+      churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
+    });
+
+    await deps.finishRun({
+      churchId, provider, runId: run.id, status: 'review_required',
+      counts: countsFromPlan(body.plan), externalWatermark: body.snapshot.watermark,
+    });
+
+    return {
+      runId: run.id,
+      reviewToken,
+      summary: summarizePlan(body.plan),
+      plan: sanitizePlanForReview(body.plan),
+      snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
+      authority: { active: pre.authorityState.active, pending: provider },
+    };
+  } catch (err) {
+    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    throw err;
+  }
+}
+
+function reviewTokenErrorStatus(code) {
+  return code === 'SYNC_REVIEW_INVALID' ? 400 : 409;
+}
+
+function reviewTokenErrorMessage(code) {
+  if (code === 'SYNC_PLAN_STALE') return 'The reviewed plan is out of date; fetch a fresh review before applying.';
+  if (code === 'SYNC_REVIEW_EXPIRED') return 'This review has expired; fetch a fresh review before applying.';
+  return 'This review token is invalid.';
+}
+
+// ─── applyReviewed ───────────────────────────────────────────────────────────
+//
+// Re-fetches a fresh full snapshot, rebuilds the plan under the SAME
+// authoritative/activeAuthority stance the reviewed plan would have used
+// (normal apply: whatever is currently the real active authority;
+// authority-switch apply: pretend `provider` is already authoritative,
+// detected via people_sync_settings.pending_authority_provider === provider
+// — the signal beginAuthoritySwitch left behind at preview time), verifies
+// the caller's token against the FRESH digest, validates selections, then
+// applies inside apply.js's one critical transaction. commitAuthoritySwitch
+// only runs after that transaction has already committed; presence is
+// persisted once after that, best-effort (a presence-accounting failure is
+// logged and never triggers a second apply attempt).
+async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
+  const deps = mergeDeps(overrides);
+  assertChurchId(churchId);
+  assertProvider(provider);
+  if (typeof reviewToken !== 'string' || reviewToken.length === 0) {
+    throw new OrchestratorError('SYNC_REVIEW_INVALID', 'A review token is required', 400);
+  }
+
+  const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const isAuthoritySwitch = pre.authorityState.pending === provider;
+  const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
+  const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
+  const trigger = isAuthoritySwitch ? 'authority_switch' : 'manual';
+
+  const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
+  try {
+    const body = await runPipelineBody({
+      churchId, provider, trigger, mode: 'full', watermark: undefined,
+      authoritative, activeAuthority, batches: pre.batches, settings: pre.settings,
+      credentials: pre.credentials, adapter: pre.adapter, deps,
+    });
+
+    const planDigest = deps.digestPlan(body.plan);
+    const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
+    if (!verification.ok) {
+      throw new OrchestratorError(verification.code, reviewTokenErrorMessage(verification.code), reviewTokenErrorStatus(verification.code));
+    }
+
+    try {
+      deps.validateSelections(body.plan, selections);
+    } catch (selectionErr) {
+      throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
+    }
+
+    // 8. apply
+    const applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections, userId });
+
+    // Only after applyPeopleSyncPlan has succeeded/committed does the
+    // authority switch itself become real.
+    if (isAuthoritySwitch) {
+      await deps.commitAuthoritySwitch(churchId, provider);
+    }
+
+    // 9. persist full-fetch presence at most once. applyReviewed always
+    // re-fetched a full snapshot above, so this is unconditional here
+    // (unlike runUnattended, which may see an incremental snapshot).
+    if (isCompleteFullSnapshot(body.snapshot)) {
+      try {
+        await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
+      } catch (presenceErr) {
+        logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
+      }
+    }
+
+    const counts = mergeAppliedCounts(applyResult, body.plan);
+    // 10. finish audit run
+    await deps.finishRun({ churchId, provider, runId: run.id, status: 'applied', counts, externalWatermark: body.snapshot.watermark });
+
+    return { runId: run.id, status: 'applied', applied: applyResult, summary: summarizePlan(body.plan) };
+  } catch (err) {
+    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    throw err;
+  }
+}
+
+// ─── runUnattended ───────────────────────────────────────────────────────────
+//
+// Permitted only when `provider` is the church's current active authority.
+// Applies deterministic links, additions, managed updates, explicit
+// upstream archive/reactivate (including a CONFIRMED — i.e. already at
+// count >= 2 — missing-person archive; plan.js itself never proposes an
+// archive action below count 2, see its addMissingActions), and
+// provenance-safe gathering changes, by calling applyPeopleSyncPlan with
+// NO selections. ambiguousPeople/familyConflicts/renameFamily/
+// unmatchedLocalRegulars are never mutated by apply.js regardless of
+// selections, so "stripping" them is a matter of how this run's outcome is
+// CLASSIFIED and reported, not of altering what apply.js does: whenever any
+// of those four buckets is non-empty, the run is marked review_required
+// (with its pending counts) instead of applied, and notifyReviewRequired is
+// called so admins learn about it later (a scheduled run has nobody
+// watching in real time — unlike buildReview/applyReviewed, which are
+// always interactive, so they never call notifyReviewRequired themselves).
+async function runUnattended({ churchId, provider, batchId, forceFull = false, trigger = 'scheduled' } = {}, overrides = {}) {
+  const deps = mergeDeps(overrides);
+  assertChurchId(churchId);
+  assertProvider(provider);
+  if (batchId === null || batchId === undefined) {
+    throw new OrchestratorError('SYNC_BATCH_REQUIRED', 'runUnattended requires a batchId', 400);
+  }
+  if (!UNATTENDED_TRIGGERS.has(trigger)) {
+    throw new OrchestratorError('SYNC_TRIGGER_INVALID', `Invalid runUnattended trigger: ${trigger}`, 400);
+  }
+
+  const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  if (pre.authorityState.active !== provider) {
+    throw new OrchestratorError(
+      'SYNC_AUTHORITY_MISMATCH',
+      `Provider "${provider}" is not the active people-sync authority for this church`,
+      409
+    );
+  }
+
+  const batch = pre.batches[0];
+  const mode = (forceFull || !batch.lastExternalWatermark) ? 'full' : 'incremental';
+
+  const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
+  try {
+    const body = await runPipelineBody({
+      churchId, provider, trigger, mode, watermark: batch.lastExternalWatermark || undefined,
+      authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
+      credentials: pre.credentials, adapter: pre.adapter, deps,
+    });
+
+    // 8. apply safe unattended actions (no selections — ambiguous/conflict/
+    // rename/unmatched-local buckets are never mutated by apply.js off an
+    // empty selection set regardless).
+    const applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections: {}, userId: null });
+
+    // 9. persist full-fetch presence at most once, only for a complete full snapshot.
+    if (isCompleteFullSnapshot(body.snapshot)) {
+      try {
+        await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
+      } catch (presenceErr) {
+        logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
+      }
+    }
+
+    const status = hasHeldItems(body.plan) ? 'review_required' : 'applied';
+    const counts = mergeAppliedCounts(applyResult, body.plan);
+
+    // 10. finish audit run
+    await deps.finishRun({ churchId, provider, runId: run.id, status, counts, externalWatermark: body.snapshot.watermark });
+
+    if (status === 'review_required') {
+      try {
+        await deps.notifyReviewRequired({ churchId, provider, runId: run.id, counts: heldCountsFromPlan(body.plan) });
+      } catch (notifyErr) {
+        logger.error(`peopleSync orchestrator: review notification failed for church ${churchId} run ${run.id}: ${notifyErr.message}`);
+      }
+    }
+
+    return {
+      runId: run.id,
+      status,
+      counts,
+      fetchMode: mode,
+      complete: body.snapshot.complete,
+      externalWatermark: body.snapshot.watermark,
+    };
+  } catch (err) {
+    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    throw err;
+  }
+}
+
+module.exports = {
+  OrchestratorError,
+  buildReview,
+  applyReviewed,
+  runUnattended,
+  previewAuthoritySwitch,
+  sanitizePlanForReview,
+  // Exported for orchestrator.test.js's dependency-injected unit tests.
+  defaultDeps,
+};

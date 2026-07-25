@@ -1,23 +1,34 @@
 // Provider-neutral scheduled sync (Task 10 of the provider-neutral
-// people-sync project). Replaces planningCenterSync.js's own cron job —
-// that module's start/stop/runNow now delegate here for compatibility.
+// people-sync project; batch execution wired to the real orchestrator in
+// Task 15). Replaces planningCenterSync.js's own cron job — that module's
+// start/stop/runNow still delegate here for compatibility.
 //
-// This task keeps the actual per-batch execution PCO-specific (via an
-// injected `executeBatch`, whose production default delegates to
-// planningCenterSync.js's existing runBatchSync) since the generic
-// fetch/match/review/apply orchestrator doesn't exist yet — Task 15 swaps
-// that default out for orchestrator.runUnattended. Everything AROUND
-// execution (which batches are due, which provider may run unattended,
-// connection health, per-church isolation, audit trail, review
-// notification) is already provider-neutral here.
+// Task 15 note: this module used to own its own audit-trail bookkeeping
+// (startRun/finishRun/failRun) and its own PCO-specific review
+// notification (defaultNotify, backed by
+// server/services/planningCenter/reviewNotification.js's
+// reviewNotificationDecision/buildPcoReviewMessage — a church_settings-
+// column-backed, PCO-only mechanism). Both of those responsibilities now
+// live INSIDE orchestrator.runUnattended itself (see orchestrator.js's own
+// header note on the 10-step pipeline): every due batch's entire
+// fetch/match/plan/apply-or-hold/audit/notify sequence happens in ONE
+// runUnattended call, so this module no longer starts/finishes runs or
+// decides whether to notify admins — it only decides WHICH batches are
+// due, confirms the provider is the active authority and its connection
+// isn't already known-bad, calls runUnattended once per due batch, and
+// (only on success) persists the batch's own last-sync bookkeeping via
+// batchRepository.recordBatchResult. The PCO-only reviewNotification
+// module is intentionally left untouched and unused by this file now —
+// removing its import here (rather than deleting the module outright) is
+// deliberate: Task 15's file list does not include deleting it, and nothing
+// else in this codebase requires it gone.
 const cron = require('node-cron');
 const Database = require('../../config/database');
 const logger = require('../../config/logger');
 const authority = require('./authority');
 const batchRepository = require('./batchRepository');
-const runRepository = require('./runRepository');
 const connectionStore = require('./connectionStore');
-const { reviewNotificationDecision, buildPcoReviewMessage } = require('../planningCenter/reviewNotification');
+const orchestrator = require('./orchestrator');
 
 const PROVIDERS = ['planning_center', 'elvanto'];
 
@@ -44,161 +55,80 @@ function isDueToday(frequency, day, now = new Date()) {
   return now.getDay() === targetDay;
 }
 
-// ─── Default (production) collaborators ──────────────────────────────────────
-// Lazy-required inside functions, never at module top level: planningCenterSync.js
-// requires this module (to delegate start/stop/runNow), so a top-level
-// require here would be circular. By the time these run, both modules are
-// already fully loaded.
-
-async function defaultGetAccessToken(churchId, provider) {
-  if (provider !== 'planning_center') return null;
-  const pcoSync = require('../planningCenterSync');
-  return pcoSync.getAccessTokenForChurch(churchId);
-}
-
-// batch here is the generic batchRepository shape; runBatchSync wants the
-// legacy PCO DTO shape (flattened filter fields, legacyProviderBatchId) —
-// reuse planningCenterSync.js's own batch loader so the two shapes never
-// drift apart.
-async function defaultExecuteBatch(churchId, batch, context) {
-  if (batch.provider !== 'planning_center') {
-    logger.warn(`peopleSync scheduler: no unattended executor registered for provider "${batch.provider}" (church ${churchId}, batch ${batch.id}) — skipping`);
-    return null;
-  }
-  const pcoSync = require('../planningCenterSync');
-  const legacyBatch = await pcoSync.getBatch(churchId, batch.id);
-  if (!legacyBatch) return null;
-  return pcoSync.runBatchSync(churchId, context.accessToken, legacyBatch, context.userId || null);
-}
-
-// Provider-specific for now (PCO's summary shape and church_settings column);
-// a future task can generalize once Elvanto has its own review-count shape.
-async function defaultNotify(churchId, totals) {
+// Church-wide (not per-batch) setting: how often a scheduled run must force
+// a FULL snapshot regardless of a batch's own incremental watermark — see
+// people_sync_settings.full_reconciliation_frequency/day
+// (server/config/schema.js) and the project's global two-consecutive-
+// full-reconciliations disappearance rule, which an incremental fetch can
+// never satisfy on its own (see plan.js/orchestrator.js).
+async function defaultGetFullReconciliationSchedule(churchId) {
   const rows = await Database.queryForChurch(
     churchId,
-    `SELECT planning_center_last_notified_review AS last FROM church_settings WHERE church_id = ? LIMIT 1`,
+    `SELECT full_reconciliation_frequency, full_reconciliation_day FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
     [churchId]
   );
-  const prev = rows.length && rows[0].last ? JSON.parse(rows[0].last) : null;
-  const decision = reviewNotificationDecision(prev, totals);
-
-  if (decision.clear) {
-    await Database.queryForChurch(
-      churchId,
-      `UPDATE church_settings SET planning_center_last_notified_review = NULL WHERE church_id = ?`,
-      [churchId]
-    );
-  }
-  if (!decision.notify) return;
-
-  const message = buildPcoReviewMessage(totals);
-  const admins = await Database.queryForChurch(
-    churchId,
-    `SELECT id FROM users WHERE role IN ('admin', 'coordinator') AND is_active = 1 AND church_id = ?`,
-    [churchId]
-  );
-  for (const admin of admins) {
-    await Database.queryForChurch(
-      churchId,
-      `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
-       VALUES (?, ?, ?, 'system', ?)`,
-      [admin.id, 'Planning Center sync needs your review', message, churchId]
-    );
-  }
-  await Database.queryForChurch(
-    churchId,
-    `UPDATE church_settings SET planning_center_last_notified_review = ? WHERE church_id = ?`,
-    [JSON.stringify(totals), churchId]
-  );
-  logger.info(`peopleSync scheduler: church ${churchId} notified ${admins.length} admin(s) — ${JSON.stringify(totals)}`);
-}
-
-// Maps a PCO batch-sync summary onto runRepository's allowlisted count keys.
-// Deliberately conservative: only include a key when there is an unambiguous
-// mapping, and never pass through anything runRepository doesn't recognise —
-// finishRun/failRun reject unknown keys outright (see COUNT_KEYS), and this
-// audit trail must never end up silently dropped because of a stray field.
-function toRunCounts(summary) {
-  const counts = {};
-  if (summary.added) counts.addPeople = summary.added;
-  if (summary.updated) counts.updateManagedFields = summary.updated;
-  if (summary.archived) counts.archive = summary.archived;
-  if (summary.reactivated) counts.reactivate = summary.reactivated;
-  if (summary.linked) counts.linkPeople = summary.linked;
-  if (summary.gatheringAssigned) counts.addToGathering = summary.gatheringAssigned;
-  if (summary.gatheringRemoved) counts.removeFromGathering = summary.gatheringRemoved;
-  if (summary.familyNamesUpdated) counts.familyNamesUpdated = summary.familyNamesUpdated;
-  if (summary.ambiguous) counts.ambiguousPeople = summary.ambiguous;
-  return counts;
-}
-
-function hasReviewItems(summary) {
-  return !!(
-    (summary.ambiguous || 0) > 0 ||
-    (summary.visitorMatches || 0) > 0 ||
-    (summary.familyNameUpdatesPending || 0) > 0 ||
-    // Per-item apply failures (e.g. one bad row in an otherwise-fine batch)
-    // aren't a "review" bucket in the plan/diff sense, but a run that hit
-    // them is not a clean "applied" either — mark it review_required so it
-    // surfaces for a human rather than reading as an unremarkable success.
-    (summary.errors || 0) > 0
-  );
+  const row = rows[0] || {};
+  return {
+    frequency: row.full_reconciliation_frequency || 'weekly',
+    day: Number.isInteger(row.full_reconciliation_day) ? row.full_reconciliation_day : 1,
+  };
 }
 
 // ─── Per-church sync ──────────────────────────────────────────────────────────
 //
 // Runs every due, enabled, authorised batch for one church, across every
-// registered provider, and returns the accumulated review-required totals.
-// Every dependency is injectable so tests can verify scheduling/authority/
-// audit behaviour without touching a real database or making a network call;
-// production callers (start()/runNow() below) rely entirely on the defaults.
+// registered provider. Every dependency is injectable so tests can verify
+// scheduling/authority/connection-gating behaviour without touching a real
+// database, a real provider adapter, or the audit/notification internals
+// orchestrator.runUnattended now owns; production callers (start()/runNow()
+// below) rely entirely on the defaults.
 async function runChurch(churchId, options = {}) {
   const {
     providers = PROVIDERS,
     getAuthority = authority.getAuthority,
     listBatches = batchRepository.listBatches,
     getConnection = connectionStore.getConnection,
-    getAccessToken = defaultGetAccessToken,
-    executeBatch = defaultExecuteBatch,
-    startRun = runRepository.startRun,
-    finishRun = runRepository.finishRun,
-    failRun = runRepository.failRun,
-    notify = defaultNotify,
+    runUnattended = orchestrator.runUnattended,
+    recordBatchResult = batchRepository.recordBatchResult,
+    getFullReconciliationSchedule = defaultGetFullReconciliationSchedule,
     skipScheduleCheck = false,
     now = new Date(),
   } = options;
 
   return Database.setChurchContext(churchId, async () => {
-    const totals = { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 };
-    // Tracks whether at least one batch actually PRODUCED A SUMMARY this run
-    // (not merely "was dispatched" — a dispatched batch that throws or
-    // returns null contributes nothing here). notify() must only run when
-    // this is true, for two related reasons:
-    //   - the old syncChurch returned immediately when nothing was due,
-    //     before ever touching the review-notification logic, so a
-    //     nothing-due night must not touch it either;
-    //   - defaultNotify/buildPcoReviewMessage only ever report review TOTALS,
-    //     never failures, so calling it after every dispatched batch failed
-    //     communicates nothing failure-specific — its only real effect would
-    //     be reviewNotificationDecision seeing all-zero totals against an
-    //     existing dedup marker and clearing it, so the same still-unresolved
-    //     items look "new" again the next time this batch actually succeeds,
-    //     re-notifying admins who already saw and haven't resolved them.
-    // Gating on "produced a summary" (rather than "dispatched") therefore
-    // covers both a quiet night AND an all-failed night the same way, while
-    // still notifying — and still allowing a genuinely-resolved marker to
-    // clear — the moment at least one batch completes for real, even with
-    // all-zero counts.
-    let anySummaryProduced = false;
     let authorityState;
     try {
       authorityState = await getAuthority(churchId);
     } catch (err) {
       logger.error(`peopleSync scheduler: failed to load authority for church ${churchId}: ${err.message}`);
-      return totals;
+      return;
     }
 
+    let reconciliationSchedule;
+    try {
+      reconciliationSchedule = await getFullReconciliationSchedule(churchId);
+    } catch (err) {
+      logger.error(`peopleSync scheduler: failed to load full-reconciliation schedule for church ${churchId}: ${err.message}`);
+      reconciliationSchedule = { frequency: 'weekly', day: 1 };
+    }
+    // Once per the configured cadence (default weekly), force every due
+    // batch's run to fetch a complete full snapshot this cycle — otherwise
+    // an authoritative provider whose batches only ever run incrementally
+    // could never accumulate the two consecutive full reconciliations the
+    // disappearance-archive rule requires.
+    const forceFullToday = skipScheduleCheck ||
+      isDueToday(reconciliationSchedule.frequency, reconciliationSchedule.day, now);
+
     for (const provider of providers) {
+      // Only the current authority may run unattended lifecycle
+      // reconciliation (archiving/reactivating people with nobody
+      // reviewing first). Interactive "Run now"/"Review & sync" from an
+      // admin are unaffected; this gate only applies to the unattended
+      // cron path. orchestrator.runUnattended enforces the exact same
+      // rule independently — this is a cheap pre-filter, not the sole
+      // guard.
+      if (authorityState.active !== provider) continue;
+
       let batches;
       try {
         batches = await listBatches(churchId, provider);
@@ -210,28 +140,15 @@ async function runChurch(churchId, options = {}) {
       const dueBatches = (batches || []).filter((batch) =>
         batch.enabled && batch.scheduleEnabled &&
         (skipScheduleCheck || isDueToday(batch.scheduleFrequency, batch.scheduleDay, now)));
-
       if (!dueBatches.length) continue;
-
-      // Only the current authority may run unattended lifecycle reconciliation
-      // (archiving/reactivating people with nobody reviewing first). A batch
-      // for a provider that is NOT the active authority — including when no
-      // authority has been chosen yet ('none') — is skipped entirely for this
-      // scheduled cycle. Interactive "Run now"/"Review & sync" from an admin
-      // are unaffected; this gate only applies to the unattended cron path.
-      if (authorityState.active !== provider) {
-        logger.info(`peopleSync scheduler: skipping ${dueBatches.length} due ${provider} batch(es) for church ${churchId} — active authority is "${authorityState.active}", not "${provider}"`);
-        continue;
-      }
 
       // Loaded for observability and as a fast-skip for a connection already
       // known to be broken. Deliberately NOT gating on an absent connection
-      // row (connection === null): a church whose PCO tokens haven't been
-      // migrated onto integration_connections yet (see
-      // pcoCredentialMigration.js) has no row here until getAccessToken's
-      // first call triggers that migration — treating "no row yet" as "not
-      // connected" would permanently block a legacy church from ever syncing
-      // again after this change ships.
+      // row (connection === null): a church whose credentials haven't been
+      // migrated/connected onto integration_connections yet has no row here
+      // — treating "no row yet" as "not connected" would permanently block
+      // scheduling; orchestrator.runUnattended's own connection load will
+      // report a clear, per-batch failure for that case instead.
       let connection;
       try {
         connection = await getConnection(churchId, provider);
@@ -244,84 +161,38 @@ async function runChurch(churchId, options = {}) {
         continue;
       }
 
-      let accessToken;
-      try {
-        accessToken = await getAccessToken(churchId, provider);
-      } catch (err) {
-        logger.error(`peopleSync scheduler: failed to get ${provider} access token for church ${churchId}: ${err.message}`);
-        continue;
-      }
-      if (!accessToken) continue;
-
       for (const batch of dueBatches) {
-        let run = null;
+        let result;
         try {
-          run = await startRun({ churchId, provider, batchId: batch.id, trigger: 'scheduled', fetchMode: 'full' });
+          result = await runUnattended({ churchId, provider, batchId: batch.id, forceFull: forceFullToday });
         } catch (err) {
-          logger.error(`peopleSync scheduler: failed to start run for batch ${batch.id} (church ${churchId}): ${err.message}`);
-        }
-
-        let summary = null;
-        try {
-          summary = await executeBatch(churchId, batch, { accessToken, provider });
-        } catch (err) {
+          // orchestrator.runUnattended already records its own run failure
+          // (failRun) internally before rethrowing — this catch exists only
+          // to keep one batch's failure from stopping the rest of this
+          // church's (or any other church's) batches.
           logger.error(`peopleSync scheduler: batch ${batch.id} failed for church ${churchId}: ${err.message}`);
-          if (run) {
-            try {
-              await failRun({ churchId, provider, runId: run.id, errorCode: 'BATCH_EXECUTION_ERROR', errorMessage: err.message });
-            } catch (recordErr) {
-              logger.error(`peopleSync scheduler: failed to record run failure for batch ${batch.id} (church ${churchId}): ${recordErr.message}`);
-            }
-          }
           continue;
         }
+        if (!result) continue;
 
-        if (!summary) {
-          if (run) {
-            try {
-              await failRun({ churchId, provider, runId: run.id, errorCode: 'BATCH_EXECUTION_FAILED', errorMessage: 'Batch execution did not return a summary' });
-            } catch (recordErr) {
-              logger.error(`peopleSync scheduler: failed to record run failure for batch ${batch.id} (church ${churchId}): ${recordErr.message}`);
-            }
-          }
-          continue;
-        }
-
-        anySummaryProduced = true;
-        totals.ambiguous += summary.ambiguous || 0;
-        totals.visitorMatches += summary.visitorMatches || 0;
-        totals.familyNameUpdatesPending += summary.familyNameUpdatesPending || 0;
-
-        if (run) {
-          try {
-            await finishRun({
-              churchId, provider, runId: run.id,
-              status: hasReviewItems(summary) ? 'review_required' : 'applied',
-              counts: toRunCounts(summary),
-            });
-          } catch (recordErr) {
-            logger.error(`peopleSync scheduler: failed to record run completion for batch ${batch.id} (church ${churchId}): ${recordErr.message}`);
-          }
+        try {
+          await recordBatchResult({
+            churchId, provider, batchId: batch.id, trigger: 'scheduled',
+            fetchMode: result.fetchMode, complete: result.complete,
+            status: result.status, externalWatermark: result.externalWatermark,
+          });
+        } catch (recordErr) {
+          logger.error(`peopleSync scheduler: failed to record batch result for batch ${batch.id} (church ${churchId}): ${recordErr.message}`);
         }
       }
     }
-
-    if (anySummaryProduced) {
-      try {
-        await notify(churchId, totals);
-      } catch (err) {
-        logger.error(`peopleSync scheduler: review notification failed for church ${churchId}: ${err.message}`);
-      }
-    }
-
-    return totals;
   });
 }
 
 // ─── All churches ─────────────────────────────────────────────────────────────
 //
 // Iterates every registered church SEQUENTIALLY (never in parallel — per-church
-// SQLite files and the shared PCO rate limit make concurrent runs risky) and
+// SQLite files and provider rate limits make concurrent runs risky) and
 // calls runChurch for each. A single church's failure is caught here (in
 // addition to runChurch's own internal per-batch isolation) so it can never
 // stop any other church's sync from running.
