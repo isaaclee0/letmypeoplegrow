@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const BetterSqlite3 = require('better-sqlite3');
 const Database = require('./database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
@@ -312,6 +314,121 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_family_links WHERE church_id = ?').get(churchId).count, 1);
     assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_center_sync_batches'").get(), 'legacy PCO batch table must remain');
   });
+});
+
+test('getChurchDb upgrades an old PCO database with duplicate legacy IDs without adding the legacy unique index', () => {
+  // Catches an upgrade that runs the entire current schema and retroactively
+  // applies idx_individuals_pco_id_unique to legacy duplicate PCO data.
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lmpg-legacy-sync-test-'));
+  const churchDir = path.join(tempDir, 'churches');
+  const churchId = `legacy_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const previousChurchDataDir = process.env.CHURCH_DATA_DIR;
+  fs.mkdirSync(churchDir, { recursive: true });
+
+  try {
+    const legacyDb = new BetterSqlite3(path.join(churchDir, `${churchId}.sqlite`));
+    legacyDb.pragma('foreign_keys = ON');
+    legacyDb.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        church_id TEXT NOT NULL,
+        email TEXT,
+        mobile_number TEXT,
+        role TEXT,
+        is_active INTEGER
+      );
+      CREATE TABLE church_settings (id INTEGER PRIMARY KEY AUTOINCREMENT, church_id TEXT, church_name TEXT NOT NULL);
+      CREATE TABLE gathering_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        day_of_week TEXT,
+        attendance_type TEXT,
+        is_active INTEGER,
+        church_id TEXT
+      );
+      CREATE TABLE families (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        family_name TEXT NOT NULL,
+        church_id TEXT,
+        planning_center_id TEXT
+      );
+      CREATE TABLE individuals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        family_id INTEGER,
+        is_active INTEGER,
+        church_id TEXT,
+        planning_center_id TEXT
+      );
+      CREATE TABLE planning_center_sync_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        church_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        membership_filter_enabled INTEGER DEFAULT 0,
+        membership_allowlist TEXT,
+        field_filter_enabled INTEGER DEFAULT 0,
+        field_filters TEXT,
+        default_people_type TEXT DEFAULT 'regular',
+        gathering_type_id INTEGER,
+        gathering_auto_remove_enabled INTEGER DEFAULT 0,
+        schedule_enabled INTEGER DEFAULT 0,
+        schedule_frequency TEXT DEFAULT 'weekly',
+        schedule_day INTEGER DEFAULT 1,
+        last_sync_at TEXT,
+        last_sync_result TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE gathering_lists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gathering_type_id INTEGER NOT NULL,
+        individual_id INTEGER NOT NULL,
+        added_by INTEGER,
+        church_id TEXT,
+        added_at TEXT DEFAULT (datetime('now')),
+        added_by_pco_batch_id INTEGER,
+        UNIQUE(gathering_type_id, individual_id)
+      );
+    `);
+    legacyDb.prepare('INSERT INTO church_settings (church_id, church_name) VALUES (?, ?)').run(churchId, 'Legacy Church');
+    legacyDb.prepare('INSERT INTO individuals (first_name, last_name, church_id, planning_center_id) VALUES (?, ?, ?, ?)')
+      .run('First', 'Duplicate', churchId, 'legacy-duplicate-id');
+    legacyDb.prepare('INSERT INTO individuals (first_name, last_name, church_id, planning_center_id) VALUES (?, ?, ?, ?)')
+      .run('Second', 'Duplicate', churchId, 'legacy-duplicate-id');
+    legacyDb.prepare("INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters) VALUES (?, ?, '[]', '[]')")
+      .run(churchId, 'Legacy Batch');
+    legacyDb.close();
+
+    Database.closeAll();
+    process.env.CHURCH_DATA_DIR = tempDir;
+    Database.initialize();
+    const migrated = Database.getChurchDb(churchId);
+
+    assert.strictEqual(
+      migrated.prepare('SELECT COUNT(*) AS count FROM individuals WHERE church_id = ? AND planning_center_id = ?')
+        .get(churchId, 'legacy-duplicate-id').count,
+      2,
+      'legacy duplicate PCO values must remain untouched'
+    );
+    assert.strictEqual(
+      migrated.prepare('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ?').get(churchId).count,
+      1,
+      'neutral backfill should still link one provider-scoped legacy ID'
+    );
+    assert.ok(
+      migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'people_sync_batches'").get(),
+      'neutral schema should be created during the old-database upgrade'
+    );
+  } finally {
+    Database.closeAll();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousChurchDataDir === undefined) {
+      delete process.env.CHURCH_DATA_DIR;
+    } else {
+      process.env.CHURCH_DATA_DIR = previousChurchDataDir;
+    }
+  }
 });
 
 test('linkUserLookups: is a safe no-op when both rows already share the same person_id', async () => {

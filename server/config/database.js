@@ -2,7 +2,7 @@ const BetterSqlite3 = require('better-sqlite3');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('path');
 const fs = require('fs');
-const { REGISTRY_SCHEMA, CHURCH_SCHEMA, UPDATED_AT_TRIGGERS } = require('./schema');
+const { REGISTRY_SCHEMA, CHURCH_SCHEMA, PROVIDER_NEUTRAL_SYNC_SCHEMA, UPDATED_AT_TRIGGERS } = require('./schema');
 const { randomUUID } = require('crypto');
 
 const asyncLocalStorage = new AsyncLocalStorage();
@@ -12,7 +12,7 @@ let registryDb = null;
 let dataDir = null;
 
 function ensureProviderNeutralSyncSchema(db) {
-  db.exec(CHURCH_SCHEMA);
+  db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
 
   const gatheringListColumns = db.prepare('PRAGMA table_info(gathering_lists)').all();
   if (!gatheringListColumns.some((column) => column.name === 'added_by_sync_batch_id')) {

@@ -27,6 +27,143 @@ CREATE TABLE IF NOT EXISTS platform_settings (
 );
 `;
 
+const PROVIDER_NEUTRAL_SYNC_SCHEMA = `
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  auth_type TEXT NOT NULL CHECK(auth_type IN ('oauth', 'api_key')),
+  credential_ciphertext TEXT NOT NULL,
+  credential_nonce TEXT NOT NULL,
+  credential_auth_tag TEXT NOT NULL,
+  credential_key_version INTEGER NOT NULL DEFAULT 1,
+  connection_status TEXT NOT NULL DEFAULT 'connected'
+    CHECK(connection_status IN ('connected', 'invalid', 'validation_unavailable')),
+  connected_by INTEGER,
+  connected_at TEXT DEFAULT (datetime('now')),
+  last_validated_at TEXT,
+  last_error_code TEXT,
+  metadata TEXT,
+  metadata_cached_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider),
+  FOREIGN KEY (connected_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_integration_connections_church ON integration_connections(church_id);
+
+CREATE TABLE IF NOT EXISTS external_person_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_person_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL,
+  link_source TEXT NOT NULL CHECK(link_source IN ('matched', 'created', 'manual', 'legacy_backfill')),
+  linked_at TEXT DEFAULT (datetime('now')),
+  last_seen_at TEXT,
+  missing_full_sync_count INTEGER NOT NULL DEFAULT 0,
+  review_declined INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_person_id),
+  UNIQUE(church_id, provider, individual_id),
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_external_person_links_church ON external_person_links(church_id);
+CREATE INDEX IF NOT EXISTS idx_external_person_links_lookup ON external_person_links(church_id, provider, external_person_id);
+CREATE INDEX IF NOT EXISTS idx_external_person_links_individual ON external_person_links(individual_id);
+
+CREATE TABLE IF NOT EXISTS external_family_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_family_id TEXT NOT NULL,
+  family_id INTEGER NOT NULL,
+  link_source TEXT NOT NULL CHECK(link_source IN ('matched', 'created', 'manual', 'legacy_backfill')),
+  linked_at TEXT DEFAULT (datetime('now')),
+  last_seen_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_family_id),
+  UNIQUE(church_id, provider, family_id),
+  FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_external_family_links_church ON external_family_links(church_id);
+CREATE INDEX IF NOT EXISTS idx_external_family_links_lookup ON external_family_links(church_id, provider, external_family_id);
+CREATE INDEX IF NOT EXISTS idx_external_family_links_family ON external_family_links(family_id);
+
+CREATE TABLE IF NOT EXISTS people_sync_settings (
+  church_id TEXT PRIMARY KEY,
+  authority_provider TEXT NOT NULL DEFAULT 'none'
+    CHECK(authority_provider IN ('none', 'planning_center', 'elvanto')),
+  pending_authority_provider TEXT
+    CHECK(pending_authority_provider IS NULL OR pending_authority_provider IN ('planning_center', 'elvanto')),
+  elvanto_include_contacts INTEGER NOT NULL DEFAULT 1,
+  elvanto_align_people_type INTEGER NOT NULL DEFAULT 1,
+  full_reconciliation_frequency TEXT NOT NULL DEFAULT 'weekly',
+  full_reconciliation_day INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS ensure_people_sync_settings
+AFTER INSERT ON church_settings
+BEGIN
+  INSERT OR IGNORE INTO people_sync_settings (church_id, authority_provider)
+  VALUES (
+    NEW.church_id,
+    CASE WHEN NEW.planning_center_sync_indicator = 1 THEN 'planning_center' ELSE 'none' END
+  );
+END;
+
+CREATE TABLE IF NOT EXISTS people_sync_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  filter_schema_version INTEGER NOT NULL DEFAULT 1,
+  filter_config TEXT NOT NULL DEFAULT '{}',
+  default_people_type TEXT NOT NULL DEFAULT 'regular'
+    CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
+  gathering_type_id INTEGER,
+  gathering_auto_remove_enabled INTEGER NOT NULL DEFAULT 0,
+  schedule_enabled INTEGER NOT NULL DEFAULT 0,
+  schedule_frequency TEXT NOT NULL DEFAULT 'weekly',
+  schedule_day INTEGER NOT NULL DEFAULT 1,
+  legacy_provider_batch_id INTEGER,
+  last_external_watermark TEXT,
+  last_sync_at TEXT,
+  last_sync_result TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, legacy_provider_batch_id),
+  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_batches_church ON people_sync_batches(church_id);
+CREATE INDEX IF NOT EXISTS idx_people_sync_batches_provider ON people_sync_batches(church_id, provider);
+
+CREATE TABLE IF NOT EXISTS people_sync_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  batch_id INTEGER,
+  trigger TEXT NOT NULL CHECK(trigger IN ('onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation')),
+  fetch_mode TEXT NOT NULL CHECK(fetch_mode IN ('full', 'incremental')),
+  status TEXT NOT NULL CHECK(status IN ('running', 'review_required', 'applied', 'failed', 'cancelled')),
+  counts TEXT NOT NULL DEFAULT '{}',
+  review_notification_fingerprint TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  external_watermark TEXT,
+  started_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT,
+  FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_runs_church ON people_sync_runs(church_id);
+CREATE INDEX IF NOT EXISTS idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
+`;
+
 const CHURCH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS migrations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,140 +378,7 @@ CREATE INDEX IF NOT EXISTS idx_individuals_church ON individuals(church_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_individuals_pco_id_unique
   ON individuals(church_id, planning_center_id) WHERE planning_center_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS integration_connections (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  auth_type TEXT NOT NULL CHECK(auth_type IN ('oauth', 'api_key')),
-  credential_ciphertext TEXT NOT NULL,
-  credential_nonce TEXT NOT NULL,
-  credential_auth_tag TEXT NOT NULL,
-  credential_key_version INTEGER NOT NULL DEFAULT 1,
-  connection_status TEXT NOT NULL DEFAULT 'connected'
-    CHECK(connection_status IN ('connected', 'invalid', 'validation_unavailable')),
-  connected_by INTEGER,
-  connected_at TEXT DEFAULT (datetime('now')),
-  last_validated_at TEXT,
-  last_error_code TEXT,
-  metadata TEXT,
-  metadata_cached_at TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(church_id, provider),
-  FOREIGN KEY (connected_by) REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_integration_connections_church ON integration_connections(church_id);
-
-CREATE TABLE IF NOT EXISTS external_person_links (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  external_person_id TEXT NOT NULL,
-  individual_id INTEGER NOT NULL,
-  link_source TEXT NOT NULL CHECK(link_source IN ('matched', 'created', 'manual', 'legacy_backfill')),
-  linked_at TEXT DEFAULT (datetime('now')),
-  last_seen_at TEXT,
-  missing_full_sync_count INTEGER NOT NULL DEFAULT 0,
-  review_declined INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(church_id, provider, external_person_id),
-  UNIQUE(church_id, provider, individual_id),
-  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_external_person_links_church ON external_person_links(church_id);
-CREATE INDEX IF NOT EXISTS idx_external_person_links_lookup ON external_person_links(church_id, provider, external_person_id);
-CREATE INDEX IF NOT EXISTS idx_external_person_links_individual ON external_person_links(individual_id);
-
-CREATE TABLE IF NOT EXISTS external_family_links (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  external_family_id TEXT NOT NULL,
-  family_id INTEGER NOT NULL,
-  link_source TEXT NOT NULL CHECK(link_source IN ('matched', 'created', 'manual', 'legacy_backfill')),
-  linked_at TEXT DEFAULT (datetime('now')),
-  last_seen_at TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(church_id, provider, external_family_id),
-  UNIQUE(church_id, provider, family_id),
-  FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_external_family_links_church ON external_family_links(church_id);
-CREATE INDEX IF NOT EXISTS idx_external_family_links_lookup ON external_family_links(church_id, provider, external_family_id);
-CREATE INDEX IF NOT EXISTS idx_external_family_links_family ON external_family_links(family_id);
-
-CREATE TABLE IF NOT EXISTS people_sync_settings (
-  church_id TEXT PRIMARY KEY,
-  authority_provider TEXT NOT NULL DEFAULT 'none'
-    CHECK(authority_provider IN ('none', 'planning_center', 'elvanto')),
-  pending_authority_provider TEXT
-    CHECK(pending_authority_provider IS NULL OR pending_authority_provider IN ('planning_center', 'elvanto')),
-  elvanto_include_contacts INTEGER NOT NULL DEFAULT 1,
-  elvanto_align_people_type INTEGER NOT NULL DEFAULT 1,
-  full_reconciliation_frequency TEXT NOT NULL DEFAULT 'weekly',
-  full_reconciliation_day INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TRIGGER IF NOT EXISTS ensure_people_sync_settings
-AFTER INSERT ON church_settings
-BEGIN
-  INSERT OR IGNORE INTO people_sync_settings (church_id, authority_provider)
-  VALUES (
-    NEW.church_id,
-    CASE WHEN NEW.planning_center_sync_indicator = 1 THEN 'planning_center' ELSE 'none' END
-  );
-END;
-
-CREATE TABLE IF NOT EXISTS people_sync_batches (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  name TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  filter_schema_version INTEGER NOT NULL DEFAULT 1,
-  filter_config TEXT NOT NULL DEFAULT '{}',
-  default_people_type TEXT NOT NULL DEFAULT 'regular'
-    CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
-  gathering_type_id INTEGER,
-  gathering_auto_remove_enabled INTEGER NOT NULL DEFAULT 0,
-  schedule_enabled INTEGER NOT NULL DEFAULT 0,
-  schedule_frequency TEXT NOT NULL DEFAULT 'weekly',
-  schedule_day INTEGER NOT NULL DEFAULT 1,
-  legacy_provider_batch_id INTEGER,
-  last_external_watermark TEXT,
-  last_sync_at TEXT,
-  last_sync_result TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(church_id, provider, legacy_provider_batch_id),
-  FOREIGN KEY (gathering_type_id) REFERENCES gathering_types(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_people_sync_batches_church ON people_sync_batches(church_id);
-CREATE INDEX IF NOT EXISTS idx_people_sync_batches_provider ON people_sync_batches(church_id, provider);
-
-CREATE TABLE IF NOT EXISTS people_sync_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  church_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
-  batch_id INTEGER,
-  trigger TEXT NOT NULL CHECK(trigger IN ('onboarding', 'manual', 'run_now', 'scheduled', 'authority_switch', 'full_reconciliation')),
-  fetch_mode TEXT NOT NULL CHECK(fetch_mode IN ('full', 'incremental')),
-  status TEXT NOT NULL CHECK(status IN ('running', 'review_required', 'applied', 'failed', 'cancelled')),
-  counts TEXT NOT NULL DEFAULT '{}',
-  review_notification_fingerprint TEXT,
-  error_code TEXT,
-  error_message TEXT,
-  external_watermark TEXT,
-  started_at TEXT DEFAULT (datetime('now')),
-  completed_at TEXT,
-  FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_people_sync_runs_church ON people_sync_runs(church_id);
-CREATE INDEX IF NOT EXISTS idx_people_sync_runs_lookup ON people_sync_runs(church_id, provider, batch_id, started_at);
+${PROVIDER_NEUTRAL_SYNC_SCHEMA}
 
 CREATE TABLE IF NOT EXISTS gathering_lists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -730,4 +734,4 @@ CREATE TRIGGER IF NOT EXISTS contacts_updated_at AFTER UPDATE ON contacts
 BEGIN UPDATE contacts SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `;
 
-module.exports = { REGISTRY_SCHEMA, CHURCH_SCHEMA, UPDATED_AT_TRIGGERS };
+module.exports = { REGISTRY_SCHEMA, CHURCH_SCHEMA, PROVIDER_NEUTRAL_SYNC_SCHEMA, UPDATED_AT_TRIGGERS };
