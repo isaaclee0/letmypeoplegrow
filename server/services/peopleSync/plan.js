@@ -9,6 +9,31 @@ function stableString(value) {
   return String(value ?? '');
 }
 
+function externalId(value, label = 'External person ID') {
+  if (typeof value === 'number') return stableString(positiveInteger(value, label));
+  const normalized = stableString(value);
+  if (!normalized) throw new TypeError(`${label} is required`);
+  return normalized;
+}
+
+function positiveInteger(value, label) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${label} must be a safe positive integer`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value, label) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a safe non-negative integer`);
+  }
+  return value;
+}
+
+function actionId(bucket, ...parts) {
+  return [bucket, ...parts.map((part) => encodeURIComponent(stableString(part)))].join(':');
+}
+
 function canonicalString(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalString).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -36,20 +61,24 @@ function uniqueBy(items, keyFor) {
 }
 
 function normalizedExternalPeople(people) {
-  return uniqueBy(people, (item) => stableString(item?.id))
+  const validated = (people || []).map((item) => ({ ...item, id: externalId(item?.id) }));
+  return uniqueBy(validated, (item) => item.id)
     .map((item) => clone(item))
     .sort((a, b) => stableString(a.id).localeCompare(stableString(b.id), 'en'));
 }
 
 function normalizedLocalPeople(people) {
-  return uniqueBy(people, (item) => Number(item?.id))
+  const validated = (people || []).map((item) => ({
+    ...item, id: positiveInteger(item?.id, 'Local person ID'),
+  }));
+  return uniqueBy(validated, (item) => item.id)
     .map((item) => clone(item))
-    .sort((a, b) => Number(a.id) - Number(b.id));
+    .sort((a, b) => a.id - b.id);
 }
 
 function idsFrom(value) {
   const values = value instanceof Set ? [...value] : Array.isArray(value) ? value : [];
-  return new Set(values.map(stableString));
+  return new Set(values.map((item) => externalId(item, 'Eligible external person ID')));
 }
 
 function explicitEligibility(input, batch) {
@@ -62,8 +91,14 @@ function explicitEligibility(input, batch) {
 function buildEligibility(input) {
   const batches = (input?.batches || [])
     .filter((item) => item?.enabled !== false)
-    .map((item) => clone(item))
-    .sort((a, b) => Number(a.id) - Number(b.id));
+    .map((item) => {
+      const normalized = { ...clone(item), id: positiveInteger(item?.id, 'Batch ID') };
+      if (normalized.gatheringTypeId !== null && normalized.gatheringTypeId !== undefined) {
+        normalized.gatheringTypeId = positiveInteger(normalized.gatheringTypeId, 'Gathering type ID');
+      }
+      return normalized;
+    })
+    .sort((a, b) => a.id - b.id);
   const eligibleByBatch = new Map();
   const eligibleUnion = new Set();
   for (const batch of batches) {
@@ -99,32 +134,34 @@ function peopleType(localPerson) {
   return localPerson?.peopleType || 'regular';
 }
 
-function sortNumeric(values) {
-  return [...(values || [])].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+function sortLocalIds(values, label = 'Candidate individual ID') {
+  return [...(values || [])]
+    .map((value) => positiveInteger(value, label))
+    .sort((a, b) => a - b);
 }
 
 function buildAmbiguousPeople(matcherResult) {
   return (matcherResult?.ambiguous || []).map((conflict) => {
-    const externalPersonId = stableString(conflict?.externalPersonId);
+    const externalPersonId = externalId(conflict?.externalPersonId);
     const reason = stableString(conflict?.reason || 'ambiguous');
-    const action = { id: `ambiguousPeople:${externalPersonId}:${reason}`, ...clone(conflict), externalPersonId };
+    const action = { id: actionId('ambiguousPeople', externalPersonId, reason), ...clone(conflict), externalPersonId };
     if (Array.isArray(conflict?.candidateIndividualIds)) {
-      action.candidateIndividualIds = sortNumeric(conflict.candidateIndividualIds);
+      action.candidateIndividualIds = sortLocalIds(conflict.candidateIndividualIds);
     }
     if (Array.isArray(conflict?.staleLinkedIndividualIds)) {
-      action.staleLinkedIndividualIds = sortNumeric(conflict.staleLinkedIndividualIds);
+      action.staleLinkedIndividualIds = sortLocalIds(conflict.staleLinkedIndividualIds, 'Stale linked individual ID');
     }
     return action;
   }).sort(compareById);
 }
 
-function identityRows(matcherResult, conflictIds) {
+function collectIdentityRows(matcherResult) {
   const rows = [];
   const add = (bucket, reviewRequired) => {
     for (const match of matcherResult?.[bucket] || []) {
-      const externalPersonId = stableString(match?.externalPersonId);
-      if (conflictIds.has(externalPersonId)) continue;
-      rows.push({ ...clone(match), externalPersonId, individualId: Number(match.individualId), bucket, reviewRequired });
+      const externalPersonId = externalId(match?.externalPersonId);
+      const individualId = positiveInteger(match?.individualId, 'Matcher individual ID');
+      rows.push({ ...clone(match), externalPersonId, individualId, bucket, reviewRequired });
     }
   };
   add('linked', false);
@@ -132,7 +169,32 @@ function identityRows(matcherResult, conflictIds) {
   add('visitorMatches', true);
   add('archivedMatches', true);
   rows.sort((a, b) => a.externalPersonId.localeCompare(b.externalPersonId, 'en') || a.individualId - b.individualId);
-  return uniqueBy(rows, (row) => row.externalPersonId);
+  return uniqueBy(rows, (row) => `${row.externalPersonId}\u0000${row.individualId}\u0000${row.bucket}`);
+}
+
+function buildIdentityConflicts(rows) {
+  const byExternal = new Map();
+  for (const row of rows) {
+    if (!byExternal.has(row.externalPersonId)) byExternal.set(row.externalPersonId, []);
+    byExternal.get(row.externalPersonId).push(row);
+  }
+  const ambiguousPeople = [];
+  const protectedIndividualIds = new Set();
+  for (const [externalPersonId, matches] of byExternal) {
+    if (matches.length <= 1) continue;
+    const candidateIndividualIds = [...new Set(matches.map((item) => item.individualId))].sort((a, b) => a - b);
+    const matcherBuckets = [...new Set(matches.map((item) => item.bucket))].sort();
+    ambiguousPeople.push({
+      id: actionId('ambiguousPeople', externalPersonId, 'conflicting_matcher_identity'),
+      externalPersonId, candidateIndividualIds, matcherBuckets, reason: 'conflicting_matcher_identity',
+    });
+    for (const individualId of candidateIndividualIds) protectedIndividualIds.add(individualId);
+  }
+  return { ambiguousPeople: ambiguousPeople.sort(compareById), protectedIndividualIds };
+}
+
+function unambiguousIdentityRows(rows, conflictIds) {
+  return rows.filter((row) => !conflictIds.has(row.externalPersonId));
 }
 
 function managedFieldChanges(externalPerson, localPerson) {
@@ -175,17 +237,21 @@ function addLifecycleAndManagedActions(context) {
     const changes = managedFieldChanges(externalPerson, localPerson);
     const canReviewedUpdate = reviewedReimport && identity.bucket === 'linked';
 
-    if (identity.bucket !== 'linked' && included) {
+    if (identity.bucket !== 'linked') {
       plan.linkPeople.push({
-        id: `linkPeople:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('linkPeople', externalPersonId, individualId), externalPersonId, individualId,
         reason: identity.reason || identity.bucket, reviewRequired: identity.reviewRequired,
       });
     }
 
+    // Review-only identity suggestions are not established links. Task 7 must first
+    // accept the linkPeople selection and regenerate before dependent mutations exist.
+    if (identity.reviewRequired) continue;
+
     if (!canManage && activeAuthority !== 'none') {
       if (changes.length > 0) {
         plan.skipped.push({
-          id: `skipped:${externalPersonId}:${individualId}:active_authority_owned`, externalPersonId,
+          id: actionId('skipped', externalPersonId, individualId, 'active_authority_owned'), externalPersonId,
           individualId, reason: 'active_authority_owned', activeAuthority,
         });
       }
@@ -196,7 +262,7 @@ function addLifecycleAndManagedActions(context) {
       const reason = isTerminalState(state) ? `provider_state_${state}` :
         state === 'contact' && input.settings?.includeContacts === false ? 'contact_excluded' : 'no_longer_eligible';
       plan.archive.push({
-        id: `archive:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
         reason, missingFullSyncCount: null,
       });
       continue;
@@ -205,14 +271,14 @@ function addLifecycleAndManagedActions(context) {
     if (!included || isTerminalState(state)) continue;
     if (canManage && !isActive(localPerson)) {
       plan.reactivate.push({
-        id: `reactivate:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('reactivate', externalPersonId, individualId), externalPersonId, individualId,
         reason: 'provider_reappearance',
       });
     }
 
     if (changes.length > 0 && (canManage || canReviewedUpdate)) {
       plan.updateManagedFields.push({
-        id: `updateManagedFields:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('updateManagedFields', externalPersonId, individualId), externalPersonId, individualId,
         changes, reason: canManage ? 'provider_managed_fields' : 'reviewed_reimport',
         reviewRequired: !canManage,
       });
@@ -224,12 +290,12 @@ function addLifecycleAndManagedActions(context) {
     if (desired === current || (!canManage && !canReviewedUpdate)) continue;
     if (desired === 'regular') {
       plan.promoteToRegular.push({
-        id: `promoteToRegular:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('promoteToRegular', externalPersonId, individualId), externalPersonId, individualId,
         fromPeopleType: current, toPeopleType: 'regular', reason: 'provider_state_active', reviewRequired: !canManage,
       });
     } else if (desired === 'local_visitor') {
       plan.demoteToLocalVisitor.push({
-        id: `demoteToLocalVisitor:${externalPersonId}:${individualId}`, externalPersonId, individualId,
+        id: actionId('demoteToLocalVisitor', externalPersonId, individualId), externalPersonId, individualId,
         fromPeopleType: current, toPeopleType: 'local_visitor', reason: 'provider_state_contact', reviewRequired: !canManage,
       });
     }
@@ -240,20 +306,20 @@ function addUnmatchedActions(context) {
   const { plan, input, matcherResult, conflictIds, externalById, populationIds, batches, eligibleByBatch } = context;
   const activeAuthority = input.activeAuthority || (input.authoritative ? input.provider : 'none');
   for (const rawExternalPersonId of matcherResult.unmatchedExternalIds || []) {
-    const externalPersonId = stableString(rawExternalPersonId);
+    const externalPersonId = externalId(rawExternalPersonId);
     if (conflictIds.has(externalPersonId) || !populationIds.has(externalPersonId)) continue;
     const externalPerson = externalById.get(externalPersonId);
     if (!externalPerson) continue;
     const desired = desiredPeopleType(externalPerson, qualifyingBatchesFor(externalPersonId, batches, eligibleByBatch));
     if (!input.authoritative && desired === 'regular') {
       plan.skipped.push({
-        id: `skipped:${externalPersonId}:create_regular_non_authoritative`, externalPersonId,
+        id: actionId('skipped', externalPersonId, 'create_regular_non_authoritative'), externalPersonId,
         reason: 'create_regular_non_authoritative', activeAuthority,
       });
       continue;
     }
     plan.addPeople.push({
-      id: `addPeople:${externalPersonId}`, externalPersonId,
+      id: actionId('addPeople', externalPersonId), externalPersonId,
       firstName: externalPerson.firstName, lastName: externalPerson.lastName,
       isChild: typeof externalPerson.child === 'boolean' ? externalPerson.child : null,
       familyId: externalPerson.familyId ?? null, peopleType: desired,
@@ -264,33 +330,68 @@ function addUnmatchedActions(context) {
 
 function addUnmatchedLocalReview(plan, matcherResult, localById) {
   for (const rawIndividualId of matcherResult.unmatchedLocalIds || []) {
-    const individualId = Number(rawIndividualId);
+    const individualId = positiveInteger(rawIndividualId, 'Unmatched local individual ID');
     const localPerson = localById.get(individualId);
     if (!localPerson || !isActive(localPerson) || peopleType(localPerson) !== 'regular') continue;
     plan.unmatchedLocalRegulars.push({
-      id: `unmatchedLocalRegulars:${individualId}`, individualId,
+      id: actionId('unmatchedLocalRegulars', individualId), individualId,
       reason: 'unmatched_local_regular', reviewRequired: true,
     });
   }
 }
 
-function addMissingActions(plan, input) {
-  if (!input.authoritative || input.snapshot?.mode !== 'full' || input.snapshot?.complete !== true) return;
-  for (const candidate of input.missingCandidates || []) {
-    const externalPersonId = stableString(candidate?.externalPersonId);
-    const individualId = Number(candidate?.individualId);
-    const missingFullSyncCount = Number(candidate?.missingFullSyncCount);
-    if (missingFullSyncCount >= 2) {
+function presenceLinks(input) {
+  if ((input.personLinks || []).length > 0) return input.personLinks;
+  // Compatibility for callers that still pass Task 3's already-incremented
+  // missingCandidates. New orchestration should pass all durable personLinks.
+  return (input.missingCandidates || []).map((candidate) => {
+    const projectedCount = nonNegativeInteger(candidate?.missingFullSyncCount, 'Missing full-sync count');
+    return { ...candidate, missingFullSyncCount: Math.max(0, projectedCount - 1) };
+  });
+}
+
+function buildPresenceProjection(input, externalById, eligibleUnion) {
+  const completeFullSnapshot = input.snapshot?.mode === 'full' && input.snapshot?.complete === true;
+  const projection = { completeFullSnapshot, updates: [] };
+  if (!completeFullSnapshot) return projection;
+  const links = uniqueBy(presenceLinks(input).map((link) => ({
+    externalPersonId: externalId(link?.externalPersonId),
+    individualId: positiveInteger(link?.individualId, 'Linked individual ID'),
+    missingFullSyncCount: nonNegativeInteger(link?.missingFullSyncCount, 'Missing full-sync count'),
+  })), (link) => `${link.externalPersonId}\u0000${link.individualId}`);
+  for (const link of links) {
+    const seen = externalById.has(link.externalPersonId) || eligibleUnion.has(link.externalPersonId);
+    const nextMissingFullSyncCount = seen ? 0 : link.missingFullSyncCount + 1;
+    nonNegativeInteger(nextMissingFullSyncCount, 'Next missing full-sync count');
+    projection.updates.push({
+      externalPersonId: link.externalPersonId,
+      individualId: link.individualId,
+      previousMissingFullSyncCount: link.missingFullSyncCount,
+      nextMissingFullSyncCount,
+      seen,
+    });
+  }
+  projection.updates.sort((a, b) => a.externalPersonId.localeCompare(b.externalPersonId, 'en') ||
+    a.individualId - b.individualId);
+  return projection;
+}
+
+function addMissingActions(plan, input, conflictIds) {
+  if (!input.authoritative || !plan.presenceProjection.completeFullSnapshot) return;
+  for (const update of plan.presenceProjection.updates) {
+    const { externalPersonId, individualId, nextMissingFullSyncCount } = update;
+    if (conflictIds.has(externalPersonId)) continue;
+    if (!update.seen && nextMissingFullSyncCount >= 2) {
       if (!actionExists(plan.archive, externalPersonId, individualId)) {
         plan.archive.push({
-          id: `archive:${externalPersonId}:${individualId}`, externalPersonId, individualId,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount,
+          id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
+          reason: 'confirmed_missing_full_sync', missingFullSyncCount: nextMissingFullSyncCount,
         });
       }
-    } else if (missingFullSyncCount > 0) {
+    } else if (!update.seen && nextMissingFullSyncCount > 0) {
       plan.skipped.push({
-        id: `skipped:${externalPersonId}:${individualId}:awaiting_missing_confirmation`, externalPersonId,
-        individualId, reason: 'awaiting_missing_confirmation', missingFullSyncCount,
+        id: actionId('skipped', externalPersonId, individualId, 'awaiting_missing_confirmation'), externalPersonId,
+        individualId, reason: 'awaiting_missing_confirmation', missingFullSyncCount: nextMissingFullSyncCount,
       });
     }
   }
@@ -298,22 +399,26 @@ function addMissingActions(plan, input) {
 
 function membershipBatchId(row) {
   const value = row?.addedBySyncBatchId ?? row?.added_by_sync_batch_id;
-  return value === null || value === undefined ? null : Number(value);
+  return value === null || value === undefined ? null : positiveInteger(value, 'Roster provenance batch ID');
 }
 
 function addGatheringActions(context) {
-  const { plan, batches, eligibleByBatch, populationIds, identities, input } = context;
-  const individualByExternal = new Map(identities.map((item) => [item.externalPersonId, item.individualId]));
+  const { plan, batches, eligibleByBatch, populationIds, identities, protectedIndividualIds, input } = context;
+  const actionableIdentities = identities.filter((item) => !item.reviewRequired);
+  const individualByExternal = new Map(actionableIdentities.map((item) => [item.externalPersonId, item.individualId]));
   for (const addition of plan.addPeople) individualByExternal.set(addition.externalPersonId, null);
-  const externalByIndividual = new Map(identities.map((item) => [item.individualId, item.externalPersonId]));
-  const memberships = (input.gatheringMemberships || []).map((item) => clone(item));
-  const membershipKeys = new Set(memberships.map((row) => `${Number(row.gatheringTypeId)}:${Number(row.individualId)}`));
+  const externalByIndividual = new Map(actionableIdentities.map((item) => [item.individualId, item.externalPersonId]));
+  const memberships = (input.gatheringMemberships || []).map((item) => ({
+    ...clone(item),
+    gatheringTypeId: positiveInteger(item?.gatheringTypeId, 'Roster gathering type ID'),
+    individualId: positiveInteger(item?.individualId, 'Roster individual ID'),
+  }));
+  const membershipKeys = new Set(memberships.map((row) => `${row.gatheringTypeId}:${row.individualId}`));
   const candidates = new Map();
 
   for (const batch of batches) {
     if (batch.gatheringTypeId === null || batch.gatheringTypeId === undefined) continue;
-    const gatheringTypeId = Number(batch.gatheringTypeId);
-    if (!Number.isInteger(gatheringTypeId)) continue;
+    const gatheringTypeId = batch.gatheringTypeId;
     for (const externalPersonId of eligibleByBatch.get(batch.id) || []) {
       if (!populationIds.has(externalPersonId) || !individualByExternal.has(externalPersonId)) continue;
       const individualId = individualByExternal.get(externalPersonId);
@@ -325,30 +430,31 @@ function addGatheringActions(context) {
   }
 
   for (const candidate of candidates.values()) {
-    const eligibleBatchIds = [...new Set(candidate.batches.map(Number))].sort((a, b) => a - b);
+    const eligibleBatchIds = [...new Set(candidate.batches)].sort((a, b) => a - b);
     const batchId = eligibleBatchIds[0];
     const localKey = candidate.individualId === null ? 'new' : candidate.individualId;
     plan.addToGathering.push({
-      id: `addToGathering:${batchId}:${candidate.gatheringTypeId}:${candidate.externalPersonId}:${localKey}`,
+      id: actionId('addToGathering', batchId, candidate.gatheringTypeId, candidate.externalPersonId, localKey),
       batchId, gatheringTypeId: candidate.gatheringTypeId, externalPersonId: candidate.externalPersonId,
       individualId: candidate.individualId, eligibleBatchIds, reason: 'batch_eligible',
     });
   }
 
-  const batchById = new Map(batches.map((item) => [Number(item.id), item]));
+  const batchById = new Map(batches.map((item) => [item.id, item]));
   for (const row of memberships) {
     const ownerBatchId = membershipBatchId(row);
     const ownerBatch = batchById.get(ownerBatchId);
-    const gatheringTypeId = Number(row.gatheringTypeId);
-    const individualId = Number(row.individualId);
-    if (!ownerBatch || ownerBatch.gatheringAutoRemoveEnabled !== true || Number(ownerBatch.gatheringTypeId) !== gatheringTypeId) continue;
+    const gatheringTypeId = row.gatheringTypeId;
+    const individualId = row.individualId;
+    if (!ownerBatch || ownerBatch.gatheringAutoRemoveEnabled !== true || ownerBatch.gatheringTypeId !== gatheringTypeId) continue;
+    if (protectedIndividualIds.has(individualId)) continue;
     const externalPersonId = externalByIndividual.get(individualId);
     const remainsEligible = externalPersonId && batches.some((batch) =>
-      Number(batch.gatheringTypeId) === gatheringTypeId &&
+      batch.gatheringTypeId === gatheringTypeId &&
       eligibleByBatch.get(batch.id)?.has(externalPersonId) && populationIds.has(externalPersonId));
     if (remainsEligible) continue;
     plan.removeFromGathering.push({
-      id: `removeFromGathering:${ownerBatchId}:${gatheringTypeId}:${individualId}`,
+      id: actionId('removeFromGathering', ownerBatchId, gatheringTypeId, individualId),
       batchId: ownerBatchId, gatheringTypeId, individualId, reason: 'batch_no_longer_eligible',
     });
   }
@@ -365,14 +471,23 @@ function computePeopleSyncPlan(input = {}) {
 
   const externalPeople = normalizedExternalPeople(input.externalPeople || []);
   const localPeople = normalizedLocalPeople(input.localPeople || []);
-  const externalById = new Map(externalPeople.map((item) => [stableString(item.id), item]));
-  const localById = new Map(localPeople.map((item) => [Number(item.id), item]));
+  const externalById = new Map(externalPeople.map((item) => [item.id, item]));
+  const localById = new Map(localPeople.map((item) => [item.id, item]));
   const matcherResult = input.matcher || {};
-  plan.ambiguousPeople = buildAmbiguousPeople(matcherResult);
+  const allIdentityRows = collectIdentityRows(matcherResult);
+  const identityConflicts = buildIdentityConflicts(allIdentityRows);
+  plan.ambiguousPeople = [...buildAmbiguousPeople(matcherResult), ...identityConflicts.ambiguousPeople];
   plan.familyConflicts = (input.familyConflicts || []).map(clone).sort((a, b) => canonicalString(a).localeCompare(canonicalString(b), 'en'));
   const conflictIds = new Set(plan.ambiguousPeople.map((item) => item.externalPersonId));
-  const identities = identityRows(matcherResult, conflictIds);
+  const protectedIndividualIds = new Set(identityConflicts.protectedIndividualIds);
+  for (const ambiguity of plan.ambiguousPeople) {
+    for (const individualId of ambiguity.candidateIndividualIds || []) protectedIndividualIds.add(individualId);
+    for (const individualId of ambiguity.staleLinkedIndividualIds || []) protectedIndividualIds.add(individualId);
+  }
+  for (const identity of allIdentityRows) if (identity.reviewRequired) protectedIndividualIds.add(identity.individualId);
+  const identities = unambiguousIdentityRows(allIdentityRows, conflictIds);
   const { batches, eligibleByBatch, eligibleUnion } = buildEligibility(input);
+  plan.presenceProjection = buildPresenceProjection(input, externalById, eligibleUnion);
   const populationIds = new Set();
   for (const externalPersonId of eligibleUnion) {
     const externalPerson = externalById.get(externalPersonId);
@@ -383,12 +498,12 @@ function computePeopleSyncPlan(input = {}) {
 
   const context = {
     plan, input, matcherResult, conflictIds, externalById, localById, identities,
-    populationIds, batches, eligibleByBatch,
+    protectedIndividualIds, populationIds, batches, eligibleByBatch,
   };
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
   addUnmatchedLocalReview(plan, matcherResult, localById);
-  addMissingActions(plan, input);
+  addMissingActions(plan, input, conflictIds);
   addGatheringActions(context);
 
   for (const bucket of BUCKETS) {

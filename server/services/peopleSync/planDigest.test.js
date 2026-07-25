@@ -83,6 +83,49 @@ test('digest removes only volatile snapshot, run, display, and cache metadata', 
   assert.equal(digestPlan(first), digestPlan(later));
 });
 
+test('volatile pruning is exact-path and retains durable cachedAt action values', () => {
+  const first = plan({
+    snapshot: { fetchedAt: '2026-07-25T01:00:00.000Z', watermark: 'wm-1', mode: 'full' },
+    updateManagedFields: [{ id: 'update:e1', externalPersonId: 'e1',
+      changes: [{ field: 'attributes', localValue: { cachedAt: 'durable-1' }, externalValue: {} }] }],
+  });
+  const displayOnly = plan({
+    snapshot: { fetchedAt: '2026-07-25T02:00:00.000Z', watermark: 'wm-1', mode: 'full' },
+    updateManagedFields: [{ id: 'update:e1', externalPersonId: 'e1',
+      changes: [{ field: 'attributes', localValue: { cachedAt: 'durable-1' }, externalValue: {} }] }],
+  });
+  const durableChanged = plan({
+    snapshot: { fetchedAt: '2026-07-25T02:00:00.000Z', watermark: 'wm-1', mode: 'full' },
+    updateManagedFields: [{ id: 'update:e1', externalPersonId: 'e1',
+      changes: [{ field: 'attributes', localValue: { cachedAt: 'durable-2' }, externalValue: {} }] }],
+  });
+
+  assert.equal(digestPlan(first), digestPlan(displayOnly));
+  assert.notEqual(digestPlan(first), digestPlan(durableChanged));
+});
+
+test('presence projection is bound into the plan digest', () => {
+  const baseline = plan({ presenceProjection: { completeFullSnapshot: true, updates: [
+    { externalPersonId: 'e1', individualId: 1, previousMissingFullSyncCount: 0,
+      nextMissingFullSyncCount: 1, seen: false },
+  ] } });
+  const changed = plan({ presenceProjection: { completeFullSnapshot: true, updates: [
+    { externalPersonId: 'e1', individualId: 1, previousMissingFullSyncCount: 1,
+      nextMissingFullSyncCount: 2, seen: false },
+  ] } });
+
+  assert.notEqual(digestPlan(baseline), digestPlan(changed));
+});
+
+test('canonical JSON rejects non-finite numbers instead of collapsing them to null', () => {
+  assert.throws(() => digestPlan(plan({ updateManagedFields: [{ id: 'bad', localValue: NaN }] })),
+    /finite number/i);
+  assert.throws(() => digestPlan(plan({ updateManagedFields: [{ id: 'bad', localValue: Infinity }] })),
+    /finite number/i);
+  assert.throws(() => digestPlan(plan({ updateManagedFields: [{ id: 'bad', localValue: -Infinity }] })),
+    /finite number/i);
+});
+
 test('digest retains watermarks, action values, IDs, selections, and conflicts', () => {
   const baseline = digestPlan(plan());
   const changed = [

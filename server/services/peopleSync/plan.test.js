@@ -30,7 +30,7 @@ function input(overrides = {}) {
     settings: { includeContacts: true, alignPeopleType: true },
     externalPeople: [person()], localPeople: [local()], batches: [batch()],
     matcher: matcher({ linked: [{ externalPersonId: 'ext-1', individualId: 1, reason: 'existing_link' }] }),
-    missingCandidates: [], gatheringMemberships: [],
+    personLinks: [], missingCandidates: [], gatheringMemberships: [],
     ...overrides,
   };
 }
@@ -231,6 +231,93 @@ test('authority-none reviewed updates remain limited to already-linked people', 
   assert.deepEqual(plan.updateManagedFields, []);
 });
 
+test('review-only matches cannot emit dependent terminal, reactivate, type, or managed-field actions', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [
+      person({ id: 'terminal', state: 'archived' }),
+      person({ id: 'reactivate', state: 'active' }),
+      person({ id: 'type', state: 'contact' }),
+      person({ id: 'fields', state: 'active', firstName: 'External' }),
+    ],
+    localPeople: [
+      local({ id: 1 }),
+      local({ id: 2, isActive: false }),
+      local({ id: 3, peopleType: 'regular' }),
+      local({ id: 4, firstName: 'Local' }),
+    ],
+    batches: [batch({ eligibleExternalPersonIds: ['terminal', 'reactivate', 'type', 'fields'] })],
+    matcher: matcher({
+      visitorMatches: [
+        { externalPersonId: 'terminal', individualId: 1, peopleType: 'local_visitor' },
+        { externalPersonId: 'type', individualId: 3, peopleType: 'local_visitor' },
+        { externalPersonId: 'fields', individualId: 4, peopleType: 'local_visitor' },
+      ],
+      archivedMatches: [{ externalPersonId: 'reactivate', individualId: 2 }],
+    }),
+  }));
+
+  assert.deepEqual(plan.linkPeople.map((action) => [action.externalPersonId, action.reviewRequired]), [
+    ['fields', true], ['reactivate', true], ['terminal', true], ['type', true],
+  ]);
+  assert.deepEqual(plan.archive, []);
+  assert.deepEqual(plan.reactivate, []);
+  assert.deepEqual(plan.promoteToRegular, []);
+  assert.deepEqual(plan.demoteToLocalVisitor, []);
+  assert.deepEqual(plan.updateManagedFields, []);
+});
+
+test('conflicting matcher identity buckets become ambiguity without dependent actions', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ firstName: 'External' })],
+    localPeople: [local({ id: 1, firstName: 'One' }), local({ id: 2, firstName: 'Two', isActive: false })],
+    batches: [batch({ gatheringTypeId: 100 })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'ext-1', individualId: 1, reason: 'existing_link' }],
+      archivedMatches: [{ externalPersonId: 'ext-1', individualId: 2 }],
+    }),
+  }));
+
+  assert.deepEqual(plan.ambiguousPeople, [{
+    id: 'ambiguousPeople:ext-1:conflicting_matcher_identity', externalPersonId: 'ext-1',
+    candidateIndividualIds: [1, 2], matcherBuckets: ['archivedMatches', 'linked'],
+    reason: 'conflicting_matcher_identity',
+  }]);
+  assert.deepEqual(plan.linkPeople, []);
+  assert.deepEqual(plan.updateManagedFields, []);
+  assert.deepEqual(plan.reactivate, []);
+  assert.deepEqual(plan.addToGathering, []);
+});
+
+test('pending matcher identity conflicts protect every candidate roster row from removal', () => {
+  const plan = computePeopleSyncPlan(input({
+    batches: [batch({ gatheringTypeId: 100, gatheringAutoRemoveEnabled: true,
+      eligibleExternalPersonIds: [] })],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'ext-1', individualId: 1, reason: 'existing_link' }],
+      matches: [{ externalPersonId: 'ext-1', individualId: 2, reason: 'unique_name' }],
+    }),
+    localPeople: [local({ id: 1 }), local({ id: 2 })],
+    gatheringMemberships: [
+      { gatheringTypeId: 100, individualId: 1, addedBySyncBatchId: 1 },
+      { gatheringTypeId: 100, individualId: 2, addedBySyncBatchId: 1 },
+    ],
+  }));
+
+  assert.deepEqual(plan.removeFromGathering, []);
+});
+
+test('pending matcher ambiguity suppresses presence-based archive actions', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })],
+    matcher: matcher({ ambiguous: [{ externalPersonId: 'missing', candidateIndividualIds: [1, 2],
+      reason: 'conflicting_existing_link' }] }),
+    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
+  }));
+
+  assert.equal(plan.presenceProjection.updates[0].nextMissingFullSyncCount, 2);
+  assert.deepEqual(plan.archive, []);
+});
+
 test('provider-neutral people without a status use the qualifying batch default type', () => {
   const external = person({ state: undefined });
   const plan = computePeopleSyncPlan(input({
@@ -284,6 +371,69 @@ test('missing counters below two do not archive and confirmed count two does', (
     id: 'skipped:missing-1:1:awaiting_missing_confirmation', externalPersonId: 'missing-1',
     individualId: 1, reason: 'awaiting_missing_confirmation', missingFullSyncCount: 1,
   }]);
+});
+
+test('presence projection increments first and second complete-full misses deterministically', () => {
+  const first = computePeopleSyncPlan(input({
+    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
+    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 0 }],
+  }));
+  const second = computePeopleSyncPlan(input({
+    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
+    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
+  }));
+
+  assert.deepEqual(first.presenceProjection, {
+    completeFullSnapshot: true,
+    updates: [{ externalPersonId: 'missing', individualId: 1,
+      previousMissingFullSyncCount: 0, nextMissingFullSyncCount: 1, seen: false }],
+  });
+  assert.deepEqual(first.archive, []);
+  assert.deepEqual(second.presenceProjection, {
+    completeFullSnapshot: true,
+    updates: [{ externalPersonId: 'missing', individualId: 1,
+      previousMissingFullSyncCount: 1, nextMissingFullSyncCount: 2, seen: false }],
+  });
+  assert.deepEqual(second.archive, [{
+    id: 'archive:missing:1', externalPersonId: 'missing', individualId: 1,
+    reason: 'confirmed_missing_full_sync', missingFullSyncCount: 2,
+  }]);
+});
+
+test('presence in any enabled batch resets the linked missing count and blocks archive', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ id: 'present' })],
+    batches: [
+      batch({ id: 1, eligibleExternalPersonIds: [] }),
+      batch({ id: 2, eligibleExternalPersonIds: ['present'] }),
+    ],
+    matcher: matcher({ linked: [{ externalPersonId: 'present', individualId: 1, reason: 'existing_link' }] }),
+    personLinks: [{ externalPersonId: 'present', individualId: 1, missingFullSyncCount: 2 }],
+  }));
+
+  assert.deepEqual(plan.presenceProjection.updates, [{
+    externalPersonId: 'present', individualId: 1,
+    previousMissingFullSyncCount: 2, nextMissingFullSyncCount: 0, seen: true,
+  }]);
+  assert.deepEqual(plan.archive, []);
+});
+
+test('partial and incremental snapshots never project missing-counter mutations', () => {
+  const common = {
+    externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })], matcher: matcher(),
+    personLinks: [{ externalPersonId: 'missing', individualId: 1, missingFullSyncCount: 1 }],
+  };
+  const partial = computePeopleSyncPlan(input({
+    ...common, snapshot: { fetchedAt: 'now', watermark: 'wm', mode: 'full', complete: false },
+  }));
+  const incremental = computePeopleSyncPlan(input({
+    ...common, snapshot: { fetchedAt: 'now', watermark: 'wm', mode: 'incremental', complete: true },
+  }));
+
+  assert.deepEqual(partial.presenceProjection, { completeFullSnapshot: false, updates: [] });
+  assert.deepEqual(incremental.presenceProjection, { completeFullSnapshot: false, updates: [] });
+  assert.deepEqual(partial.archive, []);
+  assert.deepEqual(incremental.archive, []);
 });
 
 test('stale and contended matcher conflicts are retained and never become additions', () => {
@@ -350,4 +500,34 @@ test('is pure and produces the same plan regardless of input array order', () =>
 
   assert.deepEqual(original, before);
   assert.deepEqual(second, first);
+});
+
+test('rejects unsafe numeric local and action identifiers', () => {
+  assert.throws(() => computePeopleSyncPlan(input({
+    localPeople: [local({ id: Number.MAX_SAFE_INTEGER + 1 })],
+    matcher: matcher({ linked: [{ externalPersonId: 'ext-1', individualId: Number.MAX_SAFE_INTEGER + 1 }] }),
+  })), /safe positive integer/i);
+  assert.throws(() => computePeopleSyncPlan(input({
+    batches: [batch({ id: NaN })],
+  })), /safe positive integer/i);
+  assert.throws(() => computePeopleSyncPlan(input({
+    batches: [batch({ gatheringTypeId: Infinity })],
+  })), /safe positive integer/i);
+  assert.throws(() => computePeopleSyncPlan(input({
+    externalPeople: [person({ id: Number.MAX_SAFE_INTEGER + 1 })],
+  })), /safe positive integer/i);
+});
+
+test('action IDs remain distinct when external IDs and reasons contain separators', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ id: 'a' }), person({ id: 'a:b' })], localPeople: [],
+    batches: [batch({ eligibleExternalPersonIds: ['a', 'a:b'] })],
+    matcher: matcher({ ambiguous: [
+      { externalPersonId: 'a', candidateIndividualIds: [], reason: 'b:c' },
+      { externalPersonId: 'a:b', candidateIndividualIds: [], reason: 'c' },
+    ] }),
+  }));
+
+  assert.equal(plan.ambiguousPeople.length, 2);
+  assert.equal(new Set(plan.ambiguousPeople.map((action) => action.id)).size, 2);
 });

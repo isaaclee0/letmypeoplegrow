@@ -3,7 +3,13 @@ const crypto = require('node:crypto');
 const INVALID = Object.freeze({ ok: false, code: 'SYNC_REVIEW_INVALID' });
 const EXPIRED = Object.freeze({ ok: false, code: 'SYNC_REVIEW_EXPIRED' });
 const STALE = Object.freeze({ ok: false, code: 'SYNC_PLAN_STALE' });
-const TIMESTAMP_KEY = /^(?:fetchedAt|generatedAt|updatedAt|createdAt|startedAt|completedAt|cachedAt|timestamp)$/i;
+const VOLATILE_PATHS = new Set([
+  'snapshot.fetchedAt',
+  'runId', 'run_id', 'syncRunId', 'sync_run_id', 'run.id',
+  'display.generatedAt', 'display.updatedAt',
+  'metadataCache.cachedAt', 'metadataCache.updatedAt',
+  'cache.cachedAt', 'cache.updatedAt',
+]);
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false;
@@ -12,16 +18,13 @@ function isPlainObject(value) {
 }
 
 function isVolatile(path, key) {
-  const parent = path[path.length - 1] || '';
-  const ancestry = path.join('.');
-  if (parent === 'snapshot' && key === 'fetchedAt') return true;
-  if (/^(?:runId|run_id|syncRunId|sync_run_id)$/i.test(key)) return true;
-  if (/run/i.test(parent) && key === 'id') return true;
-  if (/^(?:cachedAt|cacheTimestamp|metadataCachedAt|cacheUpdatedAt)$/i.test(key)) return true;
-  return TIMESTAMP_KEY.test(key) && /(?:^|\.)(?:display|[^.]*run[^.]*|[^.]*cache[^.]*)(?:\.|$)/i.test(ancestry);
+  return VOLATILE_PATHS.has([...path, key].join('.'));
 }
 
 function canonicalize(value, path = []) {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new TypeError('Canonical JSON values must contain only finite numbers');
+  }
   if (Array.isArray(value)) return value.map((item, index) => canonicalize(item, [...path, String(index)]));
   if (!isPlainObject(value)) return value;
   const normalized = {};
