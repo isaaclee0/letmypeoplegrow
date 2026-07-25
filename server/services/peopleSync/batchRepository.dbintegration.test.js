@@ -59,6 +59,16 @@ test('scheduled successful results advance a batch watermark but failed or parti
   });
 });
 
+test('complete manually applied results advance a batch watermark while manual review results do not', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members' });
+    await recordBatchResult({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual', fetchMode: 'full', complete: true, status: 'applied', externalWatermark: 'manual-watermark' });
+    assert.equal((await getBatch(churchId, 'elvanto', batch.id)).lastExternalWatermark, 'manual-watermark');
+    await recordBatchResult({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual', fetchMode: 'full', complete: true, status: 'review_required', externalWatermark: 'review-watermark' });
+    assert.equal((await getBatch(churchId, 'elvanto', batch.id)).lastExternalWatermark, 'manual-watermark');
+  });
+});
+
 test('delete batch is scoped to its provider and church', async () => {
   await withTestChurchDb(async (churchId) => {
     const elvanto = await createBatch({ churchId, provider: 'elvanto', name: 'Elvanto' });

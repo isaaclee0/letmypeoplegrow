@@ -122,14 +122,14 @@ async function deleteBatch(churchId, provider, batchId) {
 async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMode, complete, status, externalWatermark }) {
   assertProvider(provider);
   if (!RUN_STATUSES.has(status)) throw new Error('Invalid batch result status');
-  const successfulScheduledComplete = trigger === 'scheduled' && complete === true &&
-    (status === 'applied' || status === 'review_required') && typeof externalWatermark === 'string';
+  const shouldAdvanceWatermark = complete === true && typeof externalWatermark === 'string' &&
+    (status === 'applied' || (status === 'review_required' && trigger === 'scheduled'));
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
     SET last_sync_at = datetime('now'), last_sync_result = ?,
       last_external_watermark = CASE WHEN ? THEN ? ELSE last_external_watermark END,
       updated_at = datetime('now')
     WHERE id = ? AND church_id = ? AND provider = ?`, [
-    status, successfulScheduledComplete ? 1 : 0, externalWatermark, batchId, churchId, provider,
+    status, shouldAdvanceWatermark ? 1 : 0, externalWatermark, batchId, churchId, provider,
   ]);
   return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
 }

@@ -37,6 +37,41 @@ function assertAllowlistedInput(input, allowed, label) {
   }
 }
 
+function normaliseSafeAuditText(value, label, { allowNull = true, maxLength = 500 } = {}) {
+  if (value === null || value === undefined) {
+    if (allowNull) return null;
+    throw new Error(`${label} is required`);
+  }
+  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
+  const normalised = value.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (!normalised) {
+    if (allowNull) return null;
+    throw new Error(`${label} is required`);
+  }
+  if (normalised.length > maxLength) throw new Error(`${label} is too long`);
+  if (/^[{[]/.test(normalised)) {
+    try {
+      const parsed = JSON.parse(normalised);
+      if (parsed && typeof parsed === 'object') throw new Error(`${label} cannot contain a serialized payload`);
+    } catch (error) {
+      if (/serialized payload/.test(error.message)) throw error;
+    }
+  }
+  if (/\b(?:bearer|basic)\s+[a-z0-9._~+/=-]+/i.test(normalised) ||
+      /\b(?:api[ _-]?key|access[ _-]?token|refresh[ _-]?token|authorization|password|secret|token)\b\s*(?:[:=]\s*|\s+)[^\s,;]+/i.test(normalised)) {
+    throw new Error(`${label} cannot contain credential-shaped content`);
+  }
+  return normalised;
+}
+
+function normaliseErrorCode(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(value)) {
+    throw new Error('Run error code must use the safe UPPER_SNAKE_CASE format');
+  }
+  return value;
+}
+
 function sanitiseCounts(counts) {
   if (!counts || typeof counts !== 'object' || Array.isArray(counts)) throw new Error('Run counts must be an object');
   assertNoCredentialShape(counts);
@@ -68,10 +103,18 @@ function toRun(row) {
   };
 }
 
-async function getRunForChurch(runId, churchId) {
+async function getRunForChurch(runId, churchId, provider) {
+  assertProvider(provider);
   const rows = await Database.queryForChurch(churchId,
-    'SELECT * FROM people_sync_runs WHERE id = ? AND church_id = ?', [runId, churchId]);
+    'SELECT * FROM people_sync_runs WHERE id = ? AND church_id = ? AND provider = ?', [runId, churchId, provider]);
   return rows[0] || null;
+}
+
+async function getRunningRun(runId, churchId, provider) {
+  const run = await getRunForChurch(runId, churchId, provider);
+  if (!run) throw new Error('Run is not available for this church and provider');
+  if (run.status !== 'running') throw new Error('Only running runs can be finalized');
+  return run;
 }
 
 async function startRun(input) {
@@ -88,46 +131,52 @@ async function startRun(input) {
   const result = await Database.queryForChurch(churchId, `INSERT INTO people_sync_runs
     (church_id, provider, batch_id, trigger, fetch_mode, status) VALUES (?, ?, ?, ?, ?, 'running')`,
   [churchId, provider, batchId, trigger, fetchMode]);
-  return toRun(await getRunForChurch(result.insertId, churchId));
+  return toRun(await getRunForChurch(result.insertId, churchId, provider));
 }
 
 async function finishRun(input) {
-  const allowed = new Set(['churchId', 'runId', 'status', 'counts', 'externalWatermark']);
+  const allowed = new Set(['churchId', 'provider', 'runId', 'status', 'counts', 'externalWatermark']);
   assertAllowlistedInput(input, allowed, 'Run finish');
-  const { churchId, runId, status, counts, externalWatermark = null } = input;
+  const { churchId, provider, runId, status, counts, externalWatermark = null } = input;
+  assertProvider(provider);
   if (!FINISHED_STATUSES.has(status)) throw new Error('Invalid completed run status');
   const safeCounts = sanitiseCounts(counts);
-  const existing = await getRunForChurch(runId, churchId);
-  if (!existing) return null;
-  await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = ?, counts = ?, external_watermark = ?,
-      completed_at = datetime('now') WHERE id = ? AND church_id = ? AND provider = ?`,
-  [status, JSON.stringify(safeCounts), externalWatermark, runId, churchId, existing.provider]);
-  return toRun(await getRunForChurch(runId, churchId));
+  const safeWatermark = normaliseSafeAuditText(externalWatermark, 'External watermark');
+  await getRunningRun(runId, churchId, provider);
+  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = ?, counts = ?, external_watermark = ?,
+      error_code = NULL, error_message = NULL, completed_at = datetime('now')
+      WHERE id = ? AND church_id = ? AND provider = ? AND status = 'running'`,
+  [status, JSON.stringify(safeCounts), safeWatermark, runId, churchId, provider]);
+  if (result.affectedRows !== 1) throw new Error('Only running runs can be finalized');
+  return toRun(await getRunForChurch(runId, churchId, provider));
 }
 
 async function failRun(input) {
-  const allowed = new Set(['churchId', 'runId', 'errorCode', 'errorMessage']);
+  const allowed = new Set(['churchId', 'provider', 'runId', 'errorCode', 'errorMessage']);
   assertAllowlistedInput(input, allowed, 'Run failure');
-  const { churchId, runId, errorCode = null, errorMessage = null } = input;
-  if (errorCode !== null && typeof errorCode !== 'string') throw new Error('Run error code must be a string');
-  if (errorMessage !== null && typeof errorMessage !== 'string') throw new Error('Run error message must be a string');
-  const existing = await getRunForChurch(runId, churchId);
-  if (!existing) return null;
-  await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = 'failed', error_code = ?, error_message = ?,
-      completed_at = datetime('now') WHERE id = ? AND church_id = ? AND provider = ?`,
-  [errorCode, errorMessage, runId, churchId, existing.provider]);
-  return toRun(await getRunForChurch(runId, churchId));
+  const { churchId, provider, runId, errorCode = null, errorMessage = null } = input;
+  assertProvider(provider);
+  const safeErrorCode = normaliseErrorCode(errorCode);
+  const safeErrorMessage = normaliseSafeAuditText(errorMessage, 'Run error message');
+  await getRunningRun(runId, churchId, provider);
+  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = 'failed', error_code = ?, error_message = ?,
+      counts = '{}', external_watermark = NULL, review_notification_fingerprint = NULL, completed_at = datetime('now')
+      WHERE id = ? AND church_id = ? AND provider = ? AND status = 'running'`,
+  [safeErrorCode, safeErrorMessage, runId, churchId, provider]);
+  if (result.affectedRows !== 1) throw new Error('Only running runs can be finalized');
+  return toRun(await getRunForChurch(runId, churchId, provider));
 }
 
-async function setReviewNotificationFingerprint(runId, churchId, fingerprint) {
+async function setReviewNotificationFingerprint(runId, churchId, provider, fingerprint) {
+  assertProvider(provider);
   if (typeof fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(fingerprint)) {
     throw new Error('Review notification fingerprint must be a lowercase SHA-256 digest');
   }
-  const existing = await getRunForChurch(runId, churchId);
-  if (!existing) return false;
+  const existing = await getRunForChurch(runId, churchId, provider);
+  if (!existing) throw new Error('Run is not available for this church and provider');
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs
     SET review_notification_fingerprint = ? WHERE id = ? AND church_id = ? AND provider = ?`,
-  [fingerprint, runId, churchId, existing.provider]);
+  [fingerprint, runId, churchId, provider]);
   return result.affectedRows > 0;
 }
 

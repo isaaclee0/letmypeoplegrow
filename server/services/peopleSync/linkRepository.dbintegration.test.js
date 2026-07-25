@@ -7,6 +7,7 @@ const {
   upsertPersonLink,
   upsertPersonLinkWithConnection,
   upsertFamilyLink,
+  upsertFamilyLinkWithConnection,
   markPeopleSeen,
   recordFullFetchPresence,
 } = require('./linkRepository');
@@ -75,6 +76,24 @@ test('link reads and connection-scoped writes retain the church boundary', async
   });
 });
 
+test('outer transactions roll back person and family connection-scoped link writes', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const familyId = await seedFamily(churchId);
+    await assert.rejects(Database.transaction(async (conn) => {
+      await upsertPersonLinkWithConnection(conn, {
+        churchId, provider: 'elvanto', externalPersonId: 'elvanto-person-1', individualId, linkSource: 'created',
+      });
+      await upsertFamilyLinkWithConnection(conn, {
+        churchId, provider: 'elvanto', externalFamilyId: 'elvanto-family-1', familyId, linkSource: 'created',
+      });
+      throw new Error('abort outer transaction');
+    }), /abort outer transaction/);
+    assert.equal((await Database.query('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ? AND provider = ?', [churchId, 'elvanto']))[0].count, 0);
+    assert.equal((await Database.query('SELECT COUNT(*) AS count FROM external_family_links WHERE church_id = ? AND provider = ?', [churchId, 'elvanto']))[0].count, 0);
+  });
+});
+
 test('seen people reset their missing counter and refresh last seen', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId);
@@ -99,6 +118,22 @@ test('complete full fetches increment missing counters and seen people reset the
     await recordFullFetchPresence(churchId, 'elvanto', new Set(['elvanto-1']), { complete: true });
     const links = await listPersonLinks(churchId, 'elvanto');
     assert.equal(links[0].missingFullSyncCount, 0);
+  });
+});
+
+test('a full-presence write rolls back every earlier counter update when a later write aborts', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstIndividualId = await seedIndividual(churchId, 'First');
+    const secondIndividualId = await seedIndividual(churchId, 'Second');
+    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId: firstIndividualId, linkSource: 'created' });
+    await upsertPersonLink({ churchId, provider: 'elvanto', externalPersonId: 'elvanto-2', individualId: secondIndividualId, linkSource: 'created' });
+    await Database.query(`CREATE TRIGGER abort_second_presence
+      BEFORE UPDATE ON external_person_links
+      WHEN NEW.external_person_id = 'elvanto-2'
+      BEGIN SELECT RAISE(ABORT, 'forced presence failure'); END`);
+
+    await assert.rejects(recordFullFetchPresence(churchId, 'elvanto', new Set(), { complete: true }), /forced presence failure/);
+    assert.deepEqual((await listPersonLinks(churchId, 'elvanto')).map((link) => link.missingFullSyncCount), [0, 0]);
   });
 });
 
