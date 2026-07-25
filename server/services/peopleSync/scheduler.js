@@ -170,6 +170,19 @@ async function runChurch(churchId, options = {}) {
 
   return Database.setChurchContext(churchId, async () => {
     const totals = { ambiguous: 0, visitorMatches: 0, familyNameUpdatesPending: 0 };
+    // Tracks whether we actually got far enough to dispatch at least one
+    // batch this run (past due/authority/connection/token gating — see
+    // below). notify() must only run when this is true: the old syncChurch
+    // returned immediately when nothing was due, before ever touching the
+    // review-notification logic. If notify() ran unconditionally on a
+    // nothing-due night, reviewNotificationDecision sees all-zero totals
+    // against an existing dedup marker and CLEARS it — so the next time the
+    // same unresolved items reappear (e.g. the following week, for a weekly
+    // batch), they look "new" again and re-notify admins who already saw and
+    // haven't resolved them. Skipping notify entirely (rather than just
+    // skipping the clear) also means it does not spuriously NOTIFY on a
+    // nothing-ran night either — there is nothing new to report either way.
+    let anyBatchDispatched = false;
     let authorityState;
     try {
       authorityState = await getAuthority(churchId);
@@ -233,6 +246,8 @@ async function runChurch(churchId, options = {}) {
       }
       if (!accessToken) continue;
 
+      anyBatchDispatched = true;
+
       for (const batch of dueBatches) {
         let run = null;
         try {
@@ -285,10 +300,12 @@ async function runChurch(churchId, options = {}) {
       }
     }
 
-    try {
-      await notify(churchId, totals);
-    } catch (err) {
-      logger.error(`peopleSync scheduler: review notification failed for church ${churchId}: ${err.message}`);
+    if (anyBatchDispatched) {
+      try {
+        await notify(churchId, totals);
+      } catch (err) {
+        logger.error(`peopleSync scheduler: review notification failed for church ${churchId}: ${err.message}`);
+      }
     }
 
     return totals;

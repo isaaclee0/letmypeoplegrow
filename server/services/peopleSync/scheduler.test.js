@@ -149,6 +149,44 @@ test('an absent connection (never migrated/connected yet) does not block dispatc
   assert.deepEqual(executed, [14]);
 });
 
+test('a church with no due batches today does not clear or re-fire an existing review notification marker', async () => {
+  // Regression: notify() must not run at all when nothing was actually
+  // dispatched this cycle. If it ran unconditionally with all-zero totals,
+  // reviewNotificationDecision would see zero counts against an existing
+  // dedup marker and clear it — so the same still-unresolved items would
+  // look "new" again next time this (e.g. weekly) batch is actually due,
+  // re-notifying admins who already saw and haven't resolved them.
+  let notifyCalls = 0;
+  await runChurch('church-a', {
+    now: MONDAY,
+    providers: ['planning_center'],
+    getAuthority: async () => ({ active: 'planning_center', pending: null }),
+    listBatches: async () => [baseBatch({ id: 50, scheduleDay: 3 })], // not due today
+    getConnection: async () => ({ connectionStatus: 'connected' }),
+    getAccessToken: async () => { throw new Error('must not be called when nothing is due'); },
+    executeBatch: async () => { throw new Error('must not be called when nothing is due'); },
+    notify: async () => { notifyCalls++; },
+    ...noopRunRecorder(),
+  });
+  assert.equal(notifyCalls, 0);
+});
+
+test('a church whose only due batch is skipped for authority reasons does not clear or re-fire an existing marker', async () => {
+  let notifyCalls = 0;
+  await runChurch('church-a', {
+    now: MONDAY,
+    providers: ['planning_center'],
+    getAuthority: async () => ({ active: 'elvanto', pending: null }), // non-authoritative for this batch's provider
+    listBatches: async () => [baseBatch({ id: 51 })], // due today, but authority mismatch
+    getConnection: async () => ({ connectionStatus: 'connected' }),
+    getAccessToken: async () => { throw new Error('must not be called when authority-skipped'); },
+    executeBatch: async () => { throw new Error('must not be called when authority-skipped'); },
+    notify: async () => { notifyCalls++; },
+    ...noopRunRecorder(),
+  });
+  assert.equal(notifyCalls, 0);
+});
+
 test('review-required counts produce a sanitized notification summary and a review_required run', async () => {
   let notified = null;
   let finished = null;
@@ -283,23 +321,30 @@ test('churches run sequentially, in listChurches order', async () => {
 
 test('background work executes inside Database.setChurchContext for the correct church', async () => {
   let observedChurchId = null;
+  let notifyCalled = false;
   await runChurch('church-xyz', {
     now: MONDAY,
+    providers: ['planning_center'],
     getAuthority: async (churchId) => {
       observedChurchId = Database.getCurrentChurchId();
       return { active: 'planning_center', pending: null };
     },
-    listBatches: async () => [],
+    // At least one due batch must actually dispatch, otherwise notify() is
+    // deliberately never called (see the no-due-batches tests above) and this
+    // test's own notify assertion below would silently never run.
+    listBatches: async (churchId, provider) => [baseBatch({ id: 60, provider })],
     getConnection: async () => ({ connectionStatus: 'connected' }),
     getAccessToken: async () => 'token',
     executeBatch: async () => ({ added: 0 }),
     notify: async () => {
+      notifyCalled = true;
       // Also verify the context is still active by the time notify runs.
       assert.equal(Database.getCurrentChurchId(), 'church-xyz');
     },
     ...noopRunRecorder(),
   });
   assert.equal(observedChurchId, 'church-xyz');
+  assert.equal(notifyCalled, true, 'notify must actually have run for this assertion to mean anything');
   // Context must not leak past the call.
   assert.equal(Database.getCurrentChurchId(), undefined);
 });

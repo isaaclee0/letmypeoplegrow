@@ -1962,7 +1962,11 @@ router.get('/planning-center/callback', async (req, res) => {
       credentials: {
         accessToken: tokenResponse.access_token,
         refreshToken: tokenResponse.refresh_token,
-        expiresAt: Date.now() + Number(tokenResponse.expires_in) * 1000,
+        // Same fallback as requestPcoTokenRefresh in planningCenterSync.js —
+        // if PCO ever omits expires_in, Number(undefined) is NaN, which
+        // isExpiringSoon treats as falsy (never proactively refreshes), so a
+        // missing value must not become the expiry rather than being defaulted.
+        expiresAt: Date.now() + (Number(tokenResponse.expires_in) || 7200) * 1000,
       },
       connectedBy: connectUserId,
       metadata: { accountName },
