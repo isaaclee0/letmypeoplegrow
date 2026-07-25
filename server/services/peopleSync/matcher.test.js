@@ -238,7 +238,7 @@ test('surfaces a stale durable link instead of falling back to a name match', ()
   }));
 
   assert.deepEqual(result.ambiguous, [{
-    externalPersonId: 'e1', candidateIndividualIds: [99], reason: 'stale_link',
+    externalPersonId: 'e1', candidateIndividualIds: [], staleLinkedIndividualIds: [99], reason: 'stale_link',
   }]);
   assert.deepEqual(result.matches, []);
 });
@@ -253,7 +253,7 @@ test('surfaces mixed stale and valid durable-link claims for review', () => {
   }));
 
   assert.deepEqual(result.ambiguous, [{
-    externalPersonId: 'e1', candidateIndividualIds: [1, 99], reason: 'stale_link',
+    externalPersonId: 'e1', candidateIndividualIds: [1], staleLinkedIndividualIds: [99], reason: 'stale_link',
   }]);
   assert.deepEqual(result.linked, []);
 });
@@ -270,6 +270,112 @@ test('keeps reciprocal contention ambiguous instead of assigning one local by ex
   }, {
     externalPersonId: 'e-b', candidateIndividualIds: [1], reason: 'contended_unique_name',
   }]);
+});
+
+test('allows same-name externals narrowed by opposite child states to match independently after reordering', () => {
+  const first = input({
+    externalPeople: [
+      external('e-child', 'Alex', 'Lee', { child: true }),
+      external('e-adult', 'Alex', 'Lee', { child: false }),
+    ],
+    localPeople: [local(1, 'Alex', 'Lee', { isChild: false }), local(2, 'Alex', 'Lee', { isChild: true })],
+  });
+  const second = input({ ...first, externalPeople: [...first.externalPeople].reverse() });
+  const expected = [{
+    individualId: 1, externalPersonId: 'e-adult', reason: 'child_narrowing',
+  }, {
+    individualId: 2, externalPersonId: 'e-child', reason: 'child_narrowing',
+  }];
+
+  assert.deepEqual(matchPeople(first).matches, expected);
+  assert.deepEqual(matchPeople(second).matches, expected);
+});
+
+test('allows same-name externals corroborated by separate linked families to match independently after reordering', () => {
+  const first = input({
+    externalPeople: [
+      external('e-two', 'John', 'Smith', { familyId: 'external-2' }),
+      external('e-linked-1', 'Jane', 'Smith', { familyId: 'external-1' }),
+      external('e-one', 'John', 'Smith', { familyId: 'external-1' }),
+      external('e-linked-2', 'Jill', 'Smith', { familyId: 'external-2' }),
+    ],
+    localPeople: [
+      local(1, 'John', 'Smith', { familyId: 10 }), local(2, 'John', 'Smith', { familyId: 20 }),
+      local(3, 'Jane', 'Smith', { familyId: 10 }), local(4, 'Jill', 'Smith', { familyId: 20 }),
+    ],
+    existingLinks: [
+      { externalPersonId: 'e-linked-1', individualId: 3 }, { externalPersonId: 'e-linked-2', individualId: 4 },
+    ],
+    localFamilyMembers: new Map([
+      [10, [local(1, 'John', 'Smith', { familyId: 10 }), local(3, 'Jane', 'Smith', { familyId: 10 })]],
+      [20, [local(2, 'John', 'Smith', { familyId: 20 }), local(4, 'Jill', 'Smith', { familyId: 20 })]],
+    ]),
+    externalFamilyMembers: new Map([
+      ['external-1', [external('e-one', 'John', 'Smith', { familyId: 'external-1' }), external('e-linked-1', 'Jane', 'Smith', { familyId: 'external-1' })]],
+      ['external-2', [external('e-two', 'John', 'Smith', { familyId: 'external-2' }), external('e-linked-2', 'Jill', 'Smith', { familyId: 'external-2' })]],
+    ]),
+  });
+  const second = input({ ...first, externalPeople: [...first.externalPeople].reverse() });
+  const expected = [{
+    individualId: 1, externalPersonId: 'e-one', reason: 'family_corroboration',
+  }, {
+    individualId: 2, externalPersonId: 'e-two', reason: 'family_corroboration',
+  }];
+
+  assert.deepEqual(matchPeople(first).matches, expected);
+  assert.deepEqual(matchPeople(second).matches, expected);
+});
+
+test('keeps visitor and archived review candidates globally contended after reordering', () => {
+  const visitor = input({
+    externalPeople: [external('e-two', 'Vera', 'Review'), external('e-one', 'Vera', 'Review')],
+    localPeople: [local(1, 'Vera', 'Review', { peopleType: 'local_visitor' })],
+  });
+  const archived = input({
+    externalPeople: [external('a-two', 'Arnie', 'Review'), external('a-one', 'Arnie', 'Review')],
+    localPeople: [local(2, 'Arnie', 'Review', { isActive: false })],
+  });
+  const expectedVisitor = [{
+    externalPersonId: 'e-one', candidateIndividualIds: [1], reason: 'contended_review_candidate',
+  }, {
+    externalPersonId: 'e-two', candidateIndividualIds: [1], reason: 'contended_review_candidate',
+  }];
+  const expectedArchived = [{
+    externalPersonId: 'a-one', candidateIndividualIds: [2], reason: 'contended_review_candidate',
+  }, {
+    externalPersonId: 'a-two', candidateIndividualIds: [2], reason: 'contended_review_candidate',
+  }];
+
+  assert.deepEqual(matchPeople(visitor).ambiguous, expectedVisitor);
+  assert.deepEqual(matchPeople(input({ ...visitor, externalPeople: [...visitor.externalPeople].reverse() })).ambiguous, expectedVisitor);
+  assert.deepEqual(matchPeople(archived).ambiguous, expectedArchived);
+  assert.deepEqual(matchPeople(input({ ...archived, externalPeople: [...archived.externalPeople].reverse() })).ambiguous, expectedArchived);
+});
+
+test('canonicalizes equivalent duplicate external records with type-varied family ids before family corroboration', () => {
+  const targetNumber = external('e-target', 'John', 'Smith', { familyId: 1, email: 'first@example.com' });
+  const targetString = external('e-target', 'John', 'Smith', { familyId: '1', customId: 'ignored-custom-id' });
+  const linked = external('e-linked', 'Jane', 'Smith', { familyId: 1 });
+  const first = input({
+    externalPeople: [targetNumber, targetString, linked],
+    localPeople: [
+      local(1, 'John', 'Smith', { familyId: 10 }), local(2, 'John', 'Smith', { familyId: 20 }),
+      local(3, 'Jane', 'Smith', { familyId: 10 }),
+    ],
+    existingLinks: [{ externalPersonId: 'e-linked', individualId: 3 }],
+    localFamilyMembers: new Map([[10, [local(1, 'John', 'Smith', { familyId: 10 }), local(3, 'Jane', 'Smith', { familyId: 10 })]]]),
+    externalFamilyMembers: new Map([[1, [targetString, linked]]]),
+  });
+  const second = input({ ...first, externalPeople: [...first.externalPeople].reverse() });
+  const expected = {
+    ...emptyResult(),
+    linked: [{ individualId: 3, externalPersonId: 'e-linked', reason: 'existing_link' }],
+    matches: [{ individualId: 1, externalPersonId: 'e-target', reason: 'family_corroboration' }],
+    unmatchedLocalIds: [2],
+  };
+
+  assert.deepEqual(matchPeople(first), expected);
+  assert.deepEqual(matchPeople(second), expected);
 });
 
 test('keeps conflicting duplicate external records review-safe after input reordering', () => {

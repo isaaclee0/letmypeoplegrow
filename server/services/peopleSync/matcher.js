@@ -21,6 +21,10 @@ function normalizeName(value) {
     .trim();
 }
 
+function normalizeFamilyId(value) {
+  return value === null || value === undefined ? null : stableString(value);
+}
+
 function nameKey(person) {
   const firstName = normalizeName(person?.firstName);
   const lastName = normalizeName(person?.lastName);
@@ -50,13 +54,18 @@ function uniquePeopleById(people, compare) {
     });
 }
 
-function externalFingerprint(person) {
-  return JSON.stringify({
+function canonicalExternal(person) {
+  return {
+    id: stableString(person?.id),
     firstName: normalizeName(person?.firstName),
     lastName: normalizeName(person?.lastName),
     child: typeof person?.child === 'boolean' ? person.child : null,
-    familyId: stableString(person?.familyId),
-  });
+    familyId: normalizeFamilyId(person?.familyId),
+  };
+}
+
+function externalFingerprint(person) {
+  return JSON.stringify(canonicalExternal(person));
 }
 
 function prepareExternalPeople(people) {
@@ -64,7 +73,7 @@ function prepareExternalPeople(people) {
   for (const person of people || []) {
     const id = stableString(person?.id);
     if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(person);
+    groups.get(id).push(canonicalExternal(person));
   }
 
   const duplicateExternalIds = new Set();
@@ -83,8 +92,20 @@ function idSet(people) {
 }
 
 function memberIds(membersByFamily, familyId) {
-  if (familyId === null || familyId === undefined) return new Set();
-  return idSet(membersByFamily.get(familyId) || []);
+  const key = normalizeFamilyId(familyId);
+  if (key === null) return new Set();
+  return idSet(membersByFamily.get(key) || []);
+}
+
+function normalizeFamilyMembers(membersByFamily) {
+  const normalized = new Map();
+  for (const [familyId, members] of membersByFamily instanceof Map ? membersByFamily : []) {
+    const key = normalizeFamilyId(familyId);
+    if (key === null) continue;
+    if (!normalized.has(key)) normalized.set(key, []);
+    normalized.get(key).push(...(members || []));
+  }
+  return normalized;
 }
 
 function buildDurableLinks(existingLinks, externalById, localById) {
@@ -111,8 +132,10 @@ function buildDurableLinks(existingLinks, externalById, localById) {
       if (localById.has(individualId)) reservedLocalIds.add(individualId);
     }
     const claimIds = [...individualIds].sort((a, b) => a - b);
-    if (claimIds.some((individualId) => !localById.has(individualId))) {
-      staleByExternal.set(externalPersonId, claimIds);
+    const candidateIndividualIds = claimIds.filter((individualId) => localById.has(individualId));
+    const staleLinkedIndividualIds = claimIds.filter((individualId) => !localById.has(individualId));
+    if (staleLinkedIndividualIds.length > 0) {
+      staleByExternal.set(externalPersonId, { candidateIndividualIds, staleLinkedIndividualIds });
       continue;
     }
     const individualId = individualIds.size === 1 ? [...individualIds][0] : null;
@@ -148,21 +171,57 @@ function isVisitorActive(person) {
   return person.isActive !== false && !isRegularActive(person);
 }
 
-function buildRegularContention(externalPeople, regularByName, reservedLocalIds, excludedExternalIds) {
-  const contenderIdsByLocal = new Map();
-  for (const externalPerson of externalPeople) {
-    const externalPersonId = stableString(externalPerson.id);
-    if (excludedExternalIds.has(externalPersonId)) continue;
-    const key = nameKey(externalPerson);
-    if (!key) continue;
-    for (const localPerson of regularByName.get(key) || []) {
-      const individualId = Number(localPerson.id);
-      if (reservedLocalIds.has(individualId)) continue;
-      if (!contenderIdsByLocal.has(individualId)) contenderIdsByLocal.set(individualId, new Set());
-      contenderIdsByLocal.get(individualId).add(externalPersonId);
-    }
+function regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext) {
+  const key = nameKey(externalPerson);
+  if (!key) return { candidates: [], proposal: null };
+  let candidates = (regularByName.get(key) || [])
+    .filter((person) => !reservedLocalIds.has(Number(person.id)));
+  if (candidates.length === 1) return { candidates, proposal: { person: candidates[0], reason: 'unique_name' } };
+
+  if (candidates.length > 1 && typeof externalPerson.child === 'boolean') {
+    const sameChildState = candidates.filter((person) => typeof person.isChild === 'boolean' && person.isChild === externalPerson.child);
+    if (sameChildState.length === 1) return { candidates: sameChildState, proposal: { person: sameChildState[0], reason: 'child_narrowing' } };
+    if (sameChildState.length > 0) candidates = sameChildState;
   }
-  return contenderIdsByLocal;
+
+  if (candidates.length > 1) {
+    const corroborated = candidates.filter((localPerson) => hasLinkedFamilyMember({
+      externalPerson,
+      localPerson,
+      ...familyContext,
+    }));
+    if (corroborated.length === 1) return { candidates: corroborated, proposal: { person: corroborated[0], reason: 'family_corroboration' } };
+    return {
+      candidates,
+      proposal: null,
+      ambiguityReason: corroborated.length > 1 ? 'conflicting_family_evidence' : 'duplicate_name',
+    };
+  }
+  return { candidates, proposal: null };
+}
+
+function reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds) {
+  const key = nameKey(externalPerson);
+  if (!key) return { candidates: [], proposal: null };
+  const available = (person) => !reservedLocalIds.has(Number(person.id));
+  const visitors = (visitorByName.get(key) || []).filter(available);
+  const archived = (archivedByName.get(key) || []).filter(available);
+  const candidates = [...visitors, ...archived].sort(compareNumericId);
+  if (candidates.length !== 1) return { candidates, proposal: null };
+  return {
+    candidates,
+    proposal: { person: candidates[0], bucket: visitors.length === 1 ? 'visitor' : 'archived' },
+  };
+}
+
+function contentionByLocal(proposals) {
+  const externalIdsByLocal = new Map();
+  for (const [externalPersonId, proposal] of proposals) {
+    const individualId = Number(proposal.person.id);
+    if (!externalIdsByLocal.has(individualId)) externalIdsByLocal.set(individualId, new Set());
+    externalIdsByLocal.get(individualId).add(externalPersonId);
+  }
+  return externalIdsByLocal;
 }
 
 function matchPeople(input) {
@@ -187,25 +246,44 @@ function matchPeople(input) {
     usedExternalIds.add(stableString(externalPerson.id));
     usedLocalIds.add(Number(localPerson.id));
   };
-  const available = (person) => !usedLocalIds.has(Number(person.id)) && !reservedLocalIds.has(Number(person.id));
   const regularByName = indexByName(localPeople.filter(isRegularActive));
   const visitorByName = indexByName(localPeople.filter(isVisitorActive));
   const archivedByName = indexByName(localPeople.filter((person) => person.isActive === false));
+  const familyContext = {
+    externalFamilyMembers: normalizeFamilyMembers(input?.externalFamilyMembers),
+    localFamilyMembers: normalizeFamilyMembers(input?.localFamilyMembers),
+    linkedByExternal,
+  };
   const excludedExternalIds = new Set([
     ...duplicateExternalIds,
     ...conflictedByExternal.keys(),
     ...staleByExternal.keys(),
     ...validByExternal.keys(),
   ]);
-  const contenderIdsByLocal = buildRegularContention(
-    externalPeople,
-    regularByName,
-    reservedLocalIds,
-    excludedExternalIds
-  );
-  const isContended = (localPerson, externalPersonId) => {
-    const contenders = contenderIdsByLocal.get(Number(localPerson.id));
-    return contenders?.size > 1 && contenders.has(externalPersonId);
+  const regularDecisions = new Map();
+  const regularProposals = new Map();
+  const reviewDecisions = new Map();
+  const reviewProposals = new Map();
+  for (const externalPerson of externalPeople) {
+    const externalPersonId = stableString(externalPerson.id);
+    if (excludedExternalIds.has(externalPersonId)) continue;
+    const decision = regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext);
+    regularDecisions.set(externalPersonId, decision);
+    if (decision.proposal) {
+      regularProposals.set(externalPersonId, decision.proposal);
+      continue;
+    }
+    if (decision.candidates.length === 0) {
+      const review = reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds);
+      reviewDecisions.set(externalPersonId, review);
+      if (review.proposal) reviewProposals.set(externalPersonId, review.proposal);
+    }
+  }
+  const regularContention = contentionByLocal(regularProposals);
+  const reviewContention = contentionByLocal(reviewProposals);
+  const isContended = (contention, localPerson) => {
+    const contenders = contention.get(Number(localPerson.id));
+    return contenders?.size > 1;
   };
 
   for (const externalPerson of externalPeople) {
@@ -223,9 +301,11 @@ function matchPeople(input) {
     }
 
     if (staleByExternal.has(externalPersonId)) {
+      const stale = staleByExternal.get(externalPersonId);
       result.ambiguous.push({
         externalPersonId,
-        candidateIndividualIds: staleByExternal.get(externalPersonId),
+        candidateIndividualIds: stale.candidateIndividualIds,
+        staleLinkedIndividualIds: stale.staleLinkedIndividualIds,
         reason: 'stale_link',
       });
       usedExternalIds.add(externalPersonId);
@@ -257,96 +337,61 @@ function matchPeople(input) {
       continue;
     }
 
-    let candidates = (regularByName.get(key) || []).filter(available);
-    if (candidates.length === 1) {
-      if (isContended(candidates[0], externalPersonId)) {
+    const decision = regularDecisions.get(externalPersonId);
+    if (decision?.proposal) {
+      const { person, reason } = decision.proposal;
+      if (isContended(regularContention, person)) {
         result.ambiguous.push({
           externalPersonId,
-          candidateIndividualIds: [Number(candidates[0].id)],
+          candidateIndividualIds: [Number(person.id)],
           reason: 'contended_unique_name',
         });
         usedExternalIds.add(externalPersonId);
         continue;
       }
-      reserve(externalPerson, candidates[0]);
-      result.matches.push({ individualId: Number(candidates[0].id), externalPersonId, reason: 'unique_name' });
+      reserve(externalPerson, person);
+      result.matches.push({ individualId: Number(person.id), externalPersonId, reason });
       continue;
     }
-
-    if (candidates.length > 1 && typeof externalPerson.child === 'boolean') {
-      const sameChildState = candidates.filter((person) => typeof person.isChild === 'boolean' && person.isChild === externalPerson.child);
-      if (sameChildState.length === 1) {
-        if (isContended(sameChildState[0], externalPersonId)) {
-          result.ambiguous.push({
-            externalPersonId,
-            candidateIndividualIds: [Number(sameChildState[0].id)],
-            reason: 'contended_unique_name',
-          });
-          usedExternalIds.add(externalPersonId);
-          continue;
-        }
-        reserve(externalPerson, sameChildState[0]);
-        result.matches.push({ individualId: Number(sameChildState[0].id), externalPersonId, reason: 'child_narrowing' });
-        continue;
-      }
-      if (sameChildState.length > 0) candidates = sameChildState;
-    }
-
-    if (candidates.length > 1) {
-      const corroborated = candidates.filter((localPerson) => hasLinkedFamilyMember({
-        externalPerson,
-        localPerson,
-        externalFamilyMembers: input?.externalFamilyMembers || new Map(),
-        localFamilyMembers: input?.localFamilyMembers || new Map(),
-        linkedByExternal,
-      }));
-      if (corroborated.length === 1) {
-        if (isContended(corroborated[0], externalPersonId)) {
-          result.ambiguous.push({
-            externalPersonId,
-            candidateIndividualIds: [Number(corroborated[0].id)],
-            reason: 'contended_unique_name',
-          });
-          usedExternalIds.add(externalPersonId);
-          continue;
-        }
-        reserve(externalPerson, corroborated[0]);
-        result.matches.push({ individualId: Number(corroborated[0].id), externalPersonId, reason: 'family_corroboration' });
-        continue;
-      }
+    if (decision?.candidates.length > 1) {
       result.ambiguous.push({
         externalPersonId,
-        candidateIndividualIds: candidates.map((person) => Number(person.id)),
-        reason: corroborated.length > 1 ? 'conflicting_family_evidence' : 'duplicate_name',
+        candidateIndividualIds: decision.candidates.map((person) => Number(person.id)),
+        reason: decision.ambiguityReason,
       });
       usedExternalIds.add(externalPersonId);
       continue;
     }
 
-    const visitorCandidates = (visitorByName.get(key) || []).filter(available);
-    const archivedCandidates = (archivedByName.get(key) || []).filter(available);
-    const reviewCandidates = [...visitorCandidates, ...archivedCandidates]
-      .sort(compareNumericId);
-    if (reviewCandidates.length === 1 && visitorCandidates.length === 1) {
-      reserve(externalPerson, visitorCandidates[0]);
-      result.visitorMatches.push({
-        externalPersonId,
-        individualId: Number(visitorCandidates[0].id),
-        peopleType: visitorCandidates[0].peopleType,
-      });
+    const review = reviewDecisions.get(externalPersonId) || { candidates: [], proposal: null };
+    if (review.proposal) {
+      const { person, bucket } = review.proposal;
+      if (isContended(reviewContention, person)) {
+        result.ambiguous.push({
+          externalPersonId,
+          candidateIndividualIds: [Number(person.id)],
+          reason: 'contended_review_candidate',
+        });
+        usedExternalIds.add(externalPersonId);
+        continue;
+      }
+      reserve(externalPerson, person);
+      if (bucket === 'visitor') {
+        result.visitorMatches.push({
+          externalPersonId,
+          individualId: Number(person.id),
+          peopleType: person.peopleType,
+        });
+      } else {
+        result.archivedMatches.push({ externalPersonId, individualId: Number(person.id) });
+      }
       continue;
     }
 
-    if (reviewCandidates.length === 1 && archivedCandidates.length === 1) {
-      reserve(externalPerson, archivedCandidates[0]);
-      result.archivedMatches.push({ externalPersonId, individualId: Number(archivedCandidates[0].id) });
-      continue;
-    }
-
-    if (reviewCandidates.length > 1) {
+    if (review.candidates.length > 1) {
       result.ambiguous.push({
         externalPersonId,
-        candidateIndividualIds: reviewCandidates.map((person) => Number(person.id)),
+        candidateIndividualIds: review.candidates.map((person) => Number(person.id)),
         reason: 'review_candidates',
       });
     } else {

@@ -78,3 +78,26 @@ test('validateAdapter rejects extra keys so test-only APIs cannot enter producti
     { message: 'Provider planning_center has unexpected resetForTests' }
   );
 });
+
+test('validateAdapter rejects inherited provider and required methods', () => {
+  const inheritedProvider = Object.create(adapter('planning_center'));
+  assert.throws(
+    () => validateAdapter(inheritedProvider),
+    { message: 'Provider must define own provider' }
+  );
+
+  const inheritedMethod = Object.create(adapter('planning_center'));
+  inheritedMethod.provider = 'planning_center';
+  assert.throws(
+    () => validateAdapter(inheritedMethod),
+    { message: 'Provider planning_center missing validateConnection' }
+  );
+});
+
+test('validateAdapter rejects own symbol properties', () => {
+  const testOnlySymbol = Symbol('resetForTests');
+  assert.throws(
+    () => validateAdapter(adapter('planning_center', { [testOnlySymbol]: () => {} })),
+    { message: 'Provider planning_center has unexpected symbol property' }
+  );
+});
