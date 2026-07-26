@@ -62,6 +62,7 @@ describe('SyncReview', () => {
     fireEvent.click(screen.getByLabelText('Use local person 7 for ext-1'));
     fireEvent.click(screen.getByLabelText('Promote visitor 18'));
     fireEvent.click(screen.getByLabelText('Archive person 10'));
+    fireEvent.click(screen.getByLabelText('Archive person 11'));
     fireEvent.click(screen.getByLabelText('Accept family rename to New family name'));
 
     const apply = screen.getByRole('button', { name: 'Apply sync' });
@@ -74,9 +75,34 @@ describe('SyncReview', () => {
       ambiguous: { 'ext-1': 7 },
       skipExternalPersonIds: [],
       visitorChoices: { 'ext-visitor': 'promote' },
-      acceptArchiveIndividualIds: [10],
+      acceptArchiveIndividualIds: [10, 11],
       acceptFamilyRenameIds: ['renameFamily:20'],
     });
+  });
+
+  it('does not enable Apply until every planned archive is explicitly accepted', () => {
+    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Archive person 11'));
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
+  });
+
+  it('serializes the visitor keep decision', () => {
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    const nonDestructiveReview: PeopleSyncReview = {
+      ...review,
+      plan: { ...plan, archive: [], removeFromGathering: [], renameFamily: [] },
+    };
+    render(<SyncReview provider="elvanto" review={nonDestructiveReview} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
+
+    fireEvent.click(screen.getByLabelText('Keep as visitor'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+
+    expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({
+      visitorChoices: { 'ext-visitor': 'keep' },
+    }));
   });
 
   it('offers a manual refresh after a stale plan error without retrying the apply', async () => {
@@ -86,6 +112,7 @@ describe('SyncReview', () => {
     render(<SyncReview provider="elvanto" review={review} onRefresh={onRefresh} onApply={onApply} applying={false} />);
 
     fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
+    fireEvent.click(screen.getByLabelText('Archive person 11'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
 
     expect(await screen.findByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();

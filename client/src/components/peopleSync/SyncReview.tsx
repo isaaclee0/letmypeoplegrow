@@ -17,6 +17,7 @@ interface SyncReviewProps {
   applying: boolean;
   renderCandidateSearch?: (props: CandidateSearchRenderProps) => React.ReactNode;
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
+  resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
 }
 
 const emptyState = (): SyncSelectionState => ({
@@ -47,7 +48,7 @@ function ErrorMessage({ error, onRefresh }: { error: unknown; onRefresh: () => v
   );
 }
 
-export default function SyncReview({ provider, review, onRefresh, onApply, applying, renderCandidateSearch, renderCandidateLabel }: SyncReviewProps) {
+export default function SyncReview({ provider, review, onRefresh, onApply, applying, renderCandidateSearch, renderCandidateLabel, resolveAmbiguousArchiveIndividualId }: SyncReviewProps) {
   const [state, setState] = useState<SyncSelectionState>(emptyState);
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
   const [applyError, setApplyError] = useState<unknown>(null);
@@ -74,10 +75,11 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
     if (acceptedFamilyRenameIds.has(actionId)) acceptedFamilyRenameIds.delete(actionId); else acceptedFamilyRenameIds.add(actionId);
     return { ...previous, acceptedFamilyRenameIds };
   });
-  const selectCandidate = (externalPersonId: string, candidateId: number) => setState((previous) => ({
-    ...previous,
-    ambiguousChoices: { ...previous.ambiguousChoices, [externalPersonId]: candidateId },
-  }));
+  const selectCandidate = (externalPersonId: string, candidateId: number, archiveIndividualId?: number) => setState((previous) => {
+    const acceptedArchiveIds = new Set(previous.acceptedArchiveIds);
+    if (archiveIndividualId !== undefined) acceptedArchiveIds.delete(archiveIndividualId);
+    return { ...previous, acceptedArchiveIds, ambiguousChoices: { ...previous.ambiguousChoices, [externalPersonId]: candidateId } };
+  });
   const chooseVisitor = (externalPersonId: string, choice: VisitorChoice | null) => setState((previous) => ({
     ...previous,
     visitorChoices: { ...previous.visitorChoices, [externalPersonId]: choice },
@@ -85,7 +87,9 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
 
   const requiresConfirmation = plan.archive.length > 0
     || plan.removeFromGathering.length > 0
-    || state.acceptedFamilyRenameIds.size > 0;
+    || state.acceptedFamilyRenameIds.size > 0
+    || state.acceptedArchiveIds.size > 0;
+  const allPlannedArchivesAccepted = plan.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
   const submit = async () => {
     setApplyError(null);
     try {
@@ -114,19 +118,36 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
               <PlanItem key={action.id}>
                 <p className="mb-2">{action.externalPersonId} — {action.reason}</p>
                 <div className="space-y-1">
+                  {(() => {
+                    const archiveIndividualId = resolveAmbiguousArchiveIndividualId?.(action);
+                    return <>
                   {(action.candidateIndividualIds || []).map((candidateId) => (
                     <label key={candidateId} className="flex items-center gap-2">
                       <input type="radio" name={`ambiguous-${action.id}`} checked={state.ambiguousChoices[action.externalPersonId] === candidateId}
-                        onChange={() => selectCandidate(action.externalPersonId, candidateId)} />
+                        onChange={() => selectCandidate(action.externalPersonId, candidateId, archiveIndividualId)} />
                       <span>{renderCandidateLabel ? renderCandidateLabel(action, candidateId) : `Use local person ${candidateId} for ${action.externalPersonId}`}</span>
                     </label>
                   ))}
+                  {archiveIndividualId !== undefined && <label className="flex items-center gap-2">
+                    <input type="radio" name={`ambiguous-${action.id}`} checked={state.acceptedArchiveIds.has(archiveIndividualId)} onChange={() => setState((previous) => ({
+                      ...previous,
+                      ambiguousChoices: { ...previous.ambiguousChoices, [action.externalPersonId]: null },
+                      acceptedArchiveIds: new Set(previous.acceptedArchiveIds).add(archiveIndividualId),
+                    }))} />
+                    <span>Archive this person</span>
+                  </label>}
                   <label className="flex items-center gap-2">
                     <input type="radio" name={`ambiguous-${action.id}`} checked={state.ambiguousChoices[action.externalPersonId] === null}
-                      onChange={() => setState((previous) => ({ ...previous, ambiguousChoices: { ...previous.ambiguousChoices, [action.externalPersonId]: null } }))} />
+                      onChange={() => setState((previous) => {
+                        const acceptedArchiveIds = new Set(previous.acceptedArchiveIds);
+                        if (archiveIndividualId !== undefined) acceptedArchiveIds.delete(archiveIndividualId);
+                        return { ...previous, acceptedArchiveIds, ambiguousChoices: { ...previous.ambiguousChoices, [action.externalPersonId]: null } };
+                      })} />
                     <span>Decide later</span>
                   </label>
-                  {renderCandidateSearch?.({ action, selectCandidate: (candidateId) => selectCandidate(action.externalPersonId, candidateId) })}
+                  {renderCandidateSearch?.({ action, selectCandidate: (candidateId) => selectCandidate(action.externalPersonId, candidateId, archiveIndividualId) })}
+                    </>;
+                  })()}
                 </div>
               </PlanItem>
             ))}
@@ -169,7 +190,7 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
       {requiresConfirmation && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmedDestructiveChanges} onChange={(event) => setConfirmedDestructiveChanges(event.target.checked)} />I understand that this sync will archive people, remove gathering assignments, or rename families.</label>}
       {applyError && <ErrorMessage error={applyError} onRefresh={onRefresh} />}
       <div className="flex items-center gap-3">
-        <button type="button" onClick={() => void submit()} disabled={applying || (requiresConfirmation && !confirmedDestructiveChanges)} className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">{applying ? 'Applying…' : 'Apply sync'}</button>
+        <button type="button" onClick={() => void submit()} disabled={applying || !allPlannedArchivesAccepted || (requiresConfirmation && !confirmedDestructiveChanges)} className="inline-flex items-center rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">{applying ? 'Applying…' : 'Apply sync'}</button>
         <button type="button" onClick={() => void onRefresh()} disabled={applying} className="text-sm underline text-gray-600 dark:text-gray-300">Refresh plan</button>
       </div>
     </div>

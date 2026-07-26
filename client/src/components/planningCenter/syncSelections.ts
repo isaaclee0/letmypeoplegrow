@@ -15,6 +15,7 @@ export interface SyncSelections {
 
 export interface LegacyPcoSelectionMap {
   ambiguousIndividualByExternalId: Record<string, number>;
+  pcoIdByAmbiguousCandidateKey: Record<string, Record<number, string>>;
   visitorIndividualByExternalId: Record<string, number>;
   familyIdByRenameActionId: Record<string, number>;
 }
@@ -55,9 +56,10 @@ export function buildSelections(
 
 export function toLegacyPcoSelections(selections: PeopleSyncSelections, map: LegacyPcoSelectionMap): SyncSelections {
   const ambiguous = Object.fromEntries(Object.entries(selections.ambiguous || {})
-    .flatMap(([externalId, pcoId]) => {
+    .flatMap(([externalId, candidateKey]) => {
       const individualId = map.ambiguousIndividualByExternalId[externalId];
-      return individualId === undefined ? [] : [[String(individualId), String(pcoId)]];
+      const pcoId = map.pcoIdByAmbiguousCandidateKey[externalId]?.[candidateKey];
+      return individualId === undefined || pcoId === undefined ? [] : [[String(individualId), pcoId]];
     })
     .sort(([left], [right]) => left.localeCompare(right)));
   const visitorChoices = Object.fromEntries(Object.entries(selections.visitorChoices || {})
@@ -72,7 +74,9 @@ export function toLegacyPcoSelections(selections: PeopleSyncSelections, map: Leg
     ambiguous,
     skipAddPcoIds: [...(selections.skipExternalPersonIds || [])].sort(),
     visitorChoices,
-    archiveAmbiguousIds: [],
+    archiveAmbiguousIds: [...new Set(selections.acceptArchiveIndividualIds || [])]
+      .filter((individualId) => Object.values(map.ambiguousIndividualByExternalId).includes(individualId))
+      .sort((a, b) => a - b),
     skipFamilyNameUpdateIds: Object.entries(map.familyIdByRenameActionId)
       .filter(([actionId]) => !acceptedRenames.has(actionId))
       .map(([, familyId]) => familyId)

@@ -55,19 +55,21 @@ describe('buildSelections', () => {
 
   it('translates neutral selections to the legacy PCO endpoint shape', () => {
     expect(toLegacyPcoSelections({
-      ambiguous: { 'pco-ambiguous:12': 456 },
+      ambiguous: { 'pco-ambiguous:12': 1 },
       skipExternalPersonIds: ['pco-3'],
       visitorChoices: { 'pco-visitor:34': 'promote' },
+      acceptArchiveIndividualIds: [12],
       acceptFamilyRenameIds: ['pco-rename:56'],
     }, {
       ambiguousIndividualByExternalId: { 'pco-ambiguous:12': 12 },
       visitorIndividualByExternalId: { 'pco-visitor:34': 34 },
       familyIdByRenameActionId: { 'pco-rename:56': 56, 'pco-rename:78': 78 },
+      pcoIdByAmbiguousCandidateKey: { 'pco-ambiguous:12': { 1: '9007199254740993' } },
     })).toEqual({
-      ambiguous: { 12: '456' },
+      ambiguous: { 12: '9007199254740993' },
       skipAddPcoIds: ['pco-3'],
       visitorChoices: { 34: 'promote' },
-      archiveAmbiguousIds: [],
+      archiveAmbiguousIds: [12],
       skipFamilyNameUpdateIds: [78],
     });
   });
