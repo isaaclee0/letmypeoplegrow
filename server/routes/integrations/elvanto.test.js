@@ -203,6 +203,50 @@ test('POST /sync-batches/:id/run-now still returns success if recording the batc
   });
 });
 
+// ─── Mount-order regression: preserved legacy routes must still resolve ────
+//
+// Task 16's whole legacy-route-surgery premise depends on one structural
+// Express fact: mounting a sub-router with `router.use('/elvanto', ...)`
+// does NOT swallow a sub-path that sub-router has no route for — it falls
+// through to whatever is registered NEXT on the parent router. That's
+// exactly how server/routes/integrations.js keeps the preserved one-shot
+// gathering/people/family import routes (`/elvanto/people`, `/elvanto/
+// families`, `/elvanto/import`, etc.) working after mounting
+// createElvantoRouter() at the same `/elvanto` prefix, ahead of them. This
+// pins that structural property directly (mirroring the real mount order),
+// so a future accidental catch-all inside the new router, or a reordering
+// of the two mounts, would fail this test rather than only being caught by
+// manual/reviewer inspection.
+test('a preserved legacy route mounted alongside the new router at the same /elvanto prefix still resolves to its own handler', async () => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, res, next) => { req.user = ADMIN_USER; next(); });
+
+  const parent = express.Router();
+  // Mirrors routes/integrations.js's own order exactly: the new router is
+  // mounted FIRST, then a preserved legacy route is registered on a path
+  // (`/elvanto/people`) the new router intentionally does not define.
+  parent.use('/elvanto', createElvantoRouter(noopDeps({ listBatches: async () => [{ id: 1, name: 'stub-batch' }] })));
+  parent.get('/elvanto/people', (req, res) => res.json({ legacy: true, source: 'one-shot-import' }));
+  app.use(parent);
+
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const newRouterResponse = await requestJson(`${base}/elvanto/sync-batches`);
+    assert.equal(newRouterResponse.status, 200);
+    assert.deepEqual(newRouterResponse.body.batches, [{ id: 1, name: 'stub-batch' }]);
+
+    const legacyResponse = await requestJson(`${base}/elvanto/people`);
+    assert.equal(legacyResponse.status, 200);
+    assert.deepEqual(legacyResponse.body, { legacy: true, source: 'one-shot-import' });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // ─── run-now never bypasses review ──────────────────────────────────────────
 
 test('run-now faithfully forwards a review_required outcome with pending counts rather than forcing applied', async () => {
@@ -263,6 +307,71 @@ test('POST /sync-batches rejects a filter the adapter considers invalid, before 
   assert.equal(createCalled, false);
 });
 
+// ─── Schedule day/frequency range validation ────────────────────────────────
+//
+// Same bug shape as the equivalent peopleSync.js settings gap, and a
+// regression vs. the existing PCO validator in routes/integrations.js
+// (which DOES range-check both frequencies): scheduleDay only checked
+// Number.isInteger, with no range check at all, so
+// {scheduleFrequency:'weekly', scheduleDay:99} or
+// {scheduleFrequency:'monthly', scheduleDay:-5} were both silently accepted
+// — creating a batch that looks scheduleEnabled:true and healthy but whose
+// scheduler.isDueToday check never matches, so it silently never fires.
+
+test('POST /sync-batches rejects an out-of-range scheduleDay for a weekly schedule', async () => {
+  await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches`, {
+      method: 'POST', body: { name: 'X', scheduleFrequency: 'weekly', scheduleDay: 99 },
+    });
+    assert.equal(status, 400);
+    assert.match(body.error, /between 0 and 6/i);
+  });
+});
+
+test('POST /sync-batches rejects an out-of-range scheduleDay for a monthly schedule', async () => {
+  await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches`, {
+      method: 'POST', body: { name: 'X', scheduleFrequency: 'monthly', scheduleDay: -5 },
+    });
+    assert.equal(status, 400);
+    assert.match(body.error, /between 1 and 31/i);
+  });
+});
+
+test('POST /sync-batches rejects a scheduleDay that is only invalid because of the DEFAULT frequency (weekly) when scheduleFrequency is omitted', async () => {
+  // batchRepository.createBatch defaults scheduleFrequency to 'weekly' when
+  // omitted — a request supplying only scheduleDay: 20 would be created
+  // with the impossible pair {frequency:'weekly', day:20} unless this is
+  // cross-checked against that same default.
+  await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches`, { method: 'POST', body: { name: 'X', scheduleDay: 20 } });
+    assert.equal(status, 400);
+    assert.match(body.error, /between 0 and 6/i);
+  });
+});
+
+test('PUT /sync-batches/:id rejects a frequency-only patch that would leave a stale, now-invalid stored day in place', async () => {
+  await withServer(noopDeps({
+    getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: {}, scheduleFrequency: 'monthly', scheduleDay: 20 }),
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/9`, { method: 'PUT', body: { scheduleFrequency: 'weekly' } });
+    assert.equal(status, 400);
+    assert.match(body.error, /between 0 and 6/i);
+  });
+});
+
+test('PUT /sync-batches/:id accepts a frequency-only patch when the already-stored day is valid for the new frequency', async () => {
+  const calls = [];
+  await withServer(noopDeps({
+    getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: {}, scheduleFrequency: 'monthly', scheduleDay: 3 }),
+    updateBatch: async (args) => { calls.push(args); return { id: 9, ...args }; },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status } = await requestJson(`${base}/sync-batches/9`, { method: 'PUT', body: { scheduleFrequency: 'weekly' } });
+    assert.equal(status, 200);
+  });
+  assert.equal(calls[0].scheduleFrequency, 'weekly');
+});
+
 test('PUT /sync-batches/:id accepts a partial patch without requiring name', async () => {
   const calls = [];
   await withServer(noopDeps({
@@ -277,10 +386,10 @@ test('PUT /sync-batches/:id accepts a partial patch without requiring name', asy
   assert.equal('name' in calls[0], false);
 });
 
-test('PUT /sync-batches/:id only re-validates the filter when filterConfig is actually supplied', async () => {
+test('PUT /sync-batches/:id skips filter re-validation when neither filterConfig nor filterSchemaVersion is supplied', async () => {
   let validateFilterCalled = false;
   await withServer(noopDeps({
-    getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: { statuses: ['active'] } }),
+    getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: { statuses: ['active'] }, scheduleFrequency: 'weekly', scheduleDay: 1 }),
     updateBatch: async (args) => ({ id: 9, ...args }),
     adapter: { validateFilter: () => { validateFilterCalled = true; return { ok: true, value: {}, errors: [] }; } },
   }), { user: ADMIN_USER }, async (base) => {
@@ -288,6 +397,37 @@ test('PUT /sync-batches/:id only re-validates the filter when filterConfig is ac
     assert.equal(status, 200);
   });
   assert.equal(validateFilterCalled, false);
+});
+
+test('PUT /sync-batches/:id re-validates the filter when ONLY filterSchemaVersion is supplied (regression: used to bypass validation entirely)', async () => {
+  // Before the fix, changing only filterSchemaVersion (with no filterConfig
+  // in the same request) skipped adapter.validateFilter entirely, because
+  // the gate only checked for the presence of `filterConfig` in the patch.
+  // A body of {filterSchemaVersion: 2} alone would then persist a
+  // filterSchemaVersion the real Elvanto filter validator hard-rejects
+  // (only version 1 exists), bricking every future plan/apply/run-now for
+  // that batch with SYNC_BATCH_FILTER_INVALID — and silently forever on the
+  // scheduled path, which just logs and skips a failed batch.
+  const calls = [];
+  await withServer(noopDeps({
+    getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: { statuses: ['active'] }, scheduleFrequency: 'weekly', scheduleDay: 1 }),
+    updateBatch: async (args) => ({ id: 9, ...args }),
+    adapter: {
+      validateFilter: (config, version) => {
+        calls.push({ config, version });
+        return version === 1 ? { ok: true, value: config, errors: [] } : { ok: false, value: null, errors: ['Unsupported elvanto filter schema version: 2'] };
+      },
+    },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/9`, { method: 'PUT', body: { filterSchemaVersion: 2 } });
+    assert.equal(status, 400);
+    assert.match(body.error, /invalid elvanto filter/i);
+  });
+  assert.equal(calls.length, 1);
+  // Validated against the EXISTING stored filterConfig (this patch didn't
+  // supply one) and the NEW filterSchemaVersion from the patch.
+  assert.deepEqual(calls[0].config, { statuses: ['active'] });
+  assert.equal(calls[0].version, 2);
 });
 
 test('PUT /sync-batches/:id returns 404 for a batch that does not exist for this church', async () => {
@@ -423,6 +563,80 @@ test('GET /metadata returns 400 when Elvanto is not connected', async () => {
     const { status, body } = await requestJson(`${base}/metadata`);
     assert.equal(status, 400);
     assert.match(body.error, /not connected/i);
+  });
+});
+
+// ─── Aggregate route timeout ─────────────────────────────────────────────────
+//
+// A per-HTTP-request 30s socket timeout exists inside the transport layer,
+// but nothing previously bounded the AGGREGATE operation across several
+// synchronous network calls in one request (worst case: GET /metadata's
+// cold path does a full snapshot fetch plus ten more paginated calls). Uses
+// a tiny `routeTimeoutMs` override (a real injected dependency, not a
+// magic number the route hardcodes) so these tests run in milliseconds
+// rather than actually waiting out the real ~110s production default.
+
+function neverResolves() {
+  return new Promise(() => {}); // deliberately never settles
+}
+
+test('POST /connect times out with a safe 503 rather than hanging forever on a stuck validateConnection call', async () => {
+  await withServer(noopDeps({
+    routeTimeoutMs: 20,
+    adapter: { validateConnection: neverResolves },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/connect`, { method: 'POST', body: { apiKey: 'k' } });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('GET /metadata (cold, live-fetch path) times out with a safe 503 rather than hanging on a stuck fetchSnapshot call', async () => {
+  await withServer(noopDeps({
+    routeTimeoutMs: 20,
+    getCredentials: async () => ({ apiKey: 'k' }),
+    getConnection: async () => ({ metadata: {} }),
+    adapter: { fetchSnapshot: neverResolves, fetchMetadata: async () => ({}) },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/metadata`);
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('POST /metadata/refresh times out with a safe 503 rather than hanging on a stuck fetchSnapshot call', async () => {
+  await withServer(noopDeps({
+    routeTimeoutMs: 20,
+    getCredentials: async () => ({ apiKey: 'k' }),
+    adapter: { fetchSnapshot: neverResolves, fetchMetadata: async () => ({}) },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/metadata/refresh`, { method: 'POST' });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('GET /sync-batches/:id/plan times out with a safe 503 rather than hanging on a stuck buildReview call', async () => {
+  await withServer(noopDeps({ routeTimeoutMs: 20, buildReview: neverResolves }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/1/plan`);
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('POST /sync-batches/:id/apply times out with a safe 503 rather than hanging on a stuck applyReviewed call', async () => {
+  await withServer(noopDeps({ routeTimeoutMs: 20, applyReviewed: neverResolves }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/1/apply`, { method: 'POST', body: { reviewToken: 't' } });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('POST /sync-batches/:id/run-now times out with a safe 503 rather than hanging on a stuck runUnattended call', async () => {
+  await withServer(noopDeps({ routeTimeoutMs: 20, runUnattended: neverResolves }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/1/run-now`, { method: 'POST' });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
 });
 

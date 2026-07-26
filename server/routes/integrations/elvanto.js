@@ -59,14 +59,50 @@ function parseBatchId(raw) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+// batchRepository.createBatch's own defaults (services/peopleSync/
+// batchRepository.js's normaliseBatchInput) for a brand-new batch that
+// doesn't specify a schedule at all — used as the "current" fallback for
+// POST /sync-batches's day/frequency cross-check below, so a create body
+// that supplies ONLY scheduleDay (no scheduleFrequency) is validated
+// against the frequency it would actually be created with.
+const CREATE_SCHEDULE_DEFAULTS = { scheduleFrequency: 'weekly', scheduleDay: 1 };
+
+// Same reasoning and shape as peopleSync.js's validateDayForFrequency: day
+// range depends on the RESULTING frequency (existing/default, or
+// newly-supplied in this same patch) — weekly is 0-6 (JS Date
+// day-of-week), monthly is 1-31. scheduler.isDueToday ignores the day
+// value for daily, but a wildly out-of-range value is still rejected here
+// rather than silently stored.
+function validateScheduleDayForFrequency(frequency, day) {
+  if (day === undefined || day === null) return null;
+  if (frequency === 'weekly' && (day < 0 || day > 6)) return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
+  if (frequency === 'monthly' && (day < 1 || day > 31)) return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
+  if (frequency === 'daily' && (day < 0 || day > 31)) return 'scheduleDay must be an integer between 0 and 31.';
+  return null;
+}
+
 // Strict allow-list + type validator for a sync-batch request body, shared
-// by create (full body, name required) and update (partial patch, name only
-// validated if supplied — batchRepository.updateBatch itself merges a
-// partial patch over the existing row, see its own header note). Mirrors
-// the existing PCO `validateBatchBody` in routes/integrations.js in spirit
-// (a pure function returning `null` or a single error string) but adapted
-// for the new generic schema's field set.
-function validateBatchBody(body, { requireName } = {}) {
+// by create (full body, name required, `current` is
+// CREATE_SCHEDULE_DEFAULTS) and update (partial patch, name only validated
+// if supplied, `current` is the existing stored batch — batchRepository.
+// updateBatch itself merges a partial patch over the existing row, see its
+// own header note). Mirrors the existing PCO `validateBatchBody` in
+// routes/integrations.js in spirit (a pure function returning `null` or a
+// single error string) but adapted for the new generic schema's field set
+// AND for partial-patch semantics PCO's own (always-full-body) validator
+// never had to handle.
+//
+// `current` matters specifically for the schedule day/frequency
+// cross-check: a patch that changes ONLY scheduleFrequency (or ONLY
+// scheduleDay) must be validated against the RESULTING pair — this field's
+// own new value if supplied, else whatever is already stored/defaulted —
+// not just whichever of the two happens to be present in this one request.
+// Without this, e.g. a batch stored with {frequency:'monthly', day:20}
+// patched to {scheduleFrequency:'weekly'} alone would silently persist an
+// impossible pair (weekly only ever matches day 0-6), and
+// scheduler.isDueToday would then never fire for that batch again, with no
+// error anywhere.
+function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAULTS } = {}) {
   if (!isPlainObject(body)) return 'Request body must be an object.';
   for (const key of Object.keys(body)) {
     if (!BATCH_BODY_ALLOWED.has(key)) return `Unknown batch field: ${key}`;
@@ -93,6 +129,12 @@ function validateBatchBody(body, { requireName } = {}) {
     return 'filterSchemaVersion must be an integer.';
   }
   if (body.filterConfig !== undefined && !isPlainObject(body.filterConfig)) return 'filterConfig must be an object.';
+
+  const resultingFrequency = body.scheduleFrequency !== undefined ? body.scheduleFrequency : current.scheduleFrequency;
+  const resultingDay = body.scheduleDay !== undefined ? body.scheduleDay : current.scheduleDay;
+  const dayError = validateScheduleDayForFrequency(resultingFrequency, resultingDay);
+  if (dayError) return dayError;
+
   return null;
 }
 
@@ -106,18 +148,66 @@ function extractBatchFields(body) {
 
 // ─── Default (production) collaborators ─────────────────────────────────────
 
+// Church-scoped (not per-admin, unlike the pre-Task-16 disconnect handler's
+// own per-user delete) belt-and-suspenders cleanup: clears the specific
+// legacy `elvanto_api_key` row this module migrates from, AND any other
+// elvanto-prefixed preference row (e.g. a stale `elvanto_integration` OAuth
+// remnant from an even older version of this integration) — mirroring the
+// pre-Task-16 handler's own `LIKE 'elvanto%'` breadth, which this rewrite
+// had narrowed to just the one key it actively reads. Nothing in this
+// codebase currently reads an `elvanto_integration` row, so there is no
+// "resurrection" risk from leaving it behind, but a church that still has
+// one would otherwise export it in cleartext via church takeout (see
+// routes/takeout.js's REDACT_PREFERENCE_KEYS, widened alongside this).
 async function defaultDeleteLegacyPreferences(churchId) {
   await Database.queryForChurch(
     churchId,
-    `DELETE FROM user_preferences WHERE church_id = ? AND preference_key = ?`,
-    [churchId, legacyCredential.LEGACY_PREFERENCE_KEY]
+    `DELETE FROM user_preferences WHERE church_id = ? AND preference_key LIKE 'elvanto%'`,
+    [churchId]
   );
 }
 
 const defaultAdapter = createElvantoAdapter();
 
+// ─── Aggregate route timeout ─────────────────────────────────────────────────
+//
+// httpClient.js's own per-HTTP-request timeout (30s, see its
+// DEFAULT_TIMEOUT_MS) bounds a single Elvanto call, but several of this
+// router's handlers make MANY such calls synchronously inside one page-load
+// request — worst case, GET /metadata's cold path does a full-roster
+// snapshot fetch (fully paginated, up to 1000 pages) PLUS the four-dimension
+// membership index (four more fully-paginated fetches) PLUS six more
+// paginated metadata-definition endpoint calls, all before responding. With
+// no aggregate deadline, a slow/degraded Elvanto account could tie up a
+// request (and the admin's browser tab) indefinitely. This wraps the
+// network-touching handlers in an overall deadline that maps to a clean 503
+// instead. It does NOT cancel the underlying in-flight network calls (that
+// would need an AbortController threaded through httpClient.js — out of
+// scope here) — it only stops this ROUTE from waiting on them past the
+// deadline; the losing operation keeps running in the background and its
+// eventual result (or error) is simply discarded once the response has
+// already been sent.
+const DEFAULT_ROUTE_TIMEOUT_MS = 110000; // just under the client's own 120s axios timeout for these calls
+
+class RouteTimeoutError extends Error {
+  constructor(ms) {
+    super(`The request to Elvanto did not complete within ${ms}ms.`);
+    this.name = 'RouteTimeoutError';
+    this.code = 'SYNC_ROUTE_TIMEOUT';
+  }
+}
+
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new RouteTimeoutError(ms)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const defaultDeps = {
   adapter: defaultAdapter,
+  routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   getConnection: connectionStore.getConnection,
   getCredentials: connectionStore.getCredentials,
   upsertConnection: connectionStore.upsertConnection,
@@ -141,6 +231,9 @@ const defaultDeps = {
 // ─── Safe error mapping ──────────────────────────────────────────────────────
 //
 // Exhaustive over every typed error this router can actually observe:
+//   - RouteTimeoutError (from withTimeout, above) — the aggregate route
+//     deadline was exceeded; always a safe 503, never leaks which specific
+//     network call was still in flight.
 //   - OrchestratorError (from buildReview/applyReviewed/runUnattended) —
 //     status/code/message already curated by orchestrator.js itself.
 //   - ElvantoError (from a direct adapter call, OR unwrapped straight
@@ -159,6 +252,9 @@ const ELVANTO_ERROR_STATUS = {
 };
 
 function respondWithError(res, err, { context, logLabel } = {}) {
+  if (err instanceof RouteTimeoutError) {
+    return res.status(503).json({ error: 'The request took too long to complete. Please try again.', code: err.code });
+  }
   if (err instanceof OrchestratorError) {
     return res.status(err.status || 400).json({ error: err.message, code: err.code });
   }
@@ -186,9 +282,16 @@ function respondWithError(res, err, { context, logLabel } = {}) {
   return res.status(500).json({ error: 'An unexpected error occurred.' });
 }
 
+// Bounded as ONE aggregate operation (not per-call) — a full-roster
+// snapshot fetch followed by six more paginated metadata-definition calls
+// is exactly the "several sequential network calls in one request" case
+// the route-timeout wrapper exists for (see its own header note above
+// defaultDeps).
 async function fetchLiveMetadata(deps, churchId, credentials, force) {
-  const snapshot = await deps.adapter.fetchSnapshot({ churchId, credentials, mode: 'full' });
-  return deps.adapter.fetchMetadata({ churchId, credentials, force, snapshot });
+  return withTimeout((async () => {
+    const snapshot = await deps.adapter.fetchSnapshot({ churchId, credentials, mode: 'full' });
+    return deps.adapter.fetchMetadata({ churchId, credentials, force, snapshot });
+  })(), deps.routeTimeoutMs);
 }
 
 function createElvantoRouter(overrides = {}) {
@@ -261,7 +364,9 @@ function createElvantoRouter(overrides = {}) {
       // Validate-before-replace: if validateConnection throws, we never
       // reach upsertConnection below — any previously-connected credential
       // for this church is left completely untouched.
-      const validation = await deps.adapter.validateConnection({ churchId, credentials: { apiKey } });
+      const validation = await withTimeout(
+        deps.adapter.validateConnection({ churchId, credentials: { apiKey } }), deps.routeTimeoutMs
+      );
       await deps.upsertConnection({
         churchId, provider: PROVIDER, authType: 'api_key',
         credentials: { apiKey }, connectedBy: req.user.id, metadata: (validation && validation.metadata) || {},
@@ -386,14 +491,27 @@ function createElvantoRouter(overrides = {}) {
       if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
 
       const body = req.body || {};
-      const bodyError = validateBatchBody(body, { requireName: false });
+      const bodyError = validateBatchBody(body, { requireName: false, current: existing });
       if (bodyError) return res.status(400).json({ error: bodyError });
 
       const fields = extractBatchFields(body);
-      if (Object.hasOwn(fields, 'filterConfig')) {
+      // Re-validate whenever EITHER filterConfig OR filterSchemaVersion is
+      // present in the patch — not just filterConfig alone. A body of
+      // `{filterSchemaVersion: 2}` on its own used to skip this entirely
+      // (normaliseBatchInput only checks filterSchemaVersion is a positive
+      // integer; it has no idea validateElvantoFilter hard-rejects anything
+      // != version 1), silently persisting a filterConfig/filterSchemaVersion
+      // pair that would then fail SYNC_BATCH_FILTER_INVALID on every future
+      // plan/apply/run-now AND every scheduled run for this batch forever —
+      // and the scheduled path just logs and skips, so it would fail
+      // silently. Validates the EFFECTIVE resulting pair: whichever of the
+      // two this patch supplies, plus whichever it doesn't (from the
+      // existing stored batch).
+      if (Object.hasOwn(fields, 'filterConfig') || Object.hasOwn(fields, 'filterSchemaVersion')) {
+        const filterConfig = Object.hasOwn(fields, 'filterConfig') ? fields.filterConfig : existing.filterConfig;
         const filterSchemaVersion = Object.hasOwn(fields, 'filterSchemaVersion')
           ? fields.filterSchemaVersion : existing.filterSchemaVersion;
-        const filterValidation = deps.adapter.validateFilter(fields.filterConfig, filterSchemaVersion);
+        const filterValidation = deps.adapter.validateFilter(filterConfig, filterSchemaVersion);
         if (!filterValidation.ok) {
           return res.status(400).json({ error: 'Invalid Elvanto filter.', errors: filterValidation.errors });
         }
@@ -427,7 +545,9 @@ function createElvantoRouter(overrides = {}) {
     const batchId = parseBatchId(req.params.id);
     if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     try {
-      const result = await deps.buildReview({ churchId, provider: PROVIDER, batchId, trigger: 'manual' });
+      const result = await withTimeout(
+        deps.buildReview({ churchId, provider: PROVIDER, batchId, trigger: 'manual' }), deps.routeTimeoutMs
+      );
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto GET /sync-batches/:id/plan' });
@@ -442,9 +562,10 @@ function createElvantoRouter(overrides = {}) {
       const body = req.body || {};
       const reviewToken = typeof body.reviewToken === 'string' ? body.reviewToken : '';
       const selections = isPlainObject(body.selections) ? body.selections : {};
-      const result = await deps.applyReviewed({
-        churchId, provider: PROVIDER, batchId, reviewToken, selections, userId: req.user.id,
-      });
+      const result = await withTimeout(
+        deps.applyReviewed({ churchId, provider: PROVIDER, batchId, reviewToken, selections, userId: req.user.id }),
+        deps.routeTimeoutMs
+      );
       // As with /people-sync/authority/apply: `result.authorityCommitError`
       // (if present) is surfaced as-is rather than dropped — a batch apply
       // can coincide with a pending authority switch left over from a
@@ -464,7 +585,9 @@ function createElvantoRouter(overrides = {}) {
       // ambiguous/conflicting/rename/unmatched items into review_required
       // pending counts on its own — this route does not, and must not, add
       // any bypass logic of its own; it only forwards the result faithfully.
-      const result = await deps.runUnattended({ churchId, provider: PROVIDER, batchId, trigger: 'run_now' });
+      const result = await withTimeout(
+        deps.runUnattended({ churchId, provider: PROVIDER, batchId, trigger: 'run_now' }), deps.routeTimeoutMs
+      );
       try {
         await deps.recordBatchResult({
           churchId, provider: PROVIDER, batchId, trigger: 'run_now',
@@ -490,4 +613,5 @@ module.exports = {
   defaultDeps,
   respondWithError,
   validateBatchBody,
+  RouteTimeoutError,
 };

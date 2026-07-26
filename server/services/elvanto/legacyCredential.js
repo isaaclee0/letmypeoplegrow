@@ -36,9 +36,11 @@
 //     never built from the key itself.
 const Database = require('../../config/database');
 const connectionStore = require('../peopleSync/connectionStore');
+const { ElvantoError } = require('./httpClient');
 
 const LEGACY_PREFERENCE_KEY = 'elvanto_api_key';
 const ELVANTO_RECONNECT_REQUIRED = 'ELVANTO_RECONNECT_REQUIRED';
+const ELVANTO_VALIDATION_UNAVAILABLE = 'ELVANTO_VALIDATION_UNAVAILABLE';
 
 class ElvantoReconnectRequiredError extends Error {
   constructor(churchId) {
@@ -50,6 +52,32 @@ class ElvantoReconnectRequiredError extends Error {
     this.name = 'ElvantoReconnectRequiredError';
     this.code = ELVANTO_RECONNECT_REQUIRED;
     this.churchId = churchId;
+  }
+}
+
+// Thrown (never returned as null) when the sole distinct legacy key could
+// not be VERIFIED one way or the other because Elvanto itself was
+// unreachable/misbehaving (ELVANTO_UNAVAILABLE/ELVANTO_RESPONSE/
+// ELVANTO_PAGINATION — including a plain request timeout, all classified
+// this way by httpClient.js) — as opposed to ELVANTO_AUTH, a definitive
+// "this key is wrong" verdict. Conflating the two used to report both as a
+// flat "not connected", which is misleading (a transient outage is not a
+// verdict on the key) and, left unclassified, gets silently retried on
+// every single request that needs credentials until it eventually succeeds
+// or someone notices. Nothing is migrated either way — only the ERROR
+// REPORTED to the caller differs; callers that don't care can still treat
+// this the same as an invalid key by catching it and returning null
+// themselves.
+class ElvantoValidationUnavailableError extends Error {
+  constructor(churchId, cause) {
+    super('Elvanto could not be reached to verify the legacy API key; try again shortly.');
+    this.name = 'ElvantoValidationUnavailableError';
+    this.code = ELVANTO_VALIDATION_UNAVAILABLE;
+    this.churchId = churchId;
+    // Never serialize `.cause` to a client response — it may carry
+    // provider-side detail (path/status); it exists purely for server-side
+    // logging by whichever caller catches this.
+    this.cause = cause;
   }
 }
 
@@ -100,12 +128,16 @@ async function defaultValidateConnection({ churchId, credentials }) {
 // instead — nothing is written or deleted in that case, leaving the
 // ambiguous legacy data intact for a human (an explicit reconnect writes a
 // definitive fresh row directly, sidestepping the ambiguity). If the sole
-// distinct key fails live validation, nothing is migrated (or deleted) —
-// this returns null exactly as if there were no usable legacy credentials,
-// so a caller cannot distinguish "no legacy data" from "invalid legacy
-// data" from this return value alone, which is deliberate: neither case has
-// anything safe to hand back to a caller expecting real, working
-// credentials.
+// distinct key fails live validation with a definitive ELVANTO_AUTH verdict,
+// nothing is migrated (or deleted) — this returns null exactly as if there
+// were no usable legacy credentials, so a caller cannot distinguish "no
+// legacy data" from "invalid legacy data" from this return value alone,
+// which is deliberate: neither case has anything safe to hand back to a
+// caller expecting real, working credentials. If validation instead fails
+// because Elvanto itself was unreachable/misbehaving (not a verdict on the
+// key), this throws ElvantoValidationUnavailableError instead of returning
+// null, so a caller CAN distinguish "definitely bad" from "temporarily
+// unknown" if it wants to (e.g. to report 503 instead of "not connected").
 async function migrateLegacyCredentials(churchId, { validateConnection = defaultValidateConnection } = {}) {
   const rows = await Database.queryForChurch(
     churchId,
@@ -130,16 +162,24 @@ async function migrateLegacyCredentials(churchId, { validateConnection = default
   const [{ credentials, userId }] = distinct.values();
 
   let validation = null;
+  let validationError = null;
   try {
     validation = await validateConnection({ churchId, credentials });
-  } catch (_) {
-    validation = null;
+  } catch (err) {
+    validationError = err;
   }
   if (!validation || validation.ok !== true) {
-    // Invalid legacy key: leave everything untouched (nothing written,
-    // nothing deleted). Not cached as a permanent failure — a later call
-    // (e.g. once the admin fixes the key directly in Elvanto) may still
-    // succeed.
+    // Leave everything untouched either way (nothing written, nothing
+    // deleted) — not cached as a permanent failure, a later call (e.g. once
+    // the admin fixes the key, or once Elvanto is reachable again) may
+    // still succeed. But distinguish WHY for a caller that cares: a
+    // transient failure (Elvanto unreachable/misbehaving, including a
+    // timeout) is not the same fact as a definitive "this key is wrong"
+    // (ELVANTO_AUTH), so it is not silently folded into the same "return
+    // null" path.
+    if (validationError instanceof ElvantoError && validationError.code !== 'ELVANTO_AUTH') {
+      throw new ElvantoValidationUnavailableError(churchId, validationError);
+    }
     return null;
   }
 
@@ -163,9 +203,19 @@ async function migrateLegacyCredentials(churchId, { validateConnection = default
 
 // Single read entry point: prefer the encrypted church connection; fall back
 // to a one-time (validated) migration from legacy data. Returns null if
-// there is no Elvanto connection at all (never connected, an invalid legacy
-// key, or already disconnected). Throws ElvantoReconnectRequiredError if
-// legacy rows exist but disagree.
+// there is no Elvanto connection at all (never connected, a definitively
+// invalid legacy key, or already disconnected). Throws
+// ElvantoReconnectRequiredError if legacy rows exist but disagree, or
+// ElvantoValidationUnavailableError if the sole distinct legacy key could
+// not be verified because Elvanto itself was unreachable.
+//
+// Note: `connectionStore.getCredentials` itself throws a plain Error (not
+// one of this module's typed errors) if INTEGRATION_CREDENTIALS_KEY is
+// missing/invalid — server misconfiguration, not a credential-migration
+// concern, so this module deliberately does not wrap or reclassify it;
+// callers should treat an error that isn't one of this module's own typed
+// errors as a possible config problem (see routes/integrations.js's
+// resolveElvantoApiKeyOrRespond for the one place that currently does).
 async function getOrMigrateCredentials(churchId, overrides = {}) {
   const existing = await connectionStore.getCredentials(churchId, 'elvanto');
   if (existing) return existing;
@@ -175,7 +225,9 @@ async function getOrMigrateCredentials(churchId, overrides = {}) {
 module.exports = {
   LEGACY_PREFERENCE_KEY,
   ELVANTO_RECONNECT_REQUIRED,
+  ELVANTO_VALIDATION_UNAVAILABLE,
   ElvantoReconnectRequiredError,
+  ElvantoValidationUnavailableError,
   migrateLegacyCredentials,
   getOrMigrateCredentials,
 };

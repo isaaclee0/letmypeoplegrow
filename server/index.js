@@ -154,6 +154,94 @@ const validateEnvironment = () => {
   console.log('✅ Environment validation completed');
 };
 
+// Checks whether INTEGRATION_CREDENTIALS_KEY (server/services/peopleSync/
+// credentialCipher.js — encrypts every Elvanto/Planning Center credential
+// on the church-scoped integration_connections table) is set to a valid
+// base64-encoded 32-byte key, and — if not — whether any church actually
+// has credential data that depends on it. Reproduced empirically in review:
+// without this key, a deployment with a valid legacy Elvanto API key still
+// sitting in user_preferences would have every credential-encryption
+// operation throw, and (before this fix) that throw was silently swallowed
+// into a misleading 401 "not connected" on every one-shot import route —
+// see routes/integrations.js's resolveElvantoApiKeyOrRespond, and
+// legacyCredential.js's own migration path.
+//
+// Deliberately NOT a hard startup failure (no process.exit here): a
+// misconfigured Elvanto/Planning Center key must not take down attendance
+// tracking — this app's actual core function — for every church, including
+// the (likely common) case of a church that never uses either integration.
+// Must be called AFTER the database is initialized (needs the registry to
+// enumerate churches) and BEFORE the server starts accepting requests.
+//
+//   - key is valid: silent, no log line (the common, correctly-configured case).
+//   - key is missing/invalid AND at least one church has dependent data (a
+//     legacy Elvanto/PCO row still awaiting migration, or an
+//     already-connected encrypted integration): a loud, specific
+//     console.error naming the exact consequence, so this is never
+//     mistaken for "not connected" by whoever is watching server logs.
+//   - key is missing/invalid AND no church has any dependent data yet (a
+//     fresh install that has never touched either integration): a quiet
+//     warning only — this must never nag an installation that doesn't need
+//     the key yet.
+async function checkIntegrationCredentialsKey() {
+  let keyIsValid = false;
+  try {
+    // Cheapest possible validity probe: round-trip a throwaway value
+    // through the real cipher. Never touches real data, and the probe
+    // value itself is never logged either way.
+    const { encryptCredential, decryptCredential } = require('./services/peopleSync/credentialCipher');
+    decryptCredential(encryptCredential({ probe: true }));
+    keyIsValid = true;
+  } catch (_) {
+    keyIsValid = false;
+  }
+  if (keyIsValid) return;
+
+  try {
+    const Database = require('./config/database');
+    const churches = Database.listChurches();
+    let affectedChurches = 0;
+
+    for (const church of churches) {
+      try {
+        const legacyRows = await Database.queryForChurch(
+          church.church_id,
+          `SELECT COUNT(*) AS n FROM user_preferences WHERE preference_key IN ('elvanto_api_key', 'planning_center_tokens')`
+        );
+        const connectionRows = await Database.queryForChurch(
+          church.church_id,
+          `SELECT COUNT(*) AS n FROM integration_connections`
+        );
+        if ((legacyRows[0]?.n || 0) > 0 || (connectionRows[0]?.n || 0) > 0) affectedChurches++;
+      } catch (churchError) {
+        // A brand-new/not-yet-migrated church DB missing one of these
+        // tables is not itself evidence of a problem — skip it rather than
+        // letting one church's schema quirk abort the whole startup check.
+        console.warn(`⚠️  Could not check integration credential data for church ${church.church_id}:`, churchError.message);
+      }
+    }
+
+    if (affectedChurches > 0) {
+      console.error(
+        `❌ CONFIGURATION ERROR: INTEGRATION_CREDENTIALS_KEY is missing or invalid, but ${affectedChurches} ` +
+        `church(es) have Elvanto/Planning Center credential data that depends on it (a legacy row still awaiting ` +
+        `migration, or an already-connected encrypted integration). Every credential-encryption operation for ` +
+        `those churches will fail until a valid base64-encoded 32-byte key is set in server/.env — see ` +
+        `server/.env.example. This does NOT stop the server from starting (attendance tracking is unaffected), ` +
+        `but Elvanto/Planning Center integration features are broken for those churches until this is fixed.`
+      );
+    } else {
+      console.warn(
+        '⚠️  INTEGRATION_CREDENTIALS_KEY is not set. No church currently has Elvanto/Planning Center credential ' +
+        'data, so nothing is broken yet — but this MUST be set (see server/.env.example) before any church ' +
+        'connects one of those integrations, or the connection will silently fail.'
+      );
+    }
+  } catch (error) {
+    console.warn('⚠️  Failed to check INTEGRATION_CREDENTIALS_KEY configuration against existing church data:', error.message);
+  }
+}
+
 // Security middleware with error handling
 try {
   app.use(helmet({
@@ -572,7 +660,20 @@ async function startServer() {
         }
       }
     }
-    
+
+    // Checks INTEGRATION_CREDENTIALS_KEY against existing church data — see
+    // checkIntegrationCredentialsKey's own header note. Needs the registry
+    // (populated above by initializeDatabase) to enumerate churches, and
+    // must run before the provider registration/scheduler steps below,
+    // which are the things that actually exercise encrypted credentials.
+    if (dbInitialized) {
+      try {
+        await checkIntegrationCredentialsKey();
+      } catch (error) {
+        console.warn('⚠️  INTEGRATION_CREDENTIALS_KEY check failed unexpectedly:', error.message);
+      }
+    }
+
     // Initialize WebSocket service
     try {
       webSocketService.initialize(server);

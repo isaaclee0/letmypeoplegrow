@@ -122,33 +122,71 @@ function pcoEnv(suffix) {
   return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
 }
 
-// Helper function to get the church's current Elvanto API key, used by the
-// legacy one-shot gathering/people/family import routes below (a different,
-// still-supported feature — see the NOTE above `/elvanto/debug-dump`).
+// Resolves the church's current Elvanto API key for the legacy one-shot
+// gathering/people/family import routes below (a different, still-supported
+// feature — see the NOTE above `/elvanto/debug-dump`), OR writes an
+// appropriate error response itself and returns a falsy value if the caller
+// should stop. Every call site below follows the same
+// `const apiKey = await resolveElvantoApiKeyOrRespond(req, res); if (!apiKey) return;`
+// pattern, so none of the nine of them has to duplicate this branching.
 //
 // Task 16: the credential itself is now church-level, not per-admin (the new
 // `/elvanto/connect` — see routes/integrations/elvanto.js — writes to the
-// encrypted, church-scoped integration_connections table, not this legacy
+// encrypted, church-scoped integration_connections table, not the legacy
 // `user_preferences` row), so this reads through
 // legacyCredential.getOrMigrateCredentials, which transparently: (1) prefers
 // the encrypted connection if one already exists, (2) otherwise falls back
-// to a one-time validated migration of this exact legacy row. `userId` is
-// accepted for call-site compatibility but is no longer used to scope the
-// lookup — the credential is church-wide, exactly like every other
-// integration in this app.
+// to a one-time validated migration of the legacy row.
 //
-// A church whose legacy rows disagree (ELVANTO_RECONNECT_REQUIRED) is
-// treated the same as "not connected" here — this helper has always
-// returned a plain nullable string, never a distinguishable error, and
-// these older import routes have no UI affordance to show a distinct
-// "reconnect required" state; an admin hitting this will simply need to use
-// the new Elvanto connect flow, which resolves the ambiguity explicitly.
-async function getElvantoApiKey(userId, churchId) {
+// This distinguishes four outcomes rather than collapsing everything into a
+// single "not connected" 401 (a real bug fixed after review — a config
+// error or a transient outage is not the same fact as "never connected",
+// and reporting it as such is a dead end for an admin holding a perfectly
+// good key):
+//   - not connected at all (no legacy key, no encrypted connection): the
+//     original plain 401 "not connected" contract, unchanged.
+//   - ELVANTO_RECONNECT_REQUIRED (two admins' legacy keys disagree): 409
+//     with a machine-readable code, matching the new /elvanto/status
+//     route's own `reconnectRequired` signal — an admin hitting this can at
+//     least be told to reconnect, instead of being told nothing is
+//     connected when something plainly is.
+//   - ELVANTO_VALIDATION_UNAVAILABLE (Elvanto was unreachable while trying
+//     to validate a not-yet-migrated legacy key): 503 — a transient outage,
+//     not a verdict on the key, so it must not read as "not connected."
+//   - a misconfigured/missing INTEGRATION_CREDENTIALS_KEY (thrown by
+//     credentialCipher.js's keyBuffer(), reached via
+//     connectionStore.getCredentials/upsertConnection): 500, logged loudly
+//     server-side. This is a server deployment problem — EVERY encrypted
+//     credential in the system (this one, and any already-migrated
+//     Planning Center connection) is unusable until it's fixed — so it
+//     must never be silently reported as "not connected."
+async function resolveElvantoApiKeyOrRespond(req, res) {
+  const churchId = req.user.church_id;
   try {
     const credentials = await legacyCredential.getOrMigrateCredentials(churchId);
-    return credentials ? credentials.apiKey : null;
+    if (!credentials) {
+      res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
+      return null;
+    }
+    return credentials.apiKey;
   } catch (error) {
+    if (error && error.code === legacyCredential.ELVANTO_RECONNECT_REQUIRED) {
+      res.status(409).json({ error: error.message, code: error.code });
+      return null;
+    }
+    if (error && error.code === legacyCredential.ELVANTO_VALIDATION_UNAVAILABLE) {
+      res.status(503).json({ error: 'Elvanto is currently unavailable. Please try again shortly.', code: error.code });
+      return null;
+    }
+    if (typeof error?.message === 'string' && error.message.includes('INTEGRATION_CREDENTIALS_KEY')) {
+      logger.error(
+        `Elvanto legacy credential lookup failed for church ${churchId}: server is missing or has an invalid INTEGRATION_CREDENTIALS_KEY`
+      );
+      res.status(500).json({ error: 'Elvanto integration is not fully configured on this server. Please contact support.' });
+      return null;
+    }
     console.error('Error getting Elvanto API key:', error);
+    res.status(500).json({ error: 'Failed to check the Elvanto connection.' });
     return null;
   }
 }
@@ -226,9 +264,9 @@ function namesMatch(name1, name2) {
 // `/elvanto` prefix — that router owns the one reachable implementation of
 // those three routes now, backed by the encrypted, church-scoped
 // integration_connections table (see connectionStore.js) instead of a
-// per-admin preference row. getElvantoApiKey() below still exists and is
-// still used by the legacy one-shot gathering/people/family import routes
-// further down this file (`/elvanto/people`, `/elvanto/families`,
+// per-admin preference row. resolveElvantoApiKeyOrRespond() below still
+// exists and is still used by the legacy one-shot gathering/people/family
+// import routes further down this file (`/elvanto/people`, `/elvanto/families`,
 // `/elvanto/import`, `/elvanto/import-gatherings`, `/elvanto/debug-dump`) —
 // a deliberately DIFFERENT, still-supported feature (CLAUDE.md: "a one-shot,
 // unlinked import") that Task 21, not this task, retires. It has been
@@ -239,10 +277,8 @@ function namesMatch(name1, name2) {
 // Debug endpoint - dump all available Elvanto data
 router.get('/elvanto/debug-dump', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const authHeader = createElvantoAuthHeader(apiKey);
     const results = {
@@ -288,10 +324,8 @@ router.get('/elvanto/debug-dump', async (req, res) => {
 // Get people from Elvanto
 router.get('/elvanto/people', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const { page = 1, per_page = 50, search, include_family = 'true' } = req.query;
     
@@ -325,10 +359,8 @@ router.get('/elvanto/people', async (req, res) => {
 // Get groups from Elvanto
 router.get('/elvanto/groups', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const { page = 1, per_page = 50, search } = req.query;
     
@@ -359,10 +391,8 @@ router.get('/elvanto/groups', async (req, res) => {
 // Get details of a specific group including members
 router.get('/elvanto/groups/:groupId', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const { groupId } = req.params;
     const url = `https://api.elvanto.com/v1/groups/getInfo.json?id=${groupId}&fields=people`;
@@ -389,10 +419,8 @@ router.get('/elvanto/groups/:groupId', async (req, res) => {
 // Get services from Elvanto
 router.get('/elvanto/services', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const { page = 1, per_page = 100 } = req.query;
     
@@ -426,10 +454,8 @@ router.post('/elvanto/check-gathering-duplicates', async (req, res) => {
       return res.status(400).json({ error: 'Please provide groupIds or serviceTypeIds to check.' });
     }
 
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const authHeader = createElvantoAuthHeader(apiKey);
     const duplicates = [];
@@ -520,10 +546,8 @@ router.post('/elvanto/import-gatherings', async (req, res) => {
       return res.status(400).json({ error: 'Please provide groupIds or serviceTypeIds to import.' });
     }
 
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const authHeader = createElvantoAuthHeader(apiKey);
     const importedGatherings = [];
@@ -820,10 +844,8 @@ router.post('/elvanto/import-gatherings', async (req, res) => {
 // Get families from Elvanto (grouped from people endpoint)
 router.get('/elvanto/families', async (req, res) => {
   try {
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const { search, include_archived = 'false' } = req.query;
     const showArchived = include_archived === 'true';
@@ -984,10 +1006,8 @@ router.post('/elvanto/import', async (req, res) => {
       return res.status(400).json({ error: 'Please provide peopleIds or familyIds to import.' });
     }
 
-    const apiKey = await getElvantoApiKey(req.user.id, req.user.church_id);
-    if (!apiKey) {
-      return res.status(401).json({ error: 'Elvanto not connected. Please connect your account first.' });
-    }
+    const apiKey = await resolveElvantoApiKeyOrRespond(req, res);
+    if (!apiKey) return;
 
     const authHeader = createElvantoAuthHeader(apiKey);
     const imported = { people: [], families: [] };
@@ -2729,3 +2749,4 @@ module.exports = router;
 module.exports.getPlanningCenterSyncStats = getPlanningCenterSyncStats;
 module.exports.validateBatchBody = validateBatchBody;
 module.exports.resolveGatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled;
+module.exports.resolveElvantoApiKeyOrRespond = resolveElvantoApiKeyOrRespond;

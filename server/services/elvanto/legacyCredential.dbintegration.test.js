@@ -5,9 +5,11 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const connectionStore = require('../peopleSync/connectionStore');
 const {
   ELVANTO_RECONNECT_REQUIRED,
+  ELVANTO_VALIDATION_UNAVAILABLE,
   getOrMigrateCredentials,
   migrateLegacyCredentials,
 } = require('./legacyCredential');
+const { ElvantoError } = require('./httpClient');
 
 async function withCredentialKey(callback) {
   const previous = process.env.INTEGRATION_CREDENTIALS_KEY;
@@ -169,6 +171,49 @@ test('a validator that throws is treated the same as an explicit ok:false (not m
     assert.equal(await countConnectionRows(churchId), 0);
     assert.equal(await countLegacyRows(churchId), 1);
   }));
+});
+
+test('a genuine ELVANTO_AUTH failure is still treated as "not migrated" (null), not thrown', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedLegacyKey(churchId, adminId, 'revoked-key');
+
+    const validateConnection = async () => { throw new ElvantoError('rejected', 'ELVANTO_AUTH', {}); };
+    const credentials = await getOrMigrateCredentials(churchId, { validateConnection });
+    assert.equal(credentials, null);
+    assert.equal(await countConnectionRows(churchId), 0);
+    assert.equal(await countLegacyRows(churchId), 1);
+  }));
+});
+
+test('a transient ELVANTO_UNAVAILABLE failure (e.g. a timeout) throws ElvantoValidationUnavailableError, distinct from an invalid key', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedLegacyKey(churchId, adminId, 'some-key');
+
+    const validateConnection = async () => { throw new ElvantoError('Elvanto request timed out', 'ELVANTO_UNAVAILABLE', {}); };
+    await assert.rejects(getOrMigrateCredentials(churchId, { validateConnection }), (err) => {
+      assert.equal(err.code, ELVANTO_VALIDATION_UNAVAILABLE);
+      assert.equal(/some-key/.test(err.message), false);
+      return true;
+    });
+
+    // Nothing written, nothing deleted — same as an invalid key, only the
+    // signal reported to the caller differs.
+    assert.equal(await countConnectionRows(churchId), 0);
+    assert.equal(await countLegacyRows(churchId), 1);
+  }));
+});
+
+test('ELVANTO_RESPONSE and ELVANTO_PAGINATION (other transient failure shapes) also throw ElvantoValidationUnavailableError', async () => {
+  for (const code of ['ELVANTO_RESPONSE', 'ELVANTO_PAGINATION']) {
+    await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+      const adminId = await insertAdmin(churchId, 'admin@example.test');
+      await seedLegacyKey(churchId, adminId, 'some-key');
+      const validateConnection = async () => { throw new ElvantoError('malformed', code, {}); };
+      await assert.rejects(getOrMigrateCredentials(churchId, { validateConnection }), (err) => err.code === ELVANTO_VALIDATION_UNAVAILABLE);
+    }));
+  }
 });
 
 test('successful migration removes the legacy row only after the encrypted row is saved', async () => {

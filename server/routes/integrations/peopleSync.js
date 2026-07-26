@@ -86,13 +86,25 @@ async function defaultGetSettings(churchId) {
 // (see scheduler.js's isDueToday), but an out-of-range integer is still
 // rejected here rather than silently stored, since a later frequency change
 // back to weekly/monthly would otherwise inherit a nonsensical day.
+//
+// `day` here is always the RESULTING value the caller resolved (this
+// patch's own fullReconciliationDay if supplied, else whatever is already
+// stored) — never just "was fullReconciliationDay present in this specific
+// request", which is what let a frequency-only patch silently leave a
+// stale, now-invalid day in place (e.g. stored {frequency:'monthly',day:20},
+// patched to {frequency:'weekly'} alone — accepted, but
+// scheduler.isDueToday('weekly', 20) is permanently false with no error
+// anywhere). See validateSettingsPatch's own resultingDay computation.
 function validateDayForFrequency(frequency, day) {
-  if (day === undefined) return null;
+  if (day === undefined || day === null) return null;
   if (frequency === 'weekly' && (day < 0 || day > 6)) {
     return 'fullReconciliationDay must be between 0 and 6 (Sunday-Saturday) for a weekly schedule.';
   }
   if (frequency === 'monthly' && (day < 1 || day > 31)) {
     return 'fullReconciliationDay must be between 1 and 31 for a monthly schedule.';
+  }
+  if (frequency === 'daily' && (day < 0 || day > 31)) {
+    return 'fullReconciliationDay must be between 0 and 31.';
   }
   return null;
 }
@@ -100,7 +112,13 @@ function validateDayForFrequency(frequency, day) {
 // Strict allow-list validator: rejects an empty body, any unknown key, and
 // any wrongly-typed value, listing every problem found (not just the
 // first). Returns { errors } or { patch } — never both.
-function validateSettingsPatch(body, currentFrequency) {
+//
+// `current` is the FULL currently-stored settings object (not just the
+// frequency) — the day/frequency cross-check below needs both the patch's
+// own values AND whichever of the two fields this specific request did NOT
+// supply, so a frequency-only (or day-only) patch is validated against the
+// RESULTING pair, not just whatever happens to be present in this request.
+function validateSettingsPatch(body, current) {
   if (!isPlainObject(body)) return { errors: ['Request body must be an object.'] };
   const keys = Object.keys(body);
   if (keys.length === 0) return { errors: ['At least one setting must be provided.'] };
@@ -133,8 +151,10 @@ function validateSettingsPatch(body, currentFrequency) {
   }
   if (errors.length > 0) return { errors };
 
-  const resultingFrequency = patch.fullReconciliationFrequency || currentFrequency;
-  const dayError = validateDayForFrequency(resultingFrequency, patch.fullReconciliationDay);
+  const resultingFrequency = patch.fullReconciliationFrequency || current.fullReconciliationFrequency;
+  const resultingDay = Object.hasOwn(patch, 'fullReconciliationDay')
+    ? patch.fullReconciliationDay : current.fullReconciliationDay;
+  const dayError = validateDayForFrequency(resultingFrequency, resultingDay);
   if (dayError) return { errors: [dayError] };
 
   return { patch };
@@ -173,6 +193,54 @@ async function defaultListAllRecentRuns(churchId, limit) {
     RUN_PROVIDERS.map((provider) => runRepository.listRecentRuns(churchId, provider, limit))
   );
   return perProvider.flat().sort((a, b) => b.id - a.id).slice(0, limit);
+}
+
+// runRepository's own stored errorMessage already passes through a fairly
+// strict sanitizer at WRITE time (normaliseSafeAuditText — no
+// credential-shaped content, no serialized payloads, no bearer/basic
+// tokens; see runRepository.js), but that is a different, narrower bar
+// than the rest of THIS API holds itself to: every other route here only
+// ever returns a small, fixed, curated message per error CODE (see
+// respondWithError above), never a raw stored/thrown message — which could
+// still carry other internal detail a credential-focused sanitizer was
+// never trying to catch (a raw SQLite error string, an internal hostname,
+// etc.). Maps each run's errorCode to that same convention instead of ever
+// echoing the raw stored errorMessage back over this API.
+const RUN_ERROR_MESSAGES = {
+  SYNC_PROVIDER_INVALID: 'Unsupported people-sync provider.',
+  SYNC_CHURCH_REQUIRED: 'A church context was required.',
+  SYNC_NOT_CONNECTED: 'No connection was configured for this provider.',
+  SYNC_CONNECTION_INVALID: 'The provider connection was marked invalid.',
+  SYNC_BATCH_NOT_FOUND: 'The batch for this run was not found.',
+  SYNC_BATCH_DISABLED: 'The batch for this run was disabled.',
+  SYNC_NO_BATCHES: 'No enabled batches were available for this run.',
+  SYNC_BATCH_FILTER_INVALID: 'The batch filter was invalid.',
+  SYNC_FETCH_INCOMPLETE: 'The provider fetch did not return a complete result.',
+  SYNC_TRIGGER_INVALID: 'An invalid run trigger was used.',
+  SYNC_REVIEW_INVALID: 'The review token was invalid.',
+  SYNC_REVIEW_EXPIRED: 'The review had expired.',
+  SYNC_PLAN_STALE: 'The reviewed plan was out of date.',
+  SYNC_SELECTIONS_INVALID: 'The submitted selections were invalid.',
+  SYNC_BATCH_REQUIRED: 'A batch was required for this run.',
+  SYNC_AUTHORITY_MISMATCH: 'The provider was not the active people-sync authority for this church.',
+  SYNC_ROUTE_TIMEOUT: 'The run timed out.',
+  ELVANTO_AUTH: 'Elvanto rejected the stored API key.',
+  ELVANTO_UNAVAILABLE: 'Elvanto was temporarily unavailable.',
+  ELVANTO_RESPONSE: 'Elvanto returned an unexpected response.',
+  ELVANTO_PAGINATION: 'Elvanto returned an unexpected response.',
+};
+
+function sanitizeRunErrorMessage(errorCode) {
+  if (!errorCode) return null;
+  return RUN_ERROR_MESSAGES[errorCode] || 'This sync run failed. See server logs for details.';
+}
+
+// Never spreads the underlying run object's OWN errorMessage through —
+// always rebuilds it from errorCode, so a run row this app didn't sanitize
+// as strictly at write time (or a future error code not yet in
+// RUN_ERROR_MESSAGES) still can't leak internal detail through this route.
+function sanitizeRunForResponse(run) {
+  return { ...run, errorMessage: sanitizeRunErrorMessage(run.errorCode) };
 }
 
 // ─── Default (production) collaborators ─────────────────────────────────────
@@ -246,7 +314,7 @@ function createPeopleSyncRouter(overrides = {}) {
     try {
       const churchId = req.user.church_id;
       const current = await deps.getSettings(churchId);
-      const { errors, patch } = validateSettingsPatch(req.body, current.fullReconciliationFrequency);
+      const { errors, patch } = validateSettingsPatch(req.body, current);
       if (errors) return res.status(400).json({ error: errors[0], errors });
       const settings = await deps.updateSettings(churchId, patch);
       res.json({ success: true, settings });
@@ -255,17 +323,36 @@ function createPeopleSyncRouter(overrides = {}) {
     }
   });
 
-  router.post('/authority/preview', async (req, res) => {
+  // NOTE: these three routes are named `/people-authority/*`, not the more
+  // obvious `/authority/*`, deliberately — see churchIsolation.js's
+  // `ensureChurchIsolation`, which skips its own church_id validation for
+  // any path matching `req.path.startsWith('/auth')` (meant for the actual
+  // `/api/auth/*` login routes). Inside a mounted sub-router, `req.path` is
+  // MOUNT-RELATIVE, so `POST /people-sync/authority/preview` would have
+  // arrived here as `/authority/preview` — which itself starts with
+  // `/auth` and would have silently skipped this router's own
+  // ensureChurchIsolation call above (verified: an invalid church_id sailed
+  // through `/authority/preview`/`/authority/disable` while still being
+  // correctly blocked on `/settings`/`/runs`). Not currently exploitable —
+  // the PARENT router's own ensureChurchIsolation (applied before this
+  // sub-router is mounted, on the full `/people-sync/authority/preview`
+  // path) still catches it — but this file's own header comment claims it
+  // doesn't depend on being mounted exactly right, and for these three
+  // routes that claim was false. Renaming the path (rather than touching
+  // churchIsolation.js's shared matching logic, which many other routes
+  // depend on) is the safe fix; see the regression test in
+  // peopleSync.test.js that pins this directly against the sub-router.
+  router.post('/people-authority/preview', async (req, res) => {
     try {
       const provider = req.body && req.body.provider;
       const result = await deps.previewAuthoritySwitch({ churchId: req.user.church_id, provider });
       res.json({ success: true, ...result });
     } catch (err) {
-      respondWithError(res, err, 'people-sync POST /authority/preview');
+      respondWithError(res, err, 'people-sync POST /people-authority/preview');
     }
   });
 
-  router.post('/authority/apply', async (req, res) => {
+  router.post('/people-authority/apply', async (req, res) => {
     try {
       const body = req.body || {};
       const provider = body.provider;
@@ -281,16 +368,16 @@ function createPeopleSyncRouter(overrides = {}) {
       // since the reviewed apply did succeed.
       res.json({ success: true, ...result });
     } catch (err) {
-      respondWithError(res, err, 'people-sync POST /authority/apply');
+      respondWithError(res, err, 'people-sync POST /people-authority/apply');
     }
   });
 
-  router.post('/authority/disable', async (req, res) => {
+  router.post('/people-authority/disable', async (req, res) => {
     try {
       const result = await deps.disableAuthority(req.user.church_id);
       res.json({ success: true, authority: result });
     } catch (err) {
-      respondWithError(res, err, 'people-sync POST /authority/disable');
+      respondWithError(res, err, 'people-sync POST /people-authority/disable');
     }
   });
 
@@ -299,7 +386,7 @@ function createPeopleSyncRouter(overrides = {}) {
       const rawLimit = Number(req.query.limit);
       const limit = Number.isInteger(rawLimit) && rawLimit >= 1 && rawLimit <= 100 ? rawLimit : DEFAULT_RUNS_LIMIT;
       const runs = await deps.listAllRecentRuns(req.user.church_id, limit);
-      res.json({ success: true, runs });
+      res.json({ success: true, runs: runs.map(sanitizeRunForResponse) });
     } catch (err) {
       respondWithError(res, err, 'people-sync GET /runs');
     }
