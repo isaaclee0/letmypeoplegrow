@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSelections, VisitorChoice } from './syncSelections';
+import { buildSelections, toLegacyPcoSelections, VisitorChoice } from './syncSelections';
 
 describe('buildSelections', () => {
   it('maps ambiguous choices and skip set into the apply payload', () => {
@@ -51,5 +51,24 @@ describe('buildSelections', () => {
   it('includes skipFamilyNameUpdateIds when provided', () => {
     const result = buildSelections({}, new Set(), {}, new Set(), new Set([100, 200]));
     expect(result.skipFamilyNameUpdateIds).toEqual([100, 200]);
+  });
+
+  it('translates neutral selections to the legacy PCO endpoint shape', () => {
+    expect(toLegacyPcoSelections({
+      ambiguous: { 'pco-ambiguous:12': 456 },
+      skipExternalPersonIds: ['pco-3'],
+      visitorChoices: { 'pco-visitor:34': 'promote' },
+      acceptFamilyRenameIds: ['pco-rename:56'],
+    }, {
+      ambiguousIndividualByExternalId: { 'pco-ambiguous:12': 12 },
+      visitorIndividualByExternalId: { 'pco-visitor:34': 34 },
+      familyIdByRenameActionId: { 'pco-rename:56': 56, 'pco-rename:78': 78 },
+    })).toEqual({
+      ambiguous: { 12: '456' },
+      skipAddPcoIds: ['pco-3'],
+      visitorChoices: { 34: 'promote' },
+      archiveAmbiguousIds: [],
+      skipFamilyNameUpdateIds: [78],
+    });
   });
 });

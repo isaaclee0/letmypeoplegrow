@@ -1,4 +1,8 @@
-// Shapes shared by the sync review UI.
+import type { PeopleSyncSelections } from '../peopleSync/types';
+
+// Legacy Planning Center apply payload. Its ambiguous and family-rename
+// semantics intentionally differ from PeopleSyncSelections, so keep this
+// type named separately until the endpoint accepts the neutral contract.
 export type VisitorChoice = 'promote' | 'keep';
 
 export interface SyncSelections {
@@ -7,6 +11,12 @@ export interface SyncSelections {
   visitorChoices: Record<string, VisitorChoice>;
   archiveAmbiguousIds: number[];
   skipFamilyNameUpdateIds: number[];
+}
+
+export interface LegacyPcoSelectionMap {
+  ambiguousIndividualByExternalId: Record<string, number>;
+  visitorIndividualByExternalId: Record<string, number>;
+  familyIdByRenameActionId: Record<string, number>;
 }
 
 // ambiguousChoices: individualId -> chosen pcoId (or null when the reviewer skipped).
@@ -36,10 +46,36 @@ export function buildSelections(
   }
   return {
     ambiguous,
-    skipAddPcoIds: [...skipAddPcoIds],
+    skipAddPcoIds: [...skipAddPcoIds].sort(),
     visitorChoices: vChoices,
-    archiveAmbiguousIds: [...archiveAmbiguousIds],
-    skipFamilyNameUpdateIds: [...skipFamilyNameUpdateIds],
+    archiveAmbiguousIds: [...archiveAmbiguousIds].sort((a, b) => a - b),
+    skipFamilyNameUpdateIds: [...skipFamilyNameUpdateIds].sort((a, b) => a - b),
   };
 }
 
+export function toLegacyPcoSelections(selections: PeopleSyncSelections, map: LegacyPcoSelectionMap): SyncSelections {
+  const ambiguous = Object.fromEntries(Object.entries(selections.ambiguous || {})
+    .flatMap(([externalId, pcoId]) => {
+      const individualId = map.ambiguousIndividualByExternalId[externalId];
+      return individualId === undefined ? [] : [[String(individualId), String(pcoId)]];
+    })
+    .sort(([left], [right]) => left.localeCompare(right)));
+  const visitorChoices = Object.fromEntries(Object.entries(selections.visitorChoices || {})
+    .flatMap(([externalId, choice]) => {
+      const individualId = map.visitorIndividualByExternalId[externalId];
+      return individualId === undefined ? [] : [[String(individualId), choice]];
+    })
+    .sort(([left], [right]) => left.localeCompare(right)) as [string, VisitorChoice][]);
+  const acceptedRenames = new Set(selections.acceptFamilyRenameIds || []);
+
+  return {
+    ambiguous,
+    skipAddPcoIds: [...(selections.skipExternalPersonIds || [])].sort(),
+    visitorChoices,
+    archiveAmbiguousIds: [],
+    skipFamilyNameUpdateIds: Object.entries(map.familyIdByRenameActionId)
+      .filter(([actionId]) => !acceptedRenames.has(actionId))
+      .map(([, familyId]) => familyId)
+      .sort((a, b) => a - b),
+  };
+}
