@@ -596,6 +596,27 @@ async function startServer() {
       console.warn('⚠️  Weekly review scheduler initialization failed:', error.message);
     }
 
+    // Register the provider-neutral people-sync adapters (Planning Center,
+    // Elvanto) exactly once, before anything that could resolve one by name
+    // gets a chance to run. Tasks 14/15 built providerRegistry.getProvider()
+    // and every orchestrator.js pipeline function (buildReview/applyReviewed/
+    // runUnattended/previewAuthoritySwitch) calls it internally, lazily, the
+    // first time a real HTTP request or a scheduled batch reaches it — but
+    // nothing called registerBuiltInProviders() to populate that registry
+    // until now. Without this, every one of those calls would throw "Unknown
+    // provider" the moment real traffic (or the scheduler below) arrived.
+    // Placed here, before the people-sync scheduler starts and before
+    // server.listen() below accepts any request, so registration is always
+    // complete before either can be reached. registerBuiltInProviders() is
+    // idempotent (see providerRegistry.js), so calling it again later (e.g.
+    // a hot-reload path) is harmless.
+    try {
+      require('./services/peopleSync/providerRegistry').registerBuiltInProviders();
+      console.log('✅ People-sync providers registered (Planning Center, Elvanto)');
+    } catch (error) {
+      console.warn('⚠️  People-sync provider registration failed:', error.message);
+    }
+
     // Initialize the provider-neutral people-sync scheduler (Task 10). This is
     // the ONLY people-sync cron job started — planningCenterSync.start()
     // (kept only for external/back-compat callers) delegates to this exact

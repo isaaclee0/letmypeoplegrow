@@ -13,6 +13,9 @@ const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
+const legacyCredential = require('../services/elvanto/legacyCredential');
+const { createPeopleSyncRouter } = require('./integrations/peopleSync');
+const { createElvantoRouter } = require('./integrations/elvanto');
 
 const router = express.Router();
 
@@ -37,6 +40,22 @@ router.use(ensureChurchIsolation);
 // per-item review on some paths (e.g. batch "Run now") — admin-only, matching
 // every other data-mutating router in this app.
 router.use(requireRole(['admin']));
+
+// Task 16: the generic (provider-neutral) people-sync router and the
+// Elvanto-specific router are mounted BEFORE the remaining legacy `/elvanto/*`
+// handlers further down this file, so each of their own routes (status,
+// connect, disconnect, metadata, sync-batches CRUD/plan/apply/run-now) is the
+// one reachable implementation. A request under `/elvanto/*` that neither of
+// these routers itself handles (e.g. `/elvanto/people`, `/elvanto/families`,
+// `/elvanto/import`, `/elvanto/import-gatherings`, `/elvanto/debug-dump`) falls
+// through to the legacy handlers later in this file exactly as before —
+// mounting a sub-router with express.Router() does not swallow unmatched
+// sub-paths. Those legacy gathering/service-import + one-shot people/family
+// import routes are a deliberately different, still-supported feature (see
+// CLAUDE.md's "one-shot, unlinked import" description) that Task 21, not
+// this task, retires.
+router.use('/people-sync', createPeopleSyncRouter());
+router.use('/elvanto', createElvantoRouter());
 
 // Log after auth passes
 router.use((req, res, next) => {
@@ -103,23 +122,31 @@ function pcoEnv(suffix) {
   return process.env[`PLANNING_CENTER_${suffix}`] || process.env[`PLANNING_CENTRE_${suffix}`];
 }
 
-// Helper function to get Elvanto API key from user preferences
+// Helper function to get the church's current Elvanto API key, used by the
+// legacy one-shot gathering/people/family import routes below (a different,
+// still-supported feature — see the NOTE above `/elvanto/debug-dump`).
+//
+// Task 16: the credential itself is now church-level, not per-admin (the new
+// `/elvanto/connect` — see routes/integrations/elvanto.js — writes to the
+// encrypted, church-scoped integration_connections table, not this legacy
+// `user_preferences` row), so this reads through
+// legacyCredential.getOrMigrateCredentials, which transparently: (1) prefers
+// the encrypted connection if one already exists, (2) otherwise falls back
+// to a one-time validated migration of this exact legacy row. `userId` is
+// accepted for call-site compatibility but is no longer used to scope the
+// lookup — the credential is church-wide, exactly like every other
+// integration in this app.
+//
+// A church whose legacy rows disagree (ELVANTO_RECONNECT_REQUIRED) is
+// treated the same as "not connected" here — this helper has always
+// returned a plain nullable string, never a distinguishable error, and
+// these older import routes have no UI affordance to show a distinct
+// "reconnect required" state; an admin hitting this will simply need to use
+// the new Elvanto connect flow, which resolves the ambiguity explicitly.
 async function getElvantoApiKey(userId, churchId) {
   try {
-    const preferences = await Database.query(`
-      SELECT preference_value
-      FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'elvanto_api_key' AND church_id = ?
-      LIMIT 1
-    `, [userId, churchId]);
-
-    if (preferences.length === 0) {
-      return null;
-    }
-
-    const prefValue = preferences[0].preference_value;
-    const data = typeof prefValue === 'string' ? JSON.parse(prefValue) : prefValue;
-    return data.api_key || null;
+    const credentials = await legacyCredential.getOrMigrateCredentials(churchId);
+    return credentials ? credentials.apiKey : null;
   } catch (error) {
     console.error('Error getting Elvanto API key:', error);
     return null;
@@ -192,315 +219,22 @@ function namesMatch(name1, name2) {
   return false;
 }
 
-// Check if Elvanto is configured/connected
-router.get('/elvanto/status', async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const churchId = req.user.church_id;
-    
-    // Debug: Check all records for this user
-    const allRecords = await Database.query(`
-      SELECT id, user_id, preference_key, church_id
-      FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'elvanto_api_key'
-    `, [userId]);
-    
-    logger.info('Elvanto status check', {
-      userId,
-      churchId,
-      recordsFound: allRecords.length,
-      recordChurchIds: allRecords.map(r => r.church_id)
-    });
-    
-    const apiKey = await getElvantoApiKey(userId, churchId);
-    
-    console.log('🔌 Status check - API key result:', {
-      userId,
-      churchId,
-      hasApiKey: !!apiKey,
-      apiKeyPrefix: apiKey ? apiKey.substring(0, 10) + '...' : 'null'
-    });
-    
-    if (!apiKey) {
-      console.log('🔌 Status check - No API key, returning disconnected');
-      return res.json({
-        configured: false,
-        connected: false,
-        elvantoAccount: null
-      });
-    }
-    
-    console.log('🔌 Status check - API key found, testing with Elvanto API...');
-
-    // Test the API key by making a simple request
-    try {
-      const response = await makeHttpsRequest('https://api.elvanto.com/v1/people/getAll.json?page=1&page_size=10', {
-        method: 'GET',
-        headers: {
-          'Authorization': createElvantoAuthHeader(apiKey)
-        }
-      });
-
-      if (response.status === 200 && response.data?.status === 'ok') {
-        console.log('🔌 Status check - Elvanto API test successful, returning connected');
-        return res.json({
-          configured: true,
-          connected: true,
-          elvantoAccount: 'Connected via API Key'
-        });
-      } else {
-        console.log('🔌 Status check - Elvanto API test failed, returning disconnected');
-        return res.json({
-          configured: true,
-          connected: false,
-          elvantoAccount: null,
-          error: 'API key is invalid or expired'
-        });
-      }
-    } catch (error) {
-      return res.json({
-        configured: true,
-        connected: false,
-        elvantoAccount: null,
-        error: 'Failed to verify API key'
-      });
-    }
-  } catch (error) {
-    console.error('Get Elvanto status error:', error);
-    res.status(500).json({ error: 'Failed to get Elvanto integration status.' });
-  }
-});
-
-// Save Elvanto API key
-router.post('/elvanto/connect', async (req, res) => {
-  try {
-    const { apiKey } = req.body;
-
-    console.log('Elvanto connect request:', {
-      hasApiKey: !!apiKey,
-      apiKeyLength: apiKey?.length || 0,
-      body: req.body
-    });
-
-    if (!apiKey || !apiKey.trim()) {
-      return res.status(400).json({ error: 'API key is required.' });
-    }
-
-    // Test the API key first - use page_size=10 (Elvanto rejects page_size=1)
-    const authHeader = createElvantoAuthHeader(apiKey.trim());
-    console.log('Testing Elvanto API key:', {
-      apiKeyPrefix: apiKey.trim().substring(0, 10) + '...',
-      authHeaderPrefix: authHeader.substring(0, 20) + '...'
-    });
-
-    const testResponse = await makeHttpsRequest('https://api.elvanto.com/v1/people/getAll.json?page=1&page_size=10', {
-      method: 'GET',
-      headers: {
-        'Authorization': authHeader
-      }
-    });
-
-    console.log('Elvanto API test response:', {
-      status: testResponse.status,
-      dataStatus: testResponse.data?.status,
-      error: testResponse.data?.error,
-      message: testResponse.data?.message
-    });
-
-    // Check for authentication errors (401) or explicit auth failure
-    // Error code 102 = Invalid API key, 250 = invalid page size (not auth error)
-    const isAuthError = testResponse.status === 401 || 
-                        testResponse.data?.error?.code === 102 ||
-                        (testResponse.data?.status === 'fail' && testResponse.data?.error?.code !== 250);
-    
-    if (isAuthError) {
-      return res.status(400).json({ 
-        error: 'Invalid API key. Please check your Elvanto API key and try again.',
-        details: testResponse.data?.error?.message || 'Authentication failed'
-      });
-    }
-
-    // Store the API key
-    const integrationData = {
-      api_key: apiKey.trim(),
-      connected_at: new Date().toISOString()
-    };
-
-    await Database.query(`
-      INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
-      VALUES (?, 'elvanto_api_key', ?, ?)
-      ON CONFLICT(user_id, preference_key) DO UPDATE SET
-        preference_value = excluded.preference_value,
-        updated_at = CURRENT_TIMESTAMP
-    `, [req.user.id, JSON.stringify(integrationData), req.user.church_id]);
-
-    res.json({ 
-      success: true, 
-      message: 'Elvanto connected successfully.' 
-    });
-  } catch (error) {
-    console.error('Elvanto connect error:', error);
-    res.status(500).json({ error: 'Failed to connect Elvanto.' });
-  }
-});
-
-// Disconnect Elvanto integration
-router.post('/elvanto/disconnect', async (req, res) => {
-  console.log('🔌 Elvanto disconnect endpoint called');
-  try {
-    const userId = req.user.id;
-    const churchId = req.user.church_id;
-
-    console.log('🔌 Elvanto disconnect - User info:', { userId, churchId });
-
-    // Check what records exist before deletion (for debugging)
-    const recordsBefore = await Database.query(`
-      SELECT id, user_id, preference_key, church_id
-      FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'elvanto_api_key'
-    `, [userId]);
-
-    console.log('🔌 Elvanto disconnect - Before deletion:', {
-      userId,
-      churchId,
-      recordsFound: recordsBefore.length,
-      recordChurchIds: recordsBefore.map(r => r.church_id),
-      records: recordsBefore
-    });
-
-    logger.info('Elvanto disconnect - Before deletion', {
-      userId,
-      churchId,
-      recordsFound: recordsBefore.length,
-      recordChurchIds: recordsBefore.map(r => r.church_id)
-    });
-
-    // Delete ALL Elvanto-related preferences for this user to ensure complete disconnection
-    // This includes: elvanto_api_key, elvanto_integration, and any other elvanto-prefixed keys
-    let result;
-    try {
-      result = await Database.transaction(async (conn) => {
-        console.log('🔌 Transaction started - deleting all Elvanto preferences');
-        
-        // Delete elvanto_api_key
-        const deleteApiKey = await conn.query(`
-          DELETE FROM user_preferences
-          WHERE user_id = ? AND preference_key = 'elvanto_api_key'
-        `, [userId]);
-        console.log('🔌 Deleted elvanto_api_key:', { affectedRows: deleteApiKey.affectedRows });
-        
-        // Delete elvanto_integration (OAuth tokens)
-        const deleteIntegration = await conn.query(`
-          DELETE FROM user_preferences
-          WHERE user_id = ? AND preference_key = 'elvanto_integration'
-        `, [userId]);
-        console.log('🔌 Deleted elvanto_integration:', { affectedRows: deleteIntegration.affectedRows });
-        
-        // Delete any other elvanto-prefixed preferences
-        const deleteOther = await conn.query(`
-          DELETE FROM user_preferences
-          WHERE user_id = ? AND preference_key LIKE 'elvanto%'
-        `, [userId]);
-        console.log('🔌 Deleted other elvanto preferences:', { affectedRows: deleteOther.affectedRows });
-        
-        // Verify deletion immediately within the same transaction
-        const verifyResult = await conn.query(`
-          SELECT COUNT(*) as count FROM user_preferences
-          WHERE user_id = ? AND preference_key LIKE '%elvanto%'
-        `, [userId]);
-        
-        console.log('🔌 Verification within transaction:', { count: verifyResult[0]?.count });
-        
-        return {
-          affectedRows: deleteApiKey.affectedRows + deleteIntegration.affectedRows + deleteOther.affectedRows,
-          remainingCount: verifyResult[0]?.count || 0
-        };
-      });
-      console.log('🔌 Transaction committed successfully');
-    } catch (transactionError) {
-      console.error('🔌 Transaction error:', transactionError);
-      throw transactionError;
-    }
-
-    console.log('🔌 Elvanto disconnect - Delete result:', {
-      userId,
-      churchId,
-      deletedRows: result.affectedRows,
-      remainingCount: result.remainingCount
-    });
-
-    logger.info('Elvanto disconnect - Delete result', {
-      userId,
-      churchId,
-      deletedRows: result.affectedRows,
-      remainingCount: result.remainingCount
-    });
-
-    // Verify the deletion was successful
-    if (result.affectedRows === 0 || result.remainingCount > 0) {
-      if (recordsBefore.length === 0) {
-        // Already disconnected
-        logger.info('Elvanto disconnect: Already disconnected', { userId, churchId });
-        return res.json({ 
-          message: 'Elvanto integration is already disconnected.',
-          disconnected: true
-        });
-      } else {
-        // Something went wrong - records exist but weren't deleted
-        logger.error('Elvanto disconnect: Failed to delete records', {
-          userId,
-          churchId,
-          recordsBefore: recordsBefore.length,
-          deletedRows: result.affectedRows,
-          remainingCount: result.remainingCount
-        });
-        return res.status(500).json({ 
-          error: `Failed to disconnect Elvanto integration. ${result.remainingCount} record(s) still exist after deletion attempt.` 
-        });
-      }
-    }
-
-    // Verify deletion by checking if any records remain
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const recordsAfter = await Database.query(`
-      SELECT id, church_id FROM user_preferences
-      WHERE user_id = ? AND preference_key = 'elvanto_api_key'
-    `, [userId]);
-    
-    if (recordsAfter.length > 0) {
-      logger.error('Elvanto disconnect verification failed - records still exist', {
-        userId,
-        churchId,
-        remainingRecords: recordsAfter.length,
-        remainingChurchIds: recordsAfter.map(r => r.church_id)
-      });
-      return res.status(500).json({ 
-        error: 'Failed to disconnect Elvanto integration. The API key may still be stored.' 
-      });
-    }
-
-    console.log('🔌 Elvanto disconnect: Successfully disconnected', {
-      userId,
-      churchId,
-      deletedRows: result.affectedRows
-    });
-
-    logger.info('Elvanto disconnect: Successfully disconnected', {
-      userId,
-      churchId,
-      deletedRows: result.affectedRows
-    });
-
-    res.json({ 
-      message: 'Elvanto integration disconnected successfully.',
-      disconnected: true
-    });
-  } catch (error) {
-    console.error('🔌 Elvanto disconnect ERROR:', error);
-    logger.error('Disconnect Elvanto error:', error);
-    res.status(500).json({ error: 'Failed to disconnect Elvanto integration.' });
-  }
-});
+// NOTE (Task 16): the legacy `/elvanto/status`, `/elvanto/connect`, and
+// `/elvanto/disconnect` handlers that used to live here (reading/writing
+// `user_preferences.elvanto_api_key` directly) have been superseded by
+// server/routes/integrations/elvanto.js, mounted below at this same
+// `/elvanto` prefix — that router owns the one reachable implementation of
+// those three routes now, backed by the encrypted, church-scoped
+// integration_connections table (see connectionStore.js) instead of a
+// per-admin preference row. getElvantoApiKey() below still exists and is
+// still used by the legacy one-shot gathering/people/family import routes
+// further down this file (`/elvanto/people`, `/elvanto/families`,
+// `/elvanto/import`, `/elvanto/import-gatherings`, `/elvanto/debug-dump`) —
+// a deliberately DIFFERENT, still-supported feature (CLAUDE.md: "a one-shot,
+// unlinked import") that Task 21, not this task, retires. It has been
+// updated to read through legacyCredential.getOrMigrateCredentials so it
+// keeps working for a church connected via either the old per-admin row or
+// the new encrypted connection.
 
 // Debug endpoint - dump all available Elvanto data
 router.get('/elvanto/debug-dump', async (req, res) => {
