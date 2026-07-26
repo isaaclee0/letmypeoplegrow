@@ -81,6 +81,19 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
 // one of these four strings.
 export type ElvantoLastSyncResult = 'review_required' | 'applied' | 'failed' | 'cancelled';
 
+const ELVANTO_LAST_SYNC_RESULTS = new Set<ElvantoLastSyncResult>([
+  'review_required', 'applied', 'failed', 'cancelled',
+]);
+
+// Narrows PeopleSyncBatch['lastSyncResult'] (a raw `string | null`) down to
+// ElvantoLastSyncResult for an Elvanto batch specifically. Returns false for
+// `null` (never synced) and for any unrecognised string (e.g. a
+// provider='planning_center' row's JSON-stringified summary, if this were
+// ever mistakenly called on one -- see the field's own doc comment above).
+export function isElvantoLastSyncResult(value: string | null): value is ElvantoLastSyncResult {
+  return value !== null && ELVANTO_LAST_SYNC_RESULTS.has(value as ElvantoLastSyncResult);
+}
+
 // Request body accepted by POST /elvanto/sync-batches (name required) and
 // PUT /elvanto/sync-batches/:id (all fields optional -- a partial patch
 // merged over the existing stored batch). Mirrors elvanto.js's own
@@ -426,8 +439,17 @@ export interface PeopleSyncReview {
 export interface PeopleSyncApplyResult {
   runId: number;
   status: 'applied';
+  // Never partial: applyResult only ever reaches this response after
+  // applyPeopleSyncPlan has already returned successfully (a throw there is
+  // caught earlier and fails the whole request instead), so this is always
+  // the full emptyResult()-shaped count set.
   applied: PeopleSyncApplyCounts;
-  summary: PeopleSyncPlanSummary;
+  // Partial, unlike `applied` above: safeSummarizePlan() wraps this specific
+  // computation in its own try/catch and returns `{}` on an (unexpected,
+  // belt-and-braces) failure -- AFTER the apply itself already succeeded --
+  // logging server-side rather than failing an apply that already committed
+  // real mutations. See orchestrator.js's safeSummarizePlan.
+  summary: Partial<PeopleSyncPlanSummary>;
   // Present only when an authority-switch apply's commitAuthoritySwitch
   // step failed AFTER the plan itself was already successfully applied --
   // see orchestrator.js's applyReviewed for why this never rolls back or
@@ -443,20 +465,62 @@ export interface PeopleSyncApplyResult {
 export interface PeopleSyncRunNowResult {
   runId: number;
   status: 'applied' | 'review_required';
-  counts: PeopleSyncApplyCounts;
+  // Partial: finishAppliedRun initializes `counts = {}` and only overwrites
+  // it with the full mergeAppliedCounts(...) result inside a try/catch --
+  // AFTER the apply itself already succeeded -- so a classification failure
+  // there (logged server-side) leaves counts as `{}` rather than failing an
+  // already-committed run. See orchestrator.js's finishAppliedRun.
+  counts: Partial<PeopleSyncApplyCounts>;
   fetchMode: 'full' | 'incremental';
   complete: boolean;
   externalWatermark: string | null;
 }
 
 // ─── Reviewer selections (server/services/peopleSync/apply.js's validateSelections) ──
-
-export interface SyncSelections {
-  ambiguous: Record<string, number>;
-  skipExternalPersonIds: string[];
-  visitorChoices: Record<string, 'promote' | 'keep'>;
-  acceptArchiveIndividualIds: number[];
-  acceptFamilyRenameIds: number[];
+//
+// Deliberately named PeopleSyncSelections, NOT SyncSelections --
+// client/src/components/planningCenter/syncSelections.ts already exports a
+// (legacy, PCO-specific) type of that exact name, and the two are NOT
+// interchangeable despite similar-looking fields:
+//   - `ambiguous`'s direction is reversed: the legacy type maps
+//     individualId -> chosen pcoId (string); this one maps
+//     externalPersonId -> chosen individualId (number).
+//   - the legacy `skipFamilyNameUpdateIds` is opt-OUT; this type's
+//     `acceptFamilyRenameIds` is opt-IN -- same intent, inverted polarity.
+//   - the legacy `archiveAmbiguousIds` ("archive instead of picking a
+//     candidate") and this type's `acceptArchiveIndividualIds` ("confirm
+//     this archive") are different concepts with confusingly similar names.
+// TypeScript alone won't catch a hand-built `ambiguous` map in the wrong
+// direction or a flipped opt-in/opt-out boolean, so keeping these two types
+// under different names is the only real guard against Task 18 (which
+// touches both trees) mixing them up. The legacy type is removed in Task 21;
+// until then, do not rename this back to `SyncSelections`.
+export interface PeopleSyncSelections {
+  // externalPersonId -> chosen individualId, for entries in
+  // plan.ambiguousPeople the reviewer resolved manually.
+  ambiguous?: Record<string, number>;
+  // addPeople externalPersonIds the reviewer chose to skip.
+  skipExternalPersonIds?: string[];
+  // externalPersonId -> 'promote' (link + convert to regular) or 'keep' (no
+  // change), for reviewRequired linkPeople suggestions from visitor/archived
+  // matches.
+  visitorChoices?: Record<string, 'promote' | 'keep'>;
+  // individualIds (drawn from unmatchedLocalRegulars or an ambiguousPeople
+  // candidate list) the reviewer chose to archive outright.
+  acceptArchiveIndividualIds?: number[];
+  // renameFamily plan-ACTION ids (e.g. 'renameFamily:9', built by plan.js's
+  // actionId() helper) the reviewer accepted -- NOT family IDs. See
+  // apply.js's validateSelections, which builds
+  // `renameById = new Map(plan.renameFamily.map(a => [a.id, a]))` and looks
+  // up each submitted value against that map of string action ids (confirmed
+  // against apply.test.js/apply.dbintegration.test.js's own string-id
+  // fixtures, e.g. 'renameFamily:x'). Unreachable today only because
+  // plan.renameFamily has no producer yet (always []) -- getting this type
+  // wrong would surface the moment a producer lands: the review UI would
+  // submit a numeric family id, renameById.has(...) would be false, and
+  // validateSelections would throw, rejecting the ENTIRE apply (every
+  // person-level action the reviewer approved included).
+  acceptFamilyRenameIds?: string[];
 }
 
 // ─── Recent runs (server/services/peopleSync/runRepository.js's toRun()) ──

@@ -12,8 +12,10 @@ import type {
   PeopleSyncApplyResult,
   PeopleSyncRunNowResult,
   PeopleSyncRun,
-  SyncSelections,
+  PeopleSyncSelections,
   ExternalLinks,
+  ElvantoStatus,
+  ElvantoConnection,
 } from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
@@ -899,9 +901,10 @@ export const integrationsAPI = {
   // (and un-renamed) here since client/src/components/integrations/
   // IntegrationsTab.tsx and ElvantoIntegrationPanel.tsx still call these
   // directly; Task 20 replaces that panel and can retype/rename these then.
-  getElvantoStatus: () => api.get('/integrations/elvanto/status'),
-  connectElvanto: (apiKey: string) => api.post('/integrations/elvanto/connect', { apiKey }),
-  disconnectElvanto: () => api.post('/integrations/elvanto/disconnect'),
+  getElvantoStatus: () => api.get<ElvantoStatus>('/integrations/elvanto/status'),
+  connectElvanto: (apiKey: string) =>
+    api.post<{ success: true; status: ElvantoConnection }>('/integrations/elvanto/connect', { apiKey }),
+  disconnectElvanto: () => api.post<{ success: true; disconnected: boolean }>('/integrations/elvanto/disconnect'),
   // ── Legacy one-shot Elvanto people/family import (CLAUDE.md: "a one-shot,
   // unlinked import" -- admin ticks people/families, they get copied in, no
   // persistent relationship or ongoing sync). These routes are still live
@@ -1032,7 +1035,11 @@ export const peopleSyncAPI = {
       { timeout: 120000 },
     ),
 
-  applyAuthority: (provider: SyncProvider, reviewToken: string, selections: SyncSelections) =>
+  // `selections` defaults to {} to match applyReviewed's own server-side
+  // default (every field is read defensively via asArray/asRecord there), so
+  // an authority-switch apply with nothing left to review doesn't force
+  // callers to pass an empty object explicitly.
+  applyAuthority: (provider: SyncProvider, reviewToken: string, selections: PeopleSyncSelections = {}) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(
       '/integrations/people-sync/people-authority/apply',
       { provider, reviewToken, selections },
@@ -1071,6 +1078,11 @@ export const elvantoSyncAPI = {
       metadata: ElvantoSyncMetadata;
       stale: boolean;
       cached: boolean;
+      // Only present on the stale-cache-fallback path (a live fetch failed
+      // but a cache existed) -- see elvanto.js's GET /metadata handler and
+      // metadata.js's fetchElvantoMetadata, which sets `refreshing: false`
+      // on that same fallback object.
+      refreshing?: boolean;
       metadataCachedAt?: string | null;
     }>('/integrations/elvanto/metadata'),
 
@@ -1104,7 +1116,10 @@ export const elvantoSyncAPI = {
       timeout: 120000,
     }),
 
-  applyBatch: (id: number, data: { reviewToken: string; selections?: SyncSelections }) =>
+  // `selections` is optional here (mirroring applyAuthority's own default
+  // above) since the server treats a missing/non-object `selections` the
+  // same as `{}` (see elvanto.js's POST /sync-batches/:id/apply handler).
+  applyBatch: (id: number, data: { reviewToken: string; selections?: PeopleSyncSelections }) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(
       `/integrations/elvanto/sync-batches/${id}/apply`,
       data,
