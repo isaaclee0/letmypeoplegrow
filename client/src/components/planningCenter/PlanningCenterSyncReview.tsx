@@ -83,6 +83,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
     if (!opts?.preserveResult) setResult(null);
     try {
       const response = await integrationsAPI.getPlanningCenterBatchPlan(batchId, { force: opts?.force });
+      candidateSelectionMapRef.current = legacySelectionMap(response.data.plan);
       setPlan(response.data.plan);
     } catch (caught: any) {
       logger.error('Failed to compute Planning Center batch sync plan', caught);
@@ -95,7 +96,6 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
   useEffect(() => { if (connected) void loadPlan(); }, [connected, loadPlan]);
   const review = useMemo(() => plan ? buildReview(batchId, plan) : null, [batchId, plan]);
   const selectionMap = useMemo(() => plan ? legacySelectionMap(plan) : null, [plan]);
-  useEffect(() => { candidateSelectionMapRef.current = selectionMap; }, [selectionMap]);
 
   if (!connected) return <div className="text-sm text-gray-600 dark:text-gray-300">Planning Center is not connected. <button className="underline" onClick={() => navigate('/app/settings?tab=integrations')}>Connect it in Settings</button>.</div>;
   if (loading) return <p className="text-sm text-gray-500 dark:text-gray-400">Computing sync plan… (fetching everyone from Planning Center)</p>;
@@ -132,7 +132,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
     return candidate ? `${candidate.firstName} ${candidate.lastName}${candidate.membership ? ` — ${candidate.membership}` : ''}` : `Planning Center person ${pcoId || candidateId}`;
   };
 
-  return <div className="space-y-4"><SyncReview provider="planning_center" review={review} onRefresh={() => loadPlan()} onApply={apply} applying={applying} renderCandidateSearch={renderCandidateSearch} renderCandidateLabel={candidateLabel} resolveAmbiguousArchiveIndividualId={(action) => selectionMap.ambiguousIndividualByExternalId[action.externalPersonId]} />
+  return <div className="space-y-4"><SyncReview provider="planning_center" review={review} onRefresh={() => loadPlan()} onApply={apply} applying={applying} renderCandidateSearch={renderCandidateSearch} renderCandidateLabel={candidateLabel} resolveAmbiguousArchiveIndividualId={(action) => selectionMap.ambiguousIndividualByExternalId[action.externalPersonId]} requireAllPlannedArchivesAccepted />
     <button type="button" className="text-sm underline text-gray-600 dark:text-gray-300" disabled={applying} onClick={() => void loadPlan({ force: true })}>Refresh from Planning Center</button>
     {plan.pcoFetchedAt && <p className="text-xs text-gray-500 dark:text-gray-400">Planning Center data as of {new Date(plan.pcoFetchedAt).toLocaleTimeString()}.</p>}
     {result && <div className="text-sm text-green-700 dark:text-green-400">Applied: {result.added} added, {result.updated} updated, {result.archived} archived, {result.reactivated} reactivated, {result.linked} linked{result.familyNamesUpdated ? `, ${result.familyNamesUpdated} family names updated` : ''}{result.errors?.length ? <span className="text-red-600 dark:text-red-400"> · {result.errors.length} errors</span> : null}</div>}

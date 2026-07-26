@@ -81,11 +81,19 @@ describe('SyncReview', () => {
   });
 
   it('does not enable Apply until every planned archive is explicitly accepted', () => {
-    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} requireAllPlannedArchivesAccepted />);
 
     fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
     expect(screen.getByRole('button', { name: 'Apply sync' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Archive person 11'));
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
+  });
+
+  it('allows a provider-neutral reviewer to opt out of an archive while applying the remaining plan', () => {
+    render(<SyncReview provider="elvanto" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
+
     expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
   });
 

@@ -18,6 +18,7 @@ interface SyncReviewProps {
   renderCandidateSearch?: (props: CandidateSearchRenderProps) => React.ReactNode;
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
   resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
+  requireAllPlannedArchivesAccepted?: boolean;
 }
 
 const emptyState = (): SyncSelectionState => ({
@@ -48,7 +49,7 @@ function ErrorMessage({ error, onRefresh }: { error: unknown; onRefresh: () => v
   );
 }
 
-export default function SyncReview({ provider, review, onRefresh, onApply, applying, renderCandidateSearch, renderCandidateLabel, resolveAmbiguousArchiveIndividualId }: SyncReviewProps) {
+export default function SyncReview({ provider, review, onRefresh, onApply, applying, renderCandidateSearch, renderCandidateLabel, resolveAmbiguousArchiveIndividualId, requireAllPlannedArchivesAccepted = false }: SyncReviewProps) {
   const [state, setState] = useState<SyncSelectionState>(emptyState);
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
   const [applyError, setApplyError] = useState<unknown>(null);
@@ -89,7 +90,7 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
     || plan.removeFromGathering.length > 0
     || state.acceptedFamilyRenameIds.size > 0
     || state.acceptedArchiveIds.size > 0;
-  const allPlannedArchivesAccepted = plan.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
+  const allPlannedArchivesAccepted = !requireAllPlannedArchivesAccepted || plan.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
   const submit = async () => {
     setApplyError(null);
     try {
