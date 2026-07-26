@@ -79,17 +79,37 @@ function decryptCredential(row) {
   // actual decryption is attempted, so it can never be confused with an
   // authentication failure below.
   const key = keyBuffer();
+
+  // Deliberately OUTSIDE the try below: a malformed row (e.g. a null or
+  // non-base64 credential_nonce/auth_tag/ciphertext) throws a plain
+  // TypeError here, before any real decryption is even attempted — it must
+  // never be mislabeled as IntegrationCredentialDecryptFailedError (a
+  // wrong/rotated-key diagnosis). A corrupted/malformed row is a different
+  // problem entirely and should propagate as whatever plain error it
+  // naturally is, not be folded into "the key doesn't match."
+  const nonce = Buffer.from(row.credential_nonce, 'base64');
+  const authTag = Buffer.from(row.credential_auth_tag, 'base64');
+  const ciphertext = Buffer.from(row.credential_ciphertext, 'base64');
+
+  let plaintext;
   try {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(row.credential_nonce, 'base64'));
-    decipher.setAuthTag(Buffer.from(row.credential_auth_tag, 'base64'));
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(row.credential_ciphertext, 'base64')),
-      decipher.final(),
-    ]).toString('utf8');
-    return JSON.parse(plaintext);
+    // Only the actual crypto/authentication operations are wrapped here —
+    // createDecipheriv/setAuthTag/update/final failing (a bad key length,
+    // or GCM authentication rejecting the ciphertext/tag) is exactly the
+    // wrong-key/rotated-key/corrupted-ciphertext signature this error type
+    // exists to describe, and nothing else.
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+    decipher.setAuthTag(authTag);
+    plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
   } catch (err) {
     throw new IntegrationCredentialDecryptFailedError(err);
   }
+
+  // A successful decrypt+authenticate that still isn't valid JSON is yet
+  // another distinct failure mode (a corrupted/malformed stored value, not
+  // a key problem) — let JSON.parse's own SyntaxError propagate rather
+  // than folding it into the same "wrong key" diagnosis.
+  return JSON.parse(plaintext);
 }
 
 module.exports = {

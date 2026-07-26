@@ -707,7 +707,15 @@ test('run-now still records batch bookkeeping in the background even after the c
     // Now let the background orchestrator call actually finish, exactly as
     // it would in production once a slow Elvanto account eventually responds.
     resolveRunUnattended({ runId: 9, status: 'applied', counts: {}, fetchMode: 'incremental', complete: true, externalWatermark: 'wm-late' });
-    await recordedPromise;
+    // Raced against a short, explicit timeout rather than a bare `await`:
+    // node:test has no default per-test timeout, so if this regression
+    // ever came back (recordBatchResult never gets called), an unbounded
+    // await here would hang this test — and the whole suite — forever
+    // with no failure signal, instead of reporting a clean, readable ✖.
+    await Promise.race([
+      recordedPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('recordBatchResult was never called after the background run finished')), 2000)),
+    ]);
   });
 
   assert.equal(recordCalls.length, 1);
