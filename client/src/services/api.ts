@@ -1,4 +1,20 @@
 import axios from 'axios';
+import type {
+  SyncProvider,
+  PeopleSyncBatch,
+  ElvantoSyncBatchInput,
+  ElvantoSyncBatchPatch,
+  ElvantoSyncMetadata,
+  PeopleSyncSettings,
+  PeopleSyncSettingsPatch,
+  PeopleSyncAuthorityState,
+  PeopleSyncReview,
+  PeopleSyncApplyResult,
+  PeopleSyncRunNowResult,
+  PeopleSyncRun,
+  SyncSelections,
+  ExternalLinks,
+} from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
 const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
@@ -217,6 +233,12 @@ export interface Individual {
   // People-page endpoint (Task 9) vs. attendance `/full` endpoint (Task 10).
   pcoBackgroundCheckCleared?: boolean | null;
   backgroundCheckCleared?: boolean | null;
+  // Provider-neutral people-sync fields (Task 17) -- already attached by
+  // server/routes/individuals.js and server/routes/families.js to every
+  // individual/family DTO. Optional/additive so existing callers that don't
+  // know about these fields keep compiling unchanged.
+  externalLinks?: ExternalLinks;
+  managedBy?: SyncProvider | null;
 }
 
 export interface Visitor {
@@ -868,11 +890,30 @@ export interface SyncBatch extends SyncBatchInput {
 
 // Integrations API
 export const integrationsAPI = {
-  // Elvanto integration - API Key based
+  // Elvanto connection status/connect/disconnect. These three URLs are now
+  // served by the Task-16 provider-neutral router
+  // (server/routes/integrations/elvanto.js, mounted before the legacy
+  // handlers further down that same file) rather than the old per-admin
+  // user_preferences-backed handlers -- the URLs are unchanged, only the
+  // server-side implementation and response shape are new. Left untyped
+  // (and un-renamed) here since client/src/components/integrations/
+  // IntegrationsTab.tsx and ElvantoIntegrationPanel.tsx still call these
+  // directly; Task 20 replaces that panel and can retype/rename these then.
   getElvantoStatus: () => api.get('/integrations/elvanto/status'),
   connectElvanto: (apiKey: string) => api.post('/integrations/elvanto/connect', { apiKey }),
   disconnectElvanto: () => api.post('/integrations/elvanto/disconnect'),
-  // Elvanto data
+  // ── Legacy one-shot Elvanto people/family import (CLAUDE.md: "a one-shot,
+  // unlinked import" -- admin ticks people/families, they get copied in, no
+  // persistent relationship or ongoing sync). These routes are still live
+  // (server/routes/integrations.js's legacy `/elvanto/*` handlers, deliberately
+  // preserved below the Task-16 routers -- see that file's own header note)
+  // and still called by ElvantoIntegrationPanel.tsx today, so none of them are
+  // removed here. Task 21 retires this whole flow (and its panel) in favour of
+  // elvantoSyncAPI's provider-neutral batch CRUD/plan/apply/run-now below.
+  // getElvantoPeople and getElvantoGroupInfo currently have no caller anywhere
+  // in the client (verified by search) but are left in place for the same
+  // reason -- their server routes are not removed, and Task 21 owns retiring
+  // this feature, not this task.
   getElvantoPeople: (params?: { page?: number; per_page?: number; search?: string; include_family?: string }) =>
     api.get('/integrations/elvanto/people', { params }),
   getElvantoFamilies: (params?: { page?: number; per_page?: number; search?: string; include_archived?: string }) =>
@@ -885,11 +926,16 @@ export const integrationsAPI = {
     api.get('/integrations/elvanto/services', { params }),
   importFromElvanto: (data: { peopleIds?: string[]; familyIds?: string[]; gatheringIds?: number[] }) =>
     api.post('/integrations/elvanto/import', data),
+  // legacy gathering import (kept until Task 21 -- see CLAUDE.md's
+  // "one-shot, unlinked import" description; still called by
+  // ElvantoIntegrationPanel.tsx today).
   checkGatheringDuplicates: (data: { groupIds?: string[]; serviceTypeIds?: string[] }) =>
     api.post('/integrations/elvanto/check-gathering-duplicates', data),
+  // legacy gathering import (kept until Task 21 -- see above).
   importGatheringsFromElvanto: (data: { groupIds?: string[]; serviceTypeIds?: string[]; gatheringInfo?: Record<string, { name?: string; description?: string; dayOfWeek: string; startTime: string; frequency: string }>; nameOverrides?: Record<string, string> }) =>
     api.post('/integrations/elvanto/import-gatherings', data),
-  // Debug - dump all available Elvanto data
+  // Debug - dump all available Elvanto data. No current caller; see the
+  // legacy-import note above for why this is left in place.
   debugDumpElvanto: () => api.get('/integrations/elvanto/debug-dump'),
 
   // Planning Center integration - OAuth based
@@ -957,6 +1003,123 @@ export const integrationsAPI = {
     assignToGatherings?: boolean;
     recencyWeeks?: number;
   }) => api.post('/integrations/planning-center/import-checkins/execute', body, { timeout: 120000 }),
+};
+
+// ─── Provider-neutral people-sync API (Task 17) ─────────────────────────────
+//
+// Church-wide settings, the authority-switch preview/apply/disable flow, and
+// the merged recent-runs feed -- identical for planning_center and elvanto.
+// Backed by server/routes/integrations/peopleSync.js, mounted at
+// /api/integrations/people-sync. NOTE: the preview/apply/disable routes are
+// named `/people-authority/*`, not the more obvious `/authority/*` -- a
+// Task-16 review fix worked around a churchIsolation.js `/auth` prefix-skip
+// collision; see that route file's own header comment for the full story.
+export const peopleSyncAPI = {
+  getSettings: () =>
+    api.get<{ success: true; settings: PeopleSyncSettings }>('/integrations/people-sync/settings'),
+
+  updateSettings: (patch: PeopleSyncSettingsPatch) =>
+    api.put<{ success: true; settings: PeopleSyncSettings }>('/integrations/people-sync/settings', patch),
+
+  // Stages an authority switch to `provider` and returns a full
+  // reconciliation review as if it were already authoritative. Forces a full
+  // paginated roster fetch server-side, hence the long timeout (matches the
+  // server's own route-level timeout budget -- see routeTimeout.js).
+  previewAuthority: (provider: SyncProvider) =>
+    api.post<{ success: true } & PeopleSyncReview>(
+      '/integrations/people-sync/people-authority/preview',
+      { provider },
+      { timeout: 120000 },
+    ),
+
+  applyAuthority: (provider: SyncProvider, reviewToken: string, selections: SyncSelections) =>
+    api.post<{ success: true } & PeopleSyncApplyResult>(
+      '/integrations/people-sync/people-authority/apply',
+      { provider, reviewToken, selections },
+      { timeout: 120000 },
+    ),
+
+  disableAuthority: () =>
+    api.post<{ success: true; authority: PeopleSyncAuthorityState }>(
+      '/integrations/people-sync/people-authority/disable',
+    ),
+
+  getRuns: (limit?: number) =>
+    api.get<{ success: true; runs: PeopleSyncRun[] }>('/integrations/people-sync/runs', {
+      params: limit ? { limit } : {},
+    }),
+};
+
+// ─── Elvanto-specific people-sync API (Task 17) ─────────────────────────────
+//
+// Metadata discovery for the batch filter picker (Task 19) and sync-batch
+// CRUD/plan/apply/run-now -- provider-specific concerns that don't fit
+// peopleSyncAPI above. Backed by server/routes/integrations/elvanto.js,
+// mounted at /api/integrations/elvanto. This is a NEW, separate surface from
+// integrationsAPI's legacy Elvanto methods above (which cover connection
+// status/connect/disconnect, still consumed by today's
+// ElvantoIntegrationPanel.tsx) -- Task 19/20 build the new batch editor and
+// panel against these methods instead.
+export const elvantoSyncAPI = {
+  // Cheap path: serves the persisted metadata cache without a live Elvanto
+  // call when one exists; only falls through to a live fetch (subject to the
+  // same long timeout as refreshMetadata below) the first time nothing has
+  // ever been cached.
+  getMetadata: () =>
+    api.get<{
+      success: true;
+      metadata: ElvantoSyncMetadata;
+      stale: boolean;
+      cached: boolean;
+      metadataCachedAt?: string | null;
+    }>('/integrations/elvanto/metadata'),
+
+  // Forces a live Elvanto fetch (a full roster snapshot plus six definition
+  // calls), hence the long timeout.
+  refreshMetadata: () =>
+    api.post<{
+      success: true;
+      metadata: ElvantoSyncMetadata;
+      stale: boolean;
+      refreshing?: boolean;
+      metadataCachedAt?: string | null;
+    }>('/integrations/elvanto/metadata/refresh'),
+
+  listBatches: () =>
+    api.get<{ success: true; batches: PeopleSyncBatch[] }>('/integrations/elvanto/sync-batches'),
+
+  createBatch: (data: ElvantoSyncBatchInput) =>
+    api.post<{ success: true; batch: PeopleSyncBatch }>('/integrations/elvanto/sync-batches', data),
+
+  updateBatch: (id: number, data: ElvantoSyncBatchPatch) =>
+    api.put<{ success: true; batch: PeopleSyncBatch }>(`/integrations/elvanto/sync-batches/${id}`, data),
+
+  deleteBatch: (id: number) =>
+    api.delete<{ success: true }>(`/integrations/elvanto/sync-batches/${id}`),
+
+  // Builds a full review (fetch -> match -> plan) for this one batch. Forces
+  // a full paginated roster fetch server-side, hence the long timeout.
+  getBatchPlan: (id: number) =>
+    api.get<{ success: true } & PeopleSyncReview>(`/integrations/elvanto/sync-batches/${id}/plan`, {
+      timeout: 120000,
+    }),
+
+  applyBatch: (id: number, data: { reviewToken: string; selections?: SyncSelections }) =>
+    api.post<{ success: true } & PeopleSyncApplyResult>(
+      `/integrations/elvanto/sync-batches/${id}/apply`,
+      data,
+      { timeout: 120000 },
+    ),
+
+  // The "safe unattended policy" run -- ambiguous/conflicting/rename/
+  // unmatched-local items are never auto-applied; see orchestrator.js's
+  // runUnattended for the exact safety guarantees this forwards unchanged.
+  runBatchNow: (id: number) =>
+    api.post<{ success: true } & PeopleSyncRunNowResult>(
+      `/integrations/elvanto/sync-batches/${id}/run-now`,
+      undefined,
+      { timeout: 120000 },
+    ),
 };
 
 // AI Insights API
