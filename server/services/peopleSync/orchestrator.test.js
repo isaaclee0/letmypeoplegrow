@@ -187,6 +187,18 @@ test('previewAuthoritySwitch validates preconditions BEFORE staging the switch, 
   assert.equal(review.summary.addPeople, 1, 'plan must be computed AS IF elvanto were already authoritative');
 });
 
+test('previewAuthoritySwitch returns whatever beginAuthoritySwitch actually persisted, never an assumed pending value', async () => {
+  // authority.js's beginAuthoritySwitch clears pending back to null when
+  // the target provider is already the active authority (re-previewing
+  // your own current source of truth) — the response here must reflect
+  // that real DB state, not blindly echo `provider`.
+  const { deps } = makeDeps({ authorityState: { active: 'elvanto', pending: null } });
+  deps.beginAuthoritySwitch = async () => ({ active: 'elvanto', pending: null });
+
+  const review = await previewAuthoritySwitch({ churchId: 'church-a', provider: 'elvanto' }, deps);
+  assert.deepEqual(review.authority, { active: 'elvanto', pending: null });
+});
+
 test('previewAuthoritySwitch never stages a switch when preconditions fail (no lingering pending state)', async () => {
   const { deps, calls } = makeDeps();
   deps.getConnection = record(calls, 'getConnection', async () => null);

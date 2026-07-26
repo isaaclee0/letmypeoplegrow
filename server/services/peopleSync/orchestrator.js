@@ -337,6 +337,61 @@ async function safeFailRun(deps, { churchId, provider, runId, error }) {
   }
 }
 
+// Classifies and finishes a run whose applyPeopleSyncPlan call has ALREADY
+// committed real church-data mutations — called only from applyReviewed's
+// and runUnattended's post-apply tail, never from the fail-on-error path
+// above. Folded into one guarded block deliberately: `mergeAppliedCounts`/
+// `hasHeldItems` are pure functions over plan/applyResult and should never
+// throw, but if something unexpected did throw here, it must still reach a
+// finishRun attempt with SOME terminal status rather than silently
+// skipping finishRun with no log line (which would leave the row stuck
+// 'running' with no diagnostic trail at all).
+//
+// finishRun itself mirrors safeFailRun's own two-attempt pattern: on
+// failure, retry once with a minimal payload (empty counts, no watermark)
+// so the row still reaches a terminal status; only falls through to
+// log-only (leaving the row 'running') if that retry also fails. Nothing
+// here may ever route through safeFailRun/failRun — a run that already
+// mutated real data must never be recorded 'failed'.
+async function finishAppliedRun(deps, { churchId, provider, runId, plan, applyResult, externalWatermark, reviewRequiredWhenHeld }) {
+  let status = 'applied';
+  let counts = {};
+  try {
+    counts = mergeAppliedCounts(applyResult, plan);
+    if (reviewRequiredWhenHeld && hasHeldItems(plan)) status = 'review_required';
+  } catch (classifyErr) {
+    logger.error(`peopleSync orchestrator: failed to classify run outcome for church ${churchId} run ${runId}: ${classifyErr.message}`);
+  }
+
+  try {
+    await deps.finishRun({ churchId, provider, runId, status, counts, externalWatermark });
+  } catch (finishErr) {
+    logger.error(
+      `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${runId}: ${finishErr.message}`
+    );
+    try {
+      await deps.finishRun({ churchId, provider, runId, status, counts: {}, externalWatermark: null });
+    } catch (fallbackErr) {
+      logger.error(
+        `peopleSync orchestrator: failed to finish an already-applied run (fallback) for church ${churchId} run ${runId}: ${fallbackErr.message}`
+      );
+    }
+  }
+
+  return { status, counts };
+}
+
+// Same "must not throw" reasoning as finishAppliedRun above, for the
+// summary object returned to the caller after a successful apply.
+function safeSummarizePlan(logContext, plan) {
+  try {
+    return summarizePlan(plan);
+  } catch (err) {
+    logger.error(`peopleSync orchestrator: failed to summarize plan for church ${logContext.churchId} run ${logContext.runId}: ${err.message}`);
+    return {};
+  }
+}
+
 // ─── Steps 1-2: load connection, batches, settings, authority ───────────────
 
 async function loadPreconditions({ churchId, provider, batchId, deps }) {
@@ -503,7 +558,11 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
   // pending_authority_provider set with no review token ever issued — that
   // would be confusing, lingering state for a preview that never happened.
   const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
-  await deps.beginAuthoritySwitch(churchId, provider);
+  // beginAuthoritySwitch is the source of truth for the resulting pending
+  // state — it does NOT always set pending to `provider` (e.g. re-previewing
+  // the CURRENT active authority clears pending back to null; see
+  // authority.js). Never assume/echo `provider` here.
+  const authorityState = await deps.beginAuthoritySwitch(churchId, provider);
 
   const run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
   try {
@@ -529,7 +588,7 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       summary: summarizePlan(body.plan),
       plan: sanitizePlanForReview(body.plan),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
-      authority: { active: pre.authorityState.active, pending: provider },
+      authority: authorityState,
     };
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
@@ -628,9 +687,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     try {
       await deps.commitAuthoritySwitch(churchId, provider);
     } catch (commitErr) {
-      authorityCommitError = commitErr.message;
+      authorityCommitError = safeErrorMessage(commitErr);
       logger.error(
-        `peopleSync orchestrator: authority switch commit failed after a successful apply for church ${churchId} run ${run.id}: ${commitErr.message}`
+        `peopleSync orchestrator: authority switch commit failed after a successful apply for church ${churchId} run ${run.id}: ${authorityCommitError}`
       );
     }
   }
@@ -646,19 +705,16 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     }
   }
 
-  const counts = mergeAppliedCounts(applyResult, body.plan);
-  // 10. finish audit run — best-effort: if this itself fails, the run row
-  // is left 'running' rather than misreported as 'failed'.
-  try {
-    await deps.finishRun({ churchId, provider, runId: run.id, status: 'applied', counts, externalWatermark: body.snapshot.watermark });
-  } catch (finishErr) {
-    logger.error(
-      `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${run.id}: ${finishErr.message}`
-    );
-  }
+  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // header note for why this is one guarded block rather than a bare
+  // mergeAppliedCounts()/finishRun() pair.
+  const { status } = await finishAppliedRun(deps, {
+    churchId, provider, runId: run.id, plan: body.plan, applyResult,
+    externalWatermark: body.snapshot.watermark, reviewRequiredWhenHeld: false,
+  });
 
   return {
-    runId: run.id, status: 'applied', applied: applyResult, summary: summarizePlan(body.plan),
+    runId: run.id, status, applied: applyResult, summary: safeSummarizePlan({ churchId, runId: run.id }, body.plan),
     ...(authorityCommitError ? { authorityCommitError } : {}),
   };
 }
@@ -737,19 +793,13 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     }
   }
 
-  const status = hasHeldItems(body.plan) ? 'review_required' : 'applied';
-  const counts = mergeAppliedCounts(applyResult, body.plan);
-
-  // 10. finish audit run — best-effort: if this itself fails, the run row
-  // is left 'running' rather than misreported as 'failed' for a batch
-  // that already applied real mutations.
-  try {
-    await deps.finishRun({ churchId, provider, runId: run.id, status, counts, externalWatermark: body.snapshot.watermark });
-  } catch (finishErr) {
-    logger.error(
-      `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${run.id}: ${finishErr.message}`
-    );
-  }
+  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // header note for why this is one guarded block rather than a bare
+  // hasHeldItems()/mergeAppliedCounts()/finishRun() sequence.
+  const { status, counts } = await finishAppliedRun(deps, {
+    churchId, provider, runId: run.id, plan: body.plan, applyResult,
+    externalWatermark: body.snapshot.watermark, reviewRequiredWhenHeld: true,
+  });
 
   if (status === 'review_required') {
     try {

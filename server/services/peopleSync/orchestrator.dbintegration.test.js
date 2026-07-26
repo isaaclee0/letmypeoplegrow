@@ -215,6 +215,76 @@ test('a commitAuthoritySwitch failure after a successful apply never hides that 
   });
 });
 
+test('a transient finishRun failure after a successful apply retries once and still reaches a terminal status', async () => {
+  // Code-review fix: finishRun is best-effort in the post-apply tail, but
+  // must still retry once (mirroring safeFailRun's own two-attempt
+  // pattern) so the run row reaches a terminal status rather than staying
+  // 'running' forever — there is no reaper/stale-run sweep anywhere in
+  // this codebase to clean that up later.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const batch = await seedBatch(churchId);
+    await Database.query(`UPDATE people_sync_settings SET authority_provider = 'elvanto' WHERE church_id = ?`, [churchId]);
+    scenario = { people: [personFixture()], families: [] };
+
+    let finishCalls = 0;
+    const flakyFinishRun = async (input) => {
+      finishCalls++;
+      if (finishCalls === 1) throw new Error('transient db lock');
+      return runRepository.finishRun(input);
+    };
+
+    const result = await orchestrator.runUnattended(
+      { churchId, provider: 'elvanto', batchId: batch.id, forceFull: true },
+      { finishRun: flakyFinishRun }
+    );
+
+    assert.equal(result.status, 'applied', 'the import must still be reported as successful');
+    assert.equal(finishCalls, 2, 'the first finishRun attempt must fail and the retry must succeed');
+    assert.equal(await individualsCount(churchId), 1, 'the person must really have been created');
+
+    const runs = await runRepository.listRecentRuns(churchId, 'elvanto');
+    assert.equal(runs[0].status, 'applied', 'the run must reach a terminal status via the retry, not stay running');
+    assert.notEqual(runs[0].completedAt, null);
+  });
+});
+
+test('applyReviewed also retries a transient finishRun failure and still reaches a terminal status', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const batch = await seedBatch(churchId);
+    // Authority must already be 'elvanto' for BOTH the preview and the
+    // apply, so the plan rebuilt inside applyReviewed matches the reviewed
+    // digest exactly (see the "no authority chosen" gate on new-regular
+    // creation covered elsewhere in this file) — otherwise this would
+    // legitimately (and correctly) 409 as SYNC_PLAN_STALE instead of
+    // reaching the finishRun-retry path this test exists to cover.
+    await Database.query(`UPDATE people_sync_settings SET authority_provider = 'elvanto' WHERE church_id = ?`, [churchId]);
+    scenario = { people: [personFixture()], families: [] };
+    const review = await orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual' });
+
+    let finishCalls = 0;
+    const flakyFinishRun = async (input) => {
+      finishCalls++;
+      if (finishCalls === 1) throw new Error('transient db lock');
+      return runRepository.finishRun(input);
+    };
+
+    const applied = await orchestrator.applyReviewed(
+      { churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken },
+      { finishRun: flakyFinishRun }
+    );
+
+    assert.equal(applied.status, 'applied');
+    assert.equal(finishCalls, 2);
+    assert.equal(await individualsCount(churchId), 1);
+
+    const runs = await runRepository.listRecentRuns(churchId, 'elvanto');
+    assert.equal(runs[0].status, 'applied');
+    assert.notEqual(runs[0].completedAt, null);
+  });
+});
+
 test('non-authoritative manual review may link identity but not overwrite authority-owned fields; unattended runs are refused', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
