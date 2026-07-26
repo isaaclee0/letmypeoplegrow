@@ -74,9 +74,25 @@ function assertCreateContext(context) {
   }
 }
 
+// Typed (not a plain Error) so a caller further up the stack — in
+// particular orchestrator.js's safeErrorCode(), which stores this exact
+// `.code` on a run's audit row when this throws mid-pipeline — can
+// distinguish "the server is missing SYNC_REVIEW_SECRET/JWT_SECRET" (a
+// deployment config problem) from the generic unexpected-failure bucket it
+// would otherwise fall back to (SYNC_RUN_FAILED). See
+// routes/integrations/peopleSync.js's RUN_ERROR_MESSAGES for where this
+// code gets a distinct, actionable message on GET /runs.
+class ReviewSigningSecretMissingError extends Error {
+  constructor() {
+    super('A review signing secret is required');
+    this.name = 'ReviewSigningSecretMissingError';
+    this.code = 'SYNC_REVIEW_SECRET';
+  }
+}
+
 function createReviewToken(context) {
   const secret = signingSecret();
-  if (!secret) throw new Error('A review signing secret is required');
+  if (!secret) throw new ReviewSigningSecretMissingError();
   assertCreateContext(context);
   const payload = {
     churchId: context.churchId,
@@ -140,4 +156,4 @@ function verifyReviewToken(token, expected) {
   }
 }
 
-module.exports = { canonicalJson, digestPlan, createReviewToken, verifyReviewToken };
+module.exports = { canonicalJson, digestPlan, createReviewToken, verifyReviewToken, ReviewSigningSecretMissingError };

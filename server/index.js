@@ -184,24 +184,36 @@ const validateEnvironment = () => {
 //     warning only — this must never nag an installation that doesn't need
 //     the key yet.
 async function checkIntegrationCredentialsKey() {
-  let keyIsValid = false;
+  const { encryptCredential, decryptCredential } = require('./services/peopleSync/credentialCipher');
+
+  let keyFormatValid = false;
   try {
     // Cheapest possible validity probe: round-trip a throwaway value
     // through the real cipher. Never touches real data, and the probe
-    // value itself is never logged either way.
-    const { encryptCredential, decryptCredential } = require('./services/peopleSync/credentialCipher');
+    // value itself is never logged either way. NOTE: this only proves the
+    // key is well-formed (right length/encoding) — ANY well-formed 32-byte
+    // key round-trips its OWN freshly-encrypted probe perfectly fine, even
+    // one that doesn't match what a real, already-stored row was encrypted
+    // with (e.g. a rotated/regenerated key). That mismatch case is checked
+    // separately, below, against real data.
     decryptCredential(encryptCredential({ probe: true }));
-    keyIsValid = true;
+    keyFormatValid = true;
   } catch (_) {
-    keyIsValid = false;
+    keyFormatValid = false;
   }
-  if (keyIsValid) return;
 
+  let Database;
+  let churches;
   try {
-    const Database = require('./config/database');
-    const churches = Database.listChurches();
-    let affectedChurches = 0;
+    Database = require('./config/database');
+    churches = Database.listChurches();
+  } catch (error) {
+    console.warn('⚠️  Failed to check INTEGRATION_CREDENTIALS_KEY configuration against existing church data:', error.message);
+    return;
+  }
 
+  if (!keyFormatValid) {
+    let affectedChurches = 0;
     for (const church of churches) {
       try {
         const legacyRows = await Database.queryForChurch(
@@ -237,8 +249,50 @@ async function checkIntegrationCredentialsKey() {
         'connects one of those integrations, or the connection will silently fail.'
       );
     }
-  } catch (error) {
-    console.warn('⚠️  Failed to check INTEGRATION_CREDENTIALS_KEY configuration against existing church data:', error.message);
+    return;
+  }
+
+  // Key format is valid — but does it actually match what any EXISTING
+  // integration_connections row was encrypted with? A container redeployed
+  // with a regenerated/rotated key (exactly the scenario server/.env.example
+  // already warns against — "must stay stable across restarts") passes the
+  // round-trip probe above trivially, while every existing credential
+  // silently becomes undecryptable. Attempts one real row per church (the
+  // cheapest possible check — no need to check every row once one has
+  // failed to decrypt for a church) and reports a MISMATCH distinctly from
+  // "missing", since it is a different, more actionable diagnosis for an
+  // operator (rotate back, or reconnect every integration for those
+  // churches).
+  let mismatchedChurches = 0;
+  for (const church of churches) {
+    try {
+      const rows = await Database.queryForChurch(
+        church.church_id,
+        `SELECT credential_ciphertext, credential_nonce, credential_auth_tag, credential_key_version
+           FROM integration_connections LIMIT 1`
+      );
+      if (!rows.length) continue;
+      try {
+        decryptCredential(rows[0]);
+      } catch (_) {
+        mismatchedChurches++;
+      }
+    } catch (churchError) {
+      // A brand-new church DB missing this table yet is not evidence of a
+      // problem — skip it rather than letting one church's schema quirk
+      // abort the whole startup check.
+      console.warn(`⚠️  Could not check integration_connections for church ${church.church_id}:`, churchError.message);
+    }
+  }
+
+  if (mismatchedChurches > 0) {
+    console.error(
+      `❌ CONFIGURATION ERROR: INTEGRATION_CREDENTIALS_KEY does not match the key ${mismatchedChurches} church(es)' ` +
+      `existing Elvanto/Planning Center credentials were encrypted with (it may have been rotated or regenerated ` +
+      `since those credentials were saved). Every encrypted credential for those churches is now undecryptable — ` +
+      `those integrations will behave as disconnected/misconfigured until either the correct key is restored, or ` +
+      `each affected church reconnects its integration(s) to re-encrypt under the current key.`
+    );
   }
 }
 

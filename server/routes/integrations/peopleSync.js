@@ -26,6 +26,7 @@ const authority = require('../../services/peopleSync/authority');
 const orchestrator = require('../../services/peopleSync/orchestrator');
 const runRepository = require('../../services/peopleSync/runRepository');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
+const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
 
@@ -206,6 +207,15 @@ async function defaultListAllRecentRuns(churchId, limit) {
 // never trying to catch (a raw SQLite error string, an internal hostname,
 // etc.). Maps each run's errorCode to that same convention instead of ever
 // echoing the raw stored errorMessage back over this API.
+//
+// SYNC_RUN_FAILED deserves its own explicit entry, not just the generic
+// fallback below: it is orchestrator.js's safeErrorCode() catch-all for
+// ANY thrown value without a recognized `.code` — i.e. the entire
+// "genuinely unexpected bug" bucket, which is exactly the case an admin
+// most needs SOME diagnostic signal for, not the LEAST. Its text is
+// necessarily generic (there is no more specific fact to report), but it
+// is deliberately distinguished from "an error code this table doesn't
+// know about yet" so the two don't read identically.
 const RUN_ERROR_MESSAGES = {
   SYNC_PROVIDER_INVALID: 'Unsupported people-sync provider.',
   SYNC_CHURCH_REQUIRED: 'A church context was required.',
@@ -224,15 +234,18 @@ const RUN_ERROR_MESSAGES = {
   SYNC_BATCH_REQUIRED: 'A batch was required for this run.',
   SYNC_AUTHORITY_MISMATCH: 'The provider was not the active people-sync authority for this church.',
   SYNC_ROUTE_TIMEOUT: 'The run timed out.',
+  SYNC_RUN_FAILED: 'This sync run failed unexpectedly. See server logs for details.',
+  SYNC_REVIEW_SECRET: 'The server is missing its review-signing configuration (SYNC_REVIEW_SECRET/JWT_SECRET). Contact support.',
   ELVANTO_AUTH: 'Elvanto rejected the stored API key.',
   ELVANTO_UNAVAILABLE: 'Elvanto was temporarily unavailable.',
   ELVANTO_RESPONSE: 'Elvanto returned an unexpected response.',
   ELVANTO_PAGINATION: 'Elvanto returned an unexpected response.',
+  ELVANTO_RECONNECT_REQUIRED: 'Elvanto has multiple different stored credentials for this church and needs to be reconnected.',
 };
 
 function sanitizeRunErrorMessage(errorCode) {
   if (!errorCode) return null;
-  return RUN_ERROR_MESSAGES[errorCode] || 'This sync run failed. See server logs for details.';
+  return RUN_ERROR_MESSAGES[errorCode] || 'This sync run failed for an unrecognized reason. See server logs for details.';
 }
 
 // Never spreads the underlying run object's OWN errorMessage through —
@@ -246,6 +259,7 @@ function sanitizeRunForResponse(run) {
 // ─── Default (production) collaborators ─────────────────────────────────────
 
 const defaultDeps = {
+  routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   getSettings: defaultGetSettings,
   updateSettings: defaultUpdateSettings,
   getAuthority: authority.getAuthority,
@@ -257,21 +271,29 @@ const defaultDeps = {
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────
 //
-// OrchestratorError already carries a curated, credential-free `.message`,
-// a `.code`, and the correct HTTP `.status` (see orchestrator.js) for every
-// typed failure it can throw — SYNC_PROVIDER_INVALID/SYNC_CHURCH_REQUIRED/
-// SYNC_NOT_CONNECTED/SYNC_CONNECTION_INVALID/SYNC_BATCH_NOT_FOUND/
-// SYNC_BATCH_DISABLED/SYNC_NO_BATCHES/SYNC_BATCH_FILTER_INVALID/
-// SYNC_FETCH_INCOMPLETE/SYNC_TRIGGER_INVALID/SYNC_REVIEW_INVALID/
-// SYNC_REVIEW_EXPIRED/SYNC_PLAN_STALE/SYNC_SELECTIONS_INVALID/
-// SYNC_BATCH_REQUIRED/SYNC_AUTHORITY_MISMATCH — so those are passed through
-// as-is. Anything else (a provider adapter's own typed error propagating
-// unwrapped through buildReview/applyReviewed/previewAuthoritySwitch/
-// runUnattended's rethrow, or a genuinely unexpected bug) is logged
-// server-side in full and reported to the client as a generic, safe 500 —
-// never the raw `.message`, which could in principle carry provider
-// response detail never meant for the browser.
+//   - RouteTimeoutError (see routeTimeout.js): the aggregate deadline on
+//     /people-authority/preview or /apply was exceeded — always a safe
+//     503, never leaks which specific network call was still in flight.
+//   - OrchestratorError already carries a curated, credential-free
+//     `.message`, a `.code`, and the correct HTTP `.status` (see
+//     orchestrator.js) for every typed failure it can throw —
+//     SYNC_PROVIDER_INVALID/SYNC_CHURCH_REQUIRED/SYNC_NOT_CONNECTED/
+//     SYNC_CONNECTION_INVALID/SYNC_BATCH_NOT_FOUND/SYNC_BATCH_DISABLED/
+//     SYNC_NO_BATCHES/SYNC_BATCH_FILTER_INVALID/SYNC_FETCH_INCOMPLETE/
+//     SYNC_TRIGGER_INVALID/SYNC_REVIEW_INVALID/SYNC_REVIEW_EXPIRED/
+//     SYNC_PLAN_STALE/SYNC_SELECTIONS_INVALID/SYNC_BATCH_REQUIRED/
+//     SYNC_AUTHORITY_MISMATCH — so those are passed through as-is.
+//   - ElvantoError (see below).
+//   - anything else (a provider adapter's own typed error propagating
+//     unwrapped through buildReview/applyReviewed/previewAuthoritySwitch/
+//     runUnattended's rethrow, or a genuinely unexpected bug) is logged
+//     server-side in full and reported to the client as a generic, safe
+//     500 — never the raw `.message`, which could in principle carry
+//     provider response detail never meant for the browser.
 function respondWithError(res, err, logLabel) {
+  if (err instanceof RouteTimeoutError) {
+    return res.status(503).json({ error: 'The request took too long to complete. Please try again.', code: err.code });
+  }
   if (err instanceof OrchestratorError) {
     return res.status(err.status || 400).json({ error: err.message, code: err.code });
   }
@@ -345,7 +367,15 @@ function createPeopleSyncRouter(overrides = {}) {
   router.post('/people-authority/preview', async (req, res) => {
     try {
       const provider = req.body && req.body.provider;
-      const result = await deps.previewAuthoritySwitch({ churchId: req.user.church_id, provider });
+      // previewAuthoritySwitch forces a full paginated roster snapshot —
+      // exactly the "many sequential network calls in one request" shape
+      // routeTimeout.js's withTimeout exists for (see its own header note).
+      // No bookkeeping runs after this call other than formatting the
+      // response, so racing the call alone (unlike elvanto.js's run-now,
+      // which must race its OWN post-call bookkeeping too) is sufficient.
+      const result = await withTimeout(
+        deps.previewAuthoritySwitch({ churchId: req.user.church_id, provider }), deps.routeTimeoutMs
+      );
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, 'people-sync POST /people-authority/preview');
@@ -358,10 +388,21 @@ function createPeopleSyncRouter(overrides = {}) {
       const provider = body.provider;
       const reviewToken = typeof body.reviewToken === 'string' ? body.reviewToken : '';
       const selections = isPlainObject(body.selections) ? body.selections : {};
-      const result = await deps.applyReviewed({
-        churchId: req.user.church_id, provider, batchId: null,
-        reviewToken, selections, userId: req.user.id,
-      });
+      // applyReviewed also forces a full paginated roster snapshot (to
+      // verify the reviewed plan is still fresh before applying) — same
+      // aggregate-timeout rationale as preview above. Everything this call
+      // needs to durably record (the apply itself, the audit run, presence
+      // accounting, an authority-switch commit) already happens INSIDE
+      // applyReviewed before it resolves — there is no route-level
+      // bookkeeping after it to lose if the timeout wins, unlike
+      // elvanto.js's run-now.
+      const result = await withTimeout(
+        deps.applyReviewed({
+          churchId: req.user.church_id, provider, batchId: null,
+          reviewToken, selections, userId: req.user.id,
+        }),
+        deps.routeTimeoutMs
+      );
       // result may include `authorityCommitError` (set when the apply itself
       // succeeded but committing the authority switch afterward failed) —
       // spread through as-is so it is never silently dropped; still a 200

@@ -50,7 +50,12 @@ const REDACT_PREFERENCE_KEYS = new Set(['elvanto_api_key', 'planning_center_toke
 // that survives disconnect for any church must never leave in cleartext
 // via this export.
 function isRedactedPreferenceKey(key) {
-  return REDACT_PREFERENCE_KEYS.has(key) || (typeof key === 'string' && key.startsWith('elvanto'));
+  // Case-insensitive prefix match, matching the underlying SQL `LIKE
+  // 'elvanto%'` cleanup's own case-insensitivity (SQLite's LIKE is
+  // case-insensitive for ASCII by default) — an oddly-cased row (e.g.
+  // `Elvanto_Integration`) must redact here exactly as it would be deleted
+  // on disconnect, not slip through a case-sensitive check first.
+  return REDACT_PREFERENCE_KEYS.has(key) || (typeof key === 'string' && key.toLowerCase().startsWith('elvanto'));
 }
 
 function escapeCsvValue(val) {

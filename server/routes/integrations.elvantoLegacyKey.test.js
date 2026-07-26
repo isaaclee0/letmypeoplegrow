@@ -27,6 +27,28 @@ const express = require('express');
 const http = require('node:http');
 const { resolveElvantoApiKeyOrRespond } = require('./integrations');
 const legacyCredential = require('../services/elvanto/legacyCredential');
+const credentialCipher = require('../services/peopleSync/credentialCipher');
+
+// Captures the REAL error credentialCipher.js throws for a given
+// INTEGRATION_CREDENTIALS_KEY env value, by actually calling the real
+// cipher — rather than hand-writing a string that merely resembles it.
+// This is the point: if a future change to credentialCipher.js's error
+// wording, code, or type ever drifts from what resolveElvantoApiKeyOrRespond
+// branches on, THIS test (which exercises the real linkage) fails — a
+// hand-written string could never catch that.
+function realCipherError(envValue, action) {
+  const previous = process.env.INTEGRATION_CREDENTIALS_KEY;
+  process.env.INTEGRATION_CREDENTIALS_KEY = envValue;
+  try {
+    action();
+    throw new Error('expected the real cipher call to throw, but it did not');
+  } catch (err) {
+    return err;
+  } finally {
+    if (previous === undefined) delete process.env.INTEGRATION_CREDENTIALS_KEY;
+    else process.env.INTEGRATION_CREDENTIALS_KEY = previous;
+  }
+}
 
 function buildServer(user) {
   const app = express();
@@ -112,18 +134,60 @@ test('resolveElvantoApiKeyOrRespond responds 503 (not a flat "not connected") wh
   });
 });
 
-// The critical bug: reproduces credentialCipher.js's keyBuffer() throwing
-// because INTEGRATION_CREDENTIALS_KEY is unset/invalid — the exact error
-// connectionStore.getCredentials/upsertConnection raise in that
-// configuration, reached via getOrMigrateCredentials.
+// The critical bug: reproduces the REAL error credentialCipher.js's
+// keyBuffer() throws because INTEGRATION_CREDENTIALS_KEY is unset — the
+// exact error connectionStore.getCredentials/upsertConnection raise in that
+// configuration, reached via getOrMigrateCredentials. Constructed via the
+// actual cipher call (not a hand-written string), so a future change to
+// that module's error code/type can't silently break this detection
+// without this test catching it.
 test('resolveElvantoApiKeyOrRespond responds 500 (not a misleading 401) when INTEGRATION_CREDENTIALS_KEY is missing or invalid', async () => {
+  const realError = realCipherError('', () => credentialCipher.encryptCredential({ probe: true }));
+  assert.equal(realError.code, credentialCipher.INTEGRATION_CREDENTIALS_KEY_INVALID);
+
   await withMockedGetOrMigrate(
-    async () => { throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key'); },
+    async () => { throw realError; },
     async () => {
       await withServer({ church_id: 'church1' }, async (url) => {
         const { status, body } = await requestJson(url);
         assert.equal(status, 500);
         assert.match(body.error, /not fully configured/i);
+      });
+    }
+  );
+});
+
+// The rotated/mismatched-key case: a WELL-FORMED key that simply isn't the
+// one a real row was encrypted with. Constructed by actually encrypting
+// under one real key and decrypting under a different one, so this test
+// exercises the genuine AES-GCM authentication failure, not a stand-in.
+test('resolveElvantoApiKeyOrRespond responds 500 with a rotated-key-specific message when a stored credential fails to decrypt under the current key', async () => {
+  const keyA = require('node:crypto').randomBytes(32).toString('base64');
+  const keyB = require('node:crypto').randomBytes(32).toString('base64');
+
+  const previous = process.env.INTEGRATION_CREDENTIALS_KEY;
+  process.env.INTEGRATION_CREDENTIALS_KEY = keyA;
+  const encrypted = credentialCipher.encryptCredential({ apiKey: 'k-1' });
+  process.env.INTEGRATION_CREDENTIALS_KEY = keyB;
+  let realError;
+  try {
+    credentialCipher.decryptCredential(encrypted);
+    assert.fail('expected decryption under a different key to fail');
+  } catch (err) {
+    realError = err;
+  } finally {
+    if (previous === undefined) delete process.env.INTEGRATION_CREDENTIALS_KEY;
+    else process.env.INTEGRATION_CREDENTIALS_KEY = previous;
+  }
+  assert.equal(realError.code, credentialCipher.INTEGRATION_CREDENTIAL_DECRYPT_FAILED);
+
+  await withMockedGetOrMigrate(
+    async () => { throw realError; },
+    async () => {
+      await withServer({ church_id: 'church1' }, async (url) => {
+        const { status, body } = await requestJson(url);
+        assert.equal(status, 500);
+        assert.match(body.error, /rotated or changed/i);
       });
     }
   );

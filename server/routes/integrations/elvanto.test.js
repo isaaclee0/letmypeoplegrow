@@ -109,6 +109,42 @@ for (const [method, path] of [['get', '/sync-batches'], ['post', '/sync-batches'
   });
 }
 
+// ─── Church isolation ────────────────────────────────────────────────────────
+//
+// Inside a mounted sub-router, req.path is relative to the mount point —
+// middleware/churchIsolation.js's ensureChurchIsolation silently exempts
+// any path starting with `/auth` or `/importrange` (meant only for the
+// real /api/auth/* login routes and the importrange feature). peopleSync.js
+// had exactly this collision (`/authority/preview` → mount-relative
+// `/authority/preview` starts with `/auth`) before its routes were renamed
+// to `/people-authority/*`. This router has no route starting with either
+// prefix today, but nothing previously PINNED that fact against a future
+// route addition — this walks every route the router actually registers
+// (not a hand-picked sample) and asserts none of them would collide.
+const CHURCH_ISOLATION_SKIP_PREFIXES = ['/auth', '/auth/request-code', '/auth/verify-code', '/importrange'];
+
+function collectRoutePaths(router) {
+  const paths = [];
+  for (const layer of router.stack) {
+    if (layer.route && layer.route.path) paths.push(layer.route.path);
+  }
+  return paths;
+}
+
+test('no route registered on this router would be silently exempted by ensureChurchIsolation\'s own /auth or /importrange skip-list', () => {
+  const paths = collectRoutePaths(createElvantoRouter(noopDeps()));
+  assert.ok(paths.length > 0, 'sanity check: the router must have at least one registered route for this test to mean anything');
+  for (const path of paths) {
+    for (const prefix of CHURCH_ISOLATION_SKIP_PREFIXES) {
+      assert.equal(
+        path.startsWith(prefix), false,
+        `route "${path}" starts with "${prefix}" — ensureChurchIsolation would silently skip its own church_id ` +
+        'check for this route when this router is mounted directly (req.path is mount-relative inside a sub-router)'
+      );
+    }
+  }
+});
+
 // ─── Church ID forwarding ────────────────────────────────────────────────────
 
 test('GET /status forwards the requesting admin\'s own church_id', async () => {
@@ -638,6 +674,46 @@ test('POST /sync-batches/:id/run-now times out with a safe 503 rather than hangi
     assert.equal(status, 503);
     assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
+});
+
+// Regression: an earlier version of this route raced ONLY the orchestrator
+// call against the timeout, then called recordBatchResult afterward — so a
+// run that genuinely completed AFTER the client-facing response had already
+// timed out (withTimeout never cancels the losing promise; runUnattended
+// keeps running, still commits real mutations, still finishes its own run
+// row) would never update people_sync_batches.last_sync_at/
+// last_sync_result/last_external_watermark. The batch would then look
+// "never synced" forever, and the next incremental run would start from a
+// stale watermark. The whole unit of work (orchestrator call AND its
+// bookkeeping) must be raced as ONE continuation so the bookkeeping still
+// happens in the background regardless of what the client saw.
+test('run-now still records batch bookkeeping in the background even after the client-facing response has already timed out', async () => {
+  let resolveRunUnattended;
+  const runUnattendedPromise = new Promise((resolve) => { resolveRunUnattended = resolve; });
+  let resolveRecorded;
+  const recordedPromise = new Promise((resolve) => { resolveRecorded = resolve; });
+  const recordCalls = [];
+
+  await withServer(noopDeps({
+    routeTimeoutMs: 20,
+    runUnattended: () => runUnattendedPromise,
+    recordBatchResult: async (args) => { recordCalls.push(args); resolveRecorded(); },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/sync-batches/3/run-now`, { method: 'POST' });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+    assert.equal(recordCalls.length, 0, 'must not have recorded anything yet — the underlying run has not finished');
+
+    // Now let the background orchestrator call actually finish, exactly as
+    // it would in production once a slow Elvanto account eventually responds.
+    resolveRunUnattended({ runId: 9, status: 'applied', counts: {}, fetchMode: 'incremental', complete: true, externalWatermark: 'wm-late' });
+    await recordedPromise;
+  });
+
+  assert.equal(recordCalls.length, 1);
+  assert.equal(recordCalls[0].externalWatermark, 'wm-late');
+  assert.equal(recordCalls[0].status, 'applied');
+  assert.equal(recordCalls[0].fetchMode, 'incremental');
 });
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────

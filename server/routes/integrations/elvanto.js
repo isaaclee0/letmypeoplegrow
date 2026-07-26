@@ -38,6 +38,7 @@ const orchestrator = require('../../services/peopleSync/orchestrator');
 const { createElvantoAdapter } = require('../../services/elvanto/adapter');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
 const legacyCredential = require('../../services/elvanto/legacyCredential');
+const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
 
@@ -168,42 +169,6 @@ async function defaultDeleteLegacyPreferences(churchId) {
 }
 
 const defaultAdapter = createElvantoAdapter();
-
-// ─── Aggregate route timeout ─────────────────────────────────────────────────
-//
-// httpClient.js's own per-HTTP-request timeout (30s, see its
-// DEFAULT_TIMEOUT_MS) bounds a single Elvanto call, but several of this
-// router's handlers make MANY such calls synchronously inside one page-load
-// request — worst case, GET /metadata's cold path does a full-roster
-// snapshot fetch (fully paginated, up to 1000 pages) PLUS the four-dimension
-// membership index (four more fully-paginated fetches) PLUS six more
-// paginated metadata-definition endpoint calls, all before responding. With
-// no aggregate deadline, a slow/degraded Elvanto account could tie up a
-// request (and the admin's browser tab) indefinitely. This wraps the
-// network-touching handlers in an overall deadline that maps to a clean 503
-// instead. It does NOT cancel the underlying in-flight network calls (that
-// would need an AbortController threaded through httpClient.js — out of
-// scope here) — it only stops this ROUTE from waiting on them past the
-// deadline; the losing operation keeps running in the background and its
-// eventual result (or error) is simply discarded once the response has
-// already been sent.
-const DEFAULT_ROUTE_TIMEOUT_MS = 110000; // just under the client's own 120s axios timeout for these calls
-
-class RouteTimeoutError extends Error {
-  constructor(ms) {
-    super(`The request to Elvanto did not complete within ${ms}ms.`);
-    this.name = 'RouteTimeoutError';
-    this.code = 'SYNC_ROUTE_TIMEOUT';
-  }
-}
-
-function withTimeout(promise, ms) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new RouteTimeoutError(ms)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
 
 const defaultDeps = {
   adapter: defaultAdapter,
@@ -585,20 +550,39 @@ function createElvantoRouter(overrides = {}) {
       // ambiguous/conflicting/rename/unmatched items into review_required
       // pending counts on its own — this route does not, and must not, add
       // any bypass logic of its own; it only forwards the result faithfully.
-      const result = await withTimeout(
-        deps.runUnattended({ churchId, provider: PROVIDER, batchId, trigger: 'run_now' }), deps.routeTimeoutMs
-      );
-      try {
-        await deps.recordBatchResult({
-          churchId, provider: PROVIDER, batchId, trigger: 'run_now',
-          fetchMode: result.fetchMode, complete: result.complete,
-          status: result.status, externalWatermark: result.externalWatermark,
-        });
-      } catch (recordErr) {
-        logger.error(
-          `elvanto POST /sync-batches/:id/run-now: failed to record batch result for batch ${batchId} (church ${churchId}): ${recordErr.message}`
-        );
-      }
+      //
+      // The ENTIRE unit of work — the orchestrator call AND its batch
+      // bookkeeping — is raced against the timeout as ONE continuation
+      // (`work`), not just the orchestrator call alone. withTimeout does
+      // NOT cancel the losing promise (see its own header note): if the
+      // timeout wins, runUnattended keeps running in the background,
+      // still commits real data mutations, and still finishes its own run
+      // row — so recordBatchResult must run as part of that SAME
+      // background continuation regardless of whether the client-facing
+      // response already timed out. Racing only the orchestrator call (an
+      // earlier version of this route did) left a real regression: a run
+      // that genuinely completed after the client-facing deadline would
+      // never update people_sync_batches.last_sync_at/last_sync_result/
+      // last_external_watermark, making the batch look "never synced"
+      // forever and starting the next incremental run from a stale
+      // watermark.
+      const work = (async () => {
+        const workResult = await deps.runUnattended({ churchId, provider: PROVIDER, batchId, trigger: 'run_now' });
+        try {
+          await deps.recordBatchResult({
+            churchId, provider: PROVIDER, batchId, trigger: 'run_now',
+            fetchMode: workResult.fetchMode, complete: workResult.complete,
+            status: workResult.status, externalWatermark: workResult.externalWatermark,
+          });
+        } catch (recordErr) {
+          logger.error(
+            `elvanto POST /sync-batches/:id/run-now: failed to record batch result for batch ${batchId} (church ${churchId}): ${recordErr.message}`
+          );
+        }
+        return workResult;
+      })();
+
+      const result = await withTimeout(work, deps.routeTimeoutMs);
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /sync-batches/:id/run-now' });

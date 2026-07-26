@@ -78,18 +78,21 @@ test('GET /settings rejects a missing identity with 401', async () => {
   });
 });
 
-// ─── Church isolation (regression: mount-relative req.path vs. the "/auth"
-// skip in churchIsolation.js) ────────────────────────────────────────────────
+// ─── Church isolation ────────────────────────────────────────────────────────
 //
-// Inside a mounted sub-router, req.path is relative to the mount point —
-// so `POST /people-sync/authority/preview` used to arrive HERE as
-// `/authority/preview`, which itself starts with "/auth" and would have
-// silently skipped ensureChurchIsolation's own validation (meant only to
-// exempt the real /api/auth/* login routes). Renamed to /people-authority/*
-// specifically to kill this; these tests pin the fix directly against this
-// sub-router (in isolation, the same way a future accidental remount could
-// reintroduce the bug) rather than relying on the parent integrations.js
-// router's own (still-correct) outer ensureChurchIsolation to save it.
+// These per-route 401 checks prove ensureChurchIsolation is actually wired
+// into this sub-router at all (router.use() middleware runs for ANY path
+// under the mount, before Express tries to match a specific route further
+// down — so, on their own, these do NOT depend on which route names exist,
+// and would pass identically against the OLD pre-rename `/authority/*`
+// paths, or even a nonexistent path). The structural test below is the
+// actual guard against the specific bug this rename fixed: inside a
+// mounted sub-router, req.path is relative to the mount point, so
+// `POST /people-sync/authority/preview` used to arrive HERE as
+// `/authority/preview` — which itself starts with "/auth" and would have
+// silently skipped ensureChurchIsolation's own check (meant only to exempt
+// the real /api/auth/* login routes). Renamed to /people-authority/* to
+// kill this collision.
 for (const path of ['/people-authority/preview', '/people-authority/disable', '/settings', '/runs']) {
   test(`an invalid church_id is rejected on ${path} (mounted directly, no parent router involved)`, async () => {
     await withServer({}, { user: INVALID_CHURCH_ADMIN }, async (base) => {
@@ -100,6 +103,43 @@ for (const path of ['/people-authority/preview', '/people-authority/disable', '/
     });
   });
 }
+
+// Mirrors middleware/churchIsolation.js's own skip-list exactly (those are
+// local consts in that file, not exported, so this is a deliberate,
+// commented copy — if churchIsolation.js's own skip-list ever changes,
+// this copy must be updated to match, or this test could pass while
+// missing a real collision).
+const CHURCH_ISOLATION_SKIP_PREFIXES = ['/auth', '/auth/request-code', '/auth/verify-code', '/importrange'];
+
+function collectRoutePaths(router) {
+  const paths = [];
+  for (const layer of router.stack) {
+    if (layer.route && layer.route.path) paths.push(layer.route.path);
+  }
+  return paths;
+}
+
+// THE actual regression guard: walks every route this router really
+// registers (not a hand-picked sample) and asserts none of them would be
+// silently exempted from ensureChurchIsolation by churchIsolation.js's own
+// `/auth`/`/importrange` prefix skip-list — the exact collision
+// `/authority/preview` had before this router's routes were renamed to
+// `/people-authority/*`. A future route added to this router that
+// reintroduces a colliding name (e.g. a hypothetical `/auth-status`) would
+// fail this test, unlike the per-route 401 checks above.
+test('no route registered on this router would be silently exempted by ensureChurchIsolation\'s own /auth or /importrange skip-list', () => {
+  const paths = collectRoutePaths(createPeopleSyncRouter());
+  assert.ok(paths.length > 0, 'sanity check: the router must have at least one registered route for this test to mean anything');
+  for (const path of paths) {
+    for (const prefix of CHURCH_ISOLATION_SKIP_PREFIXES) {
+      assert.equal(
+        path.startsWith(prefix), false,
+        `route "${path}" starts with "${prefix}" — ensureChurchIsolation would silently skip its own church_id ` +
+        'check for this route when this router is mounted directly (req.path is mount-relative inside a sub-router)'
+      );
+    }
+  }
+});
 
 // ─── Church ID forwarding ────────────────────────────────────────────────────
 
@@ -203,10 +243,41 @@ test('GET /runs never echoes a run\'s raw stored errorMessage — only a fixed m
     assert.equal(status, 200);
     const [mapped, unmapped, clean] = body.runs;
     assert.equal(mapped.errorMessage, 'The provider fetch did not return a complete result.');
-    assert.equal(unmapped.errorMessage, 'This sync run failed. See server logs for details.');
+    assert.equal(unmapped.errorMessage, 'This sync run failed for an unrecognized reason. See server logs for details.');
     assert.equal(clean.errorMessage, null);
     const serialized = JSON.stringify(body);
     assert.equal(/ECONNREFUSED|10\.0\.0\.9|internal-db-host|whatever the future stores/.test(serialized), false);
+  });
+});
+
+// SYNC_RUN_FAILED is orchestrator.js's safeErrorCode() catch-all for ANY
+// thrown value without a recognized `.code` — i.e. the entire "genuinely
+// unexpected bug" bucket, and therefore the single most likely stored code
+// in practice. It (and ELVANTO_RECONNECT_REQUIRED and SYNC_REVIEW_SECRET —
+// two other real, reachable codes) must each get a DISTINCT message from
+// the generic "unrecognized code" fallback, or an admin loses exactly the
+// diagnostic signal they need most for the failures they're least able to
+// self-diagnose.
+test('GET /runs gives SYNC_RUN_FAILED, SYNC_REVIEW_SECRET, and ELVANTO_RECONNECT_REQUIRED each a distinct message, not the generic unmapped fallback', async () => {
+  await withServer({
+    listAllRecentRuns: async () => ([
+      { id: 1, provider: 'elvanto', status: 'failed', errorCode: 'SYNC_RUN_FAILED', errorMessage: 'raw' },
+      { id: 2, provider: 'elvanto', status: 'failed', errorCode: 'SYNC_REVIEW_SECRET', errorMessage: 'raw' },
+      { id: 3, provider: 'elvanto', status: 'failed', errorCode: 'ELVANTO_RECONNECT_REQUIRED', errorMessage: 'raw' },
+      { id: 4, provider: 'elvanto', status: 'failed', errorCode: 'SOME_UNMAPPED_FUTURE_CODE', errorMessage: 'raw' },
+    ]),
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/runs`);
+    assert.equal(status, 200);
+    const [runFailed, reviewSecret, reconnectRequired, unmapped] = body.runs;
+    const genericFallback = 'This sync run failed for an unrecognized reason. See server logs for details.';
+    assert.notEqual(runFailed.errorMessage, genericFallback);
+    assert.notEqual(reviewSecret.errorMessage, genericFallback);
+    assert.notEqual(reconnectRequired.errorMessage, genericFallback);
+    assert.equal(unmapped.errorMessage, genericFallback);
+    // All four still distinct from one another (no accidental collapsing).
+    const messages = new Set([runFailed.errorMessage, reviewSecret.errorMessage, reconnectRequired.errorMessage, unmapped.errorMessage]);
+    assert.equal(messages.size, 4);
   });
 });
 
@@ -397,5 +468,34 @@ test('a stale/invalid Elvanto key surfacing through applyReviewed (authority swi
     const { status, body } = await requestJson(`${base}/people-authority/apply`, { method: 'POST', body: { provider: 'elvanto', reviewToken: 't' } });
     assert.equal(status, 401);
     assert.equal(body.code, 'ELVANTO_AUTH');
+  });
+});
+
+// ─── Aggregate route timeout (a real deadline, not just mapping an
+// already-thrown provider error) ─────────────────────────────────────────────
+//
+// Both previewAuthoritySwitch and applyReviewed force a full paginated
+// roster snapshot — exactly the "many sequential network calls in one
+// request" scenario routeTimeout.js's withTimeout exists for, and exactly
+// what elvanto.js's own plan/apply routes are already wrapped for. Uses a
+// tiny `routeTimeoutMs` override (a real injected dependency) so these run
+// in milliseconds rather than the real ~110s production default.
+function neverResolvesForTimeoutTest() {
+  return new Promise(() => {}); // deliberately never settles
+}
+
+test('POST /people-authority/preview times out with a safe 503 rather than hanging forever on a stuck previewAuthoritySwitch call', async () => {
+  await withServer({ routeTimeoutMs: 20, previewAuthoritySwitch: neverResolvesForTimeoutTest }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/people-authority/preview`, { method: 'POST', body: { provider: 'elvanto' } });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('POST /people-authority/apply times out with a safe 503 rather than hanging forever on a stuck applyReviewed call', async () => {
+  await withServer({ routeTimeoutMs: 20, applyReviewed: neverResolvesForTimeoutTest }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/people-authority/apply`, { method: 'POST', body: { provider: 'elvanto', reviewToken: 't' } });
+    assert.equal(status, 503);
+    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
 });

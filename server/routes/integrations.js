@@ -13,6 +13,10 @@ const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
+const {
+  INTEGRATION_CREDENTIALS_KEY_INVALID,
+  INTEGRATION_CREDENTIAL_DECRYPT_FAILED,
+} = require('../services/peopleSync/credentialCipher');
 const legacyCredential = require('../services/elvanto/legacyCredential');
 const { createPeopleSyncRouter } = require('./integrations/peopleSync');
 const { createElvantoRouter } = require('./integrations/elvanto');
@@ -178,11 +182,30 @@ async function resolveElvantoApiKeyOrRespond(req, res) {
       res.status(503).json({ error: 'Elvanto is currently unavailable. Please try again shortly.', code: error.code });
       return null;
     }
-    if (typeof error?.message === 'string' && error.message.includes('INTEGRATION_CREDENTIALS_KEY')) {
+    // Branches on credentialCipher.js's own typed error codes (not message
+    // text — see that module's header note on why: a wording change would
+    // otherwise silently stop this detection from working). Two distinct
+    // diagnoses, both server misconfiguration rather than "not connected":
+    //   - INVALID: the key itself is missing/malformed.
+    //   - DECRYPT_FAILED: the key is well-formed but doesn't match what an
+    //     existing encrypted row was actually encrypted with (e.g. rotated
+    //     since) — a different, more actionable fact for an operator.
+    if (error && error.code === INTEGRATION_CREDENTIALS_KEY_INVALID) {
       logger.error(
         `Elvanto legacy credential lookup failed for church ${churchId}: server is missing or has an invalid INTEGRATION_CREDENTIALS_KEY`
       );
       res.status(500).json({ error: 'Elvanto integration is not fully configured on this server. Please contact support.' });
+      return null;
+    }
+    if (error && error.code === INTEGRATION_CREDENTIAL_DECRYPT_FAILED) {
+      logger.error(
+        `Elvanto legacy credential lookup failed for church ${churchId}: stored credential could not be decrypted ` +
+        `with the configured INTEGRATION_CREDENTIALS_KEY (was it rotated or changed?)`
+      );
+      res.status(500).json({
+        error: 'Elvanto credentials could not be decrypted on this server (was the encryption key rotated or changed?). ' +
+          'Please contact support.',
+      });
       return null;
     }
     console.error('Error getting Elvanto API key:', error);

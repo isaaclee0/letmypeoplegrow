@@ -1,16 +1,62 @@
 const crypto = require('node:crypto');
 
+// Typed errors so callers (routes/integrations.js's
+// resolveElvantoApiKeyOrRespond, server/index.js's startup check) can
+// branch on WHICH kind of credential-encryption problem occurred instead of
+// string-matching an error message — a prior fix round did the latter,
+// which is fragile (a message-wording change would silently stop working)
+// and untestable against the real source of the error.
+//
+// Two distinct failure modes, deliberately not conflated:
+//   - INTEGRATION_CREDENTIALS_KEY_INVALID: the key itself is missing or
+//     malformed (wrong length/encoding) — thrown by keyBuffer() before any
+//     actual crypto operation is attempted.
+//   - INTEGRATION_CREDENTIAL_DECRYPT_FAILED: the key is well-formed but
+//     decryption's AES-GCM authentication failed — this happens when the
+//     key doesn't match whatever key a STORED row was actually encrypted
+//     with (e.g. the key was rotated/regenerated since), or the stored
+//     ciphertext/nonce/auth-tag is corrupted. A well-formed-but-wrong key
+//     round-trips its OWN freshly-encrypted value perfectly fine, so this
+//     can only ever be detected against real, already-encrypted data —
+//     never from encryptCredential() alone.
+const INTEGRATION_CREDENTIALS_KEY_INVALID = 'INTEGRATION_CREDENTIALS_KEY_INVALID';
+const INTEGRATION_CREDENTIAL_DECRYPT_FAILED = 'INTEGRATION_CREDENTIAL_DECRYPT_FAILED';
+
+class IntegrationCredentialsKeyInvalidError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'IntegrationCredentialsKeyInvalidError';
+    this.code = INTEGRATION_CREDENTIALS_KEY_INVALID;
+  }
+}
+
+class IntegrationCredentialDecryptFailedError extends Error {
+  constructor(cause) {
+    super(
+      'Failed to decrypt an integration credential — the configured encryption key may not match the key this ' +
+      'credential was originally encrypted with (e.g. it was rotated or regenerated), or the stored ciphertext is corrupted.'
+    );
+    this.name = 'IntegrationCredentialDecryptFailedError';
+    this.code = INTEGRATION_CREDENTIAL_DECRYPT_FAILED;
+    // Never serialized to a client response — exists purely so a caller can
+    // log the underlying crypto library error server-side if it wants to.
+    this.cause = cause;
+  }
+}
+
 function keyBuffer() {
   const encodedKey = process.env.INTEGRATION_CREDENTIALS_KEY || '';
   const canonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
   if (!canonicalBase64.test(encodedKey)) {
-    throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+    throw new IntegrationCredentialsKeyInvalidError('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
   }
   const key = Buffer.from(encodedKey, 'base64');
   if (key.toString('base64') !== encodedKey) {
-    throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+    throw new IntegrationCredentialsKeyInvalidError('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
   }
-  if (key.length !== 32) throw new Error('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+  if (key.length !== 32) {
+    throw new IntegrationCredentialsKeyInvalidError('INTEGRATION_CREDENTIALS_KEY must be a base64-encoded 32-byte key');
+  }
   return key;
 }
 
@@ -27,13 +73,30 @@ function encryptCredential(value) {
 }
 
 function decryptCredential(row) {
-  const decipher = crypto.createDecipheriv('aes-256-gcm', keyBuffer(), Buffer.from(row.credential_nonce, 'base64'));
-  decipher.setAuthTag(Buffer.from(row.credential_auth_tag, 'base64'));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(row.credential_ciphertext, 'base64')),
-    decipher.final(),
-  ]).toString('utf8');
-  return JSON.parse(plaintext);
+  // keyBuffer()'s own IntegrationCredentialsKeyInvalidError is allowed to
+  // propagate unwrapped — a missing/malformed key is a distinct diagnosis
+  // from a well-formed-but-wrong one, and this call happens BEFORE any
+  // actual decryption is attempted, so it can never be confused with an
+  // authentication failure below.
+  const key = keyBuffer();
+  try {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(row.credential_nonce, 'base64'));
+    decipher.setAuthTag(Buffer.from(row.credential_auth_tag, 'base64'));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(row.credential_ciphertext, 'base64')),
+      decipher.final(),
+    ]).toString('utf8');
+    return JSON.parse(plaintext);
+  } catch (err) {
+    throw new IntegrationCredentialDecryptFailedError(err);
+  }
 }
 
-module.exports = { encryptCredential, decryptCredential };
+module.exports = {
+  encryptCredential,
+  decryptCredential,
+  INTEGRATION_CREDENTIALS_KEY_INVALID,
+  INTEGRATION_CREDENTIAL_DECRYPT_FAILED,
+  IntegrationCredentialsKeyInvalidError,
+  IntegrationCredentialDecryptFailedError,
+};
