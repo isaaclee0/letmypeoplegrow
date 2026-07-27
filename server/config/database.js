@@ -11,6 +11,63 @@ const churchTxLocks = new Map(); // Mutex per church to prevent concurrent trans
 let registryDb = null;
 let dataDir = null;
 
+const SCHEDULED_PCO_AUTHORITY_MIGRATION = Object.freeze({
+  version: 'v2.2.0_scheduled_pco_authority',
+  name: 'scheduled_pco_authority',
+  description: 'Preserve scheduled Planning Center sync as the strict managed people authority',
+});
+
+function ensureMigrationTrackingSchema(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS migrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    executed_at TEXT DEFAULT (datetime('now')),
+    execution_time_ms INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'success' CHECK(status IN ('pending', 'success', 'failed')),
+    error_message TEXT
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_migrations_version ON migrations(version)');
+}
+
+function markScheduledPcoAuthorityMigrationApplied(db) {
+  ensureMigrationTrackingSchema(db);
+  db.prepare(`INSERT OR IGNORE INTO migrations
+    (version, name, description, execution_time_ms, status, executed_at)
+    VALUES (?, ?, ?, 0, 'success', datetime('now'))`).run(
+    SCHEDULED_PCO_AUTHORITY_MIGRATION.version,
+    SCHEDULED_PCO_AUTHORITY_MIGRATION.name,
+    SCHEDULED_PCO_AUTHORITY_MIGRATION.description
+  );
+}
+
+function migrateScheduledPcoAuthority(db, churchId) {
+  ensureMigrationTrackingSchema(db);
+  const alreadyApplied = db.prepare(
+    "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
+  ).get(SCHEDULED_PCO_AUTHORITY_MIGRATION.version);
+  if (alreadyApplied) return;
+
+  const scheduledPcoBatch = db.prepare(`SELECT 1
+    WHERE EXISTS (
+      SELECT 1 FROM planning_center_sync_batches
+      WHERE church_id = ? AND schedule_enabled = 1
+    ) OR EXISTS (
+      SELECT 1 FROM people_sync_batches
+      WHERE church_id = ? AND provider = 'planning_center'
+        AND enabled = 1 AND schedule_enabled = 1
+    )`).get(churchId, churchId);
+
+  if (scheduledPcoBatch) {
+    db.prepare(`UPDATE people_sync_settings
+      SET authority_provider = 'planning_center', updated_at = datetime('now')
+      WHERE church_id = ? AND authority_provider = 'none'`).run(churchId);
+  }
+
+  markScheduledPcoAuthorityMigrationApplied(db);
+}
+
 function ensureProviderNeutralSyncSchema(db) {
   db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
 
@@ -81,6 +138,14 @@ function backfillProviderNeutralSync(db, churchId) {
     );
   }
 
+  // Existing PCO schedules ran unattended before provider-neutral authority
+  // was introduced. Infer that authority once so a deployment cannot silently
+  // halt them. The migration marker is essential: after this one-time upgrade,
+  // a reviewed/explicit disable must remain disabled across future restarts.
+  // The guarded UPDATE preserves either explicit non-none authority, including
+  // Elvanto, so a church can never gain two active people authorities here.
+  migrateScheduledPcoAuthority(db, churchId);
+
   db.prepare(
     `UPDATE gathering_lists
      SET added_by_sync_batch_id = (
@@ -133,6 +198,11 @@ class Database {
     if (isNew) {
       db.exec(CHURCH_SCHEMA);
       db.exec(UPDATED_AT_TRIGGERS);
+      // Fresh churches use the reviewed provider-neutral authority flow and
+      // must never be auto-promoted merely because they later schedule a PCO
+      // batch. Only databases that predate this marker receive the legacy
+      // inference in backfillProviderNeutralSync().
+      markScheduledPcoAuthorityMigrationApplied(db);
       console.log(`✅ Created church database: ${churchId}`);
     }
 

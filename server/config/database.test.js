@@ -6,6 +6,8 @@ const os = require('os');
 const BetterSqlite3 = require('better-sqlite3');
 const Database = require('./database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
+const { upsertConnection } = require('../services/peopleSync/connectionStore');
+const { INTEGRATION_CREDENTIALS_KEY_INVALID } = require('../services/peopleSync/credentialCipher');
 
 test('resyncUserLookup: refreshes a stale registry row after mobile_number is updated directly', async () => {
   await withTestChurchDb(async (churchId) => {
@@ -253,7 +255,8 @@ test('unlinkUserLookup: returns false when no matching row exists', async () => 
 
 test('getChurchDb migrates an existing PCO database to generic provenance and backfills it once', async () => {
   // Catches an upgrade that creates neutral tables for new churches but leaves
-  // existing PCO roster ownership and links unavailable after restart.
+  // existing PCO roster ownership, scheduled authority, or links unavailable
+  // after restart, and catches non-idempotent backfills on a second startup.
   await withTestChurchDb(async (churchId) => {
     const db = Database.getChurchDb(churchId);
     const familyId = Number(db.prepare(
@@ -266,8 +269,14 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
       'INSERT INTO gathering_types (name, church_id) VALUES (?, ?)'
     ).run('Migrated Gathering', churchId).lastInsertRowid);
     const legacyBatchId = Number(db.prepare(
-      "INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters) VALUES (?, ?, '[]', '[]')"
+      `INSERT INTO planning_center_sync_batches
+        (church_id, name, membership_allowlist, field_filters, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, ?, '[]', '[]', 1, 'monthly', 4)`
     ).run(churchId, 'Migrated Batch').lastInsertRowid);
+
+    // This fixture represents a database created before the one-time
+    // scheduled-PCO authority migration existed.
+    db.exec('DELETE FROM migrations');
 
     Database.closeAll();
     const dbPath = path.join(process.env.CHURCH_DATA_DIR, 'churches', `${churchId}.sqlite`);
@@ -302,18 +311,155 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     ).run(gatheringId, individualId, churchId, legacyBatchId);
     legacyDb.close();
 
-    const migrated = Database.getChurchDb(churchId);
-    const genericBatch = migrated.prepare(
+    Database.initialize();
+    const firstStartup = Database.getChurchDb(churchId);
+    const firstGenericBatch = firstStartup.prepare(
       'SELECT id FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
     ).get(churchId, 'planning_center', legacyBatchId);
+
+    assert.ok(firstGenericBatch, 'legacy PCO batch should be represented by one generic batch');
+
+    Database.closeAll();
+    Database.initialize();
+    const migrated = Database.getChurchDb(churchId);
+    const genericBatches = migrated.prepare(
+      'SELECT id, schedule_enabled, schedule_frequency, schedule_day FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
+    ).all(churchId, 'planning_center', legacyBatchId);
     const roster = migrated.prepare('SELECT added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?').get(churchId);
 
-    assert.ok(genericBatch, 'legacy PCO batch should be represented by one generic batch');
-    assert.strictEqual(roster.added_by_sync_batch_id, genericBatch.id);
+    assert.strictEqual(genericBatches.length, 1, 'restart must not duplicate the generic batch');
+    assert.strictEqual(genericBatches[0].id, firstGenericBatch.id, 'restart must preserve the generic batch identity');
+    assert.strictEqual(genericBatches[0].schedule_enabled, 1);
+    assert.strictEqual(genericBatches[0].schedule_frequency, 'monthly');
+    assert.strictEqual(genericBatches[0].schedule_day, 4);
+    assert.strictEqual(roster.added_by_sync_batch_id, genericBatches[0].id);
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ?').get(churchId).count, 1);
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_family_links WHERE church_id = ?').get(churchId).count, 1);
+    assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM people_sync_settings WHERE church_id = ?').get(churchId).count, 1);
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT authority_provider, pending_authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId),
+      { authority_provider: 'planning_center', pending_authority_provider: null },
+      'an existing scheduled PCO church must keep unattended sync running after migration'
+    );
+    assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM planning_center_sync_batches WHERE church_id = ?').get(churchId).count, 1);
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT planning_center_id FROM individuals WHERE id = ?').get(individualId),
+      { planning_center_id: 'legacy-person' },
+      'legacy person IDs must remain available for compatibility'
+    );
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT planning_center_id FROM families WHERE id = ?').get(familyId),
+      { planning_center_id: 'legacy-family' },
+      'legacy family IDs must remain available for compatibility'
+    );
+    assert.deepStrictEqual(migrated.prepare('PRAGMA foreign_key_check').all(), [], 'generic provenance must have valid foreign keys');
     assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_center_sync_batches'").get(), 'legacy PCO batch table must remain');
   });
+});
+
+test('getChurchDb migrates an existing generic scheduled PCO batch once without undoing a later explicit disable', async () => {
+  // Catches migration inference that either ignores already-generic scheduled
+  // batches or runs on every restart and silently defeats reviewed authority
+  // disablement.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.prepare(
+      `INSERT INTO people_sync_batches
+        (church_id, provider, name, enabled, schedule_enabled)
+       VALUES (?, 'planning_center', 'Existing Generic PCO Schedule', 1, 1)`
+    ).run(churchId);
+    db.exec('DELETE FROM migrations');
+
+    Database.closeAll();
+    Database.initialize();
+    const firstStartup = Database.getChurchDb(churchId);
+    assert.strictEqual(
+      firstStartup.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'planning_center'
+    );
+
+    // Simulate a later reviewed/explicit disable. The one-time migration must
+    // not reinterpret the still-scheduled batch on the next restart.
+    firstStartup.prepare(
+      "UPDATE people_sync_settings SET authority_provider = 'none', pending_authority_provider = NULL WHERE church_id = ?"
+    ).run(churchId);
+    Database.closeAll();
+    Database.initialize();
+    const secondStartup = Database.getChurchDb(churchId);
+
+    assert.strictEqual(
+      secondStartup.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'none'
+    );
+    assert.strictEqual(secondStartup.prepare('SELECT COUNT(*) AS count FROM people_sync_settings WHERE church_id = ?').get(churchId).count, 1);
+    assert.strictEqual(secondStartup.prepare('SELECT COUNT(*) AS count FROM people_sync_batches WHERE church_id = ?').get(churchId).count, 1);
+  });
+});
+
+test('getChurchDb preserves explicit Elvanto authority when an existing PCO schedule is migrated', async () => {
+  // Catches treating a scheduled PCO batch as stronger evidence than the
+  // church's explicit non-none authority and creating an unintended second
+  // active source of truth.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.prepare(
+      `INSERT INTO people_sync_batches
+        (church_id, provider, name, enabled, schedule_enabled)
+       VALUES (?, 'planning_center', 'Existing Generic PCO Schedule', 1, 1)`
+    ).run(churchId);
+    db.prepare(
+      "UPDATE people_sync_settings SET authority_provider = 'elvanto', pending_authority_provider = NULL WHERE church_id = ?"
+    ).run(churchId);
+    db.exec('DELETE FROM migrations');
+
+    Database.closeAll();
+    Database.initialize();
+    const migrated = Database.getChurchDb(churchId);
+
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT authority_provider, pending_authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId),
+      { authority_provider: 'elvanto', pending_authority_provider: null }
+    );
+    assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM people_sync_settings WHERE church_id = ?').get(churchId).count, 1);
+  });
+});
+
+test('connection saves fail closed without an encryption key while non-integration database startup remains available', async () => {
+  // Catches either provider falling back to plaintext/empty-key storage, or a
+  // missing optional integration key taking down ordinary church data access.
+  const previousKey = process.env.INTEGRATION_CREDENTIALS_KEY;
+  delete process.env.INTEGRATION_CREDENTIALS_KEY;
+
+  try {
+    await withTestChurchDb(async (churchId) => {
+      for (const connection of [
+        { provider: 'elvanto', authType: 'api_key', credentials: { apiKey: 'must-not-save' } },
+        { provider: 'planning_center', authType: 'oauth', credentials: { accessToken: 'must-not-save' } },
+      ]) {
+        await assert.rejects(
+          upsertConnection({ churchId, ...connection }),
+          (error) => {
+            assert.strictEqual(error.code, INTEGRATION_CREDENTIALS_KEY_INVALID);
+            return true;
+          }
+        );
+      }
+
+      const db = Database.getChurchDb(churchId);
+      assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM integration_connections').get().count, 0);
+      const familyId = Number(db.prepare(
+        'INSERT INTO families (family_name, church_id) VALUES (?, ?)'
+      ).run('Ordinary Family', churchId).lastInsertRowid);
+      assert.deepStrictEqual(
+        db.prepare('SELECT family_name FROM families WHERE id = ?').get(familyId),
+        { family_name: 'Ordinary Family' },
+        'non-integration reads and writes must remain available without the optional key'
+      );
+    });
+  } finally {
+    if (previousKey === undefined) delete process.env.INTEGRATION_CREDENTIALS_KEY;
+    else process.env.INTEGRATION_CREDENTIALS_KEY = previousKey;
+  }
 });
 
 test('getChurchDb upgrades an old PCO database with duplicate legacy IDs without adding the legacy unique index', () => {

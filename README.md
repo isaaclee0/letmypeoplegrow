@@ -433,7 +433,26 @@ LOG_HTTP_START=false                     # Log HTTP request start
 AUTH_DEV_BYPASS=false                    # WARNING: Bypass auth in dev only
 ```
 
-Generate the integration credential encryption key with `openssl rand -base64 32`, then set the result as `INTEGRATION_CREDENTIALS_KEY` for every server replica. This key must remain stable across restarts and replicas and must be backed up separately. Losing it makes saved integration credentials unrecoverable.
+#### Integration credential key rollout and rollback
+
+Generate the integration credential encryption key once:
+
+```bash
+openssl rand -base64 32
+```
+
+The command output becomes `INTEGRATION_CREDENTIALS_KEY`. Treat it as a secret: back it up separately from the application and database backups, configure the same value on every server replica, and keep it stable across restarts and redeployments. Losing, regenerating, or inconsistently configuring this key makes saved Planning Center and Elvanto credentials unrecoverable.
+
+For rollout, use this order:
+
+1. Back up every church database and generate and separately back up the key.
+2. Configure the identical `INTEGRATION_CREDENTIALS_KEY` on every replica before deploying code that saves or migrates integration credentials. The Compose files pass the host variable through but do not provide a real value.
+3. Deploy and verify startup logs do not report a missing, invalid, or mismatched integration key.
+4. Only after that verification, connect new integrations or allow existing per-user credentials to migrate into encrypted church-level storage.
+
+During this upgrade, an existing church with an enabled scheduled Planning Center batch and no explicit provider authority is migrated to Planning Center authority so its unattended sync does not silently stop. Its Planning Center-linked people and families then become strictly managed: edits, archive/reactivation, merge, and deletion must be made in Planning Center and synced back. An existing explicit Elvanto or Planning Center authority is preserved; the migration never activates two authorities.
+
+For rollback, stop integration writes and scheduled sync first, retain the exact same `INTEGRATION_CREDENTIALS_KEY` on all replicas, and restore the pre-rollout application together with its compatible database backup if that version cannot read provider-neutral connection data. Never generate a replacement key as part of rollback. After restoring, verify ordinary attendance access and each configured integration before re-enabling scheduled sync.
 
 ### Client Environment Variables
 

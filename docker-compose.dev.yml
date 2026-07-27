@@ -21,6 +21,7 @@ services:
       OTC_EXPIRE_MINUTES: 10
       OTC_RESEND_COOLDOWN_SECONDS: 60
       EMAIL_FROM: hello@letmypeoplegrow.com.au
+      INTEGRATION_CREDENTIALS_KEY: ${INTEGRATION_CREDENTIALS_KEY}
       # Logging controls
       LOG_LEVEL: debug
       CONSOLE_LOG_LEVEL: debug
