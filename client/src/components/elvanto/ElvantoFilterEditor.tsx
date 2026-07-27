@@ -41,12 +41,12 @@ function Checkboxes({ options, selected, onChange }: { options: Array<{ id: stri
 }
 
 function FilterDimension({ title, options, selected, operator, onSelectedChange, onOperatorChange }: {
-  title: string; options: Array<{ id: string; name: string; detail?: string }>; selected: string[]; operator: Operator;
-  onSelectedChange: (next: string[]) => void; onOperatorChange: (next: Operator) => void;
+  title: string; options: Array<{ id: string; name: string; detail?: string }>; selected: string[]; operator?: Operator;
+  onSelectedChange: (next: string[]) => void; onOperatorChange?: (next: Operator) => void;
 }) {
   if (options.length === 0) return null;
   return <section className="space-y-2">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</h3><MatchOperator value={operator} selectedCount={selected.length} onChange={onOperatorChange} /></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</h3>{operator && onOperatorChange ? <MatchOperator value={operator} selectedCount={selected.length} onChange={onOperatorChange} /> : null}</div>
     <Checkboxes options={options} selected={selected} onChange={onSelectedChange} />
   </section>;
 }
@@ -78,7 +78,7 @@ export default function ElvantoFilterEditor({ metadata, value, onChange }: Elvan
   const update = (patch: Partial<ElvantoFilterConfig>) => onChange({ ...value, ...patch });
   const warnings = removedWarnings(metadata, value);
   const dimensions = [
-    metadata.categories.length > 0 && <FilterDimension key="categories" title="Categories" options={metadata.categories.map((item) => ({ id: item.id, name: item.name }))} selected={value.categoryIds} operator="any" onSelectedChange={(categoryIds) => update({ categoryIds })} onOperatorChange={() => undefined} />,
+    metadata.categories.length > 0 && <FilterDimension key="categories" title="Categories" options={metadata.categories.map((item) => ({ id: item.id, name: item.name }))} selected={value.categoryIds} onSelectedChange={(categoryIds) => update({ categoryIds })} />,
     metadata.groups.length > 0 && <FilterDimension key="groups" title="Groups" options={metadata.groups.map((item) => ({ id: item.id, name: item.name, detail: `(${item.memberCount})` }))} selected={value.groups.ids} operator={value.groups.operator} onSelectedChange={(ids) => update({ groups: { ...value.groups, ids } })} onOperatorChange={(operator) => update({ groups: { ...value.groups, operator } })} />,
     metadata.demographics.length > 0 && <FilterDimension key="demographics" title="Demographics" options={metadata.demographics.map((item) => ({ id: item.value, name: item.value, detail: `(${item.count})` }))} selected={value.demographics.values} operator={value.demographics.operator} onSelectedChange={(values) => update({ demographics: { ...value.demographics, values } })} onOperatorChange={(operator) => update({ demographics: { ...value.demographics, operator } })} />,
     metadata.departments.length > 0 && <FilterDimension key="departments" title="Departments" options={metadata.departments.map((item) => ({ id: item.value, name: item.value, detail: `(${item.count})` }))} selected={value.departments.values} operator={value.departments.operator} onSelectedChange={(values) => update({ departments: { ...value.departments, values } })} onOperatorChange={(operator) => update({ departments: { ...value.departments, operator } })} />,
@@ -92,17 +92,18 @@ export default function ElvantoFilterEditor({ metadata, value, onChange }: Elvan
     update({ customFields: values.length === 0 ? rest : [...rest, { fieldId, values, operator: current?.operator || 'any' }] });
   };
   const setCustomFieldOperator = (fieldId: string, operator: Operator) => update({ customFields: value.customFields.map((rule) => rule.fieldId === fieldId ? { ...rule, operator } : rule) });
+  const selectableCustomFields = metadata.customFields.filter((field) => field.values.length > 0);
 
   return <div className="space-y-4">
     <section className="space-y-2">
       <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">People status</h3>
       <Checkboxes options={([['active', 'Active'], ['contact', 'Contact'], ['archived', 'Archived'], ['deceased', 'Deceased']] as Array<[Status, string]>).map(([id, name]) => ({ id, name }))} selected={value.statuses} onChange={(statuses) => update({ statuses: statuses as Status[] })} />
     </section>
-    {dimensions.map((dimension, index) => <React.Fragment key={index}>{index > 0 ? <p className="text-center text-xs font-semibold tracking-wide text-gray-500">AND</p> : null}{dimension}</React.Fragment>)}
-    {metadata.customFields.length > 0 && <>
+    {dimensions.map((dimension, index) => <React.Fragment key={index}><p className="text-center text-xs font-semibold tracking-wide text-gray-500">AND</p>{dimension}</React.Fragment>)}
+    {selectableCustomFields.length > 0 && <>
       <p className="text-center text-xs font-semibold tracking-wide text-gray-500">AND</p>
       <section className="space-y-3"><h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">Custom fields</h3>
-        {metadata.customFields.map((field) => {
+        {selectableCustomFields.map((field) => {
           const rule = value.customFields.find((item) => item.fieldId === field.id);
           return <div key={field.id} className="border border-gray-200 dark:border-gray-700 rounded p-2 space-y-2"><div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-medium">{field.name}</h4><MatchOperator value={rule?.operator || 'any'} selectedCount={rule?.values.length || 0} onChange={(operator) => setCustomFieldOperator(field.id, operator)} /></div>
             <Checkboxes options={field.values.map((item) => ({ id: item.id, name: item.name }))} selected={rule?.values || []} onChange={(values) => setCustomFieldValues(field.id, values)} />

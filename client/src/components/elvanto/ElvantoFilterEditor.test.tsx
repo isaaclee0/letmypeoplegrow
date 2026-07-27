@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import ElvantoFilterEditor, { defaultElvantoFilter } from './ElvantoFilterEditor';
 import type { ElvantoFilterConfig, ElvantoMetadata } from '../peopleSync/types';
 
 const metadata: ElvantoMetadata = {
   fetchedAt: '2026-07-25T10:00:00.000Z',
-  categories: [{ id: 'category-members', name: 'Members' }],
+  categories: [{ id: 'category-members', name: 'Members' }, { id: 'category-visitors', name: 'Visitors' }],
   groups: [{ id: 'group-youth', name: 'Youth', status: 'active', memberCount: 12 }, { id: 'group-music', name: 'Music', status: null, memberCount: 8 }],
   demographics: [{ value: 'Young adults', count: 9 }],
   departments: [{ value: 'Worship', count: 5 }],
@@ -47,6 +47,33 @@ describe('ElvantoFilterEditor', () => {
     fireEvent.click(screen.getByLabelText('Music'));
     fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
     expect(screen.getByTestId('filter-value')).toHaveTextContent('"operator":"all"');
+  });
+
+  it('matches any selected category by its stable ID without showing an unsupported category operator', () => {
+    const categoryOnly = { ...metadata, groups: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [] };
+    render(<ControlledFilter source={categoryOnly} />);
+
+    fireEvent.click(screen.getByLabelText('Members'));
+    fireEvent.click(screen.getByLabelText('Visitors'));
+    const categorySection = screen.getByText('Categories').closest('section')!;
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('category-members');
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('category-visitors');
+    expect(within(categorySection).queryByRole('button', { name: /Match any|Match all/ })).not.toBeInTheDocument();
+  });
+
+  it('shows AND between status and the first non-empty metadata dimension', () => {
+    const categoryOnly = { ...metadata, groups: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [] };
+    render(<ControlledFilter source={categoryOnly} />);
+
+    expect(screen.getByText('AND')).toBeInTheDocument();
+  });
+
+  it('omits custom fields that have no selectable values and their connector', () => {
+    const noOptions = { ...metadata, categories: [], groups: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [{ id: 'empty', name: 'No choices', type: 'text', values: [] }] };
+    render(<ControlledFilter source={noOptions} />);
+
+    expect(screen.queryByText('Custom fields')).not.toBeInTheDocument();
+    expect(screen.queryByText('AND')).not.toBeInTheDocument();
   });
 
   it('uses category and custom-field definition/value IDs and warns about removed options', () => {

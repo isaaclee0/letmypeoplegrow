@@ -56,6 +56,7 @@ export default function ElvantoBatchEditor({ batch, metadata, gatherings, onSave
     setError(null);
     if (!name.trim()) { setError('Enter a batch name.'); return; }
     if (scheduleEnabled && !validSchedule(scheduleFrequency, scheduleDay)) { setError('Choose a valid schedule day.'); return; }
+    if (gatheringMode === 'existing' && !gatheringTypeId) { setError('Choose a gathering.'); return; }
     setSaving(true);
     try {
       let finalGatheringTypeId: number | null = null;
@@ -68,7 +69,8 @@ export default function ElvantoBatchEditor({ batch, metadata, gatherings, onSave
       }
       const payload: ElvantoSyncBatchInput<ElvantoFilterConfig> = {
         name: name.trim(), enabled, filterSchemaVersion: 1, filterConfig, defaultPeopleType,
-        gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled,
+        gatheringTypeId: finalGatheringTypeId,
+        gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled,
         scheduleEnabled, scheduleFrequency, scheduleDay,
       };
       const response = batch ? await elvantoSyncAPI.updateBatch(batch.id, payload) : await elvantoSyncAPI.createBatch(payload);
@@ -88,7 +90,7 @@ export default function ElvantoBatchEditor({ batch, metadata, gatherings, onSave
       {gatheringMode === 'existing' && <select aria-label="Existing gathering" value={gatheringTypeId ?? ''} onChange={(event) => setGatheringTypeId(event.target.value ? Number(event.target.value) : null)}><option value="">Choose…</option>{gatherings.map((gathering) => <option key={gathering.id} value={gathering.id}>{gathering.name}</option>)}</select>}
       {gatheringMode === 'new' && <input aria-label="New gathering name" value={newGatheringName} onChange={(event) => setNewGatheringName(event.target.value)} placeholder="New gathering name" />}
     </div>
-    {gatheringMode !== 'none' && <label className="flex items-center gap-2 text-sm"><button type="button" role="switch" aria-label="Automatically remove people from this gathering" aria-checked={gatheringAutoRemoveEnabled} onClick={() => gatheringAutoRemoveEnabled ? setGatheringAutoRemoveEnabled(false) : setConfirmAutoRemove(true)} className="h-6 w-11 rounded-full bg-gray-200 dark:bg-gray-600" /><span>Automatically remove people from this gathering when they no longer match this batch</span></label>}
+    {gatheringMode !== 'none' && <label className="flex items-center gap-2 text-sm"><button type="button" role="switch" aria-label="Automatically remove people from this gathering" aria-checked={gatheringAutoRemoveEnabled} disabled={gatheringMode === 'existing' && gatheringTypeId === null} onClick={() => gatheringAutoRemoveEnabled ? setGatheringAutoRemoveEnabled(false) : setConfirmAutoRemove(true)} className="h-6 w-11 rounded-full bg-gray-200 dark:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50" /><span>Automatically remove people from this gathering when they no longer match this batch</span></label>}
     <div><p className="text-sm font-medium mb-2">Schedule</p><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} />Runs automatically</label>{scheduleEnabled && <div className="mt-2 flex flex-wrap gap-2"><select aria-label="Schedule frequency" value={scheduleFrequency} onChange={(event) => changeFrequency(event.target.value as 'daily' | 'weekly' | 'monthly')}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>{scheduleFrequency === 'weekly' && <select aria-label="Schedule day" value={scheduleDay} onChange={(event) => setScheduleDay(Number(event.target.value))}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</select>}{scheduleFrequency === 'monthly' && <select aria-label="Schedule day" value={scheduleDay} onChange={(event) => setScheduleDay(Number(event.target.value))}>{Array.from({ length: 31 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{ordinalDay(day)}</option>)}</select>}</div>}</div>
     {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     <div className="flex gap-3"><button type="button" onClick={save} disabled={saving} className="rounded bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? 'Saving…' : batch ? 'Save batch' : 'Create batch'}</button><button type="button" onClick={onCancel} className="text-sm underline">Cancel</button></div>

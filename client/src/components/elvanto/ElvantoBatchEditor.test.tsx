@@ -85,17 +85,41 @@ describe('ElvantoBatchEditor', () => {
     expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ gatheringTypeId: 17 }));
   });
 
-  it('asks for confirmation before enabling automatic gathering removal', async () => {
+  it('requires an existing gathering before saving', () => {
+    renderEditor();
+
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+
+    expect(screen.getByRole('switch', { name: 'Automatically remove people from this gathering' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose a gathering.');
+    expect(elvantoSyncAPI.createBatch).not.toHaveBeenCalled();
+  });
+
+  it('does not preserve automatic removal when an edited batch has no gathering', async () => {
+    vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch: savedBatch } });
+    renderEditor({ ...savedBatch, gatheringAutoRemoveEnabled: true, gatheringTypeId: null });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+
+    await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(11, expect.objectContaining({
+      gatheringTypeId: null,
+      gatheringAutoRemoveEnabled: false,
+    })));
+  });
+
+  it('asks for confirmation before enabling automatic gathering removal on a selected gathering', async () => {
     vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: savedBatch } });
     renderEditor();
 
     fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
+    fireEvent.change(screen.getByLabelText('Existing gathering'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('switch', { name: 'Automatically remove people from this gathering' }));
     expect(screen.getByText('Enable automatic removal for this batch?')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Enable automatic removal' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
 
-    await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ gatheringAutoRemoveEnabled: true })));
+    await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ gatheringTypeId: 3, gatheringAutoRemoveEnabled: true })));
   });
 
   it('refreshes metadata and previews qualification separately for every status', async () => {
