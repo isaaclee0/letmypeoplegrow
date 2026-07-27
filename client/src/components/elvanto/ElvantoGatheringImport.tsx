@@ -50,6 +50,11 @@ function normalizedFrequency(value?: string): string {
   return 'weekly';
 }
 
+function asArray<T>(value: T | T[] | null | undefined): T[] {
+  if (value === null || value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
 export default function ElvantoGatheringImport({ connected }: { connected: boolean }) {
   const [groups, setGroups] = useState<ElvantoGroup[]>([]);
   const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
@@ -71,8 +76,8 @@ export default function ElvantoGatheringImport({ connected }: { connected: boole
         integrationsAPI.getElvantoGroups({ per_page: 100 }),
         integrationsAPI.getElvantoServices({ per_page: 100 }),
       ]);
-      setGroups(groupsResponse.data?.groups?.group || []);
-      const services: ElvantoService[] = servicesResponse.data?.services?.service || [];
+      setGroups(asArray<ElvantoGroup>(groupsResponse.data?.groups?.group));
+      const services = asArray<ElvantoService>(servicesResponse.data?.services?.service);
       const byId = new Map<string, ServiceType>();
       services.forEach((service) => {
         const type = service.service_type;

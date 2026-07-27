@@ -68,8 +68,10 @@ function setupConnected(overrides: Partial<React.ComponentProps<typeof ElvantoIn
       refreshStatus={vi.fn()}
       onBack={vi.fn()}
       peopleSyncSettings={settings}
+      peopleSyncStatus="known"
       providerConnections={{ planning_center: true, elvanto: true }}
       refreshPeopleSync={vi.fn()}
+      retryPeopleSync={vi.fn()}
       {...overrides}
     />,
   );
@@ -93,7 +95,7 @@ describe('ElvantoIntegrationPanel', () => {
       <ElvantoIntegrationPanel
         status={{ connected: false, loading: false, elvantoAccount: null }}
         refreshStatus={refreshStatus} onBack={vi.fn()} peopleSyncSettings={settings}
-        providerConnections={{ planning_center: true, elvanto: false }} refreshPeopleSync={vi.fn()}
+        peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: false }} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
       />,
     );
     const key = screen.getByLabelText('Elvanto API key');
@@ -111,7 +113,7 @@ describe('ElvantoIntegrationPanel', () => {
       <ElvantoIntegrationPanel
         status={{ connected: true, loading: false, elvantoAccount: 'Example church' }}
         refreshStatus={refreshStatus} onBack={vi.fn()} peopleSyncSettings={settings}
-        providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={vi.fn()}
+        peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
       />,
     );
     await waitFor(() => expect(elvantoSyncAPI.getMetadata).toHaveBeenCalled());
@@ -128,6 +130,24 @@ describe('ElvantoIntegrationPanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Elvanto is still connected');
     expect(screen.getByText('Connected to Example church')).toBeInTheDocument();
+  });
+
+  it('clears and reloads all connection-scoped sync data after a valid connected key replacement', async () => {
+    const refreshStatus = vi.fn();
+    vi.mocked(integrationsAPI.connectElvanto).mockResolvedValue({ data: { success: true, status: {} as never } });
+    setupConnected({ refreshStatus });
+    await screen.findByText(/2 added/);
+    expect(elvantoSyncAPI.getMetadata).toHaveBeenCalledTimes(1);
+    expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByLabelText('Elvanto API key'), { target: { value: 'valid-replacement' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Replace API key' }));
+
+    await waitFor(() => expect(refreshStatus).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(elvantoSyncAPI.getMetadata).toHaveBeenCalledTimes(2));
+    expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2);
+    expect(peopleSyncAPI.getRuns).toHaveBeenCalledTimes(2);
+    expect(gatheringsAPI.getAll).toHaveBeenCalledTimes(2);
   });
 
   it('reviews and applies a batch through the shared SyncReview', async () => {

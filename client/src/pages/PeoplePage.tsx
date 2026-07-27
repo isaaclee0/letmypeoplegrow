@@ -67,6 +67,7 @@ interface Family {
   familyNotes?: string;
   planningCenterId?: string;
   externalLinks?: ExternalLinks;
+  managedBy?: AuthorityProvider | null;
 }
 
 interface GatheringType {
@@ -102,6 +103,37 @@ interface CaregiverSearchResult {
 interface VisitorConfig {
   localVisitorServiceLimit: number;
   travellerVisitorServiceLimit: number;
+}
+
+export function personAuthorityPermissions(
+  externalLinks: ExternalLinks | undefined,
+  authorityProvider: AuthorityProvider,
+) {
+  const locked = isAuthorityLocked(externalLinks, authorityProvider);
+  return {
+    locked,
+    canOpenEditor: true,
+    canEditManagedFields: !locked,
+    canEditBadge: true,
+    canEditGatherings: true,
+    canArchive: !locked,
+    canRestore: !locked,
+    canDelete: !locked,
+    canMerge: !locked,
+  };
+}
+
+export function familyAuthorityPermissions(
+  family: Pick<Family, 'externalLinks' | 'managedBy'>,
+  authorityProvider: AuthorityProvider,
+) {
+  const locked = authorityProvider !== 'none'
+    && (family.managedBy === authorityProvider || isAuthorityLocked(family.externalLinks, authorityProvider));
+  return {
+    locked,
+    canManageFamily: !locked,
+    canEditNotes: true,
+  };
 }
 
 type AuthorityPersonCardProps = Omit<React.ComponentProps<typeof PersonCard>, 'planningCenterSyncIndicator'> & {
@@ -1261,11 +1293,11 @@ const PeoplePage: React.FC = () => {
   }, [selectedPeople, people]);
   const selectedHasAuthorityLock = selectedPeople.some((id) => {
     const person = people.find((candidate) => candidate.id === id);
-    return isAuthorityLocked(person?.externalLinks, authorityProvider);
+    return personAuthorityPermissions(person?.externalLinks, authorityProvider).locked;
   });
   const familyIsAuthorityLocked = (familyId: number | null | undefined) => {
     const family = families.find((candidate) => candidate.id === familyId);
-    return isAuthorityLocked(family?.externalLinks, authorityProvider);
+    return family ? familyAuthorityPermissions(family, authorityProvider).locked : false;
   };
 
   if (isLoading) {
@@ -1342,13 +1374,10 @@ const PeoplePage: React.FC = () => {
         allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
         lockedCount={selectedPeople.reduce((n, id) => {
           const p = people.find(pp => pp.id === id);
-          return n + (isAuthorityLocked(p?.externalLinks, authorityProvider) ? 1 : 0);
+          return n + (personAuthorityPermissions(p?.externalLinks, authorityProvider).locked ? 1 : 0);
         }, 0)}
-        lockNameAge={modalSelectedCount === 1 && (() => {
-          const id = selectedPeople[0];
-          const p = id !== undefined ? people.find(pp => pp.id === id) : undefined;
-          return isAuthorityLocked(p?.externalLinks, authorityProvider);
-        })()}
+        lockManagedFields={selectedHasAuthorityLock}
+        managedByLabel={authorityLabel(authorityProvider)}
         onSave={async () => {
           try {
             setIsLoading(true);
@@ -1356,7 +1385,7 @@ const PeoplePage: React.FC = () => {
 
             // Resolve family target if provided
             let familyIdToUse: number | undefined = undefined;
-            const famInput = massEdit.familyInput.trim();
+            const famInput = selectedHasAuthorityLock ? '' : massEdit.familyInput.trim();
             if (famInput) {
               const match = families.find(f => f.familyName.toLowerCase() === famInput.toLowerCase());
               if (match) {
@@ -1378,27 +1407,33 @@ const PeoplePage: React.FC = () => {
               const allSameAgeGroup = massEdit.isChild === 'true' || massEdit.isChild === 'false';
               const canEditBadge = selectedPeople.length === 1 || (selectedPeople.length > 1 && allSameAgeGroup);
               const hasBadgeChanges = canEditBadge && (massEdit.badgeText !== (p.badgeText || '') || massEdit.badgeColor !== (p.badgeColor || '') || massEdit.badgeIcon !== (p.badgeIcon || ''));
-              const hasIndividualChanges = massEdit.firstName.trim() || massEdit.lastName.trim() || familyIdToUse !== undefined || massEdit.peopleType || massEdit.isChild || hasBadgeChanges;
+              const hasIndividualChanges = (!selectedHasAuthorityLock && (
+                massEdit.firstName.trim()
+                || massEdit.lastName.trim()
+                || familyIdToUse !== undefined
+                || massEdit.peopleType
+                || massEdit.isChild
+              )) || hasBadgeChanges;
 
               if (hasIndividualChanges) {
-                const payload: any = {
+                const payload: any = selectedHasAuthorityLock ? {} : {
                   firstName: p.firstName,
                   lastName: p.lastName,
                 };
 
-                if (massEdit.firstName.trim()) {
+                if (!selectedHasAuthorityLock && massEdit.firstName.trim()) {
                   payload.firstName = massEdit.firstName.trim();
                 }
-                if (massEdit.lastName.trim()) {
+                if (!selectedHasAuthorityLock && massEdit.lastName.trim()) {
                   payload.lastName = massEdit.lastName.trim();
                 }
-                if (familyIdToUse !== undefined) {
+                if (!selectedHasAuthorityLock && familyIdToUse !== undefined) {
                   payload.familyId = familyIdToUse;
                 }
-                if (massEdit.peopleType) {
+                if (!selectedHasAuthorityLock && massEdit.peopleType) {
                   payload.peopleType = massEdit.peopleType;
                 }
-                if (massEdit.isChild) {
+                if (!selectedHasAuthorityLock && massEdit.isChild) {
                   payload.isChild = massEdit.isChild === 'true';
                 }
                 // Badge fields (single person or multi-person when all same age group)
@@ -1711,13 +1746,13 @@ const PeoplePage: React.FC = () => {
                            </>
                          );
                        })()}
-                        {!familyIsAuthorityLocked(group.familyId) && <button
+                        <button
                           onClick={() => handleOpenNotes(group)}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                           title="Family Notes"
                         >
                           <DocumentTextIcon className="h-4 w-4" />
-                        </button>}
+                        </button>
                         {!familyIsAuthorityLocked(group.familyId) && <button
                           onClick={() => {
                             const fam = families.find(f => f.id === group.familyId);
@@ -1922,13 +1957,13 @@ const PeoplePage: React.FC = () => {
                                     </>
                                   );
                                 })()}
-                                {!familyIsAuthorityLocked(group.familyId) && <button
+                                <button
                                   onClick={() => handleOpenNotes(group)}
                                   className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                   title="Family Notes"
                                 >
                                   <DocumentTextIcon className="h-4 w-4" />
-                                </button>}
+                                </button>
                                 {!familyIsAuthorityLocked(group.familyId) && <button
                                   onClick={() => {
                                     const familyId = group.familyId;
@@ -2109,13 +2144,13 @@ const PeoplePage: React.FC = () => {
                                   {familyIsAuthorityLocked(group.familyId) && (
                                     <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
                                   )}
-                                  {!familyIsAuthorityLocked(group.familyId) && <button
+                                  <button
                                     onClick={() => handleOpenNotes(group)}
                                     className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                     title="Family Notes"
                                   >
                                     <DocumentTextIcon className="h-4 w-4" />
-                                  </button>}
+                                  </button>
                                   {!familyIsAuthorityLocked(group.familyId) && <button
                                     onClick={() => {
                                       const familyId = group.familyId;
@@ -2611,7 +2646,6 @@ const PeoplePage: React.FC = () => {
        {/* Floating Action Buttons */}
        {selectedPeople.length > 0 ? (
          <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
-           {!selectedHasAuthorityLock && (
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Edit Selected
@@ -2729,7 +2763,6 @@ const PeoplePage: React.FC = () => {
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
-           )}
            {selectedPeople.length >= 1 && selectedPeople.length <= 15 && (
              <div className="flex items-center justify-end space-x-3">
                <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">

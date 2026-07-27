@@ -32,6 +32,8 @@ export interface PanelProps<S> {
 
 export interface PeopleSyncPanelProps {
   peopleSyncSettings: PeopleSyncSettings;
+  peopleSyncStatus: 'loading' | 'error' | 'known';
   providerConnections: Record<SyncProvider, boolean>;
   refreshPeopleSync: () => void | Promise<void>;
+  retryPeopleSync: () => void | Promise<void>;
 }

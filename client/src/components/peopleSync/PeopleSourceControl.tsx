@@ -25,6 +25,7 @@ export default function PeopleSourceControl({ settings, connections, onRefresh }
   const [pendingReview, setPendingReview] = useState<PeopleSyncReview | null>(null);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [partialSuccess, setPartialSuccess] = useState<string | null>(null);
 
   const preview = async (nextProvider: SyncProvider) => {
     if (!connections[nextProvider] || nextProvider === settings.authorityProvider) return;
@@ -45,9 +46,15 @@ export default function PeopleSourceControl({ settings, connections, onRefresh }
     if (!pendingProvider) return;
     setState('applying');
     setError(null);
+    setPartialSuccess(null);
     try {
-      await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
+      const response = await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
       await onRefresh();
+      if (response.data.authorityCommitError) {
+        setPartialSuccess(response.data.authorityCommitError);
+        setState('error');
+        return;
+      }
       setPendingReview(null);
       setPendingProvider(null);
       setState('idle');
@@ -79,6 +86,7 @@ export default function PeopleSourceControl({ settings, connections, onRefresh }
     setPendingProvider(null);
     setPendingReview(null);
     setError(null);
+    setPartialSuccess(null);
     setState('idle');
   };
 
@@ -131,6 +139,12 @@ export default function PeopleSourceControl({ settings, connections, onRefresh }
 
       {state === 'previewing' && <p className="text-sm text-gray-600">Preparing authority review…</p>}
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {partialSuccess && (
+        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>{partialSuccess}</p>
+          <p className="mt-1">The reviewed people changes were applied, but the authoritative source did not change. Refresh the plan before trying again.</p>
+        </div>
+      )}
 
       {pendingReview && pendingProvider && (
         <div className="space-y-4 border-t border-gray-200 pt-4 dark:border-gray-700">

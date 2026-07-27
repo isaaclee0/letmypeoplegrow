@@ -42,9 +42,10 @@ interface MassEditModalProps {
   error?: string;
   isLoading?: boolean;
   allSameAgeGroup?: boolean; // true when all selected people are either all adults or all children
-  // PCO source-of-truth lock. When true on a single-person edit, name/age inputs
-  // are disabled. For bulk edits, lockedCount drives an informational note.
-  lockNameAge?: boolean;
+  // Provider-neutral source-of-truth lock. Provider-managed fields are
+  // disabled while local badge and gathering assignment controls stay usable.
+  lockManagedFields?: boolean;
+  managedByLabel?: string;
   lockedCount?: number;
 }
 
@@ -60,7 +61,8 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
   error,
   isLoading = false,
   allSameAgeGroup = false,
-  lockNameAge = false,
+  lockManagedFields = false,
+  managedByLabel = 'the authoritative people source',
   lockedCount = 0
 }) => {
   // Determine if this is a child (for showing badge editor)
@@ -107,8 +109,8 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                       type="text"
                       value={massEdit.firstName}
                       onChange={(e) => setMassEdit(d => ({ ...d, firstName: e.target.value }))}
-                      disabled={lockNameAge}
-                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      disabled={lockManagedFields}
+                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                       placeholder="Enter first name"
                     />
                   </div>
@@ -118,14 +120,14 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                       type="text"
                       value={massEdit.lastName}
                       onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))}
-                      disabled={lockNameAge}
-                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      disabled={lockManagedFields}
+                      className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                       placeholder="Leave blank to keep current last name"
                     />
                   </div>
                 </div>
-                {lockNameAge && (
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Name and age are managed by Planning Center for this person.</p>
+                {lockManagedFields && (
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">These fields are managed by {managedByLabel}.</p>
                 )}
               </div>
             )}
@@ -138,13 +140,14 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                   type="text"
                   value={massEdit.lastName}
                   onChange={(e) => setMassEdit(d => ({ ...d, lastName: e.target.value }))}
-                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  disabled={lockManagedFields}
+                  className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                   placeholder="Leave blank to keep current last names"
                 />
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Enter a last name to set it for all selected people</div>
                 {lockedCount > 0 && (
                   <div className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                    {lockedCount} Planning Center–linked {lockedCount === 1 ? 'person' : 'people'} won't have their name or age changed.
+                    {lockedCount} {managedByLabel}–managed {lockedCount === 1 ? 'person' : 'people'} won't have provider-managed fields changed.
                   </div>
                 )}
               </div>
@@ -156,12 +159,13 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 type="text"
                 list="family-options"
                 value={massEdit.familyInput}
+                disabled={lockManagedFields}
                 onChange={(e) => {
                   const value = e.target.value;
                   const match = families.find(f => f.familyName.toLowerCase() === value.toLowerCase());
                   setMassEdit(d => ({ ...d, familyInput: value, selectedFamilyId: match ? match.id : null, newFamilyName: match ? '' : value }));
                 }} 
-                className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500" 
+                className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                 placeholder="Search or type to create new family" 
               />
               <datalist id="family-options">
@@ -178,6 +182,7 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 <input 
                   type="checkbox" 
                   checked={massEdit.applyToWholeFamily} 
+                  disabled={lockManagedFields}
                   onChange={(e) => setMassEdit(d => ({ ...d, applyToWholeFamily: e.target.checked }))} 
                   className="rounded border-gray-300 dark:border-gray-500 text-primary-600 focus:ring-primary-500" 
                 />
@@ -193,8 +198,9 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">People Type</label>
                 <select 
                   value={massEdit.peopleType} 
+                  disabled={lockManagedFields}
                   onChange={(e) => setMassEdit(d => ({ ...d, peopleType: e.target.value as any }))} 
-                  className="mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+                  className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
                   <option value="">Do not change</option>
                   <option value="regular">Regular</option>
@@ -208,15 +214,15 @@ const MassEditModal: React.FC<MassEditModalProps> = ({
                 <select
                   value={massEdit.isChild}
                   onChange={(e) => setMassEdit(d => ({ ...d, isChild: e.target.value as '' | 'true' | 'false' }))}
-                  disabled={lockNameAge}
-                  className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockNameAge ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  disabled={lockManagedFields}
+                  className={`mt-1 block w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 ${lockManagedFields ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
                   <option value="">Do not change</option>
                   <option value="false">Adult</option>
                   <option value="true">Child</option>
                 </select>
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {lockNameAge ? 'Managed by Planning Center' : 'Set adult or child status for selected people'}
+                  {lockManagedFields ? `Managed by ${managedByLabel}` : 'Set adult or child status for selected people'}
                 </div>
               </div>
             </div>

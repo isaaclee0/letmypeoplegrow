@@ -22,10 +22,12 @@ interface IntegrationCardProps {
   onDisconnect?: () => void;
   /** When set, renders a disabled "Not available" state with this message instead of the normal action area. */
   disabledMessage?: string;
+  /** Prevents disconnect until ownership/authority preconditions are known. */
+  disconnectDisabled?: boolean;
 }
 
 const IntegrationCard: React.FC<IntegrationCardProps> = ({
-  name, description, icon, connected, loading, connectedLabel, onOpen, onDisconnect, disabledMessage,
+  name, description, icon, connected, loading, connectedLabel, onOpen, onDisconnect, disabledMessage, disconnectDisabled = false,
 }) => {
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
@@ -62,6 +64,7 @@ const IntegrationCard: React.FC<IntegrationCardProps> = ({
               {onDisconnect && (
                 <button
                   onClick={onDisconnect}
+                  disabled={disconnectDisabled}
                   className="inline-flex items-center px-3 py-2 border border-gray-300 dark:border-gray-600 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600"
                 >
                   Disconnect

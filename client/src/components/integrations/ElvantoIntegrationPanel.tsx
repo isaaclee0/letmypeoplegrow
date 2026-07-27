@@ -28,11 +28,17 @@ function ConnectionSection({
   status,
   refreshStatus,
   authoritative,
+  authorityKnown,
+  retryAuthority,
+  onConnectionChanged,
   initialAction,
 }: {
   status: ElvantoStatus;
   refreshStatus: () => void | Promise<void>;
   authoritative: boolean;
+  authorityKnown: boolean;
+  retryAuthority: () => void | Promise<void>;
+  onConnectionChanged?: () => void | Promise<void>;
   initialAction?: 'disconnect';
 }) {
   const [apiKey, setApiKey] = useState('');
@@ -55,6 +61,7 @@ function ConnectionSection({
       await integrationsAPI.connectElvanto(apiKey.trim());
       setApiKey('');
       await refreshStatus();
+      await onConnectionChanged?.();
     } catch (cause) {
       const detail = errorMessage(cause, 'Failed to connect to Elvanto.');
       setError(status.connected
@@ -88,7 +95,7 @@ function ConnectionSection({
           {status.connected && <p className="mt-1 text-xs text-green-700">Connected to {status.elvantoAccount || 'Elvanto'}</p>}
         </div>
         {status.connected && (
-          <button type="button" onClick={() => setConfirmDisconnect(true)} className="rounded border border-gray-300 px-3 py-2 text-sm">
+          <button type="button" onClick={() => setConfirmDisconnect(true)} disabled={!authorityKnown} className="rounded border border-gray-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">
             Disconnect Elvanto
           </button>
         )}
@@ -115,7 +122,9 @@ function ConnectionSection({
       {confirmDisconnect && (
         <div role="dialog" aria-modal="true" className="rounded-md border border-amber-300 bg-amber-50 p-4">
           <h5 className="font-medium">Disconnect Elvanto?</h5>
-          {authoritative ? (
+          {!authorityKnown ? (
+            <><p className="mt-1 text-sm text-amber-900">The authoritative people source is not known, so disconnect is blocked.</p><button type="button" onClick={() => void retryAuthority()} className="mt-2 text-sm underline">Retry people source status</button></>
+          ) : authoritative ? (
             <p className="mt-1 text-sm text-amber-900">Elvanto is your authoritative people source. Choose None or Planning Center and complete that change before disconnecting.</p>
           ) : (
             <p className="mt-1 text-sm">Existing imported people, links, and gatherings are retained.</p>
@@ -215,8 +224,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   onBack,
   initialAction,
   peopleSyncSettings,
+  peopleSyncStatus,
   providerConnections,
   refreshPeopleSync,
+  retryPeopleSync,
 }) => {
   const [metadata, setMetadata] = useState<ElvantoMetadata | null>(null);
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
@@ -255,6 +266,16 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
       setLoading(false);
     }
   }, [status.connected]);
+
+  const reloadConnectionData = useCallback(async () => {
+    setMetadata(null);
+    setBatches([]);
+    setGatherings([]);
+    setRuns([]);
+    setReview(null);
+    setEditingBatch(null);
+    await loadConnectedData();
+  }, [loadConnectedData]);
 
   useEffect(() => {
     void loadConnectedData();
@@ -318,13 +339,23 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
         status={status}
         refreshStatus={refreshStatus}
         authoritative={peopleSyncSettings.authorityProvider === 'elvanto'}
+        authorityKnown={peopleSyncStatus === 'known'}
+        retryAuthority={retryPeopleSync}
+        onConnectionChanged={status.connected ? reloadConnectionData : undefined}
         initialAction={initialAction}
       />
 
       {status.connected && (
         <>
-          <PeopleSourceControl settings={peopleSyncSettings} connections={providerConnections} onRefresh={refreshPeopleSync} />
-          <ElvantoOptions settings={peopleSyncSettings} onChanged={refreshPeopleSync} />
+          {peopleSyncStatus === 'known' ? (
+            <PeopleSourceControl settings={peopleSyncSettings} connections={providerConnections} onRefresh={refreshPeopleSync} />
+          ) : (
+            <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
+              {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
+            </section>
+          )}
+          {peopleSyncStatus === 'known' && <ElvantoOptions settings={peopleSyncSettings} onChanged={refreshPeopleSync} />}
 
           <section className="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
             <div className="flex items-center justify-between gap-3">

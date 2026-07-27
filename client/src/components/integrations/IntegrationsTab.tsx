@@ -45,6 +45,7 @@ const IntegrationsTab: React.FC = () => {
   const [selected, setSelected] = useState<IntegrationKey | null>(null);
   const [pendingDisconnect, setPendingDisconnect] = useState<IntegrationKey | null>(null);
   const [peopleSyncSettings, setPeopleSyncSettings] = useState(defaultPeopleSyncSettings);
+  const [peopleSyncStatus, setPeopleSyncStatus] = useState<'loading' | 'error' | 'known'>('loading');
 
   const fetchElvantoStatus = useCallback(async () => {
     try {
@@ -91,10 +92,17 @@ const IntegrationsTab: React.FC = () => {
     try {
       const response = await peopleSyncAPI.getSettings();
       setPeopleSyncSettings(response.data.settings);
+      setPeopleSyncStatus('known');
     } catch (error) {
       logger.error('Failed to fetch people-sync settings:', error);
+      setPeopleSyncStatus('error');
     }
   }, []);
+
+  const retryPeopleSync = useCallback(async () => {
+    setPeopleSyncStatus('loading');
+    await fetchPeopleSyncSettings();
+  }, [fetchPeopleSyncSettings]);
 
   // Fetch all statuses on mount
   useEffect(() => {
@@ -142,8 +150,10 @@ const IntegrationsTab: React.FC = () => {
         onBack={handleBack}
         initialAction={pendingDisconnect === 'elvanto' ? 'disconnect' : undefined}
         peopleSyncSettings={peopleSyncSettings}
+        peopleSyncStatus={peopleSyncStatus}
         providerConnections={providerConnections}
         refreshPeopleSync={refreshPeopleSync}
+        retryPeopleSync={retryPeopleSync}
       />
     );
   }
@@ -167,8 +177,10 @@ const IntegrationsTab: React.FC = () => {
         onBack={handleBack}
         initialAction={pendingDisconnect === 'planning-center' ? 'disconnect' : undefined}
         peopleSyncSettings={peopleSyncSettings}
+        peopleSyncStatus={peopleSyncStatus}
         providerConnections={providerConnections}
         refreshPeopleSync={refreshPeopleSync}
+        retryPeopleSync={retryPeopleSync}
       />
     );
   }
@@ -184,9 +196,18 @@ const IntegrationsTab: React.FC = () => {
       </div>
 
       <div className="space-y-6">
+        {peopleSyncStatus === 'loading' && (
+          <p className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">Checking authoritative people source…</p>
+        )}
+        {peopleSyncStatus === 'error' && (
+          <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <p>Could not load the authoritative people source. Disconnect and source controls are blocked until this is known.</p>
+            <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>
+          </div>
+        )}
         {/* Elvanto */}
         <div className="relative">
-          {peopleSyncSettings.authorityProvider === 'elvanto' && <span className="absolute right-6 top-2 rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">Authoritative people source</span>}
+          {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'elvanto' && <span className="absolute right-6 top-2 rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">Authoritative people source</span>}
           <IntegrationCard
           name="Elvanto"
           description="Import people and families once, or keep LMPG aligned with Elvanto."
@@ -205,6 +226,7 @@ const IntegrationsTab: React.FC = () => {
             setSelected('elvanto');
             setPendingDisconnect('elvanto');
           } : undefined}
+          disconnectDisabled={peopleSyncStatus !== 'known'}
           />
         </div>
 
@@ -231,7 +253,7 @@ const IntegrationsTab: React.FC = () => {
         {/* Planning Center */}
         {!pcStatus.fetchFailed && (
           <div className="relative">
-            {peopleSyncSettings.authorityProvider === 'planning_center' && <span className="absolute right-6 top-2 rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">Authoritative people source</span>}
+            {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider === 'planning_center' && <span className="absolute right-6 top-2 rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">Authoritative people source</span>}
             <IntegrationCard
             name="Planning Center"
             description="Import people and check-ins, or use Planning Center as your people source of truth."
@@ -251,6 +273,7 @@ const IntegrationsTab: React.FC = () => {
               setSelected('planning-center');
               setPendingDisconnect('planning-center');
             } : undefined}
+            disconnectDisabled={peopleSyncStatus !== 'known'}
             />
           </div>
         )}

@@ -26,8 +26,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   onBack,
   initialAction,
   peopleSyncSettings,
+  peopleSyncStatus,
   providerConnections,
   refreshPeopleSync,
+  retryPeopleSync,
 }) => {
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
@@ -206,6 +208,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </span>
                   <button
                     onClick={() => setShowPlanningCenterDisconnectModal(true)}
+                    disabled={peopleSyncStatus !== 'known'}
                     className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                   >
                     Disconnect
@@ -390,11 +393,14 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 </ul>
               </div>
 
-              <PeopleSourceControl
-                settings={peopleSyncSettings}
-                connections={providerConnections}
-                onRefresh={refreshPeopleSync}
-              />
+              {peopleSyncStatus === 'known' ? <PeopleSourceControl
+                  settings={peopleSyncSettings}
+                  connections={providerConnections}
+                  onRefresh={refreshPeopleSync}
+                /> : <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
+                  {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
+                </section>}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
@@ -483,7 +489,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
 
             <div className="text-center mb-6">
-              {peopleSyncSettings.authorityProvider === 'planning_center' ? (
+              {peopleSyncStatus !== 'known' ? (
+                <p className="text-sm text-amber-700">The authoritative people source is not known, so disconnect is blocked.</p>
+              ) : peopleSyncSettings.authorityProvider === 'planning_center' ? (
                 <p className="text-sm text-amber-700">
                   Planning Center is your authoritative people source. Choose None or Elvanto and complete that reviewed change before disconnecting.
                 </p>
@@ -506,7 +514,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               >
                 Cancel
               </button>
-              {peopleSyncSettings.authorityProvider !== 'planning_center' && <button
+              {peopleSyncStatus === 'known' && peopleSyncSettings.authorityProvider !== 'planning_center' && <button
                 onClick={confirmPlanningCenterDisconnect}
                 className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
               >

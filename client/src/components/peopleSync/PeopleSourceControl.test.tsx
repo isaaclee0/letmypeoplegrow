@@ -155,4 +155,28 @@ describe('PeopleSourceControl', () => {
     expect(screen.getByRole('radio', { name: 'Elvanto' })).toBeDisabled();
     expect(screen.getByText('Connect Elvanto before selecting it as your people source.')).toBeInTheDocument();
   });
+
+  it('keeps a partial-success authority commit failure visible and does not claim the provider changed', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: {
+        success: true,
+        runId: 10,
+        status: 'applied',
+        applied: {} as never,
+        summary: review.summary,
+        authorityCommitError: 'The people changes were applied, but Elvanto could not be made authoritative.',
+      },
+    });
+    const onRefresh = vi.fn();
+    render(<PeopleSourceControl settings={initialSettings} connections={{ planning_center: true, elvanto: true }} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('people changes were applied');
+    expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
 });
