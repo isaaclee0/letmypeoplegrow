@@ -27,7 +27,9 @@ COPY server/scripts ./scripts
 COPY server/uploads ./uploads
 COPY server/admin ./admin
 COPY server/package*.json ./
-COPY server/.env* ./
+
+# Runtime configuration and credentials are injected through environment
+# variables or orchestrator-managed secret facilities; never bake .env files.
 
 # Create directories
 RUN mkdir -p uploads data/churches

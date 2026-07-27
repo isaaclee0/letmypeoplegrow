@@ -9,12 +9,52 @@
 **/coverage
 **/*.log
 
-# Keep local secrets and mutable runtime data out of the build context.
-.env
-server/.env
-server/data
-server/uploads/*
-!server/uploads/.gitkeep
-backups
+# Local environment files are runtime input, never image input. Keep only the
+# checked-in examples used by development setup and documentation.
+**/.env*
+!**/.env.example
+**/.envrc
+
+# Credentials and private key/certificate stores.
+**/apikeys
+**/apikeys/**
+**/secrets
+**/secrets/**
+**/.aws
+**/.aws/**
+**/.ssh
+**/.ssh/**
+**/.netrc
+**/.npmrc
+**/*.key
+**/*.pem
+**/*.crt
+**/*.cer
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/*.kdbx
+**/*credentials*.json
+**/*service-account*.json
+
+# Runtime databases, dumps, backups, and user data.
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.bak
+**/*.backup
+**/*.dump
+**/*.sql.gz
+**/data
+**/data/**
+**/backups
+**/backups/**
+**/sqldumps
+**/sqldumps/**
+**/migration.sql
+**/family-dummy-data.tsv
+**/uploads/*
+!**/uploads/.gitkeep
 
 .DS_Store
