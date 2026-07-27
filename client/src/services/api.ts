@@ -850,7 +850,6 @@ export const settingsAPI = {
   sendTestCaregiverDigest: () => api.post('/settings/caregiver-digest/test'),
   getIntegrationSettings: () => api.get('/settings/integrations'),
   updateIntegrationSettings: (data: {
-    planningCenterSyncIndicator?: boolean;
     planningCenterSyncEnabled?: boolean;
     planningCenterTrackBackgroundChecks?: boolean;
   }) => api.put('/settings/integrations', data),
@@ -892,54 +891,22 @@ export interface SyncBatch extends SyncBatchInput {
 
 // Integrations API
 export const integrationsAPI = {
-  // Elvanto connection status/connect/disconnect. These three URLs are now
-  // served by the Task-16 provider-neutral router
-  // (server/routes/integrations/elvanto.js, mounted before the legacy
-  // handlers further down that same file) rather than the old per-admin
-  // user_preferences-backed handlers -- the URLs are unchanged, only the
-  // server-side implementation and response shape are new. Left untyped
-  // (and un-renamed) here since client/src/components/integrations/
-  // IntegrationsTab.tsx and ElvantoIntegrationPanel.tsx still call these
-  // directly; Task 20 replaces that panel and can retype/rename these then.
+  // Elvanto connection status/connect/disconnect use the encrypted,
+  // church-scoped connection managed by the provider-neutral sync backend.
   getElvantoStatus: () => api.get<ElvantoStatus>('/integrations/elvanto/status'),
   connectElvanto: (apiKey: string) =>
     api.post<{ success: true; status: ElvantoConnection }>('/integrations/elvanto/connect', { apiKey }),
   disconnectElvanto: () => api.post<{ success: true; disconnected: boolean }>('/integrations/elvanto/disconnect'),
-  // ── Legacy one-shot Elvanto people/family import (CLAUDE.md: "a one-shot,
-  // unlinked import" -- admin ticks people/families, they get copied in, no
-  // persistent relationship or ongoing sync). These routes are still live
-  // (server/routes/integrations.js's legacy `/elvanto/*` handlers, deliberately
-  // preserved below the Task-16 routers -- see that file's own header note)
-  // and still called by ElvantoIntegrationPanel.tsx today, so none of them are
-  // removed here. Task 21 retires this whole flow (and its panel) in favour of
-  // elvantoSyncAPI's provider-neutral batch CRUD/plan/apply/run-now below.
-  // getElvantoPeople and getElvantoGroupInfo currently have no caller anywhere
-  // in the client (verified by search) but are left in place for the same
-  // reason -- their server routes are not removed, and Task 21 owns retiring
-  // this feature, not this task.
-  getElvantoPeople: (params?: { page?: number; per_page?: number; search?: string; include_family?: string }) =>
-    api.get('/integrations/elvanto/people', { params }),
-  getElvantoFamilies: (params?: { page?: number; per_page?: number; search?: string; include_archived?: string }) =>
-    api.get('/integrations/elvanto/families', { params }),
+  // Gathering-only discovery/import. People and families always use reviewed
+  // people-sync batches; there is no selected-ID blind import API.
   getElvantoGroups: (params?: { page?: number; per_page?: number; search?: string }) =>
     api.get('/integrations/elvanto/groups', { params }),
-  getElvantoGroupInfo: (groupId: string) =>
-    api.get(`/integrations/elvanto/groups/${groupId}`),
   getElvantoServices: (params?: { page?: number; per_page?: number }) =>
     api.get('/integrations/elvanto/services', { params }),
-  importFromElvanto: (data: { peopleIds?: string[]; familyIds?: string[]; gatheringIds?: number[] }) =>
-    api.post('/integrations/elvanto/import', data),
-  // legacy gathering import (kept until Task 21 -- see CLAUDE.md's
-  // "one-shot, unlinked import" description; still called by
-  // ElvantoIntegrationPanel.tsx today).
   checkGatheringDuplicates: (data: { groupIds?: string[]; serviceTypeIds?: string[] }) =>
     api.post('/integrations/elvanto/check-gathering-duplicates', data),
-  // legacy gathering import (kept until Task 21 -- see above).
   importGatheringsFromElvanto: (data: { groupIds?: string[]; serviceTypeIds?: string[]; gatheringInfo?: Record<string, { name?: string; description?: string; dayOfWeek: string; startTime: string; frequency: string }>; nameOverrides?: Record<string, string> }) =>
     api.post('/integrations/elvanto/import-gatherings', data),
-  // Debug - dump all available Elvanto data. No current caller; see the
-  // legacy-import note above for why this is left in place.
-  debugDumpElvanto: () => api.get('/integrations/elvanto/debug-dump'),
 
   // Planning Center integration - OAuth based
   getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
@@ -1062,11 +1029,8 @@ export const peopleSyncAPI = {
 // Metadata discovery for the batch filter picker (Task 19) and sync-batch
 // CRUD/plan/apply/run-now -- provider-specific concerns that don't fit
 // peopleSyncAPI above. Backed by server/routes/integrations/elvanto.js,
-// mounted at /api/integrations/elvanto. This is a NEW, separate surface from
-// integrationsAPI's legacy Elvanto methods above (which cover connection
-// status/connect/disconnect, still consumed by today's
-// ElvantoIntegrationPanel.tsx) -- Task 19/20 build the new batch editor and
-// panel against these methods instead.
+// mounted at /api/integrations/elvanto. ElvantoIntegrationPanel and onboarding
+// both use these reviewed methods.
 export const elvantoSyncAPI = {
   // Cheap path: serves the persisted metadata cache without a live Elvanto
   // call when one exists; only falls through to a live fetch (subject to the

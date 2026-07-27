@@ -1,0 +1,90 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const http = require('node:http');
+const jwt = require('jsonwebtoken');
+const Database = require('../config/database');
+const { withTestChurchDb } = require('../test-helpers/testChurchDb');
+const settingsRouter = require('./settings');
+const { beginAuthoritySwitch, commitAuthoritySwitch, getAuthority } = require('../services/peopleSync/authority');
+
+async function startApp(churchId) {
+  const inserted = await Database.query(
+    `INSERT INTO users (email, role, first_name, last_name, is_active, church_id)
+     VALUES (?, 'admin', 'Admin', 'User', 1, ?)`,
+    [`settings-${Math.random().toString(36).slice(2)}@example.com`, churchId],
+  );
+  const previousSecret = process.env.JWT_SECRET;
+  Database.getRegistryDb().prepare(
+    `INSERT INTO churches (church_id, church_name, is_approved) VALUES (?, 'Settings Test Church', 1)`,
+  ).run(churchId);
+  process.env.JWT_SECRET = 'settings-integrations-test-secret';
+  const token = jwt.sign({ userId: inserted.insertId, churchId }, process.env.JWT_SECRET);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/settings', settingsRouter);
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    request: async (body) => {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/settings/integrations`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() };
+    },
+    close: async () => {
+      await new Promise((resolve) => server.close(resolve));
+      if (previousSecret === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = previousSecret;
+    },
+  };
+}
+
+test('legacy settings route rejects direct PCO authority activation and leaves authority unchanged', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO church_settings (church_id, church_name, planning_center_sync_indicator)
+       VALUES (?, 'Settings Test Church', 0)`,
+      [churchId],
+    );
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request({ planningCenterSyncIndicator: true });
+      assert.equal(response.status, 409);
+      assert.equal(response.body.code, 'AUTHORITY_REVIEW_REQUIRED');
+      assert.match(response.body.error, /people-sync\/people-authority\/preview/i);
+      assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+      const row = (await Database.query(
+        `SELECT planning_center_sync_indicator FROM church_settings WHERE church_id = ?`,
+        [churchId],
+      ))[0];
+      assert.equal(row.planning_center_sync_indicator, 0);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('legacy settings route may disable active PCO authority without activating another provider', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO church_settings (church_id, church_name, planning_center_sync_indicator)
+       VALUES (?, 'Settings Test Church', 1)`,
+      [churchId],
+    );
+    await beginAuthoritySwitch(churchId, 'planning_center');
+    await commitAuthoritySwitch(churchId, 'planning_center');
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request({ planningCenterSyncIndicator: false });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+    } finally {
+      await app.close();
+    }
+  });
+});

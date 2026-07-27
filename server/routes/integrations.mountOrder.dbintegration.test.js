@@ -7,8 +7,8 @@
 // directly in a one-route synthetic app) actually exercises the real
 // `router.use('/people-sync', createPeopleSyncRouter())` /
 // `router.use('/elvanto', createElvantoRouter())` mounts inside the real
-// routes/integrations.js, ahead of the real preserved legacy one-shot
-// import routes. This file requires and mounts the REAL exported router
+// routes/integrations.js, ahead of the retained gathering-only routes. This
+// file requires and mounts the REAL exported router
 // (no fakes for the router composition itself), with a REAL signed JWT and
 // a REAL admin user seeded in a disposable church DB — the same harness
 // pattern routes/families.dbintegration.test.js already uses for the same
@@ -92,7 +92,7 @@ async function startIntegrationsApp(churchId) {
   };
 }
 
-test('the real routes/integrations.js router resolves both new-router routes and preserved legacy routes correctly, in the real mount order', async () => {
+test('the real integrations router keeps reviewed sync and gathering routes while blind people import is absent', async () => {
   await withRouteChurchDb(async (churchId) => {
     const app = await startIntegrationsApp(churchId);
     try {
@@ -111,16 +111,16 @@ test('the real routes/integrations.js router resolves both new-router routes and
       assert.equal(batches.status, 200);
       assert.deepEqual(batches.body, { success: true, batches: [] });
 
-      // ─── Preserved legacy one-shot import route (a path the NEW router
-      // does not define at all — server/routes/integrations/elvanto.js has
-      // no '/people' route). This only resolves at all if Express's
-      // sub-router mounting correctly falls through, past the new router,
-      // to the legacy handler registered further down the SAME parent
-      // router — the exact structural property this task's route
-      // preservation depends on.
+      // The old selected-person import path must not fall through to a
+      // parent handler anymore.
       const people = await app.request('/api/integrations/elvanto/people');
-      assert.equal(people.status, 401);
-      assert.match(people.body.error, /not connected/i);
+      assert.equal(people.status, 404);
+
+      // Gathering discovery is still retained and reaches its connection
+      // gate (this church has no encrypted Elvanto connection).
+      const groups = await app.request('/api/integrations/elvanto/groups');
+      assert.equal(groups.status, 401);
+      assert.match(groups.body.error, /not connected/i);
 
       // ─── The provider-neutral router, mounted at an entirely different
       // prefix ('/people-sync'), also resolves correctly on the same app.

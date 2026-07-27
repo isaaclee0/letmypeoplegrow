@@ -548,14 +548,15 @@ test('integration settings expose authority and provider-neutral Elvanto options
   });
 });
 
-test('temporary PCO settings toggle updates authority and legacy indicator together', async () => {
+test('legacy PCO settings toggle rejects activation and may disable existing PCO authority', async () => {
   await withRouteChurchDb(async (churchId) => {
     const app = await startPeopleRouteApp(churchId);
     try {
       const enabled = await app.request('/api/settings/integrations', {
         method: 'PUT', body: JSON.stringify({ planningCenterSyncIndicator: true }),
       });
-      assert.strictEqual(enabled.status, 200);
+      assert.strictEqual(enabled.status, 409);
+      assert.strictEqual(enabled.body.code, 'AUTHORITY_REVIEW_REQUIRED');
       assert.deepStrictEqual((await Database.query(
         `SELECT pss.authority_provider, pss.pending_authority_provider, cs.planning_center_sync_indicator
            FROM people_sync_settings pss
@@ -563,10 +564,16 @@ test('temporary PCO settings toggle updates authority and legacy indicator toget
           WHERE pss.church_id = ?`,
         [churchId]
       ))[0], {
-        authority_provider: 'planning_center',
+        authority_provider: 'none',
         pending_authority_provider: null,
-        planning_center_sync_indicator: 1,
+        planning_center_sync_indicator: 0,
       });
+
+      await activateAuthority(churchId, 'planning_center');
+      await Database.query(
+        `UPDATE church_settings SET planning_center_sync_indicator = 1 WHERE church_id = ?`,
+        [churchId]
+      );
 
       const disabled = await app.request('/api/settings/integrations', {
         method: 'PUT', body: JSON.stringify({ planningCenterSyncIndicator: false }),

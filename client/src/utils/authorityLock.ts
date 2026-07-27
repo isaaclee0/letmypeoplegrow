@@ -2,11 +2,7 @@
 // authority?" helpers (Task 17 of the provider-neutral people-sync
 // project).
 //
-// This supersedes pcoLock.ts's PCO-only isPcoLocked/countPcoLocked as the
-// single source of truth once every caller has migrated (Task 21 removes
-// the last PCO-only call sites) -- pcoLock.ts itself now delegates to
-// isAuthorityLocked below so existing PCO-only call sites keep compiling
-// and behaving identically in the meantime.
+// Provider-neutral authority is the sole source of client-side lock state.
 //
 // Mirrors the backend helper at server/services/peopleSync/authority.js
 // (isPersonLocked/PEOPLE_SOURCE_LOCKED) -- see that module for the

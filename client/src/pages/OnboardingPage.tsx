@@ -8,6 +8,7 @@ import PlanningCenterBatchEditor from '../components/planningCenter/PlanningCent
 import PlanningCenterSyncReview from '../components/planningCenter/PlanningCenterSyncReview';
 import PCOCheckinImport from '../components/PCOCheckinImport';
 import { SyncBatch } from '../services/api';
+import ElvantoOnboarding, { type ElvantoOnboardingStep } from '../components/elvanto/ElvantoOnboarding';
 
 interface SetupForm {
   churchName: string;
@@ -24,8 +25,16 @@ interface LocationResult {
   displayName: string;
 }
 
+type Step = 'form' | 'code' | 'choose-path' |
+  'pco-people' | 'pco-review' | 'pco-gatherings' |
+  'elvanto-connect' | 'elvanto-batch' | 'elvanto-review' | 'elvanto-authority';
+
+const elvantoSteps: ElvantoOnboardingStep[] = [
+  'elvanto-connect', 'elvanto-batch', 'elvanto-review', 'elvanto-authority',
+];
+
 const OnboardingPage: React.FC = () => {
-  const [step, setStep] = useState<'form' | 'code' | 'choose-path' | 'pco-people' | 'pco-review' | 'pco-gatherings'>('form');
+  const [step, setStep] = useState<Step>('form');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -342,9 +351,10 @@ const OnboardingPage: React.FC = () => {
               </form>
           ) : step === 'choose-path' ? (
             <div className="space-y-4">
-              <p className="text-sm text-gray-700">
-                Do you use Planning Center? We can set up your members, gatherings and attendance history from it.
-              </p>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Bring your people with you</h2>
+                <p className="mt-1 text-sm text-gray-700">Choose an integration to review and import your people, or start with an empty account.</p>
+              </div>
               <button
                 type="button"
                 onClick={async () => {
@@ -364,12 +374,25 @@ const OnboardingPage: React.FC = () => {
               </button>
               <button
                 type="button"
+                onClick={() => setStep('elvanto-connect')}
+                className="w-full inline-flex justify-center px-6 py-3 border border-primary-300 text-base font-medium rounded-md text-primary-700 bg-primary-50 hover:bg-primary-100"
+              >
+                Set up from Elvanto
+              </button>
+              <button
+                type="button"
                 onClick={finishOnboarding}
                 className="w-full inline-flex justify-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
               >
                 Start fresh
               </button>
             </div>
+          ) : elvantoSteps.includes(step as ElvantoOnboardingStep) ? (
+            <ElvantoOnboarding
+              step={step as ElvantoOnboardingStep}
+              onStepChange={setStep}
+              onContinueToGatherings={finishOnboarding}
+            />
           ) : step === 'pco-people' ? (
             <div className="space-y-4">
               <p className="text-sm text-gray-700">Choose which Planning Center people to import, and optionally assign them to a gathering.</p>
@@ -487,4 +510,4 @@ const OnboardingPage: React.FC = () => {
   );
 };
 
-export default OnboardingPage; 
+export default OnboardingPage;

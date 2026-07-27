@@ -541,11 +541,17 @@ router.get('/integrations', requireRole(['admin', 'coordinator']), async (req, r
 router.put('/integrations', requireRole(['admin']), async (req, res) => {
   try {
     const { planningCenterSyncIndicator, planningCenterSyncEnabled, planningCenterTrackBackgroundChecks } = req.body;
+    if (planningCenterSyncIndicator === true) {
+      return res.status(409).json({
+        error: 'Planning Center authority activation requires a reviewed change through /api/integrations/people-sync/people-authority/preview and /apply.',
+        code: 'AUTHORITY_REVIEW_REQUIRED',
+      });
+    }
     const updates = [];
     const params = [];
-    if (typeof planningCenterSyncIndicator === 'boolean') {
+    if (planningCenterSyncIndicator === false) {
       updates.push('planning_center_sync_indicator = ?');
-      params.push(planningCenterSyncIndicator ? 1 : 0);
+      params.push(0);
     }
     if (typeof planningCenterSyncEnabled === 'boolean') {
       updates.push('planning_center_sync_enabled = ?');
@@ -562,19 +568,13 @@ router.put('/integrations', requireRole(['admin']), async (req, res) => {
           `UPDATE church_settings SET ${updates.join(', ')} WHERE church_id = ?`,
           params
         );
-        // Temporary compatibility bridge for the existing PCO settings UI.
-        // Task 21 removes this direct activation path after reviewed authority
-        // switching is available to every client.
-        if (typeof planningCenterSyncIndicator === 'boolean') {
+        if (planningCenterSyncIndicator === false) {
           await conn.query(
-            `INSERT INTO people_sync_settings
-               (church_id, authority_provider, pending_authority_provider)
-             VALUES (?, ?, NULL)
-             ON CONFLICT(church_id) DO UPDATE SET
-               authority_provider = excluded.authority_provider,
-               pending_authority_provider = NULL,
-               updated_at = datetime('now')`,
-            [req.user.church_id, planningCenterSyncIndicator ? 'planning_center' : 'none']
+            `UPDATE people_sync_settings
+                SET authority_provider = 'none', pending_authority_provider = NULL,
+                    updated_at = datetime('now')
+              WHERE church_id = ? AND authority_provider = 'planning_center'`,
+            [req.user.church_id]
           );
         }
       });
