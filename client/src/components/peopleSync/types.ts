@@ -115,6 +115,20 @@ export type ElvantoSyncBatchPatch = Partial<ElvantoSyncBatchInput>;
 
 // ─── Elvanto metadata (server/services/elvanto/metadata.js's computeMetadata) ──
 
+// Schema version 1 from server/services/elvanto/filter.js. IDs are stable
+// provider IDs for definition-backed dimensions; departments and demographics
+// intentionally use their stable values because Elvanto exposes no IDs there.
+export interface ElvantoFilterConfig {
+  statuses: Array<'active' | 'contact' | 'archived' | 'deceased'>;
+  categoryIds: string[];
+  groups: { ids: string[]; operator: 'any' | 'all' };
+  demographics: { values: string[]; operator: 'any' | 'all' };
+  departments: { values: string[]; operator: 'any' | 'all' };
+  serviceTypes: { ids: string[]; operator: 'any' | 'all' };
+  locations: { ids: string[]; operator: 'any' | 'all' };
+  customFields: Array<{ fieldId: string; values: string[]; operator: 'any' | 'all' }>;
+}
+
 export interface ElvantoMetadataOption {
   id: string;
   name: string;
@@ -147,6 +161,10 @@ export interface ElvantoSyncMetadata {
   locations: ElvantoMetadataOption[];
   customFields: ElvantoMetadataCustomField[];
 }
+
+// The filter editor's concise name for the exact metadata DTO above. Keep the
+// longer API-facing name for Task 17's documented client route contract.
+export type ElvantoMetadata = ElvantoSyncMetadata;
 
 // ─── people-sync settings (server/routes/integrations/peopleSync.js) ──────
 

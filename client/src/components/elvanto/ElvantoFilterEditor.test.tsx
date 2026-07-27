@@ -1,0 +1,67 @@
+import React, { useState } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import ElvantoFilterEditor, { defaultElvantoFilter } from './ElvantoFilterEditor';
+import type { ElvantoFilterConfig, ElvantoMetadata } from '../peopleSync/types';
+
+const metadata: ElvantoMetadata = {
+  fetchedAt: '2026-07-25T10:00:00.000Z',
+  categories: [{ id: 'category-members', name: 'Members' }],
+  groups: [{ id: 'group-youth', name: 'Youth', status: 'active', memberCount: 12 }, { id: 'group-music', name: 'Music', status: null, memberCount: 8 }],
+  demographics: [{ value: 'Young adults', count: 9 }],
+  departments: [{ value: 'Worship', count: 5 }],
+  serviceTypes: [{ id: 'service-sunday', name: 'Sunday service' }],
+  locations: [{ id: 'location-main', name: 'Main campus' }],
+  customFields: [{ id: 'field-ministry', name: 'Ministry', type: 'select', values: [{ id: 'value-welcome', name: 'Welcome team' }] }],
+};
+
+function ControlledFilter({ initial = defaultElvantoFilter(), source = metadata }: { initial?: ElvantoFilterConfig; source?: ElvantoMetadata }) {
+  const [value, setValue] = useState(initial);
+  return <>
+    <ElvantoFilterEditor metadata={source} value={value} onChange={setValue} />
+    <output data-testid="filter-value">{JSON.stringify(value)}</output>
+  </>;
+}
+
+describe('ElvantoFilterEditor', () => {
+  it('shows only populated metadata dimensions and starts new filters with Active and Contact', () => {
+    const emptyMetadata = { ...metadata, categories: [], groups: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [] };
+    render(<ControlledFilter source={emptyMetadata} />);
+
+    expect(screen.getByLabelText('Active')).toBeChecked();
+    expect(screen.getByLabelText('Contact')).toBeChecked();
+    expect(screen.getByText('People status')).toBeInTheDocument();
+    expect(screen.queryByText('Categories')).not.toBeInTheDocument();
+    expect(screen.queryByText('Groups')).not.toBeInTheDocument();
+    expect(screen.queryByText('Custom fields')).not.toBeInTheDocument();
+    expect(screen.queryByText('AND')).not.toBeInTheDocument();
+  });
+
+  it('keeps group stable IDs in controlled state and changes any/all only after two choices', () => {
+    render(<ControlledFilter />);
+
+    fireEvent.click(screen.getByLabelText('Youth'));
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('group-youth');
+    expect(screen.queryByRole('button', { name: 'Match all' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Music'));
+    fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('"operator":"all"');
+  });
+
+  it('uses category and custom-field definition/value IDs and warns about removed options', () => {
+    const selected = {
+      ...defaultElvantoFilter(),
+      categoryIds: ['category-removed'],
+      groups: { ids: ['group-removed'], operator: 'any' as const },
+    };
+    render(<ControlledFilter initial={selected} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/no longer exists in Elvanto/i);
+    fireEvent.click(screen.getByLabelText('Members'));
+    fireEvent.click(screen.getByLabelText('Welcome team'));
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('category-members');
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('field-ministry');
+    expect(screen.getByTestId('filter-value')).toHaveTextContent('value-welcome');
+  });
+});
