@@ -396,6 +396,151 @@ test('getChurchDb migrates an existing generic scheduled PCO batch once without 
   });
 });
 
+for (const recoverableStatus of ['pending', 'failed']) {
+  test(`getChurchDb recovers a ${recoverableStatus} scheduled PCO authority marker without re-promoting after an explicit disable`, async () => {
+    // Catches INSERT OR IGNORE leaving an interrupted/failed marker unchanged.
+    // Such a marker made every restart look like a first migration and silently
+    // undid a later reviewed authority disable.
+    await withTestChurchDb(async (churchId) => {
+      const db = Database.getChurchDb(churchId);
+      db.prepare(
+        `INSERT INTO people_sync_batches
+          (church_id, provider, name, enabled, schedule_enabled)
+         VALUES (?, 'planning_center', 'Recoverable PCO Schedule', 1, 1)`
+      ).run(churchId);
+      db.prepare(
+        `UPDATE migrations
+         SET status = ?, error_message = 'previous migration interruption'
+         WHERE version = 'v2.2.0_scheduled_pco_authority'`
+      ).run(recoverableStatus);
+
+      Database.closeAll();
+      Database.initialize();
+      const recovered = Database.getChurchDb(churchId);
+
+      assert.strictEqual(
+        recovered.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+        'planning_center'
+      );
+      assert.deepStrictEqual(
+        recovered.prepare(
+          "SELECT status, error_message FROM migrations WHERE version = 'v2.2.0_scheduled_pco_authority'"
+        ).get(),
+        { status: 'success', error_message: null },
+        `${recoverableStatus} marker should be completed rather than ignored`
+      );
+
+      recovered.prepare(
+        "UPDATE people_sync_settings SET authority_provider = 'none', pending_authority_provider = NULL WHERE church_id = ?"
+      ).run(churchId);
+      Database.closeAll();
+      Database.initialize();
+      const restarted = Database.getChurchDb(churchId);
+
+      assert.strictEqual(
+        restarted.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+        'none',
+        'a completed recovery must not reinterpret the scheduled batch on restart'
+      );
+    });
+  });
+}
+
+test('scheduled PCO authority migration rolls back its promotion when marker completion fails and can be retried', async () => {
+  // Catches a crash/error between authority promotion and marker completion.
+  // Retrying must see either both changes or neither change.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    db.prepare(
+      `INSERT INTO people_sync_batches
+        (church_id, provider, name, enabled, schedule_enabled)
+       VALUES (?, 'planning_center', 'Atomic PCO Schedule', 1, 1)`
+    ).run(churchId);
+    db.prepare(
+      `UPDATE migrations
+       SET status = 'failed', error_message = 'ready for retry'
+       WHERE version = 'v2.2.0_scheduled_pco_authority'`
+    ).run();
+    db.exec(`CREATE TRIGGER fail_scheduled_pco_marker_completion
+      BEFORE UPDATE OF status ON migrations
+      WHEN OLD.version = 'v2.2.0_scheduled_pco_authority' AND NEW.status = 'success'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated marker completion failure');
+      END`);
+
+    assert.throws(
+      () => Database.backfillProviderNeutralSync(db, churchId),
+      /simulated marker completion failure/
+    );
+    assert.strictEqual(
+      db.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'none',
+      'promotion must roll back with the failed marker completion'
+    );
+    assert.strictEqual(
+      db.prepare("SELECT status FROM migrations WHERE version = 'v2.2.0_scheduled_pco_authority'").get().status,
+      'failed'
+    );
+
+    db.exec('DROP TRIGGER fail_scheduled_pco_marker_completion');
+    Database.backfillProviderNeutralSync(db, churchId);
+    assert.deepStrictEqual(
+      db.prepare(
+        "SELECT status, error_message FROM migrations WHERE version = 'v2.2.0_scheduled_pco_authority'"
+      ).get(),
+      { status: 'success', error_message: null }
+    );
+    assert.strictEqual(
+      db.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'planning_center'
+    );
+
+    db.prepare(
+      "UPDATE people_sync_settings SET authority_provider = 'none', pending_authority_provider = NULL WHERE church_id = ?"
+    ).run(churchId);
+    Database.backfillProviderNeutralSync(db, churchId);
+    assert.strictEqual(
+      db.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'none',
+      'a successful retry marker must preserve a later explicit disable'
+    );
+  });
+});
+
+test('a fresh church scheduled for PCO later remains unowned after restart until authority is explicitly reviewed', async () => {
+  // Fresh databases are pre-marked because they never ran the legacy PCO
+  // authority flow. A later schedule must not be mistaken for upgrade state.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    assert.deepStrictEqual(
+      db.prepare(
+        "SELECT status FROM migrations WHERE version = 'v2.2.0_scheduled_pco_authority'"
+      ).get(),
+      { status: 'success' }
+    );
+    db.prepare(
+      `INSERT INTO people_sync_batches
+        (church_id, provider, name, enabled, schedule_enabled)
+       VALUES (?, 'planning_center', 'Later Fresh-Church Schedule', 1, 1)`
+    ).run(churchId);
+
+    Database.closeAll();
+    Database.initialize();
+    const restarted = Database.getChurchDb(churchId);
+
+    assert.strictEqual(
+      restarted.prepare('SELECT authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId).authority_provider,
+      'none'
+    );
+    assert.deepStrictEqual(
+      restarted.prepare(
+        "SELECT status FROM migrations WHERE version = 'v2.2.0_scheduled_pco_authority'"
+      ).get(),
+      { status: 'success' }
+    );
+  });
+});
+
 test('getChurchDb preserves explicit Elvanto authority when an existing PCO schedule is migrated', async () => {
   // Catches treating a scheduled PCO batch as stronger evidence than the
   // church's explicit non-none authority and creating an unintended second

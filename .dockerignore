@@ -1,0 +1,20 @@
+.git
+.worktrees
+.superpowers
+
+# Dependencies and generated build/test output must be produced inside images.
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/*.log
+
+# Keep local secrets and mutable runtime data out of the build context.
+.env
+server/.env
+server/data
+server/uploads/*
+!server/uploads/.gitkeep
+backups
+
+.DS_Store

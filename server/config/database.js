@@ -33,9 +33,16 @@ function ensureMigrationTrackingSchema(db) {
 
 function markScheduledPcoAuthorityMigrationApplied(db) {
   ensureMigrationTrackingSchema(db);
-  db.prepare(`INSERT OR IGNORE INTO migrations
+  db.prepare(`INSERT INTO migrations
     (version, name, description, execution_time_ms, status, executed_at)
-    VALUES (?, ?, ?, 0, 'success', datetime('now'))`).run(
+    VALUES (?, ?, ?, 0, 'success', datetime('now'))
+    ON CONFLICT(version) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      execution_time_ms = excluded.execution_time_ms,
+      status = excluded.status,
+      executed_at = excluded.executed_at,
+      error_message = NULL`).run(
     SCHEDULED_PCO_AUTHORITY_MIGRATION.version,
     SCHEDULED_PCO_AUTHORITY_MIGRATION.name,
     SCHEDULED_PCO_AUTHORITY_MIGRATION.description
@@ -44,28 +51,30 @@ function markScheduledPcoAuthorityMigrationApplied(db) {
 
 function migrateScheduledPcoAuthority(db, churchId) {
   ensureMigrationTrackingSchema(db);
-  const alreadyApplied = db.prepare(
-    "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
-  ).get(SCHEDULED_PCO_AUTHORITY_MIGRATION.version);
-  if (alreadyApplied) return;
+  db.transaction(() => {
+    const alreadyApplied = db.prepare(
+      "SELECT 1 FROM migrations WHERE version = ? AND status = 'success' LIMIT 1"
+    ).get(SCHEDULED_PCO_AUTHORITY_MIGRATION.version);
+    if (alreadyApplied) return;
 
-  const scheduledPcoBatch = db.prepare(`SELECT 1
-    WHERE EXISTS (
-      SELECT 1 FROM planning_center_sync_batches
-      WHERE church_id = ? AND schedule_enabled = 1
-    ) OR EXISTS (
-      SELECT 1 FROM people_sync_batches
-      WHERE church_id = ? AND provider = 'planning_center'
-        AND enabled = 1 AND schedule_enabled = 1
-    )`).get(churchId, churchId);
+    const scheduledPcoBatch = db.prepare(`SELECT 1
+      WHERE EXISTS (
+        SELECT 1 FROM planning_center_sync_batches
+        WHERE church_id = ? AND schedule_enabled = 1
+      ) OR EXISTS (
+        SELECT 1 FROM people_sync_batches
+        WHERE church_id = ? AND provider = 'planning_center'
+          AND enabled = 1 AND schedule_enabled = 1
+      )`).get(churchId, churchId);
 
-  if (scheduledPcoBatch) {
-    db.prepare(`UPDATE people_sync_settings
-      SET authority_provider = 'planning_center', updated_at = datetime('now')
-      WHERE church_id = ? AND authority_provider = 'none'`).run(churchId);
-  }
+    if (scheduledPcoBatch) {
+      db.prepare(`UPDATE people_sync_settings
+        SET authority_provider = 'planning_center', updated_at = datetime('now')
+        WHERE church_id = ? AND authority_provider = 'none'`).run(churchId);
+    }
 
-  markScheduledPcoAuthorityMigrationApplied(db);
+    markScheduledPcoAuthorityMigrationApplied(db);
+  })();
 }
 
 function ensureProviderNeutralSyncSchema(db) {

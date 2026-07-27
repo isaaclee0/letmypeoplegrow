@@ -139,11 +139,15 @@ A comprehensive church attendance and member management system designed to help 
 
 2. **Set up environment variables**
    ```bash
-   # Copy the example environment file
+   # Server settings used by the application
    cp server/.env.example server/.env
 
-   # Edit the .env file with your actual API keys
+   # Docker Compose interpolation (including the credential-encryption key)
+   cp .env.example .env
+
+   # Edit both files with the settings for this deployment
    nano server/.env
+   nano .env
    ```
 
    **Required for Authentication:**
@@ -443,10 +447,22 @@ openssl rand -base64 32
 
 The command output becomes `INTEGRATION_CREDENTIALS_KEY`. Treat it as a secret: back it up separately from the application and database backups, configure the same value on every server replica, and keep it stable across restarts and redeployments. Losing, regenerating, or inconsistently configuring this key makes saved Planning Center and Elvanto credentials unrecoverable.
 
+How the key is supplied depends on how the server is started:
+
+- **Direct Node.js startup:** put the key in `server/.env`, change into `server/`, and run `npm start`. The server loads that file from its working directory.
+- **Docker Compose:** either export the key in the shell that runs Compose or put it in the project-root `.env` file (copy `.env.example` first). Compose resolves `${INTEGRATION_CREDENTIALS_KEY}` before containers start. A service-level `env_file: ./server/.env` does not provide values for that interpolation, and the explicit `environment` mapping takes precedence over `env_file`. Both Compose files therefore reject a missing or empty key instead of silently overriding it with an empty value.
+
+For example, supply the already-generated value to the current shell without printing it back:
+
+```bash
+export INTEGRATION_CREDENTIALS_KEY='the-backed-up-base64-key'
+docker-compose -f docker-compose.dev.yml up -d
+```
+
 For rollout, use this order:
 
 1. Back up every church database and generate and separately back up the key.
-2. Configure the identical `INTEGRATION_CREDENTIALS_KEY` on every replica before deploying code that saves or migrates integration credentials. The Compose files pass the host variable through but do not provide a real value.
+2. Configure the identical `INTEGRATION_CREDENTIALS_KEY` on every replica before deploying code that saves or migrates integration credentials. For Compose, use the invoking shell or project-root `.env`; do not rely on `server/.env` for Compose interpolation.
 3. Deploy and verify startup logs do not report a missing, invalid, or mismatched integration key.
 4. Only after that verification, connect new integrations or allow existing per-user credentials to migrate into encrypted church-level storage.
 
@@ -468,11 +484,14 @@ FAST_REFRESH=false                       # React Fast Refresh
 
 ### Docker Compose Environment Variables
 
-Set these in your shell before running `docker-compose`:
+Set these in the invoking shell or the project-root `.env` before running `docker-compose`:
 
 ```bash
 VERSION=1.5.3                            # App version (optional, defaults to VERSION file)
+INTEGRATION_CREDENTIALS_KEY=...          # Required; one stable base64-encoded 32-byte key
 ```
+
+The key is required by both Compose files. `server/.env` remains the application environment file, but it is not an input to Compose interpolation.
 
 ## Architecture & Key Concepts
 
