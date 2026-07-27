@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { integrationsAPI, aiAPI } from '../../services/api';
+import { integrationsAPI, aiAPI, peopleSyncAPI } from '../../services/api';
 import logger from '../../utils/logger';
 import IntegrationCard from './IntegrationCard';
 import AiIntegrationPanel from './AiIntegrationPanel';
@@ -11,6 +11,16 @@ import {
   PlanningCenterStatus,
   IntegrationKey,
 } from './types';
+import type { PeopleSyncSettings } from '../peopleSync/types';
+
+const defaultPeopleSyncSettings: PeopleSyncSettings = {
+  authorityProvider: 'none',
+  pendingAuthorityProvider: null,
+  elvantoIncludeContacts: true,
+  elvantoAlignPeopleType: true,
+  fullReconciliationFrequency: 'weekly',
+  fullReconciliationDay: 1,
+};
 
 const IntegrationsTab: React.FC = () => {
   const [elvantoStatus, setElvantoStatus] = useState<ElvantoStatus>({
@@ -34,6 +44,7 @@ const IntegrationsTab: React.FC = () => {
 
   const [selected, setSelected] = useState<IntegrationKey | null>(null);
   const [pendingDisconnect, setPendingDisconnect] = useState<IntegrationKey | null>(null);
+  const [peopleSyncSettings, setPeopleSyncSettings] = useState(defaultPeopleSyncSettings);
 
   const fetchElvantoStatus = useCallback(async () => {
     try {
@@ -76,12 +87,31 @@ const IntegrationsTab: React.FC = () => {
     }
   }, []);
 
+  const fetchPeopleSyncSettings = useCallback(async () => {
+    try {
+      const response = await peopleSyncAPI.getSettings();
+      setPeopleSyncSettings(response.data.settings);
+    } catch (error) {
+      logger.error('Failed to fetch people-sync settings:', error);
+    }
+  }, []);
+
   // Fetch all statuses on mount
   useEffect(() => {
     fetchElvantoStatus();
     fetchAiStatus();
     fetchPlanningCenterStatus();
-  }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus]);
+    fetchPeopleSyncSettings();
+  }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus, fetchPeopleSyncSettings]);
+
+  const providerConnections = {
+    planning_center: pcStatus.connected,
+    elvanto: elvantoStatus.connected,
+  };
+
+  const refreshPeopleSync = useCallback(async () => {
+    await Promise.all([fetchPeopleSyncSettings(), fetchElvantoStatus(), fetchPlanningCenterStatus()]);
+  }, [fetchPeopleSyncSettings, fetchElvantoStatus, fetchPlanningCenterStatus]);
 
   // Handle Planning Center OAuth callback
   useEffect(() => {
@@ -111,6 +141,9 @@ const IntegrationsTab: React.FC = () => {
         refreshStatus={fetchElvantoStatus}
         onBack={handleBack}
         initialAction={pendingDisconnect === 'elvanto' ? 'disconnect' : undefined}
+        peopleSyncSettings={peopleSyncSettings}
+        providerConnections={providerConnections}
+        refreshPeopleSync={refreshPeopleSync}
       />
     );
   }
@@ -133,6 +166,9 @@ const IntegrationsTab: React.FC = () => {
         refreshStatus={fetchPlanningCenterStatus}
         onBack={handleBack}
         initialAction={pendingDisconnect === 'planning-center' ? 'disconnect' : undefined}
+        peopleSyncSettings={peopleSyncSettings}
+        providerConnections={providerConnections}
+        refreshPeopleSync={refreshPeopleSync}
       />
     );
   }
@@ -149,9 +185,11 @@ const IntegrationsTab: React.FC = () => {
 
       <div className="space-y-6">
         {/* Elvanto */}
-        <IntegrationCard
+        <div className="relative">
+          {peopleSyncSettings.authorityProvider === 'elvanto' && <span className="absolute right-6 top-2 rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">Authoritative people source</span>}
+          <IntegrationCard
           name="Elvanto"
-          description="Import people and families from your Elvanto account."
+          description="Import people and families once, or keep LMPG aligned with Elvanto."
           icon={
             <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
               <svg aria-hidden="true" className="w-6 h-6 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
@@ -167,7 +205,8 @@ const IntegrationsTab: React.FC = () => {
             setSelected('elvanto');
             setPendingDisconnect('elvanto');
           } : undefined}
-        />
+          />
+        </div>
 
         {/* AI Insights */}
         <IntegrationCard
@@ -191,9 +230,11 @@ const IntegrationsTab: React.FC = () => {
 
         {/* Planning Center */}
         {!pcStatus.fetchFailed && (
-          <IntegrationCard
+          <div className="relative">
+            {peopleSyncSettings.authorityProvider === 'planning_center' && <span className="absolute right-6 top-2 rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">Authoritative people source</span>}
+            <IntegrationCard
             name="Planning Center"
-            description="Connect to Planning Center Online to import people and check-ins."
+            description="Import people and check-ins, or use Planning Center as your people source of truth."
             icon={
               <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
                 <svg aria-hidden="true" className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 24 24">
@@ -210,7 +251,8 @@ const IntegrationsTab: React.FC = () => {
               setSelected('planning-center');
               setPendingDisconnect('planning-center');
             } : undefined}
-          />
+            />
+          </div>
         )}
       </div>
     </div>

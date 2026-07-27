@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI } from '../services/api';
+import { individualsAPI, familiesAPI, gatheringsAPI, csvImportAPI, visitorConfigAPI, contactsAPI, usersAPI, peopleSyncAPI } from '../services/api';
 import { useToast } from '../components/ToastContainer';
 import ActionMenu from '../components/ActionMenu';
 import MassEditModal from '../components/people/MassEditModal';
@@ -14,7 +14,8 @@ import AttendanceHistoryModal from '../components/people/AttendanceHistoryModal'
 import DataSecurityInfo from '../components/people/DataSecurityInfo';
 import PersonCard from '../components/people/PersonCard';
 import { generateFamilyName } from '../utils/familyNameUtils';
-import { isPcoLocked } from '../utils/pcoLock';
+import { authorityLabel, isAuthorityLocked } from '../utils/authorityLock';
+import type { AuthorityProvider, ExternalLinks } from '../components/peopleSync/types';
 import SampleDataBanner from '../components/SampleDataBanner';
 import { validatePerson, validateMultiplePeople, sanitizeText } from '../utils/validationUtils';
 import logger from '../utils/logger';
@@ -47,6 +48,7 @@ interface Person {
   familyId?: number;
   familyName?: string;
   planningCenterId?: string;
+  externalLinks?: ExternalLinks;
   pcoBackgroundCheckCleared?: boolean | null;
   lastAttendanceDate?: string;
   createdAt?: string;
@@ -64,6 +66,7 @@ interface Family {
   lastAttended?: string;
   familyNotes?: string;
   planningCenterId?: string;
+  externalLinks?: ExternalLinks;
 }
 
 interface GatheringType {
@@ -101,6 +104,31 @@ interface VisitorConfig {
   travellerVisitorServiceLimit: number;
 }
 
+type AuthorityPersonCardProps = Omit<React.ComponentProps<typeof PersonCard>, 'planningCenterSyncIndicator'> & {
+  authorityProvider: AuthorityProvider;
+  key?: React.Key;
+};
+
+function AuthorityPersonCard({ person, authorityProvider, needsWideLayout, ...props }: AuthorityPersonCardProps) {
+  const locked = isAuthorityLocked((person as Person).externalLinks, authorityProvider);
+  const managedLabel = locked ? authorityLabel(authorityProvider) : null;
+  return (
+    <div className={`relative ${needsWideLayout ? 'col-span-2' : ''}`}>
+      <PersonCard
+        {...props}
+        person={person}
+        needsWideLayout={false}
+        planningCenterSyncIndicator={false}
+      />
+      {managedLabel && (
+        <span className="absolute right-2 top-2 inline-flex rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800 dark:bg-green-900/40 dark:text-green-300">
+          {managedLabel}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const PeoplePage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const location = useLocation();
@@ -113,7 +141,7 @@ const PeoplePage: React.FC = () => {
   const [people, setPeople] = useState<Person[]>([]);
   const [archivedPeople, setArchivedPeople] = useState<Person[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
-  const [planningCenterSyncIndicator, setPlanningCenterSyncIndicator] = useState(false);
+  const [authorityProvider, setAuthorityProvider] = useState<AuthorityProvider>('none');
   const [planningCenterTrackBackgroundChecks, setPlanningCenterTrackBackgroundChecks] = useState(false);
   const showBackgroundCheckStatus = canSeeBackgroundCheckStatus && planningCenterTrackBackgroundChecks;
 
@@ -363,9 +391,12 @@ const PeoplePage: React.FC = () => {
 
   const loadFamilies = async () => {
     try {
-      const response = await familiesAPI.getAll();
+      const [response, peopleSyncResponse] = await Promise.all([
+        familiesAPI.getAll(),
+        peopleSyncAPI.getSettings(),
+      ]);
       setFamilies(response.data.families || []);
-      setPlanningCenterSyncIndicator(!!response.data.planningCenterSyncIndicator);
+      setAuthorityProvider(peopleSyncResponse.data.settings.authorityProvider);
       setPlanningCenterTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
     } catch (err: any) {
       setError('Failed to load families');
@@ -1228,6 +1259,14 @@ const PeoplePage: React.FC = () => {
       .filter((p): p is Person => !!p)
       .map(p => ({ id: p.id, name: `${p.firstName} ${p.lastName}` }));
   }, [selectedPeople, people]);
+  const selectedHasAuthorityLock = selectedPeople.some((id) => {
+    const person = people.find((candidate) => candidate.id === id);
+    return isAuthorityLocked(person?.externalLinks, authorityProvider);
+  });
+  const familyIsAuthorityLocked = (familyId: number | null | undefined) => {
+    const family = families.find((candidate) => candidate.id === familyId);
+    return isAuthorityLocked(family?.externalLinks, authorityProvider);
+  };
 
   if (isLoading) {
     return (
@@ -1303,12 +1342,12 @@ const PeoplePage: React.FC = () => {
         allSameAgeGroup={massEdit.isChild === 'true' || massEdit.isChild === 'false'}
         lockedCount={selectedPeople.reduce((n, id) => {
           const p = people.find(pp => pp.id === id);
-          return n + (isPcoLocked(p, planningCenterSyncIndicator) ? 1 : 0);
+          return n + (isAuthorityLocked(p?.externalLinks, authorityProvider) ? 1 : 0);
         }, 0)}
         lockNameAge={modalSelectedCount === 1 && (() => {
           const id = selectedPeople[0];
           const p = id !== undefined ? people.find(pp => pp.id === id) : undefined;
-          return isPcoLocked(p, planningCenterSyncIndicator);
+          return isAuthorityLocked(p?.externalLinks, authorityProvider);
         })()}
         onSave={async () => {
           try {
@@ -1645,6 +1684,9 @@ const PeoplePage: React.FC = () => {
                             return group.familyName;
                           })()}
                         </h4>
+                        {familyIsAuthorityLocked(group.familyId) && (
+                          <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
+                        )}
                        {(() => {
                          const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
                          const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
@@ -1669,14 +1711,14 @@ const PeoplePage: React.FC = () => {
                            </>
                          );
                        })()}
-                        <button
+                        {!familyIsAuthorityLocked(group.familyId) && <button
                           onClick={() => handleOpenNotes(group)}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                           title="Family Notes"
                         >
                           <DocumentTextIcon className="h-4 w-4" />
-                        </button>
-                        <button
+                        </button>}
+                        {!familyIsAuthorityLocked(group.familyId) && <button
                           onClick={() => {
                             const fam = families.find(f => f.id === group.familyId);
                             setFamilyEditor({
@@ -1692,7 +1734,7 @@ const PeoplePage: React.FC = () => {
                           title="Family Settings"
                         >
                           <PencilIcon className="h-4 w-4" />
-                        </button>
+                        </button>}
                         {/* Caregiver chip */}
                         {(() => {
                           const caregivers = familyCaregivers[group.familyId];
@@ -1745,7 +1787,7 @@ const PeoplePage: React.FC = () => {
 
                                                    return (
 
-                                                     <PersonCard
+                                                     <AuthorityPersonCard
 
                                                        key={person.id}
 
@@ -1767,7 +1809,7 @@ const PeoplePage: React.FC = () => {
 
                                                        variant="grouped"
 
-                                                       planningCenterSyncIndicator={planningCenterSyncIndicator}
+                                                       authorityProvider={authorityProvider}
 
                                                        showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -1791,7 +1833,7 @@ const PeoplePage: React.FC = () => {
 
                                        return (
 
-                                         <PersonCard
+                                         <AuthorityPersonCard
 
                                            key={person.id}
 
@@ -1813,7 +1855,7 @@ const PeoplePage: React.FC = () => {
 
                                            variant="individual"
 
-                                           planningCenterSyncIndicator={planningCenterSyncIndicator}
+                                           authorityProvider={authorityProvider}
 
                                            showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -1859,6 +1901,9 @@ const PeoplePage: React.FC = () => {
                                     return group.familyName;
                                   })()}
                                 </h4>
+                                {familyIsAuthorityLocked(group.familyId) && (
+                                  <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
+                                )}
                                 {(() => {
                                   const hasLocalVisitor = group.members.some((m: Person) => m.peopleType === 'local_visitor');
                                   const hasTravellerVisitor = group.members.some((m: Person) => m.peopleType === 'traveller_visitor');
@@ -1877,14 +1922,14 @@ const PeoplePage: React.FC = () => {
                                     </>
                                   );
                                 })()}
-                                <button
+                                {!familyIsAuthorityLocked(group.familyId) && <button
                                   onClick={() => handleOpenNotes(group)}
                                   className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                   title="Family Notes"
                                 >
                                   <DocumentTextIcon className="h-4 w-4" />
-                                </button>
-                                <button
+                                </button>}
+                                {!familyIsAuthorityLocked(group.familyId) && <button
                                   onClick={() => {
                                     const familyId = group.familyId;
                                     if (familyId) {
@@ -1903,7 +1948,7 @@ const PeoplePage: React.FC = () => {
                                   title="Family Settings"
                                 >
                                   <PencilIcon className="h-4 w-4" />
-                                </button>
+                                </button>}
                               </div>
                               <div className="flex items-center space-x-2">
                                 <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
@@ -1934,7 +1979,7 @@ const PeoplePage: React.FC = () => {
 
                               return (
 
-                                <PersonCard
+                                <AuthorityPersonCard
 
                                   key={person.id}
 
@@ -1956,7 +2001,7 @@ const PeoplePage: React.FC = () => {
 
                                   variant="grouped"
 
-                                  planningCenterSyncIndicator={planningCenterSyncIndicator}
+                                  authorityProvider={authorityProvider}
 
                                   showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -1997,9 +2042,9 @@ const PeoplePage: React.FC = () => {
                                 />
                                 <div className="flex items-center space-x-2">
                                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
-                                  {planningCenterSyncIndicator && person.planningCenterId && (
+                                  {isAuthorityLocked(person.externalLinks, authorityProvider) && (
                                     <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
-                                      PCO
+                                      {authorityLabel(authorityProvider)}
                                     </span>
                                   )}
                                   {showBackgroundCheckStatus && !person.isChild && (
@@ -2061,14 +2106,17 @@ const PeoplePage: React.FC = () => {
                                       return group.familyName;
                                     })()}
                                   </h4>
-                                  <button
+                                  {familyIsAuthorityLocked(group.familyId) && (
+                                    <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{authorityLabel(authorityProvider)}</span>
+                                  )}
+                                  {!familyIsAuthorityLocked(group.familyId) && <button
                                     onClick={() => handleOpenNotes(group)}
                                     className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                     title="Family Notes"
                                   >
                                     <DocumentTextIcon className="h-4 w-4" />
-                                  </button>
-                                  <button
+                                  </button>}
+                                  {!familyIsAuthorityLocked(group.familyId) && <button
                                     onClick={() => {
                                       const familyId = group.familyId;
                                       if (familyId) {
@@ -2087,7 +2135,7 @@ const PeoplePage: React.FC = () => {
                                     title="Family Settings"
                                   >
                                     <PencilIcon className="h-4 w-4" />
-                                  </button>
+                                  </button>}
                                 </div>
                                 <div className="flex items-center space-x-2">
                                   <span className="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">
@@ -2118,7 +2166,7 @@ const PeoplePage: React.FC = () => {
 
                                 return (
 
-                                  <PersonCard
+                                  <AuthorityPersonCard
 
                                     key={person.id}
 
@@ -2140,7 +2188,7 @@ const PeoplePage: React.FC = () => {
 
                                     variant="grouped"
 
-                                    planningCenterSyncIndicator={planningCenterSyncIndicator}
+                                    authorityProvider={authorityProvider}
 
                                     showBackgroundCheckStatus={showBackgroundCheckStatus}
 
@@ -2181,6 +2229,11 @@ const PeoplePage: React.FC = () => {
                                   />
                                   <div className="flex items-center space-x-2">
                                     <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{displayName}</span>
+                                    {isAuthorityLocked(person.externalLinks, authorityProvider) && (
+                                      <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                                        {authorityLabel(authorityProvider)}
+                                      </span>
+                                    )}
                                     {showBackgroundCheckStatus && !person.isChild && (
                                       <BackgroundCheckShield cleared={person.pcoBackgroundCheckCleared} className="w-4 h-4" />
                                     )}
@@ -2233,6 +2286,7 @@ const PeoplePage: React.FC = () => {
                 {archivedPeople.map((person: Person) => {
                   const displayName = getPersonDisplayName(person); // No family context for archived
                   const needsWideLayout = shouldUseWideLayout(displayName);
+                  const locked = isAuthorityLocked(person.externalLinks, authorityProvider);
                   
                   return (
                     <div 
@@ -2242,12 +2296,13 @@ const PeoplePage: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                         {displayName}
+                        {locked && <span className="ml-2 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] text-green-800">{authorityLabel(authorityProvider)}</span>}
                       </div>
                       <div className="text-xs text-gray-500">
                         {person.peopleType === 'local_visitor' ? 'Local Visitor' : person.peopleType === 'traveller_visitor' ? 'Traveller Visitor' : ''}
                       </div>
                     </div>
-                    <ActionMenu
+                    {!locked && <ActionMenu
                       items={[
                         {
                           label: 'Restore',
@@ -2261,7 +2316,7 @@ const PeoplePage: React.FC = () => {
                           className: 'text-red-600 hover:bg-red-50'
                         }
                       ]}
-                    />
+                    />}
                   </div>
                   );
                 })}
@@ -2556,6 +2611,7 @@ const PeoplePage: React.FC = () => {
        {/* Floating Action Buttons */}
        {selectedPeople.length > 0 ? (
          <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 flex flex-col space-y-2 z-[9999]">
+           {!selectedHasAuthorityLock && (
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Edit Selected
@@ -2673,6 +2729,7 @@ const PeoplePage: React.FC = () => {
                <PencilIcon className="h-6 w-6" />
              </button>
            </div>
+           )}
            {selectedPeople.length >= 1 && selectedPeople.length <= 15 && (
              <div className="flex items-center justify-end space-x-3">
                <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
@@ -2687,8 +2744,8 @@ const PeoplePage: React.FC = () => {
                </button>
              </div>
            )}
-           {/* Archive Button - hidden when any selected person is PCO-linked (lifecycle owned by sync) */}
-           {!selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncIndicator)) && (
+           {/* Lifecycle actions are hidden when any selected person is managed by the active authority. */}
+           {!selectedHasAuthorityLock && (
            <div className="flex items-center justify-end space-x-3">
              <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 Archive Selected
@@ -2708,8 +2765,8 @@ const PeoplePage: React.FC = () => {
            </div>
            )}
 
-           {/* Merge Button - Only shown for 2+ people, admin users, and only when no selected person is PCO-linked */}
-           {isAdmin && selectedPeople.length >= 2 && !selectedPeople.some(id => isPcoLocked(people.find(p => p.id === id), planningCenterSyncIndicator)) && (
+           {/* Merge is available only when every selected person is locally managed. */}
+           {isAdmin && selectedPeople.length >= 2 && !selectedHasAuthorityLock && (
                <div className="flex items-center justify-end space-x-3">
                  <div className="bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow-lg text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                   Merge
@@ -2740,7 +2797,7 @@ const PeoplePage: React.FC = () => {
              </button>
            </div>
          </div>
-        ) : !planningCenterSyncIndicator ? (
+        ) : authorityProvider === 'none' ? (
          <>
            <button
              onClick={() => openAddModal()}

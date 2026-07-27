@@ -17,23 +17,25 @@ import logger from '../../utils/logger';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
-import { PlanningCenterStatus, PanelProps } from './types';
+import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
+import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 
-const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & { initialAction?: 'disconnect' }> = ({
+const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' }> = ({
   status,
   refreshStatus,
   onBack,
   initialAction,
+  peopleSyncSettings,
+  providerConnections,
+  refreshPeopleSync,
 }) => {
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
-  const [showSourceOfTruthModal, setShowSourceOfTruthModal] = useState(false);
 
   useEffect(() => {
     if (initialAction === 'disconnect') setShowPlanningCenterDisconnectModal(true);
   }, [initialAction]);
-  const [pcSyncIndicator, setPcSyncIndicator] = useState(false);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
   const [pcTrackBackgroundChecks, setPcTrackBackgroundChecks] = useState(false);
   const [batches, setBatches] = useState<SyncBatch[]>([]);
@@ -67,31 +69,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       setSyncStats(null);
     }
   }, []);
-
-  const handlePcSyncIndicatorToggle = async (value: boolean) => {
-    setPcSyncIndicator(value);
-    try {
-      await settingsAPI.updateIntegrationSettings({ planningCenterSyncIndicator: value });
-    } catch (error) {
-      logger.error('Failed to update sync indicator setting:', error);
-      setPcSyncIndicator(!value); // revert
-    }
-  };
-
-  // Turning this on locks linked people to PCO, so confirm before enabling.
-  // Turning it off only removes restrictions, so it can happen immediately.
-  const requestPcSyncIndicatorToggle = (value: boolean) => {
-    if (value) {
-      setShowSourceOfTruthModal(true);
-    } else {
-      handlePcSyncIndicatorToggle(false);
-    }
-  };
-
-  const confirmEnableSourceOfTruth = () => {
-    setShowSourceOfTruthModal(false);
-    handlePcSyncIndicatorToggle(true);
-  };
 
   const toggleMasterSync = async (value: boolean) => {
     setPcSyncEnabled(value);
@@ -156,7 +133,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       loadBatches();
       loadSyncStats();
       settingsAPI.getIntegrationSettings().then(r => {
-        setPcSyncIndicator(!!r.data.planningCenterSyncIndicator);
         setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
         setPcTrackBackgroundChecks(!!r.data.planningCenterTrackBackgroundChecks);
       }).catch(() => {});
@@ -414,27 +390,14 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 </ul>
               </div>
 
-              {/* PCO source-of-truth and background-check tracking */}
-              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">PCO is source of truth for members</h5>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                      Locks linked people to Planning Center — their name and age group can only be changed in PCO,
-                      and archive/reactivate/delete/merge are disabled here. Also shows a PCO badge on synced families.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => requestPcSyncIndicatorToggle(!pcSyncIndicator)}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncIndicator ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                    role="switch"
-                    aria-checked={pcSyncIndicator}
-                  >
-                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncIndicator ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
-                </div>
+              <PeopleSourceControl
+                settings={peopleSyncSettings}
+                connections={providerConnections}
+                onRefresh={refreshPeopleSync}
+              />
 
+              {/* PCO-specific background-check tracking remains independent of people authority. */}
+              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Track background check status</h5>
@@ -520,12 +483,20 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
 
             <div className="text-center mb-6">
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                Are you sure you want to disconnect from Planning Center?
-              </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Your OAuth tokens will be removed. You can reconnect at any time.
-              </p>
+              {peopleSyncSettings.authorityProvider === 'planning_center' ? (
+                <p className="text-sm text-amber-700">
+                  Planning Center is your authoritative people source. Choose None or Elvanto and complete that reviewed change before disconnecting.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    Are you sure you want to disconnect from Planning Center?
+                  </p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Your OAuth tokens will be removed. You can reconnect at any time.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="flex space-x-3">
@@ -535,70 +506,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
               >
                 Cancel
               </button>
-              <button
+              {peopleSyncSettings.authorityProvider !== 'planning_center' && <button
                 onClick={confirmPlanningCenterDisconnect}
                 className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
               >
                 <LinkSlashIcon className="h-4 w-4 mr-2" />
                 Disconnect
-              </button>
+              </button>}
             </div>
           </div>
         </div>
       </Modal>
 
-      {/* Source-of-truth mode confirmation */}
-      <Modal
-        isOpen={showSourceOfTruthModal}
-        onClose={() => setShowSourceOfTruthModal(false)}
-      >
-        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
-          <div className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                Make Planning Center source of truth for members?
-              </h3>
-              <button
-                onClick={() => setShowSourceOfTruthModal(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
-                <XMarkIcon className="h-6 w-6" />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
-              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
-            </div>
-
-            <div className="mb-6">
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 text-center">
-                This changes how you manage people linked to Planning Center:
-              </p>
-              <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside space-y-1">
-                <li>Their name and age group can only be edited in Planning Center, not here</li>
-                <li>Archive, reactivate, delete, and merge are disabled here for linked people</li>
-                <li>New regular members can't be added by hand (visitors are unaffected)</li>
-                <li>A PCO badge appears on synced families</li>
-              </ul>
-            </div>
-
-            <div className="flex space-x-3">
-              <button
-                onClick={() => setShowSourceOfTruthModal(false)}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmEnableSourceOfTruth}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-              >
-                Enable
-              </button>
-            </div>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 };

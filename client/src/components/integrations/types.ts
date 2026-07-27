@@ -1,3 +1,5 @@
+import type { PeopleSyncSettings, SyncProvider } from '../peopleSync/types';
+
 export interface ElvantoStatus {
   connected: boolean;
   loading: boolean;
@@ -26,4 +28,10 @@ export interface PanelProps<S> {
   status: S;
   refreshStatus: () => void | Promise<void>;
   onBack: () => void;
+}
+
+export interface PeopleSyncPanelProps {
+  peopleSyncSettings: PeopleSyncSettings;
+  providerConnections: Record<SyncProvider, boolean>;
+  refreshPeopleSync: () => void | Promise<void>;
 }
