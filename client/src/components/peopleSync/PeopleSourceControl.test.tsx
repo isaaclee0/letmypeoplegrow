@@ -179,4 +179,29 @@ describe('PeopleSourceControl', () => {
     expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('preserves the partial-success warning when refreshing authority status also fails', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: {
+        success: true,
+        runId: 10,
+        status: 'applied',
+        applied: {} as never,
+        summary: review.summary,
+        authorityCommitError: 'The plan applied, but the authority commit failed.',
+      },
+    });
+    const onRefresh = vi.fn().mockRejectedValue(new Error('settings offline'));
+    render(<PeopleSourceControl settings={initialSettings} connections={{ planning_center: true, elvanto: true }} onRefresh={onRefresh} />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByText('The plan applied, but the authority commit failed.')).toBeInTheDocument();
+    expect(screen.getByText(/Could not refresh authoritative source status.*settings offline/i)).toBeInTheDocument();
+    expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
 });

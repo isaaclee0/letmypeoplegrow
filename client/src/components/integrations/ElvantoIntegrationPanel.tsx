@@ -130,7 +130,7 @@ function ConnectionSection({
             <p className="mt-1 text-sm">Existing imported people, links, and gatherings are retained.</p>
           )}
           <div className="mt-3 flex gap-3">
-            {!authoritative && <button type="button" onClick={() => void disconnect()} disabled={saving} className="rounded bg-red-600 px-3 py-2 text-sm text-white">Confirm disconnect</button>}
+            {authorityKnown && !authoritative && <button type="button" onClick={() => void disconnect()} disabled={saving} className="rounded bg-red-600 px-3 py-2 text-sm text-white">Confirm disconnect</button>}
             <button type="button" onClick={() => setConfirmDisconnect(false)} className="text-sm underline">Cancel</button>
           </div>
         </div>
@@ -239,6 +239,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runMessage, setRunMessage] = useState<string | null>(null);
+  const [connectionRevision, setConnectionRevision] = useState(0);
 
   const loadConnectedData = useCallback(async () => {
     if (!status.connected) {
@@ -268,6 +269,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   }, [status.connected]);
 
   const reloadConnectionData = useCallback(async () => {
+    setConnectionRevision((current) => current + 1);
     setMetadata(null);
     setBatches([]);
     setGatherings([]);
@@ -411,7 +413,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
           </section>
 
           <RecentRuns runs={runs} />
-          <ElvantoGatheringImport connected={status.connected} />
+          <ElvantoGatheringImport key={connectionRevision} connected={status.connected} />
         </>
       )}
     </div>

@@ -135,8 +135,15 @@ describe('ElvantoIntegrationPanel', () => {
   it('clears and reloads all connection-scoped sync data after a valid connected key replacement', async () => {
     const refreshStatus = vi.fn();
     vi.mocked(integrationsAPI.connectElvanto).mockResolvedValue({ data: { success: true, status: {} as never } });
+    vi.mocked(integrationsAPI.getElvantoGroups)
+      .mockResolvedValueOnce({ data: { groups: { group: [{ id: 'old-group', name: 'Old remote group' }] } } })
+      .mockResolvedValue({ data: { groups: { group: [{ id: 'new-group', name: 'New remote group' }] } } });
+    vi.mocked(integrationsAPI.getElvantoServices)
+      .mockResolvedValueOnce({ data: { services: { service: [{ id: 'old-service', service_type: { id: 'old-type', name: 'Old service type' } }] } } })
+      .mockResolvedValue({ data: { services: { service: [{ id: 'new-service', service_type: { id: 'new-type', name: 'New service type' } }] } } });
     setupConnected({ refreshStatus });
     await screen.findByText(/2 added/);
+    expect(await screen.findByRole('checkbox', { name: 'Old remote group' })).toBeInTheDocument();
     expect(elvantoSyncAPI.getMetadata).toHaveBeenCalledTimes(1);
     expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(1);
 
@@ -148,6 +155,11 @@ describe('ElvantoIntegrationPanel', () => {
     expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2);
     expect(peopleSyncAPI.getRuns).toHaveBeenCalledTimes(2);
     expect(gatheringsAPI.getAll).toHaveBeenCalledTimes(2);
+    expect(integrationsAPI.getElvantoGroups).toHaveBeenCalledTimes(2);
+    expect(integrationsAPI.getElvantoServices).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('checkbox', { name: 'New remote group' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'New service type (1)' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Old remote group' })).not.toBeInTheDocument();
   });
 
   it('reviews and applies a batch through the shared SyncReview', async () => {
@@ -187,6 +199,16 @@ describe('ElvantoIntegrationPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect Elvanto' }));
 
     expect(screen.getByText(/Elvanto is your authoritative people source/)).toBeInTheDocument();
+    expect(integrationsAPI.disconnectElvanto).not.toHaveBeenCalled();
+  });
+
+  it('does not render a disconnect confirmation action while authority is unknown', async () => {
+    setupConnected({ peopleSyncStatus: 'loading', initialAction: 'disconnect' });
+    await screen.findByText(/2 added/);
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/authoritative people source is not known/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Confirm disconnect' })).not.toBeInTheDocument();
     expect(integrationsAPI.disconnectElvanto).not.toHaveBeenCalled();
   });
 

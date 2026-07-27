@@ -49,12 +49,18 @@ export default function PeopleSourceControl({ settings, connections, onRefresh }
     setPartialSuccess(null);
     try {
       const response = await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
-      await onRefresh();
       if (response.data.authorityCommitError) {
         setPartialSuccess(response.data.authorityCommitError);
         setState('error');
+        try {
+          await onRefresh();
+        } catch (refreshCause) {
+          const detail = refreshCause instanceof Error ? refreshCause.message : 'Refresh failed.';
+          setError(`Could not refresh authoritative source status: ${detail}`);
+        }
         return;
       }
+      await onRefresh();
       setPendingReview(null);
       setPendingProvider(null);
       setState('idle');
