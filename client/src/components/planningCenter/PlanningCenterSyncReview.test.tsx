@@ -1,9 +1,10 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import PlanningCenterSyncReview, { mapLegacyPcoPlan } from './PlanningCenterSyncReview';
+import PlanningCenterSyncReview from './PlanningCenterSyncReview';
 import { integrationsAPI } from '../../services/api';
+import type { PeopleSyncPlan, PeopleSyncReview } from '../peopleSync/types';
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: {
@@ -12,34 +13,42 @@ vi.mock('../../services/api', () => ({
   },
 }));
 
-const legacyPlan = {
-  link: [], restore: [],
-  ambiguous: [{
-    individualId: 12, firstName: 'Ada', lastName: 'Lovelace', candidates: ['9007199254740993'],
-    candidateDetails: [{ pcoId: '9007199254740993', firstName: 'Ada', lastName: 'Byron', membership: 'Member' }],
-  }],
-  visitorMatches: [], add: [], update: [],
-  archive: [{ individualId: 14, pcoId: 'archive-opaque-id' }],
-  reactivate: [], familyNameUpdates: [],
+const plan: PeopleSyncPlan = {
+  provider: 'planning_center', authoritative: false,
+  snapshot: { fetchedAt: '2026-07-27T00:00:00.000Z', mode: 'full' },
+  linkPeople: [], linkFamilies: [], addPeople: [], addFamilies: [], updateManagedFields: [],
+  promoteToRegular: [], demoteToLocalVisitor: [], archive: [], reactivate: [], moveFamily: [],
+  renameFamily: [], addToGathering: [], removeFromGathering: [], ambiguousPeople: [],
+  familyConflicts: [], unmatchedLocalRegulars: [], skipped: [],
+};
+const review: PeopleSyncReview = {
+  runId: 7, reviewToken: 'pco-review-7', plan, snapshot: plan.snapshot,
+  summary: {
+    linkPeople: 0, linkFamilies: 0, addPeople: 0, addFamilies: 0, updateManagedFields: 0,
+    promoteToRegular: 0, demoteToLocalVisitor: 0, archive: 0, reactivate: 0, moveFamily: 0,
+    renameFamily: 0, addToGathering: 0, removeFromGathering: 0, ambiguousPeople: 0,
+    familyConflicts: 0, unmatchedLocalRegulars: 0, skipped: 0,
+  },
 };
 
-describe('mapLegacyPcoPlan', () => {
-  it('keeps legacy archives destructive and assigns opaque candidate keys', () => {
-    const plan = mapLegacyPcoPlan(legacyPlan);
-
-    expect(plan.archive).toEqual([expect.objectContaining({ individualId: 14, externalPersonId: 'archive-opaque-id' })]);
-    expect(plan.skipped).toEqual([]);
-    expect(plan.ambiguousPeople[0].candidateIndividualIds).toEqual([1]);
+describe('PlanningCenterSyncReview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(integrationsAPI.applyPlanningCenterBatch).mockResolvedValue({
+      data: { success: true, runId: 7, status: 'applied', applied: {} as never, summary: review.summary },
+    });
   });
 
-  it('shows initial candidate names and keeps legacy automatic archives gated', async () => {
-    const getPlan = integrationsAPI.getPlanningCenterBatchPlan as ReturnType<typeof vi.fn>;
-    getPlan.mockResolvedValue({ data: { plan: legacyPlan } });
-
+  it('loads the shared review without applying and submits its exact token only after approval', async () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
-    expect(await screen.findByText('Ada Byron — Member')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
-    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeDisabled();
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+
+    await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(7, {
+      reviewToken: 'pco-review-7', selections: expect.any(Object),
+    }));
   });
 });

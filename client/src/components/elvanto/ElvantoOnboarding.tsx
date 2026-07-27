@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useReducer, useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
@@ -12,6 +12,14 @@ interface Props {
   onContinueToGatherings: () => void;
 }
 
+interface ElvantoConnectionState { apiKey: string; connected: boolean }
+type ElvantoConnectionAction = { type: 'api-key-changed'; value: string } | { type: 'connected' };
+
+export function reduceElvantoConnection(state: ElvantoConnectionState, action: ElvantoConnectionAction): ElvantoConnectionState {
+  if (action.type === 'api-key-changed') return { ...state, apiKey: action.value };
+  return { apiKey: '', connected: true };
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === 'object' && error !== null) {
     const responseMessage = (error as { response?: { data?: { error?: string } } }).response?.data?.error;
@@ -21,8 +29,7 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export default function ElvantoOnboarding({ step, onStepChange, onContinueToGatherings }: Props) {
-  const [apiKey, setApiKey] = useState('');
-  const [connected, setConnected] = useState(false);
+  const [{ apiKey, connected }, dispatchConnection] = useReducer(reduceElvantoConnection, { apiKey: '', connected: false });
   const [metadata, setMetadata] = useState<ElvantoMetadata | null>(null);
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
   const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
@@ -60,8 +67,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     setError(null);
     try {
       await integrationsAPI.connectElvanto(key);
-      setApiKey('');
-      setConnected(true);
+      dispatchConnection({ type: 'connected' });
       await loadSetup();
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to connect to Elvanto.'));
@@ -139,7 +145,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
               type="password"
               autoComplete="new-password"
               value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
+              onChange={(event) => dispatchConnection({ type: 'api-key-changed', value: event.target.value })}
               className="mt-1 block w-full rounded-md border-gray-300"
             />
           </label>

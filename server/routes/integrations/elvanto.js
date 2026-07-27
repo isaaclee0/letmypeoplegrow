@@ -6,17 +6,15 @@
 // server/routes/integrations/peopleSync.js instead; this file owns
 // everything that only makes sense for Elvanto: the API-key connection
 // itself, metadata discovery for the batch filter picker, and batch
-// CRUD/plan/apply/run-now.
+// CRUD/plan/apply/run-now. Interactive run-now is a review alias: only the
+// scheduler may invoke the unattended orchestrator path.
 //
 // Every dependency this router touches is injected via `deps` (see
 // `defaultDeps` below) so route tests never need a real database, a real
 // Elvanto adapter, or a real network call — see elvanto.test.js. In
-// particular `deps.buildReview`/`applyReviewed`/`runUnattended` are treated
-// as opaque, already-safe collaborators: this file never second-guesses or
-// re-implements the review/selection safety orchestrator.js already
-// provides (ambiguous/conflicting/rename/unmatched buckets are ALWAYS held
-// for review — see runUnattended's own header note — this router just
-// forwards whatever it returns).
+// particular `deps.buildReview`/`applyReviewed` are treated as opaque,
+// already-safe collaborators: both interactive buttons produce a review,
+// and only an explicit apply carrying that review token may mutate data.
 //
 // `deps.adapter` is a real, directly-constructed createElvantoAdapter()
 // instance (never providerRegistry.getProvider('elvanto')) precisely so
@@ -187,10 +185,8 @@ const defaultDeps = {
   createBatch: batchRepository.createBatch,
   updateBatch: batchRepository.updateBatch,
   deleteBatch: batchRepository.deleteBatch,
-  recordBatchResult: batchRepository.recordBatchResult,
   buildReview: orchestrator.buildReview,
   applyReviewed: orchestrator.applyReviewed,
-  runUnattended: orchestrator.runUnattended,
 };
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────
@@ -199,7 +195,7 @@ const defaultDeps = {
 //   - RouteTimeoutError (from withTimeout, above) — the aggregate route
 //     deadline was exceeded; always a safe 503, never leaks which specific
 //     network call was still in flight.
-//   - OrchestratorError (from buildReview/applyReviewed/runUnattended) —
+//   - OrchestratorError (from buildReview/applyReviewed) —
 //     status/code/message already curated by orchestrator.js itself.
 //   - ElvantoError (from a direct adapter call, OR unwrapped straight
 //     through an orchestrator function's own rethrow — see orchestrator.js's
@@ -546,43 +542,10 @@ function createElvantoRouter(overrides = {}) {
     const batchId = parseBatchId(req.params.id);
     if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
     try {
-      // runUnattended (the "safe unattended policy") already strips
-      // ambiguous/conflicting/rename/unmatched items into review_required
-      // pending counts on its own — this route does not, and must not, add
-      // any bypass logic of its own; it only forwards the result faithfully.
-      //
-      // The ENTIRE unit of work — the orchestrator call AND its batch
-      // bookkeeping — is raced against the timeout as ONE continuation
-      // (`work`), not just the orchestrator call alone. withTimeout does
-      // NOT cancel the losing promise (see its own header note): if the
-      // timeout wins, runUnattended keeps running in the background,
-      // still commits real data mutations, and still finishes its own run
-      // row — so recordBatchResult must run as part of that SAME
-      // background continuation regardless of whether the client-facing
-      // response already timed out. Racing only the orchestrator call (an
-      // earlier version of this route did) left a real regression: a run
-      // that genuinely completed after the client-facing deadline would
-      // never update people_sync_batches.last_sync_at/last_sync_result/
-      // last_external_watermark, making the batch look "never synced"
-      // forever and starting the next incremental run from a stale
-      // watermark.
-      const work = (async () => {
-        const workResult = await deps.runUnattended({ churchId, provider: PROVIDER, batchId, trigger: 'run_now' });
-        try {
-          await deps.recordBatchResult({
-            churchId, provider: PROVIDER, batchId, trigger: 'run_now',
-            fetchMode: workResult.fetchMode, complete: workResult.complete,
-            status: workResult.status, externalWatermark: workResult.externalWatermark,
-          });
-        } catch (recordErr) {
-          logger.error(
-            `elvanto POST /sync-batches/:id/run-now: failed to record batch result for batch ${batchId} (church ${churchId}): ${recordErr.message}`
-          );
-        }
-        return workResult;
-      })();
-
-      const result = await withTimeout(work, deps.routeTimeoutMs);
+      const result = await withTimeout(
+        deps.buildReview({ churchId, provider: PROVIDER, batchId, trigger: 'manual' }),
+        deps.routeTimeoutMs
+      );
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /sync-batches/:id/run-now' });

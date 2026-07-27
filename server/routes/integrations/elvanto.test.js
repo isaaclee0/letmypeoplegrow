@@ -65,10 +65,8 @@ function noopDeps(extra = {}) {
     createBatch: async (input) => ({ id: 1, ...input }),
     updateBatch: async (input) => ({ id: input.batchId, ...input }),
     deleteBatch: async () => true,
-    recordBatchResult: async () => {},
     buildReview: async () => ({ runId: 1, reviewToken: 'tok', summary: {}, plan: {} }),
     applyReviewed: async () => ({ runId: 1, status: 'applied', applied: {}, summary: {} }),
-    runUnattended: async () => ({ runId: 1, status: 'applied', counts: {}, fetchMode: 'full', complete: true, externalWatermark: 'wm-1' }),
     adapter: {
       validateConnection: async () => ({ ok: true, metadata: {} }),
       fetchSnapshot: async () => ({ people: [], families: [], skipped: [] }),
@@ -210,33 +208,19 @@ test('POST /sync-batches/:id/apply forwards reviewToken, selections, and userId'
   assert.equal(calls[0].userId, ADMIN_USER.id);
 });
 
-test('POST /sync-batches/:id/run-now forwards churchId/provider/batchId and records the batch result', async () => {
-  const runCalls = [];
-  const recordCalls = [];
+test('POST /sync-batches/:id/run-now builds an interactive review and never invokes unattended apply', async () => {
+  const reviewCalls = [];
+  let unattendedCalls = 0;
   await withServer(noopDeps({
-    runUnattended: async (args) => { runCalls.push(args); return { runId: 5, status: 'applied', counts: {}, fetchMode: 'incremental', complete: true, externalWatermark: 'wm-9' }; },
-    recordBatchResult: async (args) => { recordCalls.push(args); },
+    buildReview: async (args) => { reviewCalls.push(args); return { runId: 5, reviewToken: 'review-5', summary: {}, plan: {}, snapshot: {} }; },
+    runUnattended: async () => { unattendedCalls++; throw new Error('must not run'); },
   }), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches/3/run-now`, { method: 'POST' });
     assert.equal(status, 200);
-    assert.equal(body.status, 'applied');
+    assert.equal(body.reviewToken, 'review-5');
   });
-  assert.deepEqual(runCalls, [{ churchId: ADMIN_USER.church_id, provider: 'elvanto', batchId: 3, trigger: 'run_now' }]);
-  assert.deepEqual(recordCalls, [{
-    churchId: ADMIN_USER.church_id, provider: 'elvanto', batchId: 3, trigger: 'run_now',
-    fetchMode: 'incremental', complete: true, status: 'applied', externalWatermark: 'wm-9',
-  }]);
-});
-
-test('POST /sync-batches/:id/run-now still returns success if recording the batch result fails', async () => {
-  await withServer(noopDeps({
-    runUnattended: async () => ({ runId: 5, status: 'applied', counts: {}, fetchMode: 'full', complete: true, externalWatermark: 'wm' }),
-    recordBatchResult: async () => { throw new Error('db is briefly unavailable'); },
-  }), { user: ADMIN_USER }, async (base) => {
-    const { status, body } = await requestJson(`${base}/sync-batches/3/run-now`, { method: 'POST' });
-    assert.equal(status, 200);
-    assert.equal(body.status, 'applied');
-  });
+  assert.deepEqual(reviewCalls, [{ churchId: ADMIN_USER.church_id, provider: 'elvanto', batchId: 3, trigger: 'manual' }]);
+  assert.equal(unattendedCalls, 0);
 });
 
 // ─── Mount-order regression: preserved legacy routes must still resolve ────
@@ -285,18 +269,14 @@ test('a preserved legacy route mounted alongside the new router at the same /elv
 
 // ─── run-now never bypasses review ──────────────────────────────────────────
 
-test('run-now faithfully forwards a review_required outcome with pending counts rather than forcing applied', async () => {
+test('run-now returns the exact review token required by the separate apply endpoint', async () => {
   await withServer(noopDeps({
-    runUnattended: async () => ({
-      runId: 8, status: 'review_required',
-      counts: { ambiguousPeople: 2, familyConflicts: 1, unmatchedLocalRegulars: 0, renameFamily: 0 },
-      fetchMode: 'full', complete: true, externalWatermark: 'wm',
-    }),
+    buildReview: async () => ({ runId: 8, reviewToken: 'explicit-review-token', summary: { ambiguousPeople: 2 }, plan: {}, snapshot: {} }),
   }), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches/1/run-now`, { method: 'POST' });
     assert.equal(status, 200);
-    assert.equal(body.status, 'review_required');
-    assert.equal(body.counts.ambiguousPeople, 2);
+    assert.equal(body.reviewToken, 'explicit-review-token');
+    assert.equal(body.summary.ambiguousPeople, 2);
   });
 });
 
@@ -668,62 +648,13 @@ test('POST /sync-batches/:id/apply times out with a safe 503 rather than hanging
   });
 });
 
-test('POST /sync-batches/:id/run-now times out with a safe 503 rather than hanging on a stuck runUnattended call', async () => {
-  await withServer(noopDeps({ routeTimeoutMs: 20, runUnattended: neverResolves }), { user: ADMIN_USER }, async (base) => {
+test('POST /sync-batches/:id/run-now times out with a safe 503 rather than hanging on a stuck buildReview call', async () => {
+  await withServer(noopDeps({ routeTimeoutMs: 20, buildReview: neverResolves }), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches/1/run-now`, { method: 'POST' });
     assert.equal(status, 503);
     assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
 });
-
-// Regression: an earlier version of this route raced ONLY the orchestrator
-// call against the timeout, then called recordBatchResult afterward — so a
-// run that genuinely completed AFTER the client-facing response had already
-// timed out (withTimeout never cancels the losing promise; runUnattended
-// keeps running, still commits real mutations, still finishes its own run
-// row) would never update people_sync_batches.last_sync_at/
-// last_sync_result/last_external_watermark. The batch would then look
-// "never synced" forever, and the next incremental run would start from a
-// stale watermark. The whole unit of work (orchestrator call AND its
-// bookkeeping) must be raced as ONE continuation so the bookkeeping still
-// happens in the background regardless of what the client saw.
-test('run-now still records batch bookkeeping in the background even after the client-facing response has already timed out', async () => {
-  let resolveRunUnattended;
-  const runUnattendedPromise = new Promise((resolve) => { resolveRunUnattended = resolve; });
-  let resolveRecorded;
-  const recordedPromise = new Promise((resolve) => { resolveRecorded = resolve; });
-  const recordCalls = [];
-
-  await withServer(noopDeps({
-    routeTimeoutMs: 20,
-    runUnattended: () => runUnattendedPromise,
-    recordBatchResult: async (args) => { recordCalls.push(args); resolveRecorded(); },
-  }), { user: ADMIN_USER }, async (base) => {
-    const { status, body } = await requestJson(`${base}/sync-batches/3/run-now`, { method: 'POST' });
-    assert.equal(status, 503);
-    assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
-    assert.equal(recordCalls.length, 0, 'must not have recorded anything yet — the underlying run has not finished');
-
-    // Now let the background orchestrator call actually finish, exactly as
-    // it would in production once a slow Elvanto account eventually responds.
-    resolveRunUnattended({ runId: 9, status: 'applied', counts: {}, fetchMode: 'incremental', complete: true, externalWatermark: 'wm-late' });
-    // Raced against a short, explicit timeout rather than a bare `await`:
-    // node:test has no default per-test timeout, so if this regression
-    // ever came back (recordBatchResult never gets called), an unbounded
-    // await here would hang this test — and the whole suite — forever
-    // with no failure signal, instead of reporting a clean, readable ✖.
-    await Promise.race([
-      recordedPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('recordBatchResult was never called after the background run finished')), 2000)),
-    ]);
-  });
-
-  assert.equal(recordCalls.length, 1);
-  assert.equal(recordCalls[0].externalWatermark, 'wm-late');
-  assert.equal(recordCalls[0].status, 'applied');
-  assert.equal(recordCalls[0].fetchMode, 'incremental');
-});
-
 // ─── Safe error mapping ──────────────────────────────────────────────────────
 
 test('a stored-key ELVANTO_AUTH failure on /status is reported as invalid, not a raw 401 crash', async () => {

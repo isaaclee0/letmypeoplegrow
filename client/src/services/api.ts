@@ -10,7 +10,6 @@ import type {
   PeopleSyncAuthorityState,
   PeopleSyncReview,
   PeopleSyncApplyResult,
-  PeopleSyncRunNowResult,
   PeopleSyncRun,
   PeopleSyncSelections,
   ExternalLinks,
@@ -935,12 +934,12 @@ export const integrationsAPI = {
   deletePlanningCenterSyncBatch: (id: number) =>
     api.delete(`/integrations/planning-center/sync-batches/${id}`),
   getPlanningCenterBatchPlan: (id: number, opts?: { force?: boolean }) =>
-    api.get(`/integrations/planning-center/sync-batches/${id}/plan`, {
+    api.get<{ success: true } & PeopleSyncReview>(`/integrations/planning-center/sync-batches/${id}/plan`, {
       params: opts?.force ? { refresh: 1 } : undefined,
       timeout: 120000,
     }),
-  applyPlanningCenterBatch: (id: number, data: { selections?: { ambiguous?: Record<string, string>; skipAddPcoIds?: string[]; visitorChoices?: Record<string, string>; archiveAmbiguousIds?: number[] } }) =>
-    api.post(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
+  applyPlanningCenterBatch: (id: number, data: { reviewToken: string; selections?: PeopleSyncSelections }) =>
+    api.post<{ success: true } & PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
     api.get('/integrations/planning-center/checkins/events', { params, timeout: 120000 }),
@@ -1090,11 +1089,10 @@ export const elvantoSyncAPI = {
       { timeout: 120000 },
     ),
 
-  // The "safe unattended policy" run -- ambiguous/conflicting/rename/
-  // unmatched-local items are never auto-applied; see orchestrator.js's
-  // runUnattended for the exact safety guarantees this forwards unchanged.
+  // Interactive "Run now" is an alias for building a review. Only the
+  // scheduler may invoke the unattended apply path.
   runBatchNow: (id: number) =>
-    api.post<{ success: true } & PeopleSyncRunNowResult>(
+    api.post<{ success: true } & PeopleSyncReview>(
       `/integrations/elvanto/sync-batches/${id}/run-now`,
       undefined,
       { timeout: 120000 },

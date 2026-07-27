@@ -61,17 +61,10 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   // `Record<string, number | string> | null`): batchRepository.js's
   // toBatch() does NOT JSON.parse this column -- `lastSyncResult:
   // row.last_sync_result` is a raw passthrough of a TEXT column. The two
-  // write paths that populate it disagree on shape:
-  //   - Elvanto (batchRepository.recordBatchResult, called from
-  //     elvanto.js's POST /sync-batches/:id/run-now -- the ONLY writer for
-  //     provider='elvanto' rows) always writes one of the four run-status
-  //     strings (see RUN_STATUSES in batchRepository.js).
-  //   - Planning Center's still-reachable legacy path
-  //     (planningCenterSync.js's recordBatchSyncResult) instead writes
-  //     `JSON.stringify(summary)` for provider='planning_center' rows.
-  // Since this type is shared across providers, `string | null` is the only
-  // honest shape; ElvantoLastSyncResult below narrows it for the Elvanto
-  // case this project actually needs today.
+  // scheduled provider-neutral path writes a run-status string (see
+  // RUN_STATUSES in batchRepository.js). Historical Planning Center rows may
+  // still contain a JSON summary written by the retired legacy path, so the
+  // shared DTO deliberately remains the broad `string | null` shape.
   lastSyncResult: string | null;
 }
 
@@ -434,7 +427,7 @@ export type PeopleSyncApplyCounts = Record<PeopleSyncBucketName, number> & {
   gatheringRemoved: number;
 };
 
-// ─── Review / apply / run-now results (server/services/peopleSync/orchestrator.js) ──
+// ─── Review / apply results (server/services/peopleSync/orchestrator.js) ──
 
 // buildReview()'s and previewAuthoritySwitch()'s return shape. `authority`
 // is present ONLY for previewAuthoritySwitch (POST
@@ -473,25 +466,6 @@ export interface PeopleSyncApplyResult {
   // see orchestrator.js's applyReviewed for why this never rolls back or
   // fails the run.
   authorityCommitError?: string;
-}
-
-// runUnattended()'s return shape -- used by POST
-// /elvanto/sync-batches/:id/run-now. Unlike applyReviewed, this run passes
-// reviewRequiredWhenHeld: true, so status can legitimately downgrade to
-// 'review_required' when any held-review bucket (ambiguousPeople/
-// familyConflicts/renameFamily/unmatchedLocalRegulars) is non-empty.
-export interface PeopleSyncRunNowResult {
-  runId: number;
-  status: 'applied' | 'review_required';
-  // Partial: finishAppliedRun initializes `counts = {}` and only overwrites
-  // it with the full mergeAppliedCounts(...) result inside a try/catch --
-  // AFTER the apply itself already succeeded -- so a classification failure
-  // there (logged server-side) leaves counts as `{}` rather than failing an
-  // already-committed run. See orchestrator.js's finishAppliedRun.
-  counts: Partial<PeopleSyncApplyCounts>;
-  fetchMode: 'full' | 'incremental';
-  complete: boolean;
-  externalWatermark: string | null;
 }
 
 // ─── Reviewer selections (server/services/peopleSync/apply.js's validateSelections) ──

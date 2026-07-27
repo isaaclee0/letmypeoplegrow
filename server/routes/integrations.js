@@ -7,7 +7,6 @@ const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
 const { tallyField } = require('../services/planningCenter/summary');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
-const { resolveManualLinks } = require('../services/planningCenter/selectionValidation');
 const metadataCache = require('../services/planningCenter/metadataCache');
 const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
@@ -19,6 +18,7 @@ const {
 } = require('../services/peopleSync/credentialCipher');
 const { createPeopleSyncRouter } = require('./integrations/peopleSync');
 const { createElvantoRouter } = require('./integrations/elvanto');
+const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
 
 const router = express.Router();
 
@@ -39,9 +39,9 @@ router.use((req, res, next) => {
 // All routes require authentication
 router.use(verifyToken);
 router.use(ensureChurchIsolation);
-// Elvanto/PCO connect, sync, and import all mutate church-wide data with no
-// per-item review on some paths (e.g. batch "Run now") — admin-only, matching
-// every other data-mutating router in this app.
+// Elvanto/PCO connection and sync settings are church-wide, so all routes are
+// admin-only. Interactive people sync is additionally review-token gated by
+// the provider-neutral plan/apply routers mounted below.
 router.use(requireRole(['admin']));
 
 // Provider-neutral people sync owns reviewed people/family imports. The only
@@ -49,6 +49,7 @@ router.use(requireRole(['admin']));
 // import flow used by ElvantoGatheringImport.
 router.use('/people-sync', createPeopleSyncRouter());
 router.use('/elvanto', createElvantoRouter());
+router.use('/planning-center', createPlanningCenterPeopleSyncRouter());
 
 // Log after auth passes
 router.use((req, res, next) => {
@@ -1478,135 +1479,6 @@ router.delete('/planning-center/sync-batches/:id', async (req, res) => {
   } catch (error) {
     logger.error('Delete PCO sync batch error:', error);
     res.status(500).json({ error: 'Failed to delete sync batch.' });
-  }
-});
-
-// Dry-run: compute one batch's plan without writing anything.
-router.get('/planning-center/sync-batches/:id/plan', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const batch = await pcoSync.getBatch(churchId, Number(req.params.id));
-    if (!batch) return res.status(404).json({ error: 'Sync batch not found.' });
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const force = req.query.refresh === '1' || req.query.force === '1';
-    const fullPlan = await pcoSync.computePlanForBatch(churchId, accessToken, batch, { force });
-    // Batch plans omit the whole-roster buckets (archiveExtras/unmatchedVisitors) —
-    // no endpoint surfaces those on their own anymore; computePlan still returns
-    // them because diffEngine.js is shared with every batch's own plan. pcoPeople
-    // (the full unfiltered PCO roster, attached by computePlanForChurch for the
-    // background-check sync in apply.js) is stripped for the same reason — it's
-    // server-side-only input, never meant for the client.
-    const { archiveExtras, unmatchedVisitors, pcoPeople, ...plan } = fullPlan;
-    res.json({
-      success: true,
-      summary: {
-        link: plan.link.length,
-        restore: (plan.restore || []).length,
-        ambiguous: plan.ambiguous.length,
-        visitorMatches: (plan.visitorMatches || []).length,
-        add: plan.add.length,
-        update: plan.update.length,
-        archive: plan.archive.length,
-        reactivate: plan.reactivate.length,
-        familyNameUpdates: (plan.familyNameUpdates || []).length,
-      },
-      plan,
-    });
-  } catch (error) {
-    logger.error('PCO batch sync plan error:', error);
-    res.status(500).json({ error: 'Failed to compute sync plan.' });
-  }
-});
-
-// Apply: recompute this batch's plan and apply it. Body may include { selections }.
-router.post('/planning-center/sync-batches/:id/apply', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const userId = req.user.id;
-    const batch = await pcoSync.getBatch(churchId, Number(req.params.id));
-    if (!batch) return res.status(404).json({ error: 'Sync batch not found.' });
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const plan = await pcoSync.computePlanForBatch(churchId, accessToken, batch);
-
-    const rawSel = (req.body && req.body.selections) || {};
-    const { people: cachedPcoPeople } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
-    const validPcoIds = new Set(cachedPcoPeople.map((p) => p.id));
-
-    const addPcoIds = new Set(plan.add.map((a) => a.pcoId));
-    const skipAddPcoIds = (Array.isArray(rawSel.skipAddPcoIds) ? rawSel.skipAddPcoIds : [])
-      .filter((id) => addPcoIds.has(id));
-
-    // Seed claimed pcoIds with everything the plan itself already assigns, so a
-    // reviewer's manual ambiguous pick can't collide with an auto-link/restore/
-    // visitor-match/non-skipped-add from the same run.
-    const claimedPcoIds = new Set([
-      ...plan.link.map((l) => l.pcoId),
-      ...(plan.restore || []).map((r) => r.pcoId),
-      ...(plan.visitorMatches || []).map((v) => v.candidate.pcoId),
-      ...plan.add.filter((a) => !skipAddPcoIds.includes(a.pcoId)).map((a) => a.pcoId),
-    ]);
-
-    const ambiguousIndividualIds = new Set(plan.ambiguous.map((a) => a.individualId));
-    const ambiguousCandidates = Object.entries(rawSel.ambiguous || {}).map(([individualId, pcoId]) => ({
-      individualId: Number(individualId), pcoId,
-    }));
-    const acceptedAmbiguous = resolveManualLinks(ambiguousCandidates, {
-      validPcoIds, claimedPcoIds, allowedIndividualIds: ambiguousIndividualIds,
-    });
-    const ambiguous = {};
-    for (const a of acceptedAmbiguous) ambiguous[a.individualId] = a.pcoId;
-
-    const linkedAmbiguousIds = new Set(Object.keys(ambiguous).map(Number));
-    const archiveAmbiguousIds = (Array.isArray(rawSel.archiveAmbiguousIds) ? rawSel.archiveAmbiguousIds : [])
-      .map(Number)
-      .filter((id) => ambiguousIndividualIds.has(id) && !linkedAmbiguousIds.has(id));
-
-    const visitorOfferIds = new Set((plan.visitorMatches || []).map((v) => Number(v.individualId)));
-    const visitorChoices = {};
-    for (const [rawId, choice] of Object.entries(rawSel.visitorChoices || {})) {
-      const id = Number(rawId);
-      if (visitorOfferIds.has(id) && (choice === 'promote' || choice === 'keep')) {
-        visitorChoices[id] = choice;
-      }
-    }
-    const familyNameUpdateIds = new Set((plan.familyNameUpdates || []).map((f) => f.familyId));
-    const skipFamilyNameUpdateIds = (Array.isArray(rawSel.skipFamilyNameUpdateIds) ? rawSel.skipFamilyNameUpdateIds : [])
-      .map(Number)
-      .filter((id) => familyNameUpdateIds.has(id));
-
-    const selections = { ambiguous, skipAddPcoIds, visitorChoices, archiveAmbiguousIds, skipFamilyNameUpdateIds };
-
-    const result = await pcoSync.applyForChurch(churchId, plan, userId, selections, {
-      // batch.id is the canonical people_sync_batches id (added_by_sync_batch_id);
-      // batch.legacyProviderBatchId is the dual-written planning_center_sync_batches
-      // id (added_by_pco_batch_id) — see toLegacyPcoBatchDto in planningCenterSync.js.
-      batchId: batch.legacyProviderBatchId,
-      syncBatchId: batch.id,
-      defaultPeopleType: batch.defaultPeopleType,
-      gatheringTypeId: batch.gatheringTypeId,
-      gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
-    });
-
-    const summary = {
-      at: new Date().toISOString(),
-      added: result.added, updated: result.updated, archived: result.archived,
-      reactivated: result.reactivated, linked: result.linked,
-      gatheringAssigned: result.gatheringAssigned,
-      gatheringRemoved: result.gatheringRemoved,
-      familyNamesUpdated: result.familyNamesUpdated,
-      ambiguous: plan.ambiguous.length,
-      visitorMatches: (plan.visitorMatches || []).length,
-      errors: result.errors.length,
-    };
-    await pcoSync.recordBatchSyncResult(churchId, batch, summary);
-    res.json({ success: true, result, summary });
-  } catch (error) {
-    logger.error('PCO batch sync apply error:', error);
-    res.status(500).json({ error: 'Failed to apply sync.' });
   }
 });
 

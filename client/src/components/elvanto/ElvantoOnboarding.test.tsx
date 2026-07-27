@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import type { PeopleSyncBatch, PeopleSyncPlan, PeopleSyncReview } from '../peopleSync/types';
-import ElvantoOnboarding, { type ElvantoOnboardingStep } from './ElvantoOnboarding';
+import ElvantoOnboarding, { reduceElvantoConnection, type ElvantoOnboardingStep } from './ElvantoOnboarding';
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn() },
@@ -67,6 +67,13 @@ describe('ElvantoOnboarding', () => {
     vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({ data: { success: true, runId: 5, status: 'applied', applied: {} as never, summary: review('authority-review').summary } });
   });
 
+  it('clears the in-memory API key when connection succeeds', () => {
+    expect(reduceElvantoConnection(
+      { apiKey: 'secret-key', connected: false },
+      { type: 'connected' },
+    )).toEqual({ apiKey: '', connected: true });
+  });
+
   it('connects, configures a batch, applies its review, then reviews and applies optional authority', async () => {
     const onContinue = vi.fn();
     render(<Harness onContinue={onContinue} />);
@@ -87,6 +94,9 @@ describe('ElvantoOnboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
 
     expect(await screen.findByText('Keep LMPG aligned with Elvanto?')).toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledWith(12, {
+      reviewToken: 'batch-review', selections: expect.any(Object),
+    });
     expect(screen.getByText(/linked names, child status, family membership and active status are managed in Elvanto/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use Elvanto as source of truth' }));
     await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledWith('elvanto'));

@@ -64,7 +64,7 @@ const { notifyReviewRequired } = require('./reviewNotification');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
-const UNATTENDED_TRIGGERS = new Set(['scheduled', 'run_now']);
+const UNATTENDED_TRIGGERS = new Set(['scheduled']);
 const HELD_REVIEW_BUCKETS = ['ambiguousPeople', 'familyConflicts', 'renameFamily', 'unmatchedLocalRegulars'];
 const REVIEW_TOKEN_TTL_SECONDS = 30 * 60;
 const RAW_FIELD_DENYLIST = new Set(['attributes', 'customFields', 'custom_fields', 'raw', 'rawPayload', 'demographics']);

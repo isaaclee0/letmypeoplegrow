@@ -178,9 +178,12 @@ describe('ElvantoIntegrationPanel', () => {
     }));
   });
 
-  it('surfaces pending-review counts from Run now and renders sanitized recent-run summaries', async () => {
+  it('opens Run now as a shared review and only applies after explicit approval', async () => {
     vi.mocked(elvantoSyncAPI.runBatchNow).mockResolvedValue({
-      data: { success: true, runId: 10, status: 'review_required', counts: { ambiguousPeople: 2, familyConflicts: 1 }, fetchMode: 'full', complete: true, externalWatermark: null },
+      data: { success: true, ...review },
+    });
+    vi.mocked(elvantoSyncAPI.applyBatch).mockResolvedValue({
+      data: { success: true, runId: 8, status: 'applied', applied: {} as never, summary: review.summary },
     });
     setupConnected();
 
@@ -190,7 +193,12 @@ describe('ElvantoIntegrationPanel', () => {
     expect(within(recentRuns).queryByText(/raw|api.?key|watermark/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Run Members now' }));
 
-    expect(await screen.findByText('3 items need review.')).toBeInTheDocument();
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+    await waitFor(() => expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledWith(5, {
+      reviewToken: 'batch-review', selections: expect.any(Object),
+    }));
   });
 
   it('warns before disconnecting while Elvanto is authoritative', async () => {

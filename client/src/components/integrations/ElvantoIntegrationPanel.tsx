@@ -212,12 +212,6 @@ function RecentRuns({ runs }: { runs: PeopleSyncRun[] }) {
   );
 }
 
-const pendingReviewCount = (counts: Record<string, number | undefined>) =>
-  (counts.ambiguousPeople || 0)
-  + (counts.familyConflicts || 0)
-  + (counts.renameFamily || 0)
-  + (counts.unmatchedLocalRegulars || 0);
-
 const ElvantoIntegrationPanel: React.FC<Props> = ({
   status,
   refreshStatus,
@@ -238,7 +232,6 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [applying, setApplying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [runMessage, setRunMessage] = useState<string | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
 
   const loadConnectedData = useCallback(async () => {
@@ -307,19 +300,12 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   };
 
   const runNow = async (batch: PeopleSyncBatch) => {
-    setRunMessage(null);
     setError(null);
     try {
       const response = await elvantoSyncAPI.runBatchNow(batch.id);
-      if (response.data.status === 'review_required') {
-        const count = pendingReviewCount(response.data.counts);
-        setRunMessage(`${count} item${count === 1 ? '' : 's'} need review.`);
-      } else {
-        setRunMessage(`${batch.name} sync applied.`);
-      }
-      await loadConnectedData();
+      setReview({ batch, data: response.data });
     } catch (cause) {
-      setError(errorMessage(cause, 'Failed to run this batch.'));
+      setError(errorMessage(cause, 'Failed to prepare the sync review.'));
     }
   };
 
@@ -363,7 +349,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h5 className="text-sm font-medium">Elvanto sync batches</h5>
-                <p className="text-xs text-gray-500">Review changes before applying, or run the safe unattended policy.</p>
+                <p className="text-xs text-gray-500">Both Review & sync and Run now open a review before anything is applied.</p>
               </div>
               {editingBatch === null && <button type="button" onClick={() => setEditingBatch('new')} disabled={!metadata} className="rounded bg-green-600 px-3 py-2 text-sm text-white disabled:opacity-50">New batch</button>}
             </div>
@@ -408,7 +394,6 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
               ))}
             </ul>
             {!loading && batches.length === 0 && <p className="text-sm text-gray-500">No Elvanto batches yet.</p>}
-            {runMessage && <p className="text-sm text-amber-700">{runMessage}</p>}
             {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           </section>
 

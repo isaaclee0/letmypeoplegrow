@@ -212,6 +212,15 @@ test('previewAuthoritySwitch never stages a switch when preconditions fail (no l
 
 // ─── runUnattended ───────────────────────────────────────────────────────────
 
+test('runUnattended rejects interactive run_now before any collaborator can mutate data', async () => {
+  const { deps, calls } = makeDeps();
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'run_now' }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_TRIGGER_INVALID'
+  );
+  assert.deepEqual(calls, []);
+});
+
 test('runUnattended (clean, no held items) follows the full 10-step order and classifies applied', async () => {
   const { deps, calls } = makeDeps();
   const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: true }, deps);
