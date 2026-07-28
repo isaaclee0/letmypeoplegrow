@@ -66,14 +66,16 @@ test('warm projected people and refreshed normalized people yield the same PCO m
 test('default metadata path counts memberships from both warm projected and explicit normalized people', async () => {
   let peopleCalls = 0;
   const projected = rawProjectedPerson({ membership: 'Member', fieldValues: { choir: ['Soprano'] } });
+  const terminalProjected = rawProjectedPerson({ id: 'terminal', status: 'inactive', membership: 'Former Member', fieldValues: { choir: ['Bass'] } });
   const a = createPcoAdapter({
-    fetchPeople: async () => { peopleCalls++; return { people: [projected], householdPrimaryContacts: new Map() }; },
+    fetchPeople: async () => { peopleCalls++; return { people: [projected, terminalProjected], householdPrimaryContacts: new Map() }; },
     fetchFieldDefinitions: async () => [{ id: 'choir', name: 'Choir', dataType: 'checkboxes', options: ['Soprano'] }],
   });
   const warm = await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'token' }, force: false });
   assert.deepEqual(warm.memberships, [{ membership: 'Member', count: 1 }]);
   const normalized = { id: 'p1', state: 'active', attributes: { membership: 'Member', fieldValues: { choir: ['Soprano'] } } };
-  const refreshed = await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'token' }, force: false, snapshot: { people: [normalized] } });
+  const terminalNormalized = { id: 'terminal', state: 'archived', attributes: { membership: 'Former Member', fieldValues: { choir: ['Bass'] } } };
+  const refreshed = await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'token' }, force: false, snapshot: { people: [normalized, terminalNormalized] } });
   assert.deepEqual(refreshed.memberships, [{ membership: 'Member', count: 1 }]);
   assert.equal(peopleCalls, 1, 'an explicit snapshot must not fetch people again');
 });

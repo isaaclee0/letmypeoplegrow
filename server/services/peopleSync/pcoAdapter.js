@@ -104,6 +104,10 @@ function metadataPerson(person) {
   };
 }
 
+function isActivePcoPerson(person) {
+  return person && (person.state === 'active' || person.status === 'active');
+}
+
 function buildPcoFilterDimensions({ facts = [], providerMetadata = {}, coveredDimensionIds } = {}) {
   const covered = coveredDimensionIds === undefined
     ? null
@@ -195,7 +199,9 @@ const defaultDeps = {
       ? Promise.resolve({ people: options.snapshot.people || [] })
       : peopleFetcher(churchId, accessToken, options);
     const [{ people }, fieldDefinitions] = await Promise.all([peoplePromise, fieldDefinitionsFetcher(accessToken)]);
-    return { memberships: tallyMembership(people.map(metadataPerson)).values, fieldDefinitions };
+    // Metadata choices must describe the same eligible population as facts.
+    // Archived/inactive-only memberships are not selectable positive values.
+    return { memberships: tallyMembership(people.filter(isActivePcoPerson).map(metadataPerson)).values, fieldDefinitions };
   },
 };
 
@@ -254,9 +260,9 @@ function createPcoAdapter(deps = {}) {
     buildFilterDimensions: buildPcoFilterDimensions,
 
     isInFilterPopulation(person) {
-      return person && (person.state === 'active' || person.status === 'active');
+      return isActivePcoPerson(person);
     },
   };
 }
 
-module.exports = { createPcoAdapter, validatePcoFilter, FILTER_SCHEMA_VERSION, metadataPerson };
+module.exports = { createPcoAdapter, validatePcoFilter, FILTER_SCHEMA_VERSION, metadataPerson, isActivePcoPerson };

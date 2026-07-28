@@ -110,6 +110,41 @@ test('preview rejects an over-limit canonical filter before preview evaluation',
   assert.equal(previewCalls, 0);
 });
 
+test('preview permits only unresolved selections retained by the target active filter or draft', async () => {
+  const activeConfig = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['retained-active'] }] }], exclusions: [] };
+  const draftConfig = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['retained-draft'] }] }], exclusions: [] };
+  let allowed = null;
+  await withServer(deps({
+    getBatch: async () => ({ id: 1, filterSchemaVersion: 2, filterConfig: activeConfig, draftFilterConfig: draftConfig }),
+    selectedPairs: (config) => config === activeConfig
+      ? [{ dimensionId: 'status', valueId: 'retained-active' }]
+      : config === draftConfig ? [{ dimensionId: 'status', valueId: 'retained-draft' }] : [],
+    validateFilterV2: (_config, _metadata, options) => { allowed = options.allowedUnresolvedPairs; return { ok: true, value: filter, unresolved: [] }; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/filter-preview', {
+      method: 'POST', body: { batchId: 1, filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
+    });
+    assert.equal(response.status, 200);
+  });
+  assert.deepEqual([...allowed].sort(), [JSON.stringify(['status', 'retained-active']), JSON.stringify(['status', 'retained-draft'])].sort());
+});
+
+test('preview retains an unresolved selection from an active v2 filter without an existing draft', async () => {
+  const activeConfig = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['retained-active'] }] }], exclusions: [] };
+  let allowed = null;
+  await withServer(deps({
+    getBatch: async () => ({ id: 1, filterSchemaVersion: 2, filterConfig: activeConfig, draftFilterConfig: null }),
+    selectedPairs: (config) => config === activeConfig ? [{ dimensionId: 'status', valueId: 'retained-active' }] : [],
+    validateFilterV2: (_config, _metadata, options) => { allowed = options.allowedUnresolvedPairs; return { ok: true, value: filter, unresolved: [] }; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/filter-preview', {
+      method: 'POST', body: { batchId: 1, filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
+    });
+    assert.equal(response.status, 200);
+  });
+  assert.deepEqual([...allowed], [JSON.stringify(['status', 'retained-active'])]);
+});
+
 test('refresh makes one full snapshot call, unions active and proposed dimensions, and does not replace a cache on incomplete data', async () => {
   const calls = [];
   const old = { snapshotId: 'old' };
@@ -227,6 +262,7 @@ test('invalid provider, exact JSON batch IDs, and another church batch are rejec
     assert.equal((await request(base, '/unknown/filter-metadata')).status, 404);
     assert.equal((await request(base, '/elvanto/sync-batches/nope/filter-draft', { method: 'PUT', body: {} })).status, 400);
     assert.equal((await request(base, '/elvanto/filter-preview', { method: 'POST', body: { batchId: '1', filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null } })).status, 400);
+    assert.equal((await request(base, '/elvanto/filter-preview', { method: 'POST', body: { batchId: null, filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: 0 } })).status, 400);
     assert.equal((await request(base, '/elvanto/filter-upgrades/apply-compatible', { method: 'POST', body: { upgrades: [{ batchId: '1e0', upgradeToken: 'x' }] } })).status, 400);
     const response = await request(base, '/elvanto/sync-batches/1/filter-draft', { method: 'PUT', body: { filterConfig: filter, broadMatchAcknowledged: true } });
     assert.equal(response.status, 404);

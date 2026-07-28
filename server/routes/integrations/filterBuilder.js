@@ -113,7 +113,10 @@ function createFilterBuilderJsonParser() {
 }
 
 function unresolvedPairsFromDraft(batch, selectedPairsFn) {
-  return new Set((batch?.draftFilterConfig ? selectedPairsFn(batch.draftFilterConfig) : [])
+  const active = Number(batch?.filterSchemaVersion) === 2 && batch?.filterConfig
+    ? selectedPairsFn(batch.filterConfig) : [];
+  const draft = batch?.draftFilterConfig ? selectedPairsFn(batch.draftFilterConfig) : [];
+  return new Set([...active, ...draft]
     .map((pair) => JSON.stringify([pair.dimensionId, pair.valueId])));
 }
 
@@ -249,17 +252,17 @@ function createFilterBuilderRouter(overrides = {}) {
       if (!isPlainObject(body) || !Object.keys(body).every((key) => ['batchId', 'filterConfig', 'enabled', 'defaultPeopleType', 'gatheringTypeId'].includes(key)) ||
           !(body.batchId === null || (Number.isSafeInteger(body.batchId) && body.batchId > 0)) || !isPlainObject(body.filterConfig) ||
           typeof body.enabled !== 'boolean' || !PEOPLE_TYPES.has(body.defaultPeopleType) ||
-          !(body.gatheringTypeId === null || Number.isSafeInteger(body.gatheringTypeId))) {
+          !(body.gatheringTypeId === null || (Number.isSafeInteger(body.gatheringTypeId) && body.gatheringTypeId > 0))) {
         return res.status(400).json({ error: 'Invalid filter preview.', code: 'SYNC_FILTER_INVALID' });
       }
-      if (body.batchId !== null && !(await deps.getBatch(churchId, provider, body.batchId))) {
+      const targetBatch = body.batchId === null ? null : await deps.getBatch(churchId, provider, body.batchId);
+      if (body.batchId !== null && !targetBatch) {
         return res.status(404).json({ error: 'Sync batch not found.' });
       }
       const cacheEntry = deps.cache.get(churchId, provider);
       if (!cacheEntry) return res.status(409).json({ error: 'A complete filter snapshot is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE' });
-      const current = body.batchId === null ? null : await deps.getBatch(churchId, provider, body.batchId);
       const validation = deps.validateFilterV2(body.filterConfig, metadataFromEntry(cacheEntry), {
-        allowedUnresolvedPairs: unresolvedPairsFromDraft(current, deps.selectedPairs),
+        allowedUnresolvedPairs: unresolvedPairsFromDraft(targetBatch, deps.selectedPairs),
       });
       if (!validation.ok) return res.status(400).json({ error: 'Invalid filter preview.', code: 'SYNC_FILTER_INVALID' });
       const batches = await deps.listBatches(churchId, provider);
