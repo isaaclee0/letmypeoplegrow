@@ -30,9 +30,10 @@ async function generateCaregiverDigests(churchId) {
      FROM family_caregivers fc
      JOIN users u ON fc.user_id = u.id
      WHERE fc.caregiver_type = 'user'
+       AND fc.church_id = ?
        AND u.church_id = ?
        AND u.email IS NOT NULL`,
-    [churchId]
+    [churchId, churchId]
   );
 
   const contactCaregivers = await Database.query(
@@ -40,9 +41,10 @@ async function generateCaregiverDigests(churchId) {
      FROM family_caregivers fc
      JOIN contacts c ON fc.contact_id = c.id
      WHERE fc.caregiver_type = 'contact'
+       AND fc.church_id = ?
        AND c.church_id = ?
        AND c.email IS NOT NULL`,
-    [churchId]
+    [churchId, churchId]
   );
 
   const allCaregivers = [
@@ -62,9 +64,11 @@ async function generateCaregiverDigests(churchId) {
      FROM individuals i
      JOIN families f ON f.id = i.family_id
      WHERE i.family_id IN (${placeholders})
+       AND i.church_id = ?
+       AND f.church_id = ?
        AND i.people_type = 'regular'
        AND i.is_active = 1`,
-    familyIds
+    [...familyIds, churchId, churchId]
   );
 
   if (members.length === 0) return [];
