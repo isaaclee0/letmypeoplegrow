@@ -353,10 +353,12 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
       'SELECT id, schedule_enabled, schedule_frequency, schedule_day FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
     ).all(churchId, 'planning_center', legacyBatchId);
     const existingV1Batch = migrated.prepare(
-      `SELECT filter_schema_version, filter_config, schedule_enabled, schedule_frequency, schedule_day,
+      `SELECT filter_schema_version, filter_config, filter_revision, schedule_enabled, schedule_frequency, schedule_day,
         draft_filter_schema_version, draft_filter_config, draft_filter_base_revision, draft_filter_updated_at
        FROM people_sync_batches WHERE church_id = ? AND provider = 'elvanto' AND name = 'Existing v1 Batch'`
     ).get(churchId);
+    const migratedBatchColumns = new Map(migrated.prepare('PRAGMA table_info(people_sync_batches)').all()
+      .map((column) => [column.name, column]));
     const roster = migrated.prepare('SELECT added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?').get(churchId);
 
     assert.strictEqual(genericBatches.length, 1, 'restart must not duplicate the generic batch');
@@ -364,9 +366,11 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     assert.strictEqual(genericBatches[0].schedule_enabled, 1);
     assert.strictEqual(genericBatches[0].schedule_frequency, 'monthly');
     assert.strictEqual(genericBatches[0].schedule_day, 4);
+    assert.equal(migratedBatchColumns.get('filter_revision').dflt_value, '1');
     assert.deepStrictEqual(existingV1Batch, {
       filter_schema_version: 1,
       filter_config: JSON.stringify({ groups: ['existing'] }),
+      filter_revision: 1,
       schedule_enabled: 1,
       schedule_frequency: 'monthly',
       schedule_day: 5,

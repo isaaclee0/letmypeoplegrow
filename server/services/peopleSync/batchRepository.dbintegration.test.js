@@ -40,7 +40,7 @@ test('batch repository maps the complete stable DTO and preserves its schema ver
 
 test('batch repository persists reviewed filter drafts without changing the active filter', async () => {
   await withTestChurchDb(async (churchId) => {
-    const proposed = { branches: [{ conditions: [{ field: 'campus', value: 'Hobart' }] }], exclusions: [] };
+    const proposed = { branches: [{ groups: [] }], exclusions: [] };
     const created = await createBatch({
       churchId, provider: 'elvanto', name: 'Members', initialDraftFilterConfig: proposed,
     });
@@ -66,20 +66,94 @@ test('batch repository persists reviewed filter drafts without changing the acti
   });
 });
 
+test('batch repository permits legacy v1 filter edits but blocks active schema-2 filter edits', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const legacy = await createBatch({
+      churchId, provider: 'elvanto', name: 'Legacy', filterConfig: { groups: ['members'] },
+    });
+    const legacyUpdated = await updateBatch({
+      churchId, provider: 'elvanto', batchId: legacy.id, filterConfig: { groups: ['visitors'] },
+    });
+    assert.deepEqual(legacyUpdated.filterConfig, { groups: ['visitors'] });
+
+    const schema2 = await createBatch({
+      churchId, provider: 'elvanto', name: 'Schema 2',
+      initialDraftFilterConfig: { branches: [], exclusions: [] },
+    });
+    await assert.rejects(
+      updateBatch({
+        churchId, provider: 'elvanto', batchId: schema2.id,
+        filterConfig: { branches: [], exclusions: [] },
+      }),
+      /saveFilterDraft.*promote/i
+    );
+    await assert.rejects(
+      updateBatch({
+        churchId, provider: 'elvanto', batchId: legacy.id, filterSchemaVersion: 2,
+        filterConfig: { branches: [], exclusions: [] },
+      }),
+      /saveFilterDraft.*promote/i
+    );
+    await assert.rejects(
+      createBatch({
+        churchId, provider: 'elvanto', name: 'Direct schema 2', filterSchemaVersion: 2,
+        filterConfig: { branches: [], exclusions: [] },
+      }),
+      /saveFilterDraft.*promote/i
+    );
+  });
+});
+
+test('batch repository accepts only v2 Boolean filter draft envelopes', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const malformedConditions = { branches: [{ conditions: [] }], exclusions: [] };
+    await assert.rejects(
+      createBatch({ churchId, provider: 'elvanto', name: 'Malformed', initialDraftFilterConfig: malformedConditions }),
+      /Boolean filter v2 envelope/
+    );
+    await assert.rejects(
+      createBatch({ churchId, provider: 'elvanto', name: 'Malformed root', initialDraftFilterConfig: { branches: {}, exclusions: [] } }),
+      /Boolean filter v2 envelope/
+    );
+
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members' });
+    for (const schemaVersion of [1, 3]) {
+      await assert.rejects(
+        saveFilterDraft({ churchId, provider: 'elvanto', batchId: batch.id, schemaVersion, filterConfig: { branches: [], exclusions: [] } }),
+        /schema version 2/
+      );
+    }
+    await assert.rejects(
+      saveFilterDraft({ churchId, provider: 'elvanto', batchId: batch.id, schemaVersion: 2, filterConfig: malformedConditions }),
+      /Boolean filter v2 envelope/
+    );
+  });
+});
+
 test('batch repository promotes drafts only when the revision and digest guards match', async () => {
   await withTestChurchDb(async (churchId) => {
-    const proposed = { branches: [], exclusions: [{ field: 'status', value: 'inactive' }] };
+    const proposed = { exclusions: [], branches: [] };
     const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members' });
     const draft = await saveFilterDraft({
       churchId, provider: 'elvanto', batchId: batch.id, schemaVersion: 2, filterConfig: proposed,
     });
     const conn = Database.getChurchDb(churchId);
-    const expectedDraftDigest = crypto.createHash('sha256').update(JSON.stringify(proposed)).digest('hex');
+    const expectedDraftDigest = crypto.createHash('sha256')
+      .update(JSON.stringify({ branches: [], exclusions: [] }))
+      .digest('hex');
 
     await assert.rejects(
       promoteFilterDraftWithConnection(conn, {
         churchId, provider: 'elvanto', batchId: batch.id,
         expectedBaseRevision: draft.draftFilterBaseRevision + 1, expectedDraftDigest,
+      }),
+      (error) => error?.code === 'SYNC_FILTER_DRAFT_STALE'
+    );
+
+    await assert.rejects(
+      promoteFilterDraftWithConnection(conn, {
+        churchId, provider: 'elvanto', batchId: batch.id,
+        expectedBaseRevision: draft.draftFilterBaseRevision, expectedDraftDigest: '0'.repeat(64),
       }),
       (error) => error?.code === 'SYNC_FILTER_DRAFT_STALE'
     );
@@ -90,7 +164,7 @@ test('batch repository promotes drafts only when the revision and digest guards 
     });
     assert.equal(promoted.filterRevision, 2);
     assert.equal(promoted.filterSchemaVersion, 2);
-    assert.deepEqual(promoted.filterConfig, proposed);
+    assert.deepEqual(promoted.filterConfig, { branches: [], exclusions: [] });
     assert.equal(promoted.draftFilterSchemaVersion, null);
     assert.equal(promoted.draftFilterConfig, null);
     assert.equal(promoted.draftFilterBaseRevision, null);

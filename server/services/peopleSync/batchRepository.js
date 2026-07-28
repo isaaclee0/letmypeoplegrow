@@ -18,6 +18,27 @@ function parseFilterConfig(value) {
   }
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function assertBooleanFilterV2Envelope(filterConfig) {
+  if (!isPlainObject(filterConfig) ||
+      Object.keys(filterConfig).length !== 2 ||
+      !Object.hasOwn(filterConfig, 'branches') || !Object.hasOwn(filterConfig, 'exclusions') ||
+      !Array.isArray(filterConfig.branches) || !Array.isArray(filterConfig.exclusions) ||
+      !filterConfig.branches.every((branch) => isPlainObject(branch) &&
+        Object.keys(branch).length === 1 && Object.hasOwn(branch, 'groups') && Array.isArray(branch.groups))) {
+    throw new Error('Invalid Boolean filter v2 envelope');
+  }
+}
+
+function assertSchema2ActiveFilterUsesDrafts() {
+  throw new Error('Schema-2 active filters must use saveFilterDraft and promoteFilterDraftWithConnection');
+}
+
 function canonicalFilterJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalFilterJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -87,8 +108,8 @@ function normaliseBatchInput(input) {
   if (!churchId || typeof name !== 'string' || !name.trim()) throw new Error('A batch name is required');
   if (!Number.isInteger(filterSchemaVersion) || filterSchemaVersion < 1) throw new Error('Invalid filter schema version');
   if (!filterConfig || typeof filterConfig !== 'object' || Array.isArray(filterConfig)) throw new Error('Filter config must be an object');
-  if (initialDraftFilterConfig !== undefined && (!initialDraftFilterConfig || typeof initialDraftFilterConfig !== 'object' || Array.isArray(initialDraftFilterConfig))) {
-    throw new Error('Initial draft filter config must be an object');
+  if (initialDraftFilterConfig !== undefined) {
+    assertBooleanFilterV2Envelope(initialDraftFilterConfig);
   }
   if (!PEOPLE_TYPES.has(defaultPeopleType)) throw new Error('Invalid default people type');
   return {
@@ -102,6 +123,7 @@ function normaliseBatchInput(input) {
 async function createBatch(input) {
   const batch = normaliseBatchInput(input);
   const hasInitialDraft = batch.initialDraftFilterConfig !== undefined;
+  if (!hasInitialDraft && batch.filterSchemaVersion === 2) assertSchema2ActiveFilterUsesDrafts();
   const activeFilterSchemaVersion = hasInitialDraft ? 2 : batch.filterSchemaVersion;
   const activeFilterConfig = hasInitialDraft ? { branches: [], exclusions: [] } : batch.filterConfig;
   const result = await Database.queryForChurch(batch.churchId, `INSERT INTO people_sync_batches
@@ -123,8 +145,8 @@ async function createBatch(input) {
 
 async function saveFilterDraft({ churchId, provider, batchId, schemaVersion, filterConfig }) {
   assertProvider(provider);
-  if (!Number.isInteger(schemaVersion) || schemaVersion < 1) throw new Error('Invalid filter schema version');
-  if (!filterConfig || typeof filterConfig !== 'object' || Array.isArray(filterConfig)) throw new Error('Filter config must be an object');
+  if (schemaVersion !== 2) throw new Error('Draft filters must use schema version 2');
+  assertBooleanFilterV2Envelope(filterConfig);
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
     SET draft_filter_schema_version = ?, draft_filter_config = ?, draft_filter_base_revision = filter_revision,
       draft_filter_updated_at = datetime('now'), updated_at = datetime('now')
@@ -183,6 +205,10 @@ async function updateBatch(input) {
   assertProvider(provider);
   const current = await getBatch(churchId, provider, batchId);
   if (!current) return null;
+  const isActiveFilterChange = Object.hasOwn(input, 'filterSchemaVersion') || Object.hasOwn(input, 'filterConfig');
+  if (isActiveFilterChange && (current.filterSchemaVersion === 2 || input.filterSchemaVersion === 2)) {
+    assertSchema2ActiveFilterUsesDrafts();
+  }
   const allowed = ['name', 'enabled', 'filterSchemaVersion', 'filterConfig', 'defaultPeopleType', 'gatheringTypeId',
     'gatheringAutoRemoveEnabled', 'scheduleEnabled', 'scheduleFrequency', 'scheduleDay', 'legacyProviderBatchId'];
   for (const key of Object.keys(input)) {
