@@ -27,6 +27,7 @@ const v2Batch: PeopleSyncBatch<BooleanFilterConfigV2> = {
   id: 4, provider: 'planning_center', name: 'Members', enabled: true, filterSchemaVersion: 2,
   filterConfig: filter, filterRevision: 1, draftFilterSchemaVersion: 2, draftFilterConfig: filter,
   draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T00:00:00.000Z', needsFilterReview: true,
+  initialFilterReviewPending: false,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: 8, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
@@ -92,7 +93,7 @@ describe('PlanningCenterBatchEditor', () => {
   });
 
   it('creates one schema-v2 batch with the proposed draft', async () => {
-    const created = { ...v2Batch, id: 10, needsFilterReview: true };
+    const created = { ...v2Batch, id: 10, needsFilterReview: true, initialFilterReviewPending: true };
     vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch: created } });
     const onSaved = vi.fn();
     renderEditor(null, onSaved);

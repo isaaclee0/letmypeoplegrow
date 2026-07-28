@@ -63,6 +63,23 @@ function settings(name) {
   };
 }
 
+function schema2CreateBody(name, overrides = {}) {
+  return {
+    ...settings(name), filterSchemaVersion: 2,
+    draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] },
+    broadMatchAcknowledged: false,
+    ...overrides,
+  };
+}
+
+function seedPcoFilterCache(churchId) {
+  filterFactsCache.putComplete({
+    churchId, provider: 'planning_center', mode: 'full', complete: true,
+    coveredDimensionIds: ['membership'], populationGateDigest: 'gate', facts: [],
+    dimensions: [{ id: 'membership', label: 'Membership', category: 'People', cardinality: 'single', values: [{ id: 'Member', label: 'Member', count: 0 }] }],
+  });
+}
+
 async function createSchema2Batch(churchId) {
   const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
   filterFactsCache.putComplete({
@@ -99,6 +116,70 @@ test('PCO schema-2 PUT accepts settings only and preserves compatibility criteri
       assert.equal(legacy[0].membership_allowlist, JSON.stringify(['Legacy members']));
       assert.equal(legacy[0].field_filter_enabled, 1);
       assert.equal(legacy[0].default_people_type, 'local_visitor');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('PCO schema-2 POST rejects invalid schedule ranges, unsafe gathering IDs, unknown fields, and wrong field types', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    seedPcoFilterCache(churchId);
+    const app = await startApp(churchId);
+    try {
+      const invalidBodies = [
+        schema2CreateBody('Weekly 7', { scheduleFrequency: 'weekly', scheduleDay: 7 }),
+        schema2CreateBody('Monthly 0', { scheduleFrequency: 'monthly', scheduleDay: 0 }),
+        schema2CreateBody('Zero gathering', { gatheringTypeId: 0 }),
+        schema2CreateBody('Negative gathering', { gatheringTypeId: -1 }),
+        schema2CreateBody('Unsafe gathering', { gatheringTypeId: Number.MAX_SAFE_INTEGER + 1 }),
+        schema2CreateBody('Fraction gathering', { gatheringTypeId: 1.5 }),
+        schema2CreateBody('Wrong auto remove', { gatheringAutoRemoveEnabled: 'false' }),
+        { ...schema2CreateBody('Unknown'), unexpected: true },
+        { ...schema2CreateBody('Smuggled'), filterConfig: { branches: [], exclusions: [] } },
+      ];
+      for (const body of invalidBodies) {
+        const response = await app.request('/api/integrations/planning-center/sync-batches', { method: 'POST', body });
+        assert.equal(response.status, 400, body.name);
+      }
+      assert.equal((await pcoSync.listBatches(churchId)).length, 0);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('PCO schema-2 POST accepts weekly/monthly boundaries and positive safe gathering IDs', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    seedPcoFilterCache(churchId);
+    const gathering = await Database.query('INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Monthly gathering']);
+    const app = await startApp(churchId);
+    try {
+      const weekly = await app.request('/api/integrations/planning-center/sync-batches', {
+        method: 'POST', body: schema2CreateBody('Weekly boundary', { scheduleFrequency: 'weekly', scheduleDay: 0, gatheringTypeId: null }),
+      });
+      const monthly = await app.request('/api/integrations/planning-center/sync-batches', {
+        method: 'POST', body: schema2CreateBody('Monthly boundary', { scheduleFrequency: 'monthly', scheduleDay: 31, gatheringTypeId: gathering.insertId }),
+      });
+      assert.equal(weekly.status, 200);
+      assert.equal(monthly.status, 200);
+      assert.equal(weekly.body.batch.scheduleDay, 0);
+      assert.equal(monthly.body.batch.scheduleDay, 31);
+      assert.equal(monthly.body.batch.gatheringTypeId, gathering.insertId);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('PCO DELETE rejects unsafe batch identifiers before repository lookup', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const app = await startApp(churchId);
+    try {
+      for (const id of ['nope', '0', '-1', '1.5', '9007199254740992', '1e309']) {
+        const response = await app.request(`/api/integrations/planning-center/sync-batches/${id}`, { method: 'DELETE' });
+        assert.equal(response.status, 400, id);
+      }
     } finally {
       await app.close();
     }

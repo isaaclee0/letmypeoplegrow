@@ -33,7 +33,8 @@ const metadata = {
 };
 const batch: PeopleSyncBatch = {
   id: 5, provider: 'elvanto', name: 'Members', enabled: true, filterSchemaVersion: 1,
-  filterConfig: {}, defaultPeopleType: 'regular', gatheringTypeId: null,
+  filterConfig: {}, initialFilterReviewPending: false,
+  defaultPeopleType: 'regular', gatheringTypeId: null,
   gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly',
   scheduleDay: 1, legacyProviderBatchId: null, lastExternalWatermark: null,
   lastSyncAt: null, lastSyncResult: null,

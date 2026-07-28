@@ -45,6 +45,7 @@ vi.mock('../components/planningCenter/PlanningCenterBatchEditor', () => ({
       draftFilterBaseRevision: 1,
       draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z',
       needsFilterReview: true,
+      initialFilterReviewPending: true,
       defaultPeopleType: 'regular',
       gatheringTypeId: null,
       gatheringAutoRemoveEnabled: false,

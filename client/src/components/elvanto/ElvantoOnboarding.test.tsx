@@ -25,6 +25,7 @@ const batch: PeopleSyncBatch = {
   filterConfig: { branches: [], exclusions: [] }, filterRevision: 1,
   draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] },
   draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T08:00:00.000Z', needsFilterReview: true,
+  initialFilterReviewPending: true,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,

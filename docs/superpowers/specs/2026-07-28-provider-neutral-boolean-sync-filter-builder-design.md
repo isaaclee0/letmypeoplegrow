@@ -125,7 +125,9 @@ interface FilterDimension {
   values: Array<{
     id: string;
     label: string;
-    count: number;
+    // null means the value is discoverable but this snapshot did not
+    // capture the dimension's per-person facts.
+    count: number | null;
   }>;
 }
 
@@ -243,6 +245,9 @@ The server holds at most one latest complete filter-facts snapshot per church/pr
 - It is cleared on provider disconnect and disappears harmlessly on server restart.
 - It is never returned to the browser.
 - The cache records which dimensions are covered. Missing coverage produces `Count unavailable`; it must never be treated as an empty value or a zero match.
+- Canonical dimension discovery is separate from facts coverage. An explicit refresh returns intrinsic dimensions and provider custom-field definitions, while values outside `coveredDimensionIds` carry `count: null`.
+- Metadata reads and previews never fetch a provider. On a cold cache the builder still renders an explicit **Refresh people data** action; that refresh is the only filter-builder endpoint allowed to fetch provider data.
+- A proposed uncovered dimension is structurally checked before refresh, then canonically validated against metadata derived from that same refreshed snapshot before the old cache is replaced.
 - PCO populates it from its existing complete people cache when that cache is available; otherwise count remains unavailable until an explicit refresh or complete preview populates it.
 - Elvanto populates it during explicit people-data refresh, full reviewed preview, or full reconciliation.
 - An Elvanto refresh requests the union of custom-field dimensions required by active filters and the current draft. It does not retrieve every custom field automatically when unnecessary.
@@ -279,6 +284,7 @@ The presence of a draft means `Needs full review`.
 - Count preview evaluates the draft.
 - Normal batch display shows both that a draft exists and that the active sync still has different criteria.
 - A new version-2 batch has a nobody-matching active filter until its first reviewed promotion.
+- The initial sentinel is reported as `initialFilterReviewPending`. Its draft cannot be discarded and unattended sync rejects it before creating a run or fetching provider data. A reviewed empty/nobody filter is distinct because promotion advances `filterRevision` from 1 to 2.
 - A reviewed full preview evaluates the proposed draft for that batch and every other batch's active filter.
 - Applying that review promotes the draft and applies all resulting people/link/family/gathering changes in the same church database transaction.
 - The apply is guarded by active revision, draft digest, provider, church, full-snapshot identity, and review token. Any change rejects the apply as stale.

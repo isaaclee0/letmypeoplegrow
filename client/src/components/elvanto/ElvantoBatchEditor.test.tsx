@@ -24,6 +24,7 @@ const batch: PeopleSyncBatch<BooleanFilterConfigV2> = {
   id: 11, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 2,
   filterConfig: filter, filterRevision: 1, draftFilterSchemaVersion: 2, draftFilterConfig: filter,
   draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T00:00:00.000Z', needsFilterReview: true,
+  initialFilterReviewPending: false,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
@@ -79,7 +80,7 @@ describe('ElvantoBatchEditor', () => {
   });
 
   it('creates exactly one v2 batch carrying the draft and review state', async () => {
-    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch } });
+    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: { ...batch, initialFilterReviewPending: true } } });
     const onSaved = vi.fn();
     renderEditor(null, onSaved);
     await screen.findByText('Who qualifies?');

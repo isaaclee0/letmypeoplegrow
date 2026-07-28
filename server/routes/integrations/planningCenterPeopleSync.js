@@ -17,7 +17,7 @@ const defaultDeps = {
 
 function parseBatchId(raw) {
   const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function respondWithError(res, error, label) {

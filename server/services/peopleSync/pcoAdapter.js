@@ -75,7 +75,7 @@ function valuesForFacts(facts, dimensionId) {
   return { counts, notSetCount };
 }
 
-function dimension({ id, label, cardinality, category, metadataValues = [], facts }) {
+function dimension({ id, label, cardinality, category, metadataValues = [], facts, countsAvailable = true }) {
   const { counts, notSetCount } = valuesForFacts(facts, id);
   const ids = sortedValues([...metadataValues, ...counts.keys()]);
   return {
@@ -84,8 +84,10 @@ function dimension({ id, label, cardinality, category, metadataValues = [], fact
     cardinality,
     category,
     values: [
-      ...ids.map((value) => ({ id: value, label: value, count: counts.get(value) || 0 })),
-      ...(notSetCount > 0 ? [{ id: NOT_SET, label: 'Not set', count: notSetCount }] : []),
+      ...ids.map((value) => ({ id: value, label: value, count: countsAvailable ? (counts.get(value) || 0) : null })),
+      ...(countsAvailable
+        ? (notSetCount > 0 ? [{ id: NOT_SET, label: 'Not set', count: notSetCount }] : [])
+        : [{ id: NOT_SET, label: 'Not set', count: null }]),
     ],
   };
 }
@@ -128,23 +130,25 @@ function buildPcoFilterDimensions({ facts = [], providerMetadata = {}, coveredDi
   const covered = coveredDimensionIds === undefined
     ? null
     : new Set(coveredDimensionIds instanceof Set ? coveredDimensionIds : coveredDimensionIds || []);
-  const isCovered = (dimensionId) => !covered || covered.has(dimensionId);
+  const countsAvailable = (dimensionId) => !covered || covered.has(dimensionId);
   const memberships = (providerMetadata.memberships || []).map((item) => item && item.membership);
   const fieldDefinitions = Array.isArray(providerMetadata.fieldDefinitions) ? providerMetadata.fieldDefinitions : [];
   const dimensions = [];
-  if (isCovered('membership')) dimensions.push(dimension({
+  dimensions.push(dimension({
     id: 'membership', label: 'Membership', cardinality: 'single', category: 'People', metadataValues: memberships, facts,
+    countsAvailable: countsAvailable('membership'),
   }));
   for (const field of fieldDefinitions) {
     if (!field || typeof field.id !== 'string' || !field.id) continue;
-    if (!isCovered(`custom_field:${field.id}`)) continue;
+    const id = `custom_field:${field.id}`;
     dimensions.push(dimension({
-      id: `custom_field:${field.id}`,
+      id,
       label: field.name || `Custom field ${field.id}`,
       cardinality: field.dataType === 'checkboxes' ? 'multi' : 'single',
       category: 'Custom fields',
       metadataValues: field.options || [],
       facts,
+      countsAvailable: countsAvailable(id),
     }));
   }
   return dimensions.sort((left, right) => left.id.localeCompare(right.id));

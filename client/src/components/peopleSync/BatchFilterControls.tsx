@@ -36,6 +36,7 @@ export default function BatchFilterControls({ provider, batch, value, onChange, 
   const [warnings, setWarnings] = useState<FilterPreviewResult['warnings']>([]);
   const [discarding, setDiscarding] = useState(false);
   const [discardError, setDiscardError] = useState<string | null>(null);
+  const [refreshingColdCache, setRefreshingColdCache] = useState(false);
   const handlePreview = useCallback((result: FilterPreviewResult | null) => {
     setWarnings(result?.warnings ?? []);
   }, []);
@@ -58,6 +59,20 @@ export default function BatchFilterControls({ provider, batch, value, onChange, 
   useEffect(() => { void loadMetadata(); }, [provider]);
   useEffect(() => { onBroadWarningChange(warnings.includes('BROAD_FILTER')); }, [onBroadWarningChange, warnings]);
 
+  const refreshColdCache = async () => {
+    setRefreshingColdCache(true);
+    setMetadataError(null);
+    try {
+      const response = await peopleSyncAPI.refreshFilterSnapshot(provider, { filterConfig: value });
+      setMetadata(response.data.metadata);
+    } catch (error) {
+      setMetadataError(message(error, 'Filter metadata is unavailable.'));
+    } finally {
+      setRefreshingColdCache(false);
+      setLoadingMetadata(false);
+    }
+  };
+
   const discard = async () => {
     if (!batch || !batch.draftFilterConfig) return;
     setDiscarding(true);
@@ -78,11 +93,11 @@ export default function BatchFilterControls({ provider, batch, value, onChange, 
         <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Who qualifies?</h2>
         {batch?.filterSchemaVersion === 2 ? <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">Active criteria are unchanged until you complete a full review.</p> : null}
       </div>
-      {batch?.draftFilterConfig ? <button type="button" onClick={() => { void discard(); }} disabled={discarding} className="text-sm font-medium text-gray-700 underline disabled:opacity-50 dark:text-gray-200">{discarding ? 'Discarding draft…' : 'Discard draft'}</button> : null}
+      {batch?.draftFilterConfig && !batch.initialFilterReviewPending ? <button type="button" onClick={() => { void discard(); }} disabled={discarding} className="text-sm font-medium text-gray-700 underline disabled:opacity-50 dark:text-gray-200">{discarding ? 'Discarding draft…' : 'Discard draft'}</button> : null}
     </div>
     {discardError ? <p role="alert" className="text-sm text-red-600 dark:text-red-400">{discardError}</p> : null}
     {loadingMetadata ? <p className="text-sm text-gray-600 dark:text-gray-300">Loading filter metadata…</p> : null}
-    {metadataError ? <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"><p>{metadataError}</p><button type="button" onClick={() => { void loadMetadata(); }} className="mt-2 underline">Retry filter metadata</button></div> : null}
+    {metadataError ? <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"><p>{metadataError}</p><div className="mt-2 flex gap-3"><button type="button" onClick={() => { void refreshColdCache(); }} disabled={refreshingColdCache} className="underline disabled:opacity-50">{refreshingColdCache ? 'Refreshing people data…' : 'Refresh people data'}</button><button type="button" onClick={() => { void loadMetadata(); }} className="underline">Retry filter metadata</button></div></div> : null}
     {metadata ? <>
       <FilterBuilder metadata={metadata} value={value} onChange={onChange} />
       <FilterPreviewSummary provider={provider} batchId={batch?.id ?? null} value={value} enabled={enabled} defaultPeopleType={defaultPeopleType} gatheringTypeId={gatheringTypeId} onMetadata={setMetadata} onPreview={handlePreview} />

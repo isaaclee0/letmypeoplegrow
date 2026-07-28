@@ -49,7 +49,7 @@ const batch: PeopleSyncBatch = {
   id: 12, provider: 'planning_center', name: 'Members', enabled: true,
   filterSchemaVersion: 1, filterConfig: {}, filterRevision: 1,
   draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null,
-  draftFilterUpdatedAt: null, needsFilterReview: false,
+  draftFilterUpdatedAt: null, needsFilterReview: false, initialFilterReviewPending: false,
   defaultPeopleType: 'regular',
   gatheringTypeId: null,
   gatheringAutoRemoveEnabled: false,

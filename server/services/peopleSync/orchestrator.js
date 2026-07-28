@@ -52,6 +52,7 @@ const logger = require('../../config/logger');
 const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
+const unattendedPolicy = require('./unattendedPolicy');
 const runRepository = require('./runRepository');
 const linkRepository = require('./linkRepository');
 const authority = require('./authority');
@@ -189,6 +190,7 @@ const defaultDeps = {
   captureFilterSnapshotInput,
   normalizeProviderMetadata,
   requiredDimensionIdsForBatch,
+  getUnattendedProviderEnabled: unattendedPolicy.isProviderUnattendedEnabled,
 };
 
 function mergeDeps(overrides) {
@@ -799,8 +801,18 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
       409
     );
   }
+  if (!(await deps.getUnattendedProviderEnabled(churchId, provider))) {
+    throw new OrchestratorError(
+      'SYNC_UNATTENDED_DISABLED',
+      `Unattended ${provider === 'planning_center' ? 'Planning Center' : provider} sync is disabled for this church`,
+      409
+    );
+  }
 
   const requestedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  if (pre.batches.some((batch) => batchRepository.isInitialFilterReviewPending(batch))) {
+    throw new OrchestratorError('SYNC_FILTER_INITIAL_REVIEW_REQUIRED', 'The initial filter must be reviewed before unattended sync can run', 409);
+  }
   if (pre.batches.some((batch) => batch.filterSchemaVersion === 2 && batch.draftFilterConfig)) {
     throw new OrchestratorError('SYNC_FILTER_REVIEW_REQUIRED', 'A schema-2 filter draft must be reviewed before unattended sync can run', 409);
   }

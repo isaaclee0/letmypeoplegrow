@@ -83,6 +83,7 @@ function makeDeps({
     listBatches: record(calls, 'listBatches', async () => batches),
     getSyncSettings: async () => ({ includeContacts: true, alignPeopleType: true }),
     getAuthority: async () => authorityState,
+    getUnattendedProviderEnabled: async () => true,
     beginAuthoritySwitch: record(calls, 'beginAuthoritySwitch', async () => ({ active: authorityState.active, pending: 'elvanto' })),
     startRun: record(calls, 'startRun', async () => ({ id: nextRunId++ })),
     finishRun: record(calls, 'finishRun', async (input) => input),
@@ -351,6 +352,22 @@ test('runUnattended rejects interactive run_now before any collaborator can muta
   assert.deepEqual(calls, []);
 });
 
+test('runUnattended blocks Planning Center when its master switch is off before startRun or provider fetch', async () => {
+  const { deps, calls } = makeDeps({
+    batches: [fakeBatch({ provider: 'planning_center' })],
+    authorityState: { active: 'planning_center', pending: null },
+    adapter: { ...fakeAdapter(), provider: 'planning_center' },
+    extra: { getUnattendedProviderEnabled: async () => false },
+  });
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'planning_center', batchId: 1 }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_UNATTENDED_DISABLED'
+  );
+  assert.equal(calls.includes('startRun'), false);
+  assert.equal(calls.includes('fetchSnapshot'), false);
+  assert.equal(calls.includes('applyPeopleSyncPlan'), false);
+});
+
 test('runUnattended blocks an authoritative schema-2 draft before starting a run or fetching', async () => {
   const { deps, calls } = makeDeps({
     batches: [fakeBatch({
@@ -365,6 +382,30 @@ test('runUnattended blocks an authoritative schema-2 draft before starting a run
   );
   assert.equal(calls.includes('startRun'), false);
   assert.equal(calls.includes('fetchSnapshot'), false);
+});
+
+test('runUnattended blocks a discarded initial schema-2 sentinel before starting a run or fetching', async () => {
+  const { deps, calls } = makeDeps({ batches: [fakeBatch({
+    filterSchemaVersion: 2, filterRevision: 1, filterConfig: { branches: [], exclusions: [] },
+    draftFilterSchemaVersion: null, draftFilterConfig: null,
+  })] });
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED'
+  );
+  assert.equal(calls.includes('startRun'), false);
+  assert.equal(calls.includes('fetchSnapshot'), false);
+  assert.equal(calls.includes('applyPeopleSyncPlan'), false);
+});
+
+test('runUnattended permits a reviewed empty schema-2 filter at revision 2', async () => {
+  const { deps, calls } = makeDeps({ batches: [fakeBatch({
+    filterSchemaVersion: 2, filterRevision: 2, filterConfig: { branches: [], exclusions: [] },
+    draftFilterSchemaVersion: null, draftFilterConfig: null,
+  })] });
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+  assert.equal(calls.includes('startRun'), true);
+  assert.equal(calls.includes('fetchSnapshot'), true);
 });
 
 test('runUnattended blocks every enabled schema-2 draft before a different requested batch starts', async () => {

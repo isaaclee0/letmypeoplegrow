@@ -112,15 +112,18 @@ test('does not expose terminal Elvanto statuses as positive selectable values', 
   assert.deepEqual(status.values.map((value) => value.id), ['active', 'contact']);
 });
 
-test('does not expose uncovered Elvanto dimensions or a zero-count Not set option', () => {
+test('discovers uncovered Elvanto dimensions with unavailable counts while covered status stays exact', () => {
   const adapter = createElvantoAdapter();
   const dimensions = adapter.buildFilterDimensions({
     facts: [{ externalPersonId: 'active', dimensions: { status: ['active'] } }],
     providerMetadata: { groups: [{ id: 'group-1', name: 'Choir' }] },
     coveredDimensionIds: ['status'],
   });
-  assert.deepEqual(dimensions.map((dimension) => dimension.id), ['status']);
-  assert.deepEqual(dimensions[0].values, [{ id: 'active', label: 'active', count: 1 }]);
+  assert.ok(dimensions.some((dimension) => dimension.id === 'groups'));
+  assert.deepEqual(dimensions.find((dimension) => dimension.id === 'status').values,
+    [{ id: 'active', label: 'active', count: 1 }]);
+  assert.deepEqual(dimensions.find((dimension) => dimension.id === 'groups').values,
+    [{ id: 'group-1', label: 'Choir', count: null }, { id: '$not_set', label: 'Not set', count: null }]);
 });
 
 test('registerBuiltInProviders registers both providers idempotently (a second call does not throw)', () => {

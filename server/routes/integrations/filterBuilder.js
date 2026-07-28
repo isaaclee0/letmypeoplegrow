@@ -23,6 +23,10 @@ const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
 const MAX_BODY_BYTES = 64 * 1024;
 const EMPTY_V2 = Object.freeze({ branches: [], exclusions: [] });
+const INTRINSIC_FACT_DIMENSIONS = Object.freeze({
+  planning_center: Object.freeze(['membership']),
+  elvanto: Object.freeze(['status', 'category', 'groups', 'demographics', 'departments', 'service_types', 'locations']),
+});
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
@@ -38,8 +42,8 @@ function parseBatchId(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function dimensionsFromBatches(batches, proposedConfig, selectedDimensions, requiredDimensions) {
-  const dimensions = new Set();
+function dimensionsFromBatches(provider, batches, proposedConfig, selectedDimensions, requiredDimensions) {
+  const dimensions = new Set(INTRINSIC_FACT_DIMENSIONS[provider] || []);
   for (const batch of Array.isArray(batches) ? batches : []) {
     const required = requiredDimensions(batch);
     if (required === null) return null;
@@ -79,6 +83,7 @@ function safeBatch(batch) {
     draftFilterBaseRevision: batch.draftFilterBaseRevision ?? null,
     draftFilterUpdatedAt: batch.draftFilterUpdatedAt ?? null,
     needsFilterReview: Boolean(batch.needsFilterReview),
+    initialFilterReviewPending: Boolean(batch.initialFilterReviewPending),
   };
 }
 
@@ -96,9 +101,8 @@ function permissiveMetadata(config, selectedPairsFn) {
   return { dimensions: [...byDimension].map(([id, values]) => ({ id, cardinality: 'multi', values: [...values].map((valueId) => ({ id: valueId })) })) };
 }
 
-function validateProposedFilter(config, entry, deps) {
-  const metadata = entry ? metadataFromEntry(entry) : permissiveMetadata(config, deps.selectedPairs);
-  return deps.validateFilterV2(config, metadata);
+function validateProposedFilterStructure(config, deps) {
+  return deps.validateFilterV2(config, permissiveMetadata(config, deps.selectedPairs));
 }
 
 function createFilterBuilderJsonParser() {
@@ -124,6 +128,9 @@ function unresolvedPairsFromDraft(batch, selectedPairsFn) {
 function safeError(res, error, label) {
   const code = error?.code;
   if (code === 'SYNC_FILTER_DRAFT_STALE') return res.status(409).json({ error: 'The filter draft changed. Refresh and try again.', code });
+  if (code === 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED') {
+    return res.status(409).json({ error: 'The initial filter must be reviewed before this batch can run.', code });
+  }
   if (code === 'SYNC_FILTER_UPGRADE_STALE' || code === 'SYNC_UPGRADE_STALE') {
     return res.status(409).json({ error: 'The filter upgrade is no longer current. Refresh and try again.', code: 'SYNC_FILTER_UPGRADE_STALE' });
   }
@@ -203,7 +210,7 @@ function createFilterBuilderRouter(overrides = {}) {
         if (warm) {
           const adapter = deps.getProvider(provider);
           const batches = await deps.listBatches(churchId, provider);
-          const coverage = dimensionsFromBatches(batches, EMPTY_V2, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
+          const coverage = dimensionsFromBatches(provider, batches, EMPTY_V2, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
           if (!coverage) return res.status(400).json({ error: 'Invalid saved filter.', code: 'SYNC_FILTER_INVALID' });
           const facts = (warm.people || []).filter((person) => adapter.isInFilterPopulation(person, {}))
             .map((person) => adapter.toFilterFacts(person, new Set(coverage)));
@@ -228,12 +235,11 @@ function createFilterBuilderRouter(overrides = {}) {
       if (body && !Object.keys(body).every((key) => key === 'filterConfig') || body?.filterConfig !== undefined && !isPlainObject(body.filterConfig)) {
         return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
       }
-      const previous = deps.cache.get(churchId, provider);
-      const proposedValidation = validateProposedFilter(body?.filterConfig || EMPTY_V2, previous, deps);
+      const proposedValidation = validateProposedFilterStructure(body?.filterConfig || EMPTY_V2, deps);
       if (!proposedValidation.ok) return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
       const proposedConfig = proposedValidation.value;
       const batches = await deps.listBatches(churchId, provider);
-      const coveredDimensionIds = dimensionsFromBatches(batches, proposedConfig, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
+      const coveredDimensionIds = dimensionsFromBatches(provider, batches, proposedConfig, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
       if (!coveredDimensionIds) return res.status(400).json({ error: 'Invalid saved filter.', code: 'SYNC_FILTER_INVALID' });
       const credentials = await deps.getCredentials(churchId, provider);
       if (!credentials) return res.status(409).json({ error: 'A provider connection is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE' });
@@ -252,6 +258,10 @@ function createFilterBuilderRouter(overrides = {}) {
       const providerMetadata = deps.normalizeProviderMetadata(provider, metadataResult);
       const settings = await deps.getSettings(churchId, provider);
       const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
+      const canonicalValidation = deps.validateFilterV2(proposedConfig, { dimensions: captured.dimensions });
+      if (!canonicalValidation.ok) {
+        return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
+      }
       const entry = deps.cache.putComplete({ churchId, provider, mode: 'full', complete: true,
         coveredDimensionIds: captured.coverage, facts: captured.facts, dimensions: captured.dimensions,
         populationGateDigest: captured.populationGateDigest });

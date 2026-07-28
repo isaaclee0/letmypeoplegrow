@@ -29,6 +29,7 @@ const authority = require('./authority');
 const batchRepository = require('./batchRepository');
 const connectionStore = require('./connectionStore');
 const orchestrator = require('./orchestrator');
+const unattendedPolicy = require('./unattendedPolicy');
 
 const PROVIDERS = ['planning_center', 'elvanto'];
 
@@ -91,6 +92,7 @@ async function runChurch(churchId, options = {}) {
     runUnattended = orchestrator.runUnattended,
     recordBatchResult = batchRepository.recordBatchResult,
     getFullReconciliationSchedule = defaultGetFullReconciliationSchedule,
+    getUnattendedProviderEnabled = unattendedPolicy.isProviderUnattendedEnabled,
     skipScheduleCheck = false,
     now = new Date(),
   } = options;
@@ -128,6 +130,15 @@ async function runChurch(churchId, options = {}) {
       // rule independently — this is a cheap pre-filter, not the sole
       // guard.
       if (authorityState.active !== provider) continue;
+
+      let unattendedEnabled;
+      try {
+        unattendedEnabled = await getUnattendedProviderEnabled(churchId, provider);
+      } catch (err) {
+        logger.error(`peopleSync scheduler: failed to load unattended policy for ${provider} in church ${churchId}: ${err.message}`);
+        continue;
+      }
+      if (!unattendedEnabled) continue;
 
       let batches;
       try {

@@ -52,7 +52,8 @@ export interface BooleanFilterConfigV2 {
 export interface FilterDimensionValue {
   id: string;
   label: string;
-  count: number;
+  /** null means the dimension was discovered but this snapshot did not capture its per-person facts. */
+  count: number | null;
 }
 
 export interface FilterDimension {
@@ -141,6 +142,7 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   draftFilterBaseRevision: number | null;
   draftFilterUpdatedAt: string | null;
   needsFilterReview: boolean;
+  initialFilterReviewPending: boolean;
   defaultPeopleType: PeopleType;
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;
@@ -174,6 +176,7 @@ export interface PeopleSyncFilterState<TFilter = Record<string, unknown>> {
   draftFilterBaseRevision: number | null;
   draftFilterUpdatedAt: string | null;
   needsFilterReview: boolean;
+  initialFilterReviewPending: boolean;
 }
 
 // Elvanto batches are only ever written through batchRepository's own

@@ -28,6 +28,7 @@ test('batch repository maps the complete stable DTO and preserves its schema ver
       scheduleFrequency: 'monthly', scheduleDay: 4, legacyProviderBatchId: 9,
       filterRevision: 1, draftFilterSchemaVersion: null, draftFilterConfig: null,
       draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false,
+      initialFilterReviewPending: false,
       lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
     });
     const updated = await updateBatch({ churchId, provider: 'elvanto', batchId: created.id, name: 'Renamed', enabled: true });
@@ -62,6 +63,7 @@ test('batch repository persists reviewed filter drafts without changing the acti
     assert.deepEqual(created.draftFilterConfig, proposed);
     assert.equal(created.draftFilterBaseRevision, 1);
     assert.equal(created.needsFilterReview, true);
+    assert.equal(created.initialFilterReviewPending, true);
 
     const saved = await saveFilterDraft({
       churchId, provider: 'elvanto', batchId: created.id, schemaVersion: 2,
@@ -71,11 +73,13 @@ test('batch repository persists reviewed filter drafts without changing the acti
     assert.deepEqual(saved.draftFilterConfig, { branches: [], exclusions: [{ field: 'status', value: 'inactive' }] });
     assert.equal(saved.draftFilterBaseRevision, 1);
 
-    const discarded = await discardFilterDraft(churchId, 'elvanto', created.id);
-    assert.deepEqual(discarded.filterConfig, { branches: [], exclusions: [] });
-    assert.equal(discarded.draftFilterConfig, null);
-    assert.equal(discarded.draftFilterBaseRevision, null);
-    assert.equal(discarded.needsFilterReview, false);
+    await assert.rejects(
+      discardFilterDraft(churchId, 'elvanto', created.id),
+      (error) => error?.code === 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED'
+    );
+    const retained = await getBatch(churchId, 'elvanto', created.id);
+    assert.deepEqual(retained.draftFilterConfig, { branches: [], exclusions: [{ field: 'status', value: 'inactive' }] });
+    assert.equal(retained.initialFilterReviewPending, true);
   });
 });
 
@@ -183,6 +187,7 @@ test('batch repository promotes drafts only when the revision and digest guards 
     assert.equal(promoted.draftFilterBaseRevision, null);
     assert.equal(promoted.draftFilterUpdatedAt, null);
     assert.equal(promoted.needsFilterReview, false);
+    assert.equal(promoted.initialFilterReviewPending, false);
   });
 });
 

@@ -1289,22 +1289,64 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
 
 const PCO_PEOPLE_TYPES = ['regular', 'local_visitor', 'traveller_visitor'];
 const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
+const PCO_V1_CREATE_FIELDS = new Set([
+  'name', 'filterSchemaVersion', 'membershipFilterEnabled', 'membershipAllowlist', 'fieldFilterEnabled', 'fieldFilters',
+  'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
+]);
+const PCO_V2_CREATE_FIELDS = new Set([
+  'name', 'filterSchemaVersion', 'draftFilterConfig', 'broadMatchAcknowledged',
+  'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
+]);
+
+function parsePositiveSafeInteger(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function validateGatheringTypeId(value) {
+  return value === null || value === undefined || Number.isSafeInteger(value) && value > 0
+    ? null : 'gatheringTypeId must be null or a positive safe integer.';
+}
+
+function validateBatchSchedule(scheduleFrequency, scheduleDay) {
+  if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
+  if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
+  if (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6)) {
+    return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
+  }
+  if (scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31)) {
+    return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
+  }
+  return null;
+}
+
+function validateAllowedFields(body, allowed, message) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Request body must be an object.';
+  return Object.keys(body).find((key) => !allowed.has(key)) ? message : null;
+}
 
 function validateBatchBody(body) {
   if (body && body.filterSchemaVersion === 2) {
-    const { name, draftFilterConfig, broadMatchAcknowledged, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+    const fieldError = validateAllowedFields(body, PCO_V2_CREATE_FIELDS, 'Schema-2 create contains an unknown or active-filter field.');
+    if (fieldError) return fieldError;
+    const { name, draftFilterConfig, broadMatchAcknowledged, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
     if (typeof name !== 'string' || !name.trim()) return 'name is required.';
     if (!draftFilterConfig || typeof draftFilterConfig !== 'object' || Array.isArray(draftFilterConfig)) return 'draftFilterConfig must be an object.';
     if (typeof broadMatchAcknowledged !== 'boolean') return 'broadMatchAcknowledged must be a boolean.';
     if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
-    if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) return 'gatheringTypeId must be an integer or null.';
+    const gatheringError = validateGatheringTypeId(gatheringTypeId);
+    if (gatheringError) return gatheringError;
+    if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
     if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
-    if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
-    if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
-    return null;
+    return validateBatchSchedule(scheduleFrequency, scheduleDay);
   }
+  const fieldError = validateAllowedFields(body, PCO_V1_CREATE_FIELDS, 'Unknown Planning Center batch field.');
+  if (fieldError) return fieldError;
   const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
           defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+  if (body.filterSchemaVersion !== undefined && body.filterSchemaVersion !== 1) return 'filterSchemaVersion must be 1 or 2.';
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
   if (typeof membershipFilterEnabled !== 'boolean') return 'membershipFilterEnabled must be a boolean.';
   if (typeof fieldFilterEnabled !== 'boolean') return 'fieldFilterEnabled must be a boolean.';
@@ -1320,19 +1362,10 @@ function validateBatchBody(body) {
   if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) {
     return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
   }
-  if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) {
-    return 'gatheringTypeId must be an integer or null.';
-  }
+  const gatheringError = validateGatheringTypeId(gatheringTypeId);
+  if (gatheringError) return gatheringError;
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
-  if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
-  if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
-  if (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6)) {
-    return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
-  }
-  if (scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31)) {
-    return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
-  }
-  return null;
+  return validateBatchSchedule(scheduleFrequency, scheduleDay);
 }
 
 const PCO_SCHEMA2_SETTINGS_FIELDS = new Set([
@@ -1354,14 +1387,11 @@ function validateSchema2SettingsUpdate(body) {
   const { name, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
   if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
-  if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) return 'gatheringTypeId must be an integer or null.';
+  const gatheringError = validateGatheringTypeId(gatheringTypeId);
+  if (gatheringError) return gatheringError;
   if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
-  if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
-  if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
-  if (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6)) return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
-  if (scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31)) return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
-  return null;
+  return validateBatchSchedule(scheduleFrequency, scheduleDay);
 }
 
 function hasSmuggledActiveFilterFields(body) {
@@ -1445,8 +1475,8 @@ router.post('/planning-center/sync-batches', async (req, res) => {
 router.put('/planning-center/sync-batches/:id', async (req, res) => {
   try {
     const churchId = req.user.church_id;
-    const batchId = Number(req.params.id);
-    if (!Number.isSafeInteger(batchId) || batchId <= 0) {
+    const batchId = parsePositiveSafeInteger(req.params.id);
+    if (batchId === null) {
       return res.status(400).json({ error: 'Invalid sync batch id.' });
     }
     const existing = await pcoSync.getBatch(churchId, batchId);
@@ -1543,7 +1573,8 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
 router.delete('/planning-center/sync-batches/:id', async (req, res) => {
   try {
     const churchId = req.user.church_id;
-    const batchId = Number(req.params.id);
+    const batchId = parsePositiveSafeInteger(req.params.id);
+    if (batchId === null) return res.status(400).json({ error: 'Invalid sync batch id.' });
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
     await pcoSync.deleteBatch(churchId, batchId);

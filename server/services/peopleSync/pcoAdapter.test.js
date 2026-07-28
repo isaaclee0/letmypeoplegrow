@@ -128,7 +128,7 @@ test('maps the legacy PCO absence sentinel to an omitted canonical fact', () => 
   assert.deepEqual(facts, { externalPersonId: 'p3', dimensions: {} });
 });
 
-test('does not expose uncovered PCO custom fields or a zero-count Not set option', () => {
+test('discovers uncovered PCO custom fields with unavailable counts while covered membership stays exact', () => {
   const a = adapter();
   const dimensions = a.buildFilterDimensions({
     facts: [{ externalPersonId: 'p1', dimensions: { membership: ['Member'] } }],
@@ -138,8 +138,11 @@ test('does not expose uncovered PCO custom fields or a zero-count Not set option
     },
     coveredDimensionIds: ['membership'],
   });
-  assert.deepEqual(dimensions.map((dimension) => dimension.id), ['membership']);
-  assert.deepEqual(dimensions[0].values, [{ id: 'Member', label: 'Member', count: 1 }]);
+  assert.deepEqual(dimensions.map((dimension) => dimension.id), ['custom_field:12', 'membership']);
+  assert.deepEqual(dimensions.find((dimension) => dimension.id === 'membership').values,
+    [{ id: 'Member', label: 'Member', count: 1 }]);
+  assert.deepEqual(dimensions.find((dimension) => dimension.id === 'custom_field:12').values,
+    [{ id: 'Choir', label: 'Choir', count: null }, { id: '$not_set', label: 'Not set', count: null }]);
 });
 
 test('fetchSnapshot normalizes an active PCO person: state, provider tag, familyId from householdId', async () => {

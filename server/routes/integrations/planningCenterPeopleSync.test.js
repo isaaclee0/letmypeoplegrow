@@ -67,3 +67,17 @@ test('POST batch apply rejects a direct blind apply and forwards the reviewed to
     reviewToken: 'pco-review', selections: { skipExternalPersonIds: ['pco-1'] }, userId: 9,
   }]);
 });
+
+test('plan and apply reject unsafe batch identifiers before invoking orchestration', async () => {
+  let calls = 0;
+  await withServer({
+    buildReview: async () => { calls += 1; return {}; },
+    applyReviewed: async () => { calls += 1; return {}; },
+  }, async (base) => {
+    for (const id of ['0', '-1', '1.5', '9007199254740992', '1e309']) {
+      assert.equal((await requestJson(`${base}/sync-batches/${id}/plan`)).status, 400, id);
+      assert.equal((await requestJson(`${base}/sync-batches/${id}/apply`, { method: 'POST', body: { reviewToken: 'token' } })).status, 400, id);
+    }
+  });
+  assert.equal(calls, 0);
+});

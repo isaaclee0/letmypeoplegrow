@@ -14,6 +14,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('../../config/database');
+const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { isDueToday, runChurch, runAllChurches } = require('./scheduler');
 
 const MONDAY = new Date('2026-07-06T02:00:00'); // matches a weekly schedule with scheduleDay=1
@@ -36,6 +37,7 @@ function baseOptions(overrides = {}) {
     now: MONDAY,
     getAuthority: async () => ({ active: 'planning_center', pending: null }),
     getConnection: async () => ({ connectionStatus: 'connected' }),
+    getUnattendedProviderEnabled: async () => true,
     getFullReconciliationSchedule: async () => ({ frequency: 'weekly', day: 1 }),
     recordBatchResult: async () => {},
     ...overrides,
@@ -74,6 +76,64 @@ test('a batch for the active authority provider runs unattended', async () => {
     runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
   }));
   assert.deepEqual(executed, [10]);
+});
+
+test('Planning Center master switch off skips unattended dispatch before any batch run', async () => {
+  const executed = [];
+  await runChurch('church-a', baseOptions({
+    providers: ['planning_center'],
+    getUnattendedProviderEnabled: async (_churchId, provider) => provider !== 'planning_center',
+    listBatches: async () => [baseBatch({ id: 101 })],
+    runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
+  }));
+  assert.deepEqual(executed, []);
+});
+
+test('Planning Center master switch on permits the existing authority and schedule gates to dispatch', async () => {
+  const executed = [];
+  await runChurch('church-a', baseOptions({
+    providers: ['planning_center'],
+    getUnattendedProviderEnabled: async () => true,
+    listBatches: async () => [baseBatch({ id: 102 })],
+    runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
+  }));
+  assert.deepEqual(executed, [102]);
+});
+
+test('Planning Center master switch policy does not disable Elvanto scheduling', async () => {
+  const executed = [];
+  await runChurch('church-a', baseOptions({
+    providers: ['elvanto'], getAuthority: async () => ({ active: 'elvanto', pending: null }),
+    getUnattendedProviderEnabled: async (_churchId, provider) => provider !== 'planning_center',
+    listBatches: async () => [baseBatch({ id: 103, provider: 'elvanto' })],
+    runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
+  }));
+  assert.deepEqual(executed, [103]);
+});
+
+test('real church setting turns Planning Center scheduler dispatch off and on while Elvanto remains unaffected', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const executed = [];
+    const options = {
+      now: MONDAY, providers: ['planning_center'],
+      getAuthority: async () => ({ active: 'planning_center', pending: null }),
+      listBatches: async (_churchId, provider) => [baseBatch({ id: 104, provider })],
+      getConnection: async () => ({ connectionStatus: 'connected' }),
+      getFullReconciliationSchedule: async () => ({ frequency: 'weekly', day: 1 }),
+      runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
+      recordBatchResult: async () => {},
+    };
+    await Database.query('UPDATE church_settings SET planning_center_sync_enabled = 0 WHERE church_id = ?', [churchId]);
+    await runChurch(churchId, options);
+    assert.deepEqual(executed, []);
+    await Database.query('UPDATE church_settings SET planning_center_sync_enabled = 1 WHERE church_id = ?', [churchId]);
+    await runChurch(churchId, options);
+    assert.deepEqual(executed, [104]);
+
+    await runChurch(churchId, { ...options, providers: ['elvanto'], getAuthority: async () => ({ active: 'elvanto', pending: null }),
+      listBatches: async () => [baseBatch({ id: 105, provider: 'elvanto' })] });
+    assert.deepEqual(executed, [104, 105]);
+  });
 });
 
 test('non-authoritative scheduled batches are skipped entirely (no execution)', async () => {

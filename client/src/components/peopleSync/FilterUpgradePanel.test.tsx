@@ -18,7 +18,8 @@ vi.mock('../../services/api', () => ({
 const legacy = (id: number, name: string): PeopleSyncBatch => ({
   id, provider: 'elvanto', name, enabled: true, filterSchemaVersion: 1, filterConfig: {}, filterRevision: 3,
   draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null,
-  needsFilterReview: false, defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
+  needsFilterReview: false, initialFilterReviewPending: false,
+  defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: true, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null,
   lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 });

@@ -6,6 +6,7 @@ const express = require('express');
 const http = require('node:http');
 const { createFilterBuilderRouter, createFilterBuilderJsonParser } = require('./filterBuilder');
 const { captureFilterSnapshotInput, populationGateDigest } = require('../../services/peopleSync/filterSnapshot');
+const { validateFilterV2, selectedDimensionIds, selectedPairs } = require('../../services/peopleSync/filterEngine');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 const OTHER_ADMIN = { id: 2, church_id: 'churchb2', role: 'admin' };
@@ -192,6 +193,92 @@ test('refresh unions exact v1 and v2 custom-field dimensions and passes one snap
   assert.deepEqual(seen.args.customFieldIds.sort(), ['new', 'old', 'proposed']);
 });
 
+for (const providerCase of [
+  {
+    provider: 'planning_center', intrinsicId: 'membership', intrinsicValue: 'Member', customId: 'choir', customValue: 'Soprano',
+    adapter() {
+      return {
+        provider: 'planning_center',
+        fetchSnapshot: async () => ({ provider: 'planning_center', mode: 'full', complete: true, people: [{ id: 'p1', state: 'active', attributes: { membership: 'Member', fieldValues: { choir: ['Soprano'] } } }], families: [] }),
+        fetchMetadata: async () => ({ memberships: [{ membership: 'Member', count: 1 }], fieldDefinitions: [{ id: 'choir', name: 'Choir', dataType: 'checkboxes', options: ['Soprano'] }] }),
+        isInFilterPopulation: () => true,
+        toFilterFacts: (person, covered) => ({ externalPersonId: person.id, dimensions: Object.fromEntries([
+          covered.has('membership') ? ['membership', [person.attributes.membership]] : null,
+          covered.has('custom_field:choir') ? ['custom_field:choir', person.attributes.fieldValues.choir] : null,
+        ].filter(Boolean)) }),
+        buildFilterDimensions: ({ facts, coveredDimensionIds }) => ['membership', 'custom_field:choir'].map((id) => ({
+          id, label: id, category: 'People', cardinality: 'single', values: [{
+            id: id === 'membership' ? 'Member' : 'Soprano', label: id === 'membership' ? 'Member' : 'Soprano',
+            count: coveredDimensionIds.includes(id) ? facts.filter((fact) => fact.dimensions[id]?.length).length : null,
+          }],
+        })),
+      };
+    },
+  },
+  {
+    provider: 'elvanto', intrinsicId: 'status', intrinsicValue: 'active', customId: 'choir', customValue: 'Yes',
+    adapter() {
+      return {
+        provider: 'elvanto',
+        fetchSnapshot: async () => ({ provider: 'elvanto', mode: 'full', complete: true, people: [{ id: 'e1', state: 'active', attributes: { customFields: { choir: 'Yes' } } }], families: [] }),
+        fetchMetadata: async () => ({ customFields: [{ id: 'choir', name: 'Choir', type: 'select_single', values: [{ id: 'Yes', name: 'Yes' }] }] }),
+        isInFilterPopulation: () => true,
+        toFilterFacts: (person, covered) => ({ externalPersonId: person.id, dimensions: Object.fromEntries([
+          covered.has('status') ? ['status', [person.state]] : null,
+          covered.has('custom_field:choir') ? ['custom_field:choir', [person.attributes.customFields.choir]] : null,
+        ].filter(Boolean)) }),
+        buildFilterDimensions: ({ facts, coveredDimensionIds }) => ['status', 'custom_field:choir'].map((id) => ({
+          id, label: id, category: 'People', cardinality: 'single', values: [{
+            id: id === 'status' ? 'active' : 'Yes', label: id === 'status' ? 'active' : 'Yes',
+            count: coveredDimensionIds.includes(id) ? facts.filter((fact) => fact.dimensions[id]?.length).length : null,
+          }],
+        })),
+      };
+    },
+  },
+]) {
+  test(`${providerCase.provider} cold refresh discovers intrinsic and custom dimensions with exact versus unavailable counts`, async () => {
+    let entry = null;
+    const cache = { get: () => entry, putComplete: (next) => { entry = { ...next, snapshotId: 'cold', capturedAt: '2026-07-29T00:00:00.000Z', fresh: true, expiresAt: null }; return entry; } };
+    await withServer(deps({
+      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [],
+      validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
+    }), ADMIN, async (base) => {
+      const response = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, { method: 'POST', body: { filterConfig: { branches: [], exclusions: [] } } });
+      assert.equal(response.status, 200);
+      const intrinsic = response.body.metadata.dimensions.find((dimension) => dimension.id === providerCase.intrinsicId);
+      const custom = response.body.metadata.dimensions.find((dimension) => dimension.id === `custom_field:${providerCase.customId}`);
+      assert.ok(intrinsic, 'first refresh must expose intrinsic metadata');
+      assert.ok(custom, 'first refresh must expose custom definitions');
+      assert.equal(intrinsic.values.find((value) => value.id === providerCase.intrinsicValue).count, 1);
+      assert.equal(custom.values.find((value) => value.id === providerCase.customValue).count, null);
+    });
+  });
+
+  test(`${providerCase.provider} refresh discovers and canonically validates a proposed previously-uncovered custom dimension`, async () => {
+    const oldEntry = {
+      ...cachedEntry, provider: providerCase.provider, coveredDimensionIds: [providerCase.intrinsicId],
+      dimensions: [{ id: providerCase.intrinsicId, label: providerCase.intrinsicId, cardinality: 'single', category: 'People', values: [{ id: providerCase.intrinsicValue, label: providerCase.intrinsicValue, count: 1 }] }],
+    };
+    let entry = oldEntry;
+    let fetched = 0;
+    const adapter = providerCase.adapter();
+    const originalFetch = adapter.fetchSnapshot;
+    adapter.fetchSnapshot = async (args) => { fetched += 1; return originalFetch(args); };
+    const cache = { get: () => entry, putComplete: (next) => { entry = { ...next, snapshotId: 'expanded', capturedAt: '2026-07-29T00:00:00.000Z', fresh: true, expiresAt: null }; return entry; } };
+    const proposed = { branches: [{ groups: [{ dimensionId: `custom_field:${providerCase.customId}`, mode: 'any', values: [providerCase.customValue] }] }], exclusions: [] };
+    await withServer(deps({
+      cache, getProvider: () => adapter, listBatches: async () => [],
+      validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
+    }), ADMIN, async (base) => {
+      const response = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, { method: 'POST', body: { filterConfig: proposed } });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.metadata.dimensions.find((dimension) => dimension.id === `custom_field:${providerCase.customId}`).values.find((value) => value.id === providerCase.customValue).count, 1);
+    });
+    assert.equal(fetched, 1);
+  });
+}
+
 test('Elvanto refresh applies includeContacts=false to captured facts so cached previews match live eligibility', async () => {
   let entry = null;
   let previewFacts = null;
@@ -293,6 +380,17 @@ test('saving an empty v2 filter does not require a broad acknowledgement', async
     assert.equal(response.status, 200);
   });
   assert.equal(saved, true);
+});
+
+test('discarding an initial schema-2 draft reports review-required and retains the batch', async () => {
+  await withServer(deps({
+    getBatch: async () => ({ id: 1, provider: 'elvanto', initialFilterReviewPending: true, draftFilterConfig: filter }),
+    discardFilterDraft: async () => { const error = new Error('Initial filter review is required'); error.code = 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED'; throw error; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/sync-batches/1/filter-draft', { method: 'DELETE' });
+    assert.equal(response.status, 409);
+    assert.equal(response.body.code, 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED');
+  });
 });
 
 test('legacy upgrade previews return the converted filter and safe snapshot details without persisting a draft', async () => {

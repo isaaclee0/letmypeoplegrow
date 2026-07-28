@@ -361,6 +361,7 @@ function toLegacyPcoBatchDto(batch) {
     draftFilterBaseRevision: batch.draftFilterBaseRevision ?? null,
     draftFilterUpdatedAt: batch.draftFilterUpdatedAt ?? null,
     needsFilterReview: Boolean(batch.needsFilterReview),
+    initialFilterReviewPending: Boolean(batch.initialFilterReviewPending),
   };
 }
 

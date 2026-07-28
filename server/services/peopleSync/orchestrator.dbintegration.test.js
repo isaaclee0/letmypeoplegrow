@@ -25,6 +25,7 @@ process.env.SYNC_REVIEW_SECRET = process.env.SYNC_REVIEW_SECRET || 'test-secret-
 process.env.INTEGRATION_CREDENTIALS_KEY = process.env.INTEGRATION_CREDENTIALS_KEY || Buffer.alloc(32, 5).toString('base64');
 
 let scenario = { people: [], families: [] };
+let snapshotFetchCount = 0;
 
 providerRegistry.registerProvider('elvanto', {
   provider: 'elvanto',
@@ -32,6 +33,7 @@ providerRegistry.registerProvider('elvanto', {
     return { ok: true, metadata: {} };
   },
   async fetchSnapshot({ mode }) {
+    snapshotFetchCount += 1;
     return {
       provider: 'elvanto',
       mode: mode === 'incremental' ? 'incremental' : 'full',
@@ -61,6 +63,7 @@ providerRegistry.registerProvider('elvanto', {
 // Requiring orchestrator.js AFTER registerProvider is not required (getProvider
 // resolves lazily at call time), but is done here anyway for readability.
 const orchestrator = require('./orchestrator');
+const crypto = require('node:crypto');
 
 function personFixture(overrides = {}) {
   return { id: 'ext-1', firstName: 'Ada', lastName: 'Lovelace', state: 'active', child: false, familyId: null, ...overrides };
@@ -105,6 +108,40 @@ async function isActive(churchId, individualId) {
   const [row] = await Database.query('SELECT is_active FROM individuals WHERE id = ? AND church_id = ?', [individualId, churchId]);
   return !!Number(row.is_active);
 }
+
+test('a discarded initial schema-2 sentinel is blocked before run creation or provider fetch, while reviewed empty is runnable', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await Database.query(`UPDATE people_sync_settings SET authority_provider = 'elvanto' WHERE church_id = ?`, [churchId]);
+    const initial = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Initial',
+      initialDraftFilterConfig: { branches: [], exclusions: [] },
+    });
+    await Database.query(`UPDATE people_sync_batches SET draft_filter_schema_version = NULL, draft_filter_config = NULL,
+      draft_filter_base_revision = NULL, draft_filter_updated_at = NULL WHERE id = ? AND church_id = ?`, [initial.id, churchId]);
+    const fetchesBeforeBlock = snapshotFetchCount;
+    await assert.rejects(
+      orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: initial.id }),
+      (error) => error?.code === 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED'
+    );
+    assert.equal(snapshotFetchCount, fetchesBeforeBlock);
+    assert.equal((await runRepository.listRecentRuns(churchId, 'elvanto')).length, 0);
+    await batchRepository.deleteBatch(churchId, 'elvanto', initial.id);
+
+    const reviewed = await batchRepository.createBatch({
+      churchId, provider: 'elvanto', name: 'Reviewed empty',
+      initialDraftFilterConfig: { branches: [], exclusions: [] },
+    });
+    const digest = crypto.createHash('sha256').update(JSON.stringify({ branches: [], exclusions: [] })).digest('hex');
+    await batchRepository.promoteFilterDraftWithConnection(Database.getChurchDb(churchId), {
+      churchId, provider: 'elvanto', batchId: reviewed.id, expectedBaseRevision: 1, expectedDraftDigest: digest,
+    });
+    scenario = { people: [], families: [] };
+    const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: reviewed.id });
+    assert.equal(result.status, 'applied');
+    assert.equal(snapshotFetchCount, fetchesBeforeBlock + 1);
+  });
+});
 
 test('a manual review with no authority chosen yet builds a full preview, never mutates anything, and never proposes brand-new regulars', async () => {
   // Matches plan.js's own tested contract (see plan.test.js's "an inactive

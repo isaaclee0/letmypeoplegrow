@@ -55,9 +55,20 @@ function parseDraftFilterConfig(value) {
   return value === null || value === undefined ? null : parseFilterConfig(value);
 }
 
+function isCanonicalEmptyV2(filterConfig) {
+  return isPlainObject(filterConfig) && Object.keys(filterConfig).length === 2 &&
+    Array.isArray(filterConfig.branches) && filterConfig.branches.length === 0 &&
+    Array.isArray(filterConfig.exclusions) && filterConfig.exclusions.length === 0;
+}
+
+function isInitialFilterReviewPending(batch) {
+  return Number(batch?.filterSchemaVersion) === 2 && Number(batch?.filterRevision) === 1 &&
+    isCanonicalEmptyV2(batch?.filterConfig);
+}
+
 function toBatch(row) {
   if (!row) return null;
-  return {
+  const batch = {
     id: row.id,
     provider: row.provider,
     name: row.name,
@@ -81,6 +92,8 @@ function toBatch(row) {
     lastSyncAt: row.last_sync_at,
     lastSyncResult: row.last_sync_result,
   };
+  batch.initialFilterReviewPending = isInitialFilterReviewPending(batch);
+  return batch;
 }
 
 async function getBatch(churchId, provider, batchId) {
@@ -165,6 +178,12 @@ async function saveFilterDraft({ churchId, provider, batchId, schemaVersion, fil
 
 async function discardFilterDraft(churchId, provider, batchId) {
   assertProvider(provider);
+  const current = await getBatch(churchId, provider, batchId);
+  if (isInitialFilterReviewPending(current)) {
+    const error = new Error('The initial filter must be reviewed before this batch can run.');
+    error.code = 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED';
+    throw error;
+  }
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
     SET draft_filter_schema_version = NULL, draft_filter_config = NULL, draft_filter_base_revision = NULL,
       draft_filter_updated_at = NULL, updated_at = datetime('now')
@@ -293,4 +312,5 @@ module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
   upgradeLegacyFilterWithConnection,
+  isInitialFilterReviewPending,
 };
