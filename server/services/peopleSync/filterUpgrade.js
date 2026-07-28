@@ -67,6 +67,13 @@ function canonicalPcoValue(value) {
   return value === NOT_SET ? '$$not_set' : value;
 }
 
+function literalPcoMembershipValue(value) {
+  // The live v1 membership evaluator is a literal allowlist check. `(none)`
+  // is only a custom-field absence sentinel there; changing it to missing
+  // membership would make a direct upgrade behavior-changing.
+  return value === NOT_SET ? '$$not_set' : value;
+}
+
 function group(dimensionId, mode, values) {
   return { dimensionId, mode, values: sortedValues(values) };
 }
@@ -146,7 +153,7 @@ function evaluateLegacyFacts(provider, facts, config) {
   const valid = validatedLegacyConfig(provider, config);
   if (!valid) return false;
   if (provider === 'planning_center') {
-    const membership = valid.membershipFilterEnabled && legacyAny(facts, 'membership', valid.membershipAllowlist, canonicalPcoValue);
+    const membership = valid.membershipFilterEnabled && legacyAny(facts, 'membership', valid.membershipAllowlist, literalPcoMembershipValue);
     const fieldGroups = valid.fieldFilterEnabled
       ? valid.fieldFilters.map((field) => ({ field, values: sortedValues(field.values, canonicalPcoValue) })).filter(({ values }) => values.length)
       : [];
@@ -276,7 +283,8 @@ function staleError() {
 
 function validSnapshot(entry, churchId, provider) {
   return entry && entry.churchId === churchId && entry.provider === provider &&
-    typeof entry.snapshotId === 'string' && entry.snapshotId && Array.isArray(entry.facts);
+    typeof entry.snapshotId === 'string' && entry.snapshotId &&
+    typeof entry.populationGateDigest === 'string' && entry.populationGateDigest && Array.isArray(entry.facts);
 }
 
 async function applyCompatibleUpgrades({ churchId, provider, upgrades, cache = filterFactsCache } = {}) {
@@ -313,8 +321,16 @@ async function applyCompatibleUpgrades({ churchId, provider, upgrades, cache = f
       if (!comparison.compatible || !verifyUpgradeToken(upgrade.upgradeToken, expected).ok) throw staleError();
       verified.push({ batchId: row.id, filterRevision: Number(row.filter_revision), converted });
     }
+    // `conn.query` is synchronous for the SQLite connection supplied by
+    // Database.transactionForChurch. Re-check the cache immediately before
+    // that synchronous write loop, then do not yield: a refresh cannot slip
+    // in between this identity check and any committed row change.
+    const currentSnapshot = cache.get(churchId, provider);
+    if (!validSnapshot(currentSnapshot, churchId, provider) ||
+        currentSnapshot.snapshotId !== snapshot.snapshotId ||
+        currentSnapshot.populationGateDigest !== snapshot.populationGateDigest) throw staleError();
     for (const upgrade of verified) {
-      await upgradeLegacyFilterWithConnection(conn, {
+      upgradeLegacyFilterWithConnection(conn, {
         churchId, provider, batchId: upgrade.batchId, expectedRevision: upgrade.filterRevision,
         convertedFilterConfig: upgrade.converted,
       });
