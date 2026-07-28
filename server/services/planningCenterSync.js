@@ -5,6 +5,8 @@ const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
 const { applyPlan } = require('./planningCenter/apply');
 const batchRepository = require('./peopleSync/batchRepository');
+const filterFactsCache = require('./peopleSync/filterFactsCache');
+const { validateFilterV2, evaluateFilterV2 } = require('./peopleSync/filterEngine');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
 // Fetching every person from Planning Center is the slow part of a sync — several
@@ -392,6 +394,29 @@ function buildFilterConfigInput(input) {
 async function createBatch(churchId, input) {
   const filterConfig = buildFilterConfigInput(input);
   const isV2 = input.filterSchemaVersion === 2;
+  let initialDraftFilterConfig;
+  if (isV2) {
+    const entry = filterFactsCache.get(churchId, 'planning_center');
+    if (!entry) {
+      const error = new Error('A complete filter snapshot is required.');
+      error.code = 'SYNC_FILTER_CACHE_UNAVAILABLE';
+      throw error;
+    }
+    const validation = validateFilterV2(input.draftFilterConfig, { dimensions: entry.dimensions || [] });
+    if (!validation.ok) {
+      const error = new Error('Invalid Planning Center filter.');
+      error.code = 'SYNC_FILTER_INVALID';
+      throw error;
+    }
+    const notOnly = validation.value.branches.length === 0 && validation.value.exclusions.length > 0;
+    const wholePopulation = Array.isArray(entry.facts) && entry.facts.length > 0 && entry.facts.every((facts) => evaluateFilterV2(facts, validation.value));
+    if ((notOnly || wholePopulation) && input.broadMatchAcknowledged !== true) {
+      const error = new Error('Broad filters must be acknowledged.');
+      error.code = 'SYNC_FILTER_BROAD_ACK_REQUIRED';
+      throw error;
+    }
+    initialDraftFilterConfig = validation.value;
+  }
   const generic = await batchRepository.createBatch({
     churchId,
     provider: 'planning_center',
@@ -406,7 +431,7 @@ async function createBatch(churchId, input) {
     scheduleFrequency: input.scheduleFrequency,
     scheduleDay: input.scheduleDay,
     legacyProviderBatchId: null,
-    ...(isV2 ? { initialDraftFilterConfig: input.draftFilterConfig } : {}),
+    ...(isV2 ? { initialDraftFilterConfig } : {}),
   });
 
   const legacyRes = await Database.query(

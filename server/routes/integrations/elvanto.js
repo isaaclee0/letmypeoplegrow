@@ -37,6 +37,7 @@ const { createElvantoAdapter } = require('../../services/elvanto/adapter');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
 const legacyCredential = require('../../services/elvanto/legacyCredential');
 const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
+const { validateFilterV2, evaluateFilterV2 } = require('../../services/peopleSync/filterEngine');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
@@ -47,6 +48,7 @@ const BATCH_BODY_ALLOWED = new Set([
   'name', 'enabled', 'filterSchemaVersion', 'filterConfig', 'defaultPeopleType',
   'gatheringTypeId', 'gatheringAutoRemoveEnabled', 'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
   'draftFilterConfig',
+  'broadMatchAcknowledged',
 ]);
 const VALID_PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
 const VALID_SCHEDULE_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
@@ -139,6 +141,7 @@ function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAUL
   }
   if (body.filterConfig !== undefined && !isPlainObject(body.filterConfig)) return 'filterConfig must be an object.';
   if (body.draftFilterConfig !== undefined && !isPlainObject(body.draftFilterConfig)) return 'draftFilterConfig must be an object.';
+  if (body.broadMatchAcknowledged !== undefined && typeof body.broadMatchAcknowledged !== 'boolean') return 'broadMatchAcknowledged must be a boolean.';
   if (requireName && body.filterSchemaVersion === 2 && !isPlainObject(body.draftFilterConfig)) {
     return 'draftFilterConfig is required for schema-2 batches.';
   }
@@ -154,7 +157,7 @@ function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAUL
 function extractBatchFields(body) {
   const fields = {};
   for (const key of BATCH_BODY_ALLOWED) {
-    if (key === 'draftFilterConfig') continue;
+    if (key === 'draftFilterConfig' || key === 'broadMatchAcknowledged') continue;
     if (Object.hasOwn(body || {}, key)) fields[key] = body[key];
   }
   return fields;
@@ -194,6 +197,9 @@ const defaultDeps = {
   getOrMigrateCredentials: legacyCredential.getOrMigrateCredentials,
   deleteLegacyPreferences: defaultDeleteLegacyPreferences,
   clearFilterFactsCache: filterFactsCache.clear,
+  getFilterCache: filterFactsCache.get,
+  validateFilterV2,
+  evaluateFilterV2,
   getAuthority: authority.getAuthority,
   disableAuthority: authority.disableAuthority,
   listBatches: batchRepository.listBatches,
@@ -204,6 +210,19 @@ const defaultDeps = {
   buildReview: orchestrator.buildReview,
   applyReviewed: orchestrator.applyReviewed,
 };
+
+function initialV2Draft(deps, churchId, draftFilterConfig, broadMatchAcknowledged) {
+  const entry = deps.getFilterCache(churchId, PROVIDER);
+  if (!entry) return { error: 'A complete filter snapshot is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE', status: 409 };
+  const validation = deps.validateFilterV2(draftFilterConfig, { dimensions: entry.dimensions || [] });
+  if (!validation.ok) return { error: 'Invalid Elvanto filter.', code: 'SYNC_FILTER_INVALID', status: 400 };
+  const notOnly = validation.value.branches.length === 0 && validation.value.exclusions.length > 0;
+  const wholePopulation = Array.isArray(entry.facts) && entry.facts.length > 0 && entry.facts.every((facts) => deps.evaluateFilterV2(facts, validation.value));
+  if ((notOnly || wholePopulation) && !broadMatchAcknowledged) {
+    return { error: 'Broad filters must be acknowledged.', code: 'SYNC_FILTER_BROAD_ACK_REQUIRED', status: 400 };
+  }
+  return { value: validation.value };
+}
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────
 //
@@ -455,11 +474,16 @@ function createElvantoRouter(overrides = {}) {
       }
 
       const fields = extractBatchFields(body);
+      let initialDraft = null;
+      if (filterSchemaVersion === 2) {
+        initialDraft = initialV2Draft(deps, churchId, body.draftFilterConfig, body.broadMatchAcknowledged === true);
+        if (initialDraft.error) return res.status(initialDraft.status).json({ error: initialDraft.error, code: initialDraft.code });
+      }
       const batch = await deps.createBatch({
         churchId, provider: PROVIDER, ...fields,
         filterConfig: filterSchemaVersion === 2 ? { branches: [], exclusions: [] } : filterValidation.value,
         filterSchemaVersion,
-        ...(filterSchemaVersion === 2 ? { initialDraftFilterConfig: body.draftFilterConfig } : {}),
+        ...(filterSchemaVersion === 2 ? { initialDraftFilterConfig: initialDraft.value } : {}),
       });
       res.json({ success: true, batch });
     } catch (err) {
@@ -580,5 +604,6 @@ module.exports = {
   defaultDeps,
   respondWithError,
   validateBatchBody,
+  initialV2Draft,
   RouteTimeoutError,
 };

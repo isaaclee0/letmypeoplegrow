@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('./planningCenterSync');
+const filterFactsCache = require('./peopleSync/filterFactsCache');
 const { isDueToday } = pcoSync;
 
 test('peekCachedPcoPeople returns null for a cold church without fetching', () => {
@@ -219,8 +220,14 @@ test('createBatch defaults gatheringAutoRemoveEnabled to false when the caller o
 test('createBatch preserves stale v1 fields while atomically creating a v2 active-empty filter and draft', async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
+    filterFactsCache.putComplete({
+      churchId, provider: 'planning_center', mode: 'full', complete: true,
+      coveredDimensionIds: ['membership'], populationGateDigest: 'gate', facts: [],
+      dimensions: [{ id: 'membership', cardinality: 'single', values: [{ id: 'Member' }] }],
+    });
     const created = await pcoSync.createBatch(churchId, {
       name: 'Reviewed members', filterSchemaVersion: 2, draftFilterConfig: draft,
+      broadMatchAcknowledged: false,
       defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
       scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
     });

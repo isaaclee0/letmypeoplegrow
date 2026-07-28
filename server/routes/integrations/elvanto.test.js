@@ -323,15 +323,19 @@ test('POST /sync-batches rejects a filter the adapter considers invalid, before 
   assert.equal(createCalled, false);
 });
 
-test('POST /sync-batches creates a schema-2 batch as an empty active filter plus an initial draft', async () => {
+test('POST /sync-batches creates a validated schema-2 batch as an empty active filter plus an initial draft', async () => {
   let input = null;
   const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
-  await withServer(noopDeps({ createBatch: async (value) => { input = value; return { id: 7, ...value }; } }), { user: ADMIN_USER }, async (base) => {
+  await withServer(noopDeps({
+    createBatch: async (value) => { input = value; return { id: 7, ...value }; },
+    getFilterCache: () => ({ dimensions: [{ id: 'status', cardinality: 'single', values: [{ id: 'active' }] }], facts: [] }),
+    validateFilterV2: (value) => ({ ok: true, value }),
+  }), { user: ADMIN_USER }, async (base) => {
     const response = await requestJson(`${base}/sync-batches`, {
       method: 'POST', body: {
         name: 'Members', filterSchemaVersion: 2, draftFilterConfig: draft,
         defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
-        scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
+        scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, broadMatchAcknowledged: false,
       },
     });
     assert.equal(response.status, 200);

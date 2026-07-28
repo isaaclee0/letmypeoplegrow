@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
-const { createFilterBuilderRouter } = require('./filterBuilder');
+const { createFilterBuilderRouter, createFilterBuilderJsonParser } = require('./filterBuilder');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 const OTHER_ADMIN = { id: 2, church_id: 'churchb2', role: 'admin' };
@@ -38,6 +38,7 @@ function deps(extra = {}) {
     validateFilterV2: () => ({ ok: true, value: filter, unresolved: [] }),
     selectedDimensionIds: () => ['status'],
     selectedPairs: () => [],
+    requiredDimensionIdsForBatch: (batch) => batch.filterSchemaVersion === 2 ? ['status'] : [],
     captureFilterSnapshotInput: () => ({ facts: [{ externalPersonId: 'p1', dimensions: { status: ['active'] } }], dimensions: metadata.dimensions, coverage: ['status'], populationGateDigest: 'gate' }),
     populationGateDigest: () => 'gate',
     peekCachedPcoPeople: () => null,
@@ -47,16 +48,19 @@ function deps(extra = {}) {
 
 function server(overrides, user = ADMIN) {
   const app = express();
-  app.use(express.json({ limit: '8kb' }));
+  // Mirrors the production order: the narrow parser runs before the
+  // unrelated global JSON parser and therefore protects chunked bodies too.
+  app.use('/api/integrations/people-sync/providers', createFilterBuilderJsonParser());
+  app.use(express.json({ limit: '10mb' }));
   app.use((req, _res, next) => { if (user) req.user = user; next(); });
-  app.use('/providers', createFilterBuilderRouter(overrides));
+  app.use('/api/integrations/people-sync/providers', createFilterBuilderRouter(overrides));
   return http.createServer(app);
 }
 
 async function withServer(overrides, user, run) {
   const instance = server(overrides, user);
   await new Promise((resolve) => instance.listen(0, resolve));
-  const base = `http://127.0.0.1:${instance.address().port}/providers`;
+  const base = `http://127.0.0.1:${instance.address().port}/api/integrations/people-sync/providers`;
   try { return await run(base); } finally { await new Promise((resolve) => instance.close(resolve)); }
 }
 
@@ -112,6 +116,30 @@ test('refresh makes one full snapshot call, unions active and proposed dimension
   assert.equal(calls[0].mode, 'full');
 });
 
+test('refresh unions exact v1 and v2 custom-field dimensions and passes one snapshot to metadata', async () => {
+  const seen = { snapshots: 0, metadata: 0 };
+  const v1 = { filterSchemaVersion: 1, provider: 'elvanto', filterConfig: { legacy: true } };
+  const v2 = { filterSchemaVersion: 2, provider: 'elvanto', filterConfig: filter };
+  await withServer(deps({
+    listBatches: async () => [v1, v2],
+    requiredDimensionIdsForBatch: (batch) => batch === v1 ? ['custom_field:old'] : ['status', 'custom_field:new'],
+    selectedDimensionIds: () => ['status', 'custom_field:proposed'],
+    getProvider: () => ({
+      provider: 'elvanto',
+      fetchSnapshot: async (args) => { seen.snapshots++; seen.args = args; return { mode: 'full', complete: true, people: [] }; },
+      fetchMetadata: async ({ snapshot }) => { seen.metadata++; assert.equal(snapshot.mode, 'full'); return {}; },
+      toFilterFacts: () => ({}), buildFilterDimensions: () => [], isInFilterPopulation: () => true,
+    }),
+    captureFilterSnapshotInput: () => ({ facts: [], dimensions: [], coverage: ['status'], populationGateDigest: 'gate' }),
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/filter-snapshot/refresh', { method: 'POST', body: { filterConfig: filter } });
+    assert.equal(response.status, 200);
+  });
+  assert.equal(seen.snapshots, 1);
+  assert.equal(seen.metadata, 1);
+  assert.deepEqual(seen.args.customFieldIds.sort(), ['new', 'old', 'proposed']);
+});
+
 test('saving a draft is church scoped, validates canonical metadata, and requires acknowledgement for broad filters', async () => {
   let saved = false;
   await withServer(deps({
@@ -144,10 +172,45 @@ test('saving a whole-population draft requires acknowledgement', async () => {
   assert.equal(saved, false);
 });
 
-test('invalid provider, batch id, oversized body, and another church batch are rejected safely', async () => {
+test('saving an empty v2 filter does not require a broad acknowledgement', async () => {
+  const empty = { branches: [], exclusions: [] };
+  let saved = false;
+  await withServer(deps({
+    validateFilterV2: () => ({ ok: true, value: empty, unresolved: [] }),
+    saveFilterDraft: async () => { saved = true; return { id: 1, filterSchemaVersion: 2, filterConfig: empty }; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/sync-batches/1/filter-draft', {
+      method: 'PUT', body: { filterConfig: empty, broadMatchAcknowledged: false },
+    });
+    assert.equal(response.status, 200);
+  });
+  assert.equal(saved, true);
+});
+
+test('raw chunked JSON larger than 64 KiB is rejected before the route evaluates it', async () => {
+  let evaluated = false;
+  await withServer(deps({ previewFilter: () => { evaluated = true; return {}; } }), ADMIN, async (base) => {
+    const url = new URL(`${base}/elvanto/filter-preview`);
+    const response = await new Promise((resolve, reject) => {
+      const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => {
+        let raw = ''; res.on('data', (chunk) => { raw += chunk; }); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(raw) }));
+      });
+      req.on('error', reject);
+      req.write('{"padding":"');
+      req.write('x'.repeat(70 * 1024));
+      req.end('"}');
+    });
+    assert.equal(response.status, 413);
+    assert.equal(response.body.code, 'SYNC_FILTER_INVALID');
+  });
+  assert.equal(evaluated, false);
+});
+
+test('invalid provider, exact JSON batch IDs, and another church batch are rejected safely', async () => {
   await withServer(deps({ getBatch: async () => null }), OTHER_ADMIN, async (base) => {
     assert.equal((await request(base, '/unknown/filter-metadata')).status, 404);
     assert.equal((await request(base, '/elvanto/sync-batches/nope/filter-draft', { method: 'PUT', body: {} })).status, 400);
+    assert.equal((await request(base, '/elvanto/filter-preview', { method: 'POST', body: { batchId: '1', filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null } })).status, 400);
     const response = await request(base, '/elvanto/sync-batches/1/filter-draft', { method: 'PUT', body: { filterConfig: filter, broadMatchAcknowledged: true } });
     assert.equal(response.status, 404);
     assert.equal(JSON.stringify(response.body).includes('secret'), false);

@@ -13,7 +13,7 @@ const connectionStore = require('../../services/peopleSync/connectionStore');
 const batchRepository = require('../../services/peopleSync/batchRepository');
 const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
 const { captureFilterSnapshotInput, populationGateDigest } = require('../../services/peopleSync/filterSnapshot');
-const { previewFilter } = require('../../services/peopleSync/filterPreview');
+const { previewFilter, requiredDimensionIdsForBatch } = require('../../services/peopleSync/filterPreview');
 const { validateFilterV2, evaluateFilterV2, selectedDimensionIds, selectedPairs } = require('../../services/peopleSync/filterEngine');
 const { convertV1Filter, compareUpgradeSets, createUpgradeToken, applyCompatibleUpgrades } = require('../../services/peopleSync/filterUpgrade');
 const pcoSync = require('../../services/planningCenterSync');
@@ -37,15 +37,12 @@ function parseBatchId(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function selectedDimensionsForBatch(batch, selectedDimensions) {
-  if (!batch || Number(batch.filterSchemaVersion) !== 2) return [];
-  return selectedDimensions(batch.filterConfig);
-}
-
-function dimensionsFromBatches(batches, proposedConfig, selectedDimensions) {
+function dimensionsFromBatches(batches, proposedConfig, selectedDimensions, requiredDimensions) {
   const dimensions = new Set();
   for (const batch of Array.isArray(batches) ? batches : []) {
-    for (const dimensionId of selectedDimensionsForBatch(batch, selectedDimensions)) dimensions.add(dimensionId);
+    const required = requiredDimensions(batch);
+    if (required === null) return null;
+    for (const dimensionId of required) dimensions.add(dimensionId);
   }
   for (const dimensionId of selectedDimensions(proposedConfig || EMPTY_V2)) dimensions.add(dimensionId);
   return [...dimensions].sort();
@@ -84,8 +81,35 @@ function safeBatch(batch) {
   };
 }
 
-function broadFilter(config) {
-  return isPlainObject(config) && Array.isArray(config.branches) && config.branches.length === 0;
+function isNotOnlyFilter(config) {
+  return isPlainObject(config) && Array.isArray(config.branches) && config.branches.length === 0 &&
+    Array.isArray(config.exclusions) && config.exclusions.length > 0;
+}
+
+function permissiveMetadata(config, selectedPairsFn) {
+  const byDimension = new Map();
+  for (const pair of selectedPairsFn(config)) {
+    if (!byDimension.has(pair.dimensionId)) byDimension.set(pair.dimensionId, new Set());
+    byDimension.get(pair.dimensionId).add(pair.valueId);
+  }
+  return { dimensions: [...byDimension].map(([id, values]) => ({ id, cardinality: 'multi', values: [...values].map((valueId) => ({ id: valueId })) })) };
+}
+
+function validateProposedFilter(config, entry, deps) {
+  const metadata = entry ? metadataFromEntry(entry) : permissiveMetadata(config, deps.selectedPairs);
+  return deps.validateFilterV2(config, metadata);
+}
+
+function createFilterBuilderJsonParser() {
+  const parser = express.json({ limit: MAX_BODY_BYTES, strict: true });
+  return (req, res, next) => parser(req, res, (error) => {
+    if (!error) return next();
+    if (error.type === 'entity.too.large' || error.type === 'entity.parse.failed') {
+      return res.status(error.type === 'entity.too.large' ? 413 : 400)
+        .json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
+    }
+    next(error);
+  });
 }
 
 function unresolvedPairsFromDraft(batch, selectedPairsFn) {
@@ -125,6 +149,7 @@ const defaultDeps = {
   evaluateFilterV2,
   selectedDimensionIds,
   selectedPairs,
+  requiredDimensionIdsForBatch,
   peekCachedPcoPeople: pcoSync.peekCachedPcoPeople,
   convertV1Filter,
   compareUpgradeSets,
@@ -140,13 +165,6 @@ function createFilterBuilderRouter(overrides = {}) {
   // here as a hard boundary for tests, alternative mounts, and future routes.
   router.use(ensureChurchIsolation);
   router.use(requireRole(['admin']));
-  router.use((req, res, next) => {
-    const header = Number(req.get('content-length'));
-    if (Number.isFinite(header) && header > MAX_BODY_BYTES) {
-      return res.status(413).json({ error: 'Filter request is too large.', code: 'SYNC_FILTER_INVALID' });
-    }
-    next();
-  });
 
   router.param('provider', (req, res, next, provider) => {
     if (!parseProvider(provider)) return res.status(404).json({ error: 'Sync provider not found.' });
@@ -166,7 +184,8 @@ function createFilterBuilderRouter(overrides = {}) {
         if (warm) {
           const adapter = deps.getProvider(provider);
           const batches = await deps.listBatches(churchId, provider);
-          const coverage = dimensionsFromBatches(batches, EMPTY_V2, deps.selectedDimensionIds);
+          const coverage = dimensionsFromBatches(batches, EMPTY_V2, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
+          if (!coverage) return res.status(400).json({ error: 'Invalid saved filter.', code: 'SYNC_FILTER_INVALID' });
           const facts = (warm.people || []).filter((person) => adapter.isInFilterPopulation(person, {}))
             .map((person) => adapter.toFilterFacts(person, new Set(coverage)));
           entry = { snapshotId: null, capturedAt: new Date(warm.fetchedAt || Date.now()).toISOString(), fresh: true,
@@ -187,9 +206,16 @@ function createFilterBuilderRouter(overrides = {}) {
     try {
       const body = req.body;
       if (body !== undefined && !isPlainObject(body)) return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
-      const proposedConfig = body?.filterConfig || EMPTY_V2;
+      if (body && !Object.keys(body).every((key) => key === 'filterConfig') || body?.filterConfig !== undefined && !isPlainObject(body.filterConfig)) {
+        return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
+      }
+      const previous = deps.cache.get(churchId, provider);
+      const proposedValidation = validateProposedFilter(body?.filterConfig || EMPTY_V2, previous, deps);
+      if (!proposedValidation.ok) return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
+      const proposedConfig = proposedValidation.value;
       const batches = await deps.listBatches(churchId, provider);
-      const coveredDimensionIds = dimensionsFromBatches(batches, proposedConfig, deps.selectedDimensionIds);
+      const coveredDimensionIds = dimensionsFromBatches(batches, proposedConfig, deps.selectedDimensionIds, deps.requiredDimensionIdsForBatch);
+      if (!coveredDimensionIds) return res.status(400).json({ error: 'Invalid saved filter.', code: 'SYNC_FILTER_INVALID' });
       const credentials = await deps.getCredentials(churchId, provider);
       if (!credentials) return res.status(409).json({ error: 'A provider connection is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE' });
       const adapter = deps.getProvider(provider);
@@ -221,12 +247,12 @@ function createFilterBuilderRouter(overrides = {}) {
     try {
       const body = req.body;
       if (!isPlainObject(body) || !Object.keys(body).every((key) => ['batchId', 'filterConfig', 'enabled', 'defaultPeopleType', 'gatheringTypeId'].includes(key)) ||
-          !(body.batchId === null || parseBatchId(body.batchId) !== null) || !isPlainObject(body.filterConfig) ||
+          !(body.batchId === null || (Number.isSafeInteger(body.batchId) && body.batchId > 0)) || !isPlainObject(body.filterConfig) ||
           typeof body.enabled !== 'boolean' || !PEOPLE_TYPES.has(body.defaultPeopleType) ||
           !(body.gatheringTypeId === null || Number.isSafeInteger(body.gatheringTypeId))) {
         return res.status(400).json({ error: 'Invalid filter preview.', code: 'SYNC_FILTER_INVALID' });
       }
-      if (body.batchId !== null && !(await deps.getBatch(churchId, provider, Number(body.batchId)))) {
+      if (body.batchId !== null && !(await deps.getBatch(churchId, provider, body.batchId))) {
         return res.status(404).json({ error: 'Sync batch not found.' });
       }
       const cacheEntry = deps.cache.get(churchId, provider);
@@ -265,7 +291,7 @@ function createFilterBuilderRouter(overrides = {}) {
       if (!validation.ok) return res.status(400).json({ error: 'Invalid filter draft.', code: 'SYNC_FILTER_INVALID' });
       const wholePopulation = Array.isArray(entry.facts) && entry.facts.length > 0 &&
         entry.facts.every((facts) => deps.evaluateFilterV2(facts, validation.value));
-      if ((broadFilter(validation.value) || wholePopulation) && !body.broadMatchAcknowledged) {
+      if ((isNotOnlyFilter(validation.value) || wholePopulation) && !body.broadMatchAcknowledged) {
         return res.status(400).json({ error: 'Broad filters must be acknowledged.', code: 'SYNC_FILTER_BROAD_ACK_REQUIRED' });
       }
       const saved = await deps.saveFilterDraft({ churchId, provider, batchId, schemaVersion: 2, filterConfig: validation.value });
@@ -338,4 +364,4 @@ function createFilterBuilderRouter(overrides = {}) {
   return router;
 }
 
-module.exports = { createFilterBuilderRouter, defaultDeps, MAX_BODY_BYTES };
+module.exports = { createFilterBuilderRouter, createFilterBuilderJsonParser, defaultDeps, MAX_BODY_BYTES, isNotOnlyFilter };

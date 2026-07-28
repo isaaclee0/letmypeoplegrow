@@ -175,10 +175,12 @@ const defaultDeps = {
   // gives the provider-neutral fetchMetadata contract a working PCO implementation
   // ahead of Task 9+ deciding whether/how to route the batch editor through it.
   async fetchMetadata(churchId, accessToken, options = {}) {
-    const [{ people }, fieldDefinitions] = await Promise.all([
-      getCachedPcoPeople(churchId, accessToken, options),
-      fetchFieldDefinitions(accessToken),
-    ]);
+    // Explicit filter refresh already fetched this full roster. Reuse that
+    // exact snapshot rather than asking the PCO people cache/provider again.
+    const peoplePromise = options.snapshot
+      ? Promise.resolve({ people: options.snapshot.people || [] })
+      : getCachedPcoPeople(churchId, accessToken, options);
+    const [{ people }, fieldDefinitions] = await Promise.all([peoplePromise, fetchFieldDefinitions(accessToken)]);
     return { memberships: tallyMembership(people).values, fieldDefinitions };
   },
 };
@@ -219,9 +221,9 @@ function createPcoAdapter(deps = {}) {
       };
     },
 
-    async fetchMetadata({ churchId, credentials, force } = {}) {
+    async fetchMetadata({ churchId, credentials, force, snapshot } = {}) {
       const accessToken = credentials && credentials.accessToken;
-      return resolved.fetchMetadata(churchId, accessToken, { force });
+      return resolved.fetchMetadata(churchId, accessToken, snapshot === undefined ? { force } : { force, snapshot });
     },
 
     validateFilter: validatePcoFilter,

@@ -1292,9 +1292,10 @@ const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 
 function validateBatchBody(body) {
   if (body && body.filterSchemaVersion === 2) {
-    const { name, draftFilterConfig, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+    const { name, draftFilterConfig, broadMatchAcknowledged, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
     if (typeof name !== 'string' || !name.trim()) return 'name is required.';
     if (!draftFilterConfig || typeof draftFilterConfig !== 'object' || Array.isArray(draftFilterConfig)) return 'draftFilterConfig must be an object.';
+    if (typeof broadMatchAcknowledged !== 'boolean') return 'broadMatchAcknowledged must be a boolean.';
     if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
     if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) return 'gatheringTypeId must be an integer or null.';
     if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
@@ -1391,10 +1392,15 @@ router.post('/planning-center/sync-batches', async (req, res) => {
       ...(req.body.filterSchemaVersion === 2 ? {
         filterSchemaVersion: 2,
         draftFilterConfig: req.body.draftFilterConfig,
+        broadMatchAcknowledged: req.body.broadMatchAcknowledged,
       } : {}),
     });
     res.json({ success: true, batch });
   } catch (error) {
+    if (['SYNC_FILTER_INVALID', 'SYNC_FILTER_CACHE_UNAVAILABLE', 'SYNC_FILTER_BROAD_ACK_REQUIRED'].includes(error?.code)) {
+      return res.status(error.code === 'SYNC_FILTER_CACHE_UNAVAILABLE' ? 409 : 400)
+        .json({ error: error.code === 'SYNC_FILTER_BROAD_ACK_REQUIRED' ? 'Broad filters must be acknowledged.' : 'Invalid Planning Center filter.', code: error.code });
+    }
     logger.error('Create PCO sync batch error:', error);
     res.status(500).json({ error: 'Failed to create sync batch.' });
   }

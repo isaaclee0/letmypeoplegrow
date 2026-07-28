@@ -126,6 +126,13 @@ function coverageForBatch(batch) {
   return dimensionIds === null ? { known: false, dimensionIds: [] } : { known: true, dimensionIds };
 }
 
+// Shared by preview and explicit snapshot refresh. Keeping the v1 extractor
+// here prevents refresh from silently dropping legacy custom-field coverage.
+function requiredDimensionIdsForBatch(batch) {
+  const coverage = coverageForBatch(batch);
+  return coverage.known ? coverage.dimensionIds : null;
+}
+
 function coverageForBatches(batches, cacheEntry) {
   const covered = new Set(Array.isArray(cacheEntry && cacheEntry.coveredDimensionIds) ? cacheEntry.coveredDimensionIds : []);
   const coverage = batches.map(coverageForBatch);
@@ -245,4 +252,4 @@ function previewFilter({
   return result;
 }
 
-module.exports = { previewFilter, eligibleIdsForBatch };
+module.exports = { previewFilter, eligibleIdsForBatch, requiredDimensionIdsForBatch };

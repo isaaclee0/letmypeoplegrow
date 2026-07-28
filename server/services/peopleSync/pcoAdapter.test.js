@@ -34,6 +34,14 @@ test('createPcoAdapter satisfies the Task 5 provider contract shape exactly', ()
   ]);
 });
 
+test('fetchMetadata receives and reuses the refresh snapshot instead of requesting people again', async () => {
+  let metadataOptions = null;
+  const a = adapter({ fetchMetadata: async (_churchId, _token, options) => { metadataOptions = options; return { memberships: [], fieldDefinitions: [] }; } });
+  const snapshot = { mode: 'full', people: [{ id: 'p1', attributes: { membership: 'Member' } }] };
+  await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'secret' }, force: false, snapshot });
+  assert.equal(metadataOptions.snapshot, snapshot);
+});
+
 test('projects PCO people into PII-free facts and canonical dimensions', () => {
   const a = adapter();
   const person = {
