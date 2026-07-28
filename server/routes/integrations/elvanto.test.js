@@ -526,18 +526,31 @@ test('disconnect clears only the disconnected church\'s Elvanto facts after cred
   const order = [];
   await withServer(noopDeps({
     disconnectConnection: async () => { order.push('disconnect'); return true; },
+    deleteLegacyPreferences: async () => { order.push('legacy-preferences'); },
     clearFilterFactsCache: (churchId, provider) => { order.push({ churchId, provider }); },
   }), { user: ADMIN_USER }, async (base) => {
     const { status } = await requestJson(`${base}/disconnect`, { method: 'POST' });
     assert.equal(status, 200);
   });
-  assert.deepEqual(order, ['disconnect', { churchId: 'churcha1', provider: 'elvanto' }]);
+  assert.deepEqual(order, ['disconnect', 'legacy-preferences', { churchId: 'churcha1', provider: 'elvanto' }]);
 });
 
 test('disconnect preserves cache entries when credential removal fails', async () => {
   const cleared = [];
   await withServer(noopDeps({
     disconnectConnection: async () => { throw new Error('database unavailable'); },
+    clearFilterFactsCache: (churchId, provider) => { cleared.push({ churchId, provider }); },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status } = await requestJson(`${base}/disconnect`, { method: 'POST' });
+    assert.equal(status, 500);
+  });
+  assert.deepEqual(cleared, []);
+});
+
+test('disconnect preserves cache entries when late legacy-preference cleanup fails', async () => {
+  const cleared = [];
+  await withServer(noopDeps({
+    deleteLegacyPreferences: async () => { throw new Error('legacy cleanup unavailable'); },
     clearFilterFactsCache: (churchId, provider) => { cleared.push({ churchId, provider }); },
   }), { user: ADMIN_USER }, async (base) => {
     const { status } = await requestJson(`${base}/disconnect`, { method: 'POST' });

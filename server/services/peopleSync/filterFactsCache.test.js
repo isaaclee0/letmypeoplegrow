@@ -8,6 +8,7 @@ const { createFilterFactsCache } = require('./filterFactsCache');
 function completeEntry({ churchId = 'churcha1', provider = 'planning_center', facts = [{ externalPersonId: 'p1', dimensions: { membership: ['member'] } }], coveredDimensionIds = ['membership'] } = {}) {
   return {
     complete: true,
+    mode: 'full',
     churchId,
     provider,
     coveredDimensionIds,
@@ -21,6 +22,7 @@ test('rejects incomplete and incremental snapshots before replacing a complete c
   const cache = createFilterFactsCache({ now: () => 0 });
 
   assert.throws(() => cache.putComplete({ ...completeEntry(), complete: false }), /complete snapshot/i);
+  assert.throws(() => cache.putComplete({ ...completeEntry(), mode: 'incremental' }), /full snapshot/i);
   assert.throws(() => cache.putComplete({ ...completeEntry(), complete: true, facts: undefined }), /facts/i);
   assert.equal(cache.get('churcha1', 'planning_center'), null);
 });

@@ -361,13 +361,13 @@ function createElvantoRouter(overrides = {}) {
         await deps.disableAuthority(churchId);
       }
       const disconnected = await deps.disconnectConnection(churchId, PROVIDER);
-      deps.clearFilterFactsCache(churchId, PROVIDER);
       // Belt-and-suspenders: also clear any legacy (pre-Task-16) per-admin
       // API key rows, mirroring Planning Center's own disconnect route —
       // without this, a church whose legacy row was never read (so never
       // migrated/deleted) could have its connection "resurrected" by that
       // stale row the next time getOrMigrateCredentials runs.
       await deps.deleteLegacyPreferences(churchId);
+      deps.clearFilterFactsCache(churchId, PROVIDER);
       res.json({ success: true, disconnected });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /disconnect' });

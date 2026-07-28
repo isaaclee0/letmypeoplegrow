@@ -47,6 +47,9 @@ function assertCompleteEntry(entry) {
   if (!isPlainObject(entry) || entry.complete !== true) {
     throw new TypeError('Only a complete snapshot may be cached.');
   }
+  if (entry.mode !== 'full') {
+    throw new TypeError('Only a full snapshot may be cached.');
+  }
   if (typeof entry.churchId !== 'string' || !entry.churchId || typeof entry.provider !== 'string' || !entry.provider) {
     throw new TypeError('A complete snapshot requires churchId and provider.');
   }

@@ -1014,7 +1014,6 @@ router.post('/planning-center/disconnect', async (req, res) => {
     // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
     // or a non-connecting admin's click would silently no-op.
     await connectionStore.disconnectConnection(churchId, 'planning_center');
-    filterFactsCache.clear(churchId, 'planning_center');
 
     // Belt-and-suspenders: also clear any legacy (pre-Task-10) per-admin
     // tokens. This matters even after the migration to integration_connections
@@ -1026,6 +1025,7 @@ router.post('/planning-center/disconnect', async (req, res) => {
       DELETE FROM user_preferences
       WHERE church_id = ? AND preference_key = 'planning_center_tokens'
     `, [churchId]);
+    filterFactsCache.clear(churchId, 'planning_center');
 
     res.json({ success: true, message: 'Planning Center disconnected successfully.' });
   } catch (error) {
