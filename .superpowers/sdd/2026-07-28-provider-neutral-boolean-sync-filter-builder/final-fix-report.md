@@ -107,3 +107,33 @@ Hypothesis: add an optional strict `batchId` to explicit refresh, resolve it wit
 - `npm run build` in `client`: production build passed. Its only diagnostic was the existing bundle-size warning.
 - `client/public/sw.js` was backed up before the build, restored afterward, compared byte-for-byte, and retained SHA-256 `c7122c6cf971c0ea0b035f390683f58fbe7dc804e71a4ee78cc0f0f392f1e239`.
 - `git diff --check`: passed.
+
+## Correction continuation
+
+### Root-cause trace and hypotheses
+
+- The correction wave made unresolved metadata request-specific during validation but then wrote its synthetic dimensions and values into `filterFactsCache`, whose key is only church/provider. That turns batch A's removed pair into shared canonical metadata: metadata GET and batch B validation can subsequently treat it as provider-backed. The correct boundary is to cache and return only `captureFilterSnapshotInput()`'s provider-derived dimensions. Batch A remains editable because `FilterBuilder` already projects missing selected dimensions/values from its saved config and marks them unavailable.
+- Refresh reads the target batch only before the provider fetch. Active/draft filters can be edited, promoted, discarded, or deleted during that network window, leaving the original unresolved allowance stale when post-fetch validation replaces the shared cache. The request needs an authoritative pre-fetch identity and an immediate post-fetch scoped re-read comparing schema/revision plus canonical active/draft digests; a mismatch must return a typed stale response without replacing the old cache.
+- The Planning Center automatic-sync switch starts as boolean `false`, ignores settings-load failure, and lets both the initial GET and overlapping mutations write state whenever they resolve. Consequently unknown/error is presented as OFF/paused, a late initial GET can overwrite a successful toggle, and rapid mutations can resolve out of order. The switch needs explicit loading/known/error state, a response generation guard, serialized mutation, visible retry, and rollback to the last confirmed server value on mutation failure.
+
+### Continuation TDD evidence
+
+#### RED
+
+- The focused real-route run passed 22/29 tests and failed all 7 new expectations: Planning Center and Elvanto each exposed removed dimensions/values through shared metadata, and controlled draft-edit, promotion, and deletion races reached cache replacement and returned 500. A distinct draft-discard case was added once the generalized identity check existed to prove the no-revision-change path too.
+- The focused client run passed 24/29 tests and failed all 5 new Planning Center settings cases: there was no named guarded switch, no serialized mutation, no visible mutation/load failure, and loading/error rows claimed a definite schedule state. The canonical-metadata `FilterBuilder` regression passed before production changes, confirming its saved-config projection already keeps batch A's removed selections visible and removable without synthetic metadata.
+
+#### GREEN
+
+- Focused refresh route: 30/30 tests passed, including both real provider adapters, shared GET metadata, batch-B draft rejection, batch-A retained validation, and deferred edit/promotion/discard/deletion races with zero cache replacement.
+- Combined server people-sync/Elvanto/filter-builder impact slice: 400/400 tests passed.
+- Focused Planning Center state machine plus canonical `FilterBuilder`: 29/29 tests passed.
+- Combined client controls/builder/integration-panel slice: 56/56 tests passed.
+
+### Continuation final verification
+
+- `node --test` in `server`: 928/928 passed.
+- `npm test -- --run` in `client`: 176/176 passed.
+- `npm run build` in `client`: production build passed. Its only diagnostic was the existing bundle-size warning.
+- `client/public/sw.js` was backed up before the build, restored afterward, compared byte-for-byte, and retained SHA-256 `c7122c6cf971c0ea0b035f390683f58fbe7dc804e71a4ee78cc0f0f392f1e239`.
+- `git diff --check`: passed.

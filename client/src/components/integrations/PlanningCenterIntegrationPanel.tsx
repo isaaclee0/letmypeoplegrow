@@ -42,6 +42,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [initialAction]);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
   const [pcTrackBackgroundChecks, setPcTrackBackgroundChecks] = useState(false);
+  const [pcSettingsStatus, setPcSettingsStatus] = useState<'loading' | 'known' | 'error'>('loading');
+  const [pcSettingsError, setPcSettingsError] = useState<string | null>(null);
+  const [pcSettingsUpdating, setPcSettingsUpdating] = useState(false);
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
@@ -52,6 +55,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [checkinAvailable, setCheckinAvailable] = useState(false);
   const [peopleLinked, setPeopleLinked] = useState(true);
   const batchLoadGeneration = useRef(0);
+  const settingsGeneration = useRef(0);
+  const settingsMutationInFlight = useRef(false);
 
   const loadBatches = useCallback(async () => {
     const generation = ++batchLoadGeneration.current;
@@ -84,23 +89,66 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     await loadSyncStats();
   }, [loadBatches, loadSyncStats]);
 
+  const loadPcSettings = useCallback(async () => {
+    const generation = ++settingsGeneration.current;
+    setPcSettingsStatus('loading');
+    setPcSettingsError(null);
+    try {
+      const response = await settingsAPI.getIntegrationSettings();
+      if (generation !== settingsGeneration.current) return;
+      setPcSyncEnabled(!!response.data.planningCenterSyncEnabled);
+      setPcTrackBackgroundChecks(!!response.data.planningCenterTrackBackgroundChecks);
+      setPcSettingsStatus('known');
+    } catch (error: any) {
+      if (generation !== settingsGeneration.current) return;
+      setPcSettingsStatus('error');
+      setPcSettingsError(error.response?.data?.error || 'Could not load the automatic sync setting.');
+    }
+  }, []);
+
   const toggleMasterSync = async (value: boolean) => {
+    if (pcSettingsStatus !== 'known' || settingsMutationInFlight.current) return;
+    settingsMutationInFlight.current = true;
+    const generation = ++settingsGeneration.current;
+    const confirmed = pcSyncEnabled;
+    setPcSettingsUpdating(true);
+    setPcSettingsError(null);
     setPcSyncEnabled(value);
     try {
       await settingsAPI.updateIntegrationSettings({ planningCenterSyncEnabled: value });
-    } catch (error) {
+    } catch (error: any) {
+      if (generation !== settingsGeneration.current) return;
       logger.error('Failed to update master sync switch:', error);
-      setPcSyncEnabled(!value);
+      setPcSyncEnabled(confirmed);
+      setPcSettingsError(error.response?.data?.error || 'Could not update the automatic sync setting.');
+    } finally {
+      if (generation === settingsGeneration.current) {
+        settingsMutationInFlight.current = false;
+        setPcSettingsUpdating(false);
+      }
     }
   };
 
   const toggleTrackBackgroundChecks = async (value: boolean) => {
+    if (pcSettingsStatus !== 'known' || settingsMutationInFlight.current) return;
+    settingsMutationInFlight.current = true;
+    const generation = ++settingsGeneration.current;
+    const confirmed = pcTrackBackgroundChecks;
+    setPcSettingsUpdating(true);
+    setPcSettingsError(null);
     setPcTrackBackgroundChecks(value);
     try {
       await settingsAPI.updateIntegrationSettings({ planningCenterTrackBackgroundChecks: value });
-    } catch (error) {
+    } catch (error: any) {
+      if (generation !== settingsGeneration.current) return;
       logger.error('Failed to update background-check tracking setting:', error);
-      setPcTrackBackgroundChecks(!value);
+      setPcTrackBackgroundChecks(confirmed);
+      setPcSettingsError(error.response?.data?.error || 'Could not update the Planning Center setting.');
+    } finally {
+      if (generation === settingsGeneration.current) {
+        settingsMutationInFlight.current = false;
+        setPcSettingsUpdating(false);
+      }
     }
   };
 
@@ -153,19 +201,21 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   useEffect(() => {
     if (!status.connected) {
       batchLoadGeneration.current += 1;
+      settingsGeneration.current += 1;
+      settingsMutationInFlight.current = false;
       setBatches([]);
       setBatchesLoading(false);
       setBatchesError(null);
+      setPcSettingsStatus('loading');
+      setPcSettingsError(null);
+      setPcSettingsUpdating(false);
       return;
     }
 
     setBatches([]);
     loadBatches();
     loadSyncStats();
-    settingsAPI.getIntegrationSettings().then(r => {
-      setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
-      setPcTrackBackgroundChecks(!!r.data.planningCenterTrackBackgroundChecks);
-    }).catch(() => {});
+    void loadPcSettings();
     // Cheap probe: nudge to import check-ins only if data exists and none has
     // been imported yet.
     integrationsAPI.getCheckinAvailability()
@@ -176,8 +226,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       .catch(() => setCheckinAvailable(false));
     return () => {
       batchLoadGeneration.current += 1;
+      settingsGeneration.current += 1;
     };
-  }, [status.connected, loadBatches, loadSyncStats]);
+  }, [status.connected, loadBatches, loadSyncStats, loadPcSettings]);
 
   const peopleSourceControl = peopleSyncStatus === 'known' ? (
     <PeopleSourceControl
@@ -340,16 +391,35 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                       Controls automatic scheduled sync for the batches below. When off, manual Review &amp; sync remains available.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => toggleMasterSync(!pcSyncEnabled)}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-                    role="switch"
-                    aria-checked={pcSyncEnabled}
-                  >
-                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
+                  {pcSettingsStatus === 'known' ? (
+                    <button
+                      type="button"
+                      aria-label="Automatic Planning Center sync"
+                      onClick={() => toggleMasterSync(!pcSyncEnabled)}
+                      disabled={pcSettingsUpdating}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${pcSyncEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={pcSyncEnabled}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${pcSyncEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  ) : (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {pcSettingsStatus === 'loading' ? 'Loading automatic sync setting…' : 'Automatic sync setting unavailable'}
+                    </span>
+                  )}
                 </div>
+
+                {pcSettingsError && (
+                  <div role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+                    <p>{pcSettingsError}</p>
+                    {pcSettingsStatus === 'error' && (
+                      <button type="button" onClick={() => void loadPcSettings()} className="mt-1 underline">
+                        Retry automatic sync setting
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {syncStats && (
                   <div className="mt-4">
@@ -404,7 +474,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{batch.name}</p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
                             {batch.gatheringTypeId ? 'Assigns to a gathering · ' : ''}
-                            {batch.scheduleEnabled ? (pcSyncEnabled ? `Runs ${batch.scheduleFrequency}` : 'Automatic sync paused') : 'Manual only'}
+                            {batch.scheduleEnabled
+                              ? pcSettingsStatus === 'known'
+                                ? (pcSyncEnabled ? `Runs ${batch.scheduleFrequency}` : 'Automatic sync paused')
+                                : pcSettingsStatus === 'loading' ? 'Automatic sync status loading' : 'Automatic sync status unavailable'
+                              : 'Manual only'}
                           </p>
                           {batch.lastSyncAt && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -459,7 +533,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <button
                     type="button"
                     onClick={() => toggleTrackBackgroundChecks(!pcTrackBackgroundChecks)}
-                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${pcTrackBackgroundChecks ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
+                    disabled={pcSettingsStatus !== 'known' || pcSettingsUpdating}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${pcTrackBackgroundChecks ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
                     role="switch"
                     aria-checked={pcTrackBackgroundChecks}
                   >

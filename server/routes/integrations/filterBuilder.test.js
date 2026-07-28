@@ -338,13 +338,18 @@ function refreshCache() {
 }
 
 for (const providerCase of realRefreshCases) {
-  test(`${providerCase.provider} refresh retains a persisted removed dimension from a null cache without exposing people facts`, async () => {
+  test(`${providerCase.provider} refresh keeps a persisted removed dimension batch-local and out of shared metadata`, async () => {
     const saved = onePairFilter('custom_field:retired', 'old-choice');
-    const target = { id: 7, provider: providerCase.provider, filterSchemaVersion: 2, filterConfig: saved, draftFilterConfig: null };
+    const target = { id: 7, provider: providerCase.provider, filterSchemaVersion: 2, filterConfig: saved, filterRevision: 2, draftFilterConfig: null };
+    const other = { id: 70, provider: providerCase.provider, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] }, filterRevision: 2, draftFilterConfig: null };
     const cache = refreshCache();
+    let saves = 0;
     await withServer(deps({
-      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target],
-      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider && id === 7 ? target : null,
+      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target, other],
+      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider
+        ? [target, other].find((batch) => batch.id === id) || null : null,
+      saveFilterDraft: async ({ batchId, filterConfig }) => { saves += 1; return { ...(batchId === 7 ? target : other), draftFilterConfig: filterConfig }; },
+      evaluateFilterV2: () => false,
       validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
     }), ADMIN, async (base) => {
       const strictWithoutIdentity = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
@@ -359,14 +364,29 @@ for (const providerCase of realRefreshCases) {
       });
       assert.equal(refresh.status, 200);
       const retired = refresh.body.metadata.dimensions.find((dimension) => dimension.id === 'custom_field:retired');
-      assert.equal(retired.unresolved, true);
-      assert.deepEqual(retired.values, [{ id: 'old-choice', label: 'old-choice', count: null, unresolved: true }]);
+      assert.equal(retired, undefined);
       assert.deepEqual(Object.keys(refresh.body).sort(), ['metadata', 'snapshot', 'success']);
       const serialized = JSON.stringify(refresh.body);
       assert.equal(serialized.includes('private-pco-person'), false);
       assert.equal(serialized.includes('private-elvanto-person'), false);
       assert.equal(serialized.includes('externalPersonId'), false);
       assert.equal(serialized.includes('people'), false);
+
+      const shared = await request(base, `/${providerCase.provider}/filter-metadata`);
+      assert.equal(shared.status, 200);
+      assert.equal(shared.body.metadata.dimensions.some((dimension) => dimension.id === 'custom_field:retired'), false);
+
+      const rejectedOtherDraft = await request(base, `/${providerCase.provider}/sync-batches/70/filter-draft`, {
+        method: 'PUT', body: { filterConfig: saved, broadMatchAcknowledged: false },
+      });
+      assert.equal(rejectedOtherDraft.status, 400);
+      assert.equal(rejectedOtherDraft.body.code, 'SYNC_FILTER_INVALID');
+
+      const retainedTargetDraft = await request(base, `/${providerCase.provider}/sync-batches/7/filter-draft`, {
+        method: 'PUT', body: { filterConfig: saved, broadMatchAcknowledged: false },
+      });
+      assert.equal(retainedTargetDraft.status, 200);
+      assert.equal(saves, 1);
 
       const preview = await request(base, `/${providerCase.provider}/filter-preview`, {
         method: 'POST', body: { batchId: 7, filterConfig: saved, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
@@ -375,16 +395,18 @@ for (const providerCase of realRefreshCases) {
     });
   });
 
-  test(`${providerCase.provider} refresh retains a persisted removed value but rejects a new unknown pair and preserves the cache`, async () => {
+  test(`${providerCase.provider} refresh keeps a persisted removed value out of shared metadata and rejects it for another batch`, async () => {
     const saved = onePairFilter(providerCase.existingDimensionId, providerCase.removedValue);
     const target = {
       id: 8, provider: providerCase.provider, filterSchemaVersion: 2,
-      filterConfig: { branches: [], exclusions: [] }, draftFilterConfig: saved,
+      filterConfig: { branches: [], exclusions: [] }, filterRevision: 2, draftFilterConfig: saved,
     };
+    const other = { id: 80, provider: providerCase.provider, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] }, filterRevision: 2, draftFilterConfig: null };
     const cache = refreshCache();
     await withServer(deps({
-      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target],
-      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider && id === 8 ? target : null,
+      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target, other],
+      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider
+        ? [target, other].find((batch) => batch.id === id) || null : null,
       validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
     }), ADMIN, async (base) => {
       const refresh = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
@@ -392,11 +414,15 @@ for (const providerCase of realRefreshCases) {
       });
       assert.equal(refresh.status, 200);
       const dimension = refresh.body.metadata.dimensions.find((candidate) => candidate.id === providerCase.existingDimensionId);
-      assert.deepEqual(dimension.values.find((value) => value.id === providerCase.removedValue), {
-        id: providerCase.removedValue, label: providerCase.removedValue, count: null, unresolved: true,
-      });
+      assert.equal(dimension.values.some((value) => value.id === providerCase.removedValue), false);
       assert.equal(dimension.values.find((value) => value.id === providerCase.currentValue).unresolved, undefined);
       const retainedEntry = cache.current();
+
+      const rejectedOtherDraft = await request(base, `/${providerCase.provider}/sync-batches/80/filter-draft`, {
+        method: 'PUT', body: { filterConfig: saved, broadMatchAcknowledged: false },
+      });
+      assert.equal(rejectedOtherDraft.status, 400);
+      assert.equal(rejectedOtherDraft.body.code, 'SYNC_FILTER_INVALID');
 
       const invented = onePairFilter(providerCase.existingDimensionId, 'invented-new-value');
       const rejected = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
@@ -429,6 +455,57 @@ test('refresh rejects unsafe or cross-scope batch identities before provider fet
   });
   assert.equal(fetches, 0);
 });
+
+for (const mutation of [
+  {
+    name: 'draft edit',
+    apply: (batch) => ({ ...batch, draftFilterConfig: onePairFilter('membership', 'Another removed value') }),
+  },
+  {
+    name: 'promotion',
+    apply: (batch) => ({ ...batch, filterRevision: batch.filterRevision + 1, filterConfig: batch.draftFilterConfig, draftFilterConfig: null }),
+  },
+  {
+    name: 'draft discard',
+    apply: (batch) => ({ ...batch, draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null }),
+  },
+  { name: 'deletion', apply: () => null },
+]) {
+  test(`refresh rejects a concurrent target-batch ${mutation.name} and preserves the old cache`, async () => {
+    const saved = onePairFilter('membership', 'Former');
+    let current = { id: 91, provider: 'planning_center', filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] }, filterRevision: 4,
+      draftFilterSchemaVersion: 2, draftFilterConfig: saved, draftFilterBaseRevision: 4, draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z' };
+    const old = { ...cachedEntry, provider: 'planning_center', snapshotId: 'old-before-race' };
+    let puts = 0;
+    let releaseSnapshot;
+    let announceSnapshot;
+    const snapshotStarted = new Promise((resolve) => { announceSnapshot = resolve; });
+    const snapshotRelease = new Promise((resolve) => { releaseSnapshot = resolve; });
+    const adapter = realRefreshCases.find((candidate) => candidate.provider === 'planning_center').adapter();
+    await withServer(deps({
+      cache: { get: () => old, putComplete: () => { puts += 1; throw new Error('stale refresh must not replace cache'); } },
+      getBatch: async (_churchId, _provider, id) => id === 91 ? current : null,
+      listBatches: async () => current ? [current] : [],
+      getProvider: () => ({ ...adapter, fetchSnapshot: async () => {
+        announceSnapshot();
+        await snapshotRelease;
+        return adapter.fetchSnapshot();
+      } }),
+      validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
+    }), ADMIN, async (base) => {
+      const pending = request(base, '/planning_center/filter-snapshot/refresh', {
+        method: 'POST', body: { batchId: 91, filterConfig: saved },
+      });
+      await snapshotStarted;
+      current = mutation.apply(current);
+      releaseSnapshot();
+      const response = await pending;
+      assert.equal(response.status, 409);
+      assert.equal(response.body.code, 'SYNC_FILTER_REFRESH_STALE');
+    });
+    assert.equal(puts, 0);
+  });
+}
 
 test('Elvanto refresh applies includeContacts=false to captured facts so cached previews match live eligibility', async () => {
   let entry = null;

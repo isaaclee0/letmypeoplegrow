@@ -202,13 +202,10 @@ describe('FilterBuilder', () => {
     expect(screen.queryByText('missing_dimension')).not.toBeInTheDocument();
   });
 
-  it('shows refreshed persisted unresolved dimensions and values as unavailable and removable', () => {
+  it('projects persisted missing dimensions and values from the saved config after a canonical refresh', () => {
     const refreshedMetadata: FilterMetadata = { dimensions: [
-      { id: 'custom_field:retired', label: 'custom_field:retired', cardinality: 'multi', category: 'Unavailable saved selections', unresolved: true,
-        values: [{ id: 'old-choice', label: 'old-choice', count: null, unresolved: true }] },
       { id: 'groups', label: 'Groups', cardinality: 'multi', category: 'People', values: [
         { id: 'current', label: 'Current', count: 1 },
-        { id: 'old-group', label: 'old-group', count: null, unresolved: true },
       ] },
     ] };
     function RefreshedControlled() {

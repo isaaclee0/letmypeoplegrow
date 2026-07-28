@@ -99,6 +99,13 @@ function renderPanel(overrides: Partial<PanelProps> = {}) {
   return render(<MemoryRouter>{panel(overrides)}</MemoryRouter>);
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+  return { promise, resolve, reject };
+}
+
 describe('PlanningCenterIntegrationPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -302,5 +309,84 @@ describe('PlanningCenterIntegrationPanel', () => {
     expect(screen.getByText(/Automatic sync paused/i)).toBeInTheDocument();
     expect(screen.queryByText('Runs weekly')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review & sync' })).toBeEnabled();
+  });
+
+  it('does not let an older StrictMode settings load overwrite a later successful toggle', async () => {
+    const oldLoad = deferred<{ data: { planningCenterSyncEnabled: boolean; planningCenterTrackBackgroundChecks: boolean } }>();
+    vi.mocked(settingsAPI.getIntegrationSettings)
+      .mockImplementationOnce(() => oldLoad.promise as ReturnType<typeof settingsAPI.getIntegrationSettings>)
+      .mockResolvedValueOnce({ data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false } });
+    vi.mocked(settingsAPI.updateIntegrationSettings).mockResolvedValue({ data: { success: true } });
+    render(<React.StrictMode><MemoryRouter>{panel()}</MemoryRouter></React.StrictMode>);
+
+    const automaticSwitch = await screen.findByRole('switch', { name: 'Automatic Planning Center sync' });
+    fireEvent.click(automaticSwitch);
+    await waitFor(() => expect(screen.getByText('Automatic sync paused')).toBeInTheDocument());
+
+    await act(async () => oldLoad.resolve({ data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false } }));
+    expect(screen.getByText('Automatic sync paused')).toBeInTheDocument();
+    expect(screen.queryByText('Runs weekly')).not.toBeInTheDocument();
+  });
+
+  it('serializes rapid automatic-sync toggle attempts', async () => {
+    const update = deferred<{ data: { success: true } }>();
+    vi.mocked(settingsAPI.updateIntegrationSettings).mockImplementation(
+      () => update.promise as ReturnType<typeof settingsAPI.updateIntegrationSettings>,
+    );
+    renderPanel();
+
+    const automaticSwitch = await screen.findByRole('switch', { name: 'Automatic Planning Center sync' });
+    fireEvent.click(automaticSwitch);
+    fireEvent.click(automaticSwitch);
+    expect(settingsAPI.updateIntegrationSettings).toHaveBeenCalledTimes(1);
+    expect(automaticSwitch).toBeDisabled();
+
+    await act(async () => update.resolve({ data: { success: true } }));
+    expect(screen.getByText('Automatic sync paused')).toBeInTheDocument();
+  });
+
+  it('rolls a failed automatic-sync toggle back to the last confirmed server truth', async () => {
+    vi.mocked(settingsAPI.updateIntegrationSettings).mockRejectedValue({ response: { data: { error: 'Settings write failed.' } } });
+    renderPanel();
+
+    const automaticSwitch = await screen.findByRole('switch', { name: 'Automatic Planning Center sync' });
+    fireEvent.click(automaticSwitch);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Settings write failed.');
+    expect(automaticSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('Runs weekly')).toBeInTheDocument();
+    expect(screen.queryByText('Automatic sync paused')).not.toBeInTheDocument();
+  });
+
+  it('shows an unknown state on settings load failure and recovers through retry', async () => {
+    vi.mocked(settingsAPI.getIntegrationSettings)
+      .mockRejectedValueOnce({ response: { data: { error: 'Settings read failed.' } } })
+      .mockResolvedValueOnce({ data: { planningCenterSyncEnabled: false, planningCenterTrackBackgroundChecks: false } });
+    renderPanel();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Settings read failed.');
+    expect(screen.getByText('Automatic sync status unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Automatic sync paused')).not.toBeInTheDocument();
+    expect(screen.queryByText('Runs weekly')).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Automatic Planning Center sync' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry automatic sync setting' }));
+    expect(await screen.findByText('Automatic sync paused')).toBeInTheDocument();
+  });
+
+  it('does not describe scheduled batches as running or paused until settings are known', async () => {
+    const load = deferred<{ data: { planningCenterSyncEnabled: boolean; planningCenterTrackBackgroundChecks: boolean } }>();
+    vi.mocked(settingsAPI.getIntegrationSettings).mockImplementation(
+      () => load.promise as ReturnType<typeof settingsAPI.getIntegrationSettings>,
+    );
+    renderPanel();
+
+    expect(await screen.findByText('Loading automatic sync setting…')).toBeInTheDocument();
+    expect(screen.getByText('Automatic sync status loading')).toBeInTheDocument();
+    expect(screen.queryByText('Automatic sync paused')).not.toBeInTheDocument();
+    expect(screen.queryByText('Runs weekly')).not.toBeInTheDocument();
+
+    await act(async () => load.resolve({ data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false } }));
+    expect(screen.getByText('Runs weekly')).toBeInTheDocument();
   });
 });
