@@ -215,3 +215,21 @@ test('createBatch defaults gatheringAutoRemoveEnabled to false when the caller o
     assert.strictEqual(batch.gatheringAutoRemoveEnabled, false);
   });
 });
+
+test('createBatch preserves stale v1 fields while atomically creating a v2 active-empty filter and draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
+    const created = await pcoSync.createBatch(churchId, {
+      name: 'Reviewed members', filterSchemaVersion: 2, draftFilterConfig: draft,
+      defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
+      scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
+    });
+    assert.equal(created.filterSchemaVersion, 2);
+    assert.deepEqual(created.filterConfig, { branches: [], exclusions: [] });
+    assert.deepEqual(created.draftFilterConfig, draft);
+    assert.equal(created.needsFilterReview, true);
+    // Existing PCO clients still receive their original flattened values.
+    assert.equal(created.membershipFilterEnabled, false);
+    assert.deepEqual(created.membershipAllowlist, []);
+  });
+});

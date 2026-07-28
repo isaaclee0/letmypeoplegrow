@@ -346,6 +346,19 @@ function toLegacyPcoBatchDto(batch) {
     // added_by_sync_batch_id. Existing clients simply ignore fields they don't
     // recognize, so this does not change the response shape they depend on.
     legacyProviderBatchId: batch.legacyProviderBatchId ?? null,
+    // Additive generic fields let the shared filter builder consume the PCO
+    // DTO directly while the still-installed v1 editor keeps using the
+    // flattened fields above.
+    provider: batch.provider || 'planning_center',
+    enabled: batch.enabled !== false,
+    filterSchemaVersion: batch.filterSchemaVersion,
+    filterConfig: batch.filterConfig,
+    filterRevision: batch.filterRevision,
+    draftFilterSchemaVersion: batch.draftFilterSchemaVersion ?? null,
+    draftFilterConfig: batch.draftFilterConfig ?? null,
+    draftFilterBaseRevision: batch.draftFilterBaseRevision ?? null,
+    draftFilterUpdatedAt: batch.draftFilterUpdatedAt ?? null,
+    needsFilterReview: Boolean(batch.needsFilterReview),
   };
 }
 
@@ -378,13 +391,14 @@ function buildFilterConfigInput(input) {
 // the generic row as legacy_provider_batch_id.
 async function createBatch(churchId, input) {
   const filterConfig = buildFilterConfigInput(input);
+  const isV2 = input.filterSchemaVersion === 2;
   const generic = await batchRepository.createBatch({
     churchId,
     provider: 'planning_center',
     name: input.name,
     enabled: true,
-    filterSchemaVersion: 1,
-    filterConfig,
+    filterSchemaVersion: isV2 ? 2 : 1,
+    filterConfig: isV2 ? { branches: [], exclusions: [] } : filterConfig,
     defaultPeopleType: input.defaultPeopleType,
     gatheringTypeId: input.gatheringTypeId || null,
     gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,
@@ -392,6 +406,7 @@ async function createBatch(churchId, input) {
     scheduleFrequency: input.scheduleFrequency,
     scheduleDay: input.scheduleDay,
     legacyProviderBatchId: null,
+    ...(isV2 ? { initialDraftFilterConfig: input.draftFilterConfig } : {}),
   });
 
   const legacyRes = await Database.query(

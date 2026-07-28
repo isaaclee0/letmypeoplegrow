@@ -20,6 +20,7 @@ const {
 const { createPeopleSyncRouter } = require('./integrations/peopleSync');
 const { createElvantoRouter } = require('./integrations/elvanto');
 const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
+const { createFilterBuilderRouter } = require('./integrations/filterBuilder');
 
 const router = express.Router();
 
@@ -49,6 +50,7 @@ router.use(requireRole(['admin']));
 // Elvanto routes retained below this router are the gathering discovery and
 // import flow used by ElvantoGatheringImport.
 router.use('/people-sync', createPeopleSyncRouter());
+router.use('/people-sync/providers', createFilterBuilderRouter());
 router.use('/elvanto', createElvantoRouter());
 router.use('/planning-center', createPlanningCenterPeopleSyncRouter());
 
@@ -1289,6 +1291,17 @@ const PCO_PEOPLE_TYPES = ['regular', 'local_visitor', 'traveller_visitor'];
 const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 
 function validateBatchBody(body) {
+  if (body && body.filterSchemaVersion === 2) {
+    const { name, draftFilterConfig, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+    if (typeof name !== 'string' || !name.trim()) return 'name is required.';
+    if (!draftFilterConfig || typeof draftFilterConfig !== 'object' || Array.isArray(draftFilterConfig)) return 'draftFilterConfig must be an object.';
+    if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
+    if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) return 'gatheringTypeId must be an integer or null.';
+    if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
+    if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
+    if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
+    return null;
+  }
   const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
           defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
@@ -1375,6 +1388,10 @@ router.post('/planning-center/sync-batches', async (req, res) => {
       name: name.trim(), membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
       defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
+      ...(req.body.filterSchemaVersion === 2 ? {
+        filterSchemaVersion: 2,
+        draftFilterConfig: req.body.draftFilterConfig,
+      } : {}),
     });
     res.json({ success: true, batch });
   } catch (error) {

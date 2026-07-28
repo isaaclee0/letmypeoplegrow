@@ -323,6 +323,24 @@ test('POST /sync-batches rejects a filter the adapter considers invalid, before 
   assert.equal(createCalled, false);
 });
 
+test('POST /sync-batches creates a schema-2 batch as an empty active filter plus an initial draft', async () => {
+  let input = null;
+  const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+  await withServer(noopDeps({ createBatch: async (value) => { input = value; return { id: 7, ...value }; } }), { user: ADMIN_USER }, async (base) => {
+    const response = await requestJson(`${base}/sync-batches`, {
+      method: 'POST', body: {
+        name: 'Members', filterSchemaVersion: 2, draftFilterConfig: draft,
+        defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
+        scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
+      },
+    });
+    assert.equal(response.status, 200);
+  });
+  assert.equal(input.filterSchemaVersion, 2);
+  assert.deepEqual(input.filterConfig, { branches: [], exclusions: [] });
+  assert.deepEqual(input.initialDraftFilterConfig, draft);
+});
+
 // ─── Schedule day/frequency range validation ────────────────────────────────
 //
 // Same bug shape as the equivalent peopleSync.js settings gap, and a
