@@ -45,6 +45,14 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
       'gathering lists should retain provider-neutral batch provenance'
     );
 
+    const batchColumns = await Database.query('PRAGMA table_info(people_sync_batches)');
+    const batchColumnsByName = new Map(batchColumns.map((column) => [column.name, column]));
+    assert.equal(batchColumnsByName.get('filter_revision').dflt_value, '1');
+    assert.ok(batchColumnsByName.has('draft_filter_schema_version'));
+    assert.ok(batchColumnsByName.has('draft_filter_config'));
+    assert.ok(batchColumnsByName.has('draft_filter_base_revision'));
+    assert.ok(batchColumnsByName.has('draft_filter_updated_at'));
+
     const personForeignKeys = await Database.query('PRAGMA foreign_key_list(external_person_links)');
     const familyForeignKeys = await Database.query('PRAGMA foreign_key_list(external_family_links)');
     const connectionForeignKeys = await Database.query('PRAGMA foreign_key_list(integration_connections)');
@@ -91,6 +99,7 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
         enabled: '1',
         filter_schema_version: '1',
         filter_config: "'{}'",
+        filter_revision: '1',
         default_people_type: "'regular'",
         gathering_auto_remove_enabled: '0',
         schedule_enabled: '0',

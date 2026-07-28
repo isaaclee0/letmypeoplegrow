@@ -305,10 +305,37 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
         FOREIGN KEY (added_by_pco_batch_id) REFERENCES planning_center_sync_batches(id) ON DELETE SET NULL,
         UNIQUE(gathering_type_id, individual_id)
       );
+      CREATE TABLE people_sync_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        church_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        filter_schema_version INTEGER NOT NULL DEFAULT 1,
+        filter_config TEXT NOT NULL DEFAULT '{}',
+        default_people_type TEXT NOT NULL DEFAULT 'regular',
+        gathering_type_id INTEGER,
+        gathering_auto_remove_enabled INTEGER NOT NULL DEFAULT 0,
+        schedule_enabled INTEGER NOT NULL DEFAULT 0,
+        schedule_frequency TEXT NOT NULL DEFAULT 'weekly',
+        schedule_day INTEGER NOT NULL DEFAULT 1,
+        legacy_provider_batch_id INTEGER,
+        last_external_watermark TEXT,
+        last_sync_at TEXT,
+        last_sync_result TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(church_id, provider, legacy_provider_batch_id)
+      );
     `);
     legacyDb.prepare(
       'INSERT INTO gathering_lists (gathering_type_id, individual_id, church_id, added_by_pco_batch_id) VALUES (?, ?, ?, ?)'
     ).run(gatheringId, individualId, churchId, legacyBatchId);
+    legacyDb.prepare(
+      `INSERT INTO people_sync_batches
+        (church_id, provider, name, filter_schema_version, filter_config, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, 'elvanto', 'Existing v1 Batch', 1, ?, 1, 'monthly', 5)`
+    ).run(churchId, JSON.stringify({ groups: ['existing'] }));
     legacyDb.close();
 
     Database.initialize();
@@ -325,6 +352,11 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     const genericBatches = migrated.prepare(
       'SELECT id, schedule_enabled, schedule_frequency, schedule_day FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
     ).all(churchId, 'planning_center', legacyBatchId);
+    const existingV1Batch = migrated.prepare(
+      `SELECT filter_schema_version, filter_config, schedule_enabled, schedule_frequency, schedule_day,
+        draft_filter_schema_version, draft_filter_config, draft_filter_base_revision, draft_filter_updated_at
+       FROM people_sync_batches WHERE church_id = ? AND provider = 'elvanto' AND name = 'Existing v1 Batch'`
+    ).get(churchId);
     const roster = migrated.prepare('SELECT added_by_sync_batch_id FROM gathering_lists WHERE church_id = ?').get(churchId);
 
     assert.strictEqual(genericBatches.length, 1, 'restart must not duplicate the generic batch');
@@ -332,6 +364,17 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     assert.strictEqual(genericBatches[0].schedule_enabled, 1);
     assert.strictEqual(genericBatches[0].schedule_frequency, 'monthly');
     assert.strictEqual(genericBatches[0].schedule_day, 4);
+    assert.deepStrictEqual(existingV1Batch, {
+      filter_schema_version: 1,
+      filter_config: JSON.stringify({ groups: ['existing'] }),
+      schedule_enabled: 1,
+      schedule_frequency: 'monthly',
+      schedule_day: 5,
+      draft_filter_schema_version: null,
+      draft_filter_config: null,
+      draft_filter_base_revision: null,
+      draft_filter_updated_at: null,
+    });
     assert.strictEqual(roster.added_by_sync_batch_id, genericBatches[0].id);
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ?').get(churchId).count, 1);
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM external_family_links WHERE church_id = ?').get(churchId).count, 1);

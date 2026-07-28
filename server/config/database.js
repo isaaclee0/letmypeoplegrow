@@ -80,6 +80,20 @@ function migrateScheduledPcoAuthority(db, churchId) {
 function ensureProviderNeutralSyncSchema(db) {
   db.exec(PROVIDER_NEUTRAL_SYNC_SCHEMA);
 
+  const batchColumns = db.prepare('PRAGMA table_info(people_sync_batches)').all();
+  const missingBatchColumns = [
+    ['filter_revision', 'INTEGER NOT NULL DEFAULT 1'],
+    ['draft_filter_schema_version', 'INTEGER'],
+    ['draft_filter_config', 'TEXT'],
+    ['draft_filter_base_revision', 'INTEGER'],
+    ['draft_filter_updated_at', 'TEXT'],
+  ];
+  for (const [name, definition] of missingBatchColumns) {
+    if (!batchColumns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE people_sync_batches ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
   const gatheringListColumns = db.prepare('PRAGMA table_info(gathering_lists)').all();
   if (!gatheringListColumns.some((column) => column.name === 'added_by_sync_batch_id')) {
     db.exec('ALTER TABLE gathering_lists ADD COLUMN added_by_sync_batch_id INTEGER REFERENCES people_sync_batches(id) ON DELETE SET NULL');

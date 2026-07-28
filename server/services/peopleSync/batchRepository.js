@@ -1,4 +1,5 @@
 const Database = require('../../config/database');
+const crypto = require('node:crypto');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -17,6 +18,22 @@ function parseFilterConfig(value) {
   }
 }
 
+function canonicalFilterJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalFilterJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalFilterJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function digestFilterConfig(value) {
+  return crypto.createHash('sha256').update(canonicalFilterJson(value)).digest('hex');
+}
+
+function parseDraftFilterConfig(value) {
+  return value === null || value === undefined ? null : parseFilterConfig(value);
+}
+
 function toBatch(row) {
   if (!row) return null;
   return {
@@ -26,6 +43,12 @@ function toBatch(row) {
     enabled: Boolean(row.enabled),
     filterSchemaVersion: Number(row.filter_schema_version),
     filterConfig: parseFilterConfig(row.filter_config),
+    filterRevision: Number(row.filter_revision),
+    draftFilterSchemaVersion: row.draft_filter_schema_version === null ? null : Number(row.draft_filter_schema_version),
+    draftFilterConfig: parseDraftFilterConfig(row.draft_filter_config),
+    draftFilterBaseRevision: row.draft_filter_base_revision === null ? null : Number(row.draft_filter_base_revision),
+    draftFilterUpdatedAt: row.draft_filter_updated_at,
+    needsFilterReview: row.draft_filter_config !== null,
     defaultPeopleType: row.default_people_type,
     gatheringTypeId: row.gathering_type_id,
     gatheringAutoRemoveEnabled: Boolean(row.gathering_auto_remove_enabled),
@@ -58,32 +81,101 @@ function normaliseBatchInput(input) {
     churchId, provider, name, enabled = true, filterSchemaVersion = 1, filterConfig = {},
     defaultPeopleType = 'regular', gatheringTypeId = null, gatheringAutoRemoveEnabled = false,
     scheduleEnabled = false, scheduleFrequency = 'weekly', scheduleDay = 1, legacyProviderBatchId = null,
+    initialDraftFilterConfig,
   } = input || {};
   assertProvider(provider);
   if (!churchId || typeof name !== 'string' || !name.trim()) throw new Error('A batch name is required');
   if (!Number.isInteger(filterSchemaVersion) || filterSchemaVersion < 1) throw new Error('Invalid filter schema version');
   if (!filterConfig || typeof filterConfig !== 'object' || Array.isArray(filterConfig)) throw new Error('Filter config must be an object');
+  if (initialDraftFilterConfig !== undefined && (!initialDraftFilterConfig || typeof initialDraftFilterConfig !== 'object' || Array.isArray(initialDraftFilterConfig))) {
+    throw new Error('Initial draft filter config must be an object');
+  }
   if (!PEOPLE_TYPES.has(defaultPeopleType)) throw new Error('Invalid default people type');
   return {
     churchId, provider, name: name.trim(), enabled: Boolean(enabled), filterSchemaVersion, filterConfig,
     defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled: Boolean(gatheringAutoRemoveEnabled),
     scheduleEnabled: Boolean(scheduleEnabled), scheduleFrequency, scheduleDay, legacyProviderBatchId,
+    initialDraftFilterConfig,
   };
 }
 
 async function createBatch(input) {
   const batch = normaliseBatchInput(input);
+  const hasInitialDraft = batch.initialDraftFilterConfig !== undefined;
+  const activeFilterSchemaVersion = hasInitialDraft ? 2 : batch.filterSchemaVersion;
+  const activeFilterConfig = hasInitialDraft ? { branches: [], exclusions: [] } : batch.filterConfig;
   const result = await Database.queryForChurch(batch.churchId, `INSERT INTO people_sync_batches
     (church_id, provider, name, enabled, filter_schema_version, filter_config, default_people_type,
      gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day,
-     legacy_provider_batch_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-    batch.churchId, batch.provider, batch.name, batch.enabled, batch.filterSchemaVersion,
-    JSON.stringify(batch.filterConfig), batch.defaultPeopleType, batch.gatheringTypeId,
+     legacy_provider_batch_id, draft_filter_schema_version, draft_filter_config, draft_filter_base_revision,
+     draft_filter_updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      CASE WHEN ? THEN datetime('now') ELSE NULL END)`, [
+    batch.churchId, batch.provider, batch.name, batch.enabled, activeFilterSchemaVersion,
+    JSON.stringify(activeFilterConfig), batch.defaultPeopleType, batch.gatheringTypeId,
     batch.gatheringAutoRemoveEnabled, batch.scheduleEnabled, batch.scheduleFrequency, batch.scheduleDay,
-    batch.legacyProviderBatchId,
+    batch.legacyProviderBatchId, hasInitialDraft ? 2 : null,
+    hasInitialDraft ? JSON.stringify(batch.initialDraftFilterConfig) : null,
+    hasInitialDraft ? 1 : null, hasInitialDraft ? 1 : 0,
   ]);
   return getBatch(batch.churchId, batch.provider, result.insertId);
+}
+
+async function saveFilterDraft({ churchId, provider, batchId, schemaVersion, filterConfig }) {
+  assertProvider(provider);
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 1) throw new Error('Invalid filter schema version');
+  if (!filterConfig || typeof filterConfig !== 'object' || Array.isArray(filterConfig)) throw new Error('Filter config must be an object');
+  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
+    SET draft_filter_schema_version = ?, draft_filter_config = ?, draft_filter_base_revision = filter_revision,
+      draft_filter_updated_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ? AND church_id = ? AND provider = ?`, [
+    schemaVersion, JSON.stringify(filterConfig), batchId, churchId, provider,
+  ]);
+  return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
+}
+
+async function discardFilterDraft(churchId, provider, batchId) {
+  assertProvider(provider);
+  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
+    SET draft_filter_schema_version = NULL, draft_filter_config = NULL, draft_filter_base_revision = NULL,
+      draft_filter_updated_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
+  return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
+}
+
+async function promoteFilterDraftWithConnection(conn, {
+  churchId, provider, batchId, expectedBaseRevision, expectedDraftDigest,
+}) {
+  assertProvider(provider);
+  const row = conn.prepare(`SELECT * FROM people_sync_batches
+    WHERE id = ? AND church_id = ? AND provider = ?`).get(batchId, churchId, provider);
+  const draftConfig = parseDraftFilterConfig(row?.draft_filter_config);
+  if (!row || draftConfig === null || row.filter_revision !== expectedBaseRevision ||
+      row.draft_filter_base_revision !== expectedBaseRevision ||
+      digestFilterConfig(draftConfig) !== expectedDraftDigest) {
+    const error = new Error('Sync filter draft is stale');
+    error.code = 'SYNC_FILTER_DRAFT_STALE';
+    throw error;
+  }
+  const result = conn.prepare(`UPDATE people_sync_batches
+    SET filter_schema_version = draft_filter_schema_version,
+        filter_config = draft_filter_config,
+        filter_revision = filter_revision + 1,
+        draft_filter_schema_version = NULL,
+        draft_filter_config = NULL,
+        draft_filter_base_revision = NULL,
+        draft_filter_updated_at = NULL,
+        updated_at = datetime('now')
+    WHERE id = ? AND church_id = ? AND provider = ? AND filter_revision = ?`).run(
+    batchId, churchId, provider, expectedBaseRevision
+  );
+  if (result.changes !== 1) {
+    const error = new Error('Sync filter draft is stale');
+    error.code = 'SYNC_FILTER_DRAFT_STALE';
+    throw error;
+  }
+  return toBatch(conn.prepare(`SELECT * FROM people_sync_batches
+    WHERE id = ? AND church_id = ? AND provider = ?`).get(batchId, churchId, provider));
 }
 
 async function updateBatch(input) {
@@ -134,4 +226,7 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
   return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
 }
 
-module.exports = { listBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult };
+module.exports = {
+  listBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
+  saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
+};

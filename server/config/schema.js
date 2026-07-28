@@ -139,6 +139,11 @@ CREATE TABLE IF NOT EXISTS people_sync_batches (
   enabled INTEGER NOT NULL DEFAULT 1,
   filter_schema_version INTEGER NOT NULL DEFAULT 1,
   filter_config TEXT NOT NULL DEFAULT '{}',
+  filter_revision INTEGER NOT NULL DEFAULT 1,
+  draft_filter_schema_version INTEGER,
+  draft_filter_config TEXT,
+  draft_filter_base_revision INTEGER,
+  draft_filter_updated_at TEXT,
   default_people_type TEXT NOT NULL DEFAULT 'regular'
     CHECK(default_people_type IN ('regular', 'local_visitor', 'traveller_visitor')),
   gathering_type_id INTEGER,
