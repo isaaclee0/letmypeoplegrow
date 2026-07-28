@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const {
-  listBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
+  listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
 } = require('./batchRepository');
 
@@ -35,6 +35,19 @@ test('batch repository maps the complete stable DTO and preserves its schema ver
     assert.equal(updated.name, 'Renamed');
     assert.equal(updated.enabled, true);
     assert.deepEqual(await listBatches(churchId, 'elvanto'), [updated]);
+  });
+});
+
+test('listEnabledBatches filters by church, provider, and enabled status in its query', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const otherChurchId = `${churchId}_other`;
+    Database.getChurchDb(otherChurchId);
+    const enabled = await createBatch({ churchId, provider: 'elvanto', name: 'Enabled', enabled: true });
+    await createBatch({ churchId, provider: 'elvanto', name: 'Disabled', enabled: false });
+    await createBatch({ churchId, provider: 'planning_center', name: 'Other provider', enabled: true });
+    await createBatch({ churchId: otherChurchId, provider: 'elvanto', name: 'Other church', enabled: true });
+
+    assert.deepEqual(await listEnabledBatches(churchId, 'elvanto'), [enabled]);
   });
 });
 

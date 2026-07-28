@@ -97,6 +97,13 @@ async function listBatches(churchId, provider) {
   return rows.map(toBatch);
 }
 
+async function listEnabledBatches(churchId, provider) {
+  assertProvider(provider);
+  const rows = await Database.queryForChurch(churchId, `SELECT * FROM people_sync_batches
+    WHERE church_id = ? AND provider = ? AND enabled = 1 ORDER BY id`, [churchId, provider]);
+  return rows.map(toBatch);
+}
+
 function normaliseBatchInput(input) {
   const {
     churchId, provider, name, enabled = true, filterSchemaVersion = 1, filterConfig = {},
@@ -253,6 +260,6 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 }
 
 module.exports = {
-  listBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
+  listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
 };
