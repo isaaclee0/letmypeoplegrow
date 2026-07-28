@@ -66,6 +66,22 @@ test('evaluateFilterV2 handles $not_set, any, all, multiple exclusions, NOT-only
   assert.equal(evaluateFilterV2(noGroups, EMPTY_V2_FILTER), false);
 });
 
+test('evaluateFilterV2 fails closed for malformed or unvalidated configs', () => {
+  const facts = { externalPersonId: 'one', dimensions: { status: ['active'] } };
+  const malformedConfigs = [
+    { branches: [{ groups: [] }], exclusions: [] },
+    { branches: [], exclusions: [{ dimensionId: 'status' }] },
+    { branches: [null], exclusions: [] },
+    { branches: [{ groups: [null] }], exclusions: [] },
+    { branches: [], exclusions: [null] },
+    { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'], unexpected: true }] }], exclusions: [] },
+  ];
+
+  for (const config of malformedConfigs) {
+    assert.doesNotThrow(() => assert.equal(evaluateFilterV2(facts, config), false));
+  }
+});
+
 test('validateFilterV2 canonicalizes order and summaries are order-independent', () => {
   const first = validConfig({
     branches: [{ groups: [
@@ -130,8 +146,35 @@ test('validateFilterV2 accepts only explicitly allowed unresolved dimension/valu
   assert.equal(rejected.ok, false);
   assert.ok(codes(rejected).includes('UNKNOWN_VALUE'));
 
-  const accepted = validateFilterV2(config, metadata, { allowedUnresolvedPairs: new Set(['status:gone']) });
+  const accepted = validateFilterV2(config, metadata, { allowedUnresolvedPairs: new Set([JSON.stringify(['status', 'gone'])]) });
   assert.equal(accepted.ok, true);
   assert.deepEqual(accepted.unresolved, [{ dimensionId: 'status', valueId: 'gone' }]);
   assert.deepEqual(accepted.value, config);
+});
+
+test('tuple identity keeps colon-containing dimension and value IDs distinct', () => {
+  const colonMetadata = {
+    provider: 'elvanto',
+    dimensions: [
+      { id: 'a', label: 'A', cardinality: 'multi', category: 'Test', values: [{ id: 'known', label: 'Known', count: 0 }] },
+      { id: 'a:b', label: 'A:B', cardinality: 'multi', category: 'Test', values: [{ id: 'known', label: 'Known', count: 0 }] },
+    ],
+    snapshot: null,
+  };
+  const firstPair = { dimensionId: 'a', valueId: 'b:c' };
+  const secondPair = { dimensionId: 'a:b', valueId: 'c' };
+  const allowed = new Set([JSON.stringify(['a', 'b:c'])]);
+
+  const first = validateFilterV2({ branches: [{ groups: [{ dimensionId: 'a', mode: 'any', values: ['b:c'] }] }], exclusions: [] }, colonMetadata, { allowedUnresolvedPairs: allowed });
+  const second = validateFilterV2({ branches: [{ groups: [{ dimensionId: 'a:b', mode: 'any', values: ['c'] }] }], exclusions: [] }, colonMetadata, { allowedUnresolvedPairs: allowed });
+  const distinct = {
+    branches: [{ groups: [{ dimensionId: 'a', mode: 'any', values: ['b:c'] }] }],
+    exclusions: [{ dimensionId: 'a:b', values: ['c'] }],
+  };
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  assert.ok(codes(second).includes('UNKNOWN_VALUE'));
+  assert.equal(validateFilterV2(distinct, colonMetadata, { allowedUnresolvedPairs: new Set([JSON.stringify(['a', 'b:c']), JSON.stringify(['a:b', 'c'])]) }).ok, true);
+  assert.deepEqual(selectedPairs(distinct), [firstPair, secondPair]);
 });

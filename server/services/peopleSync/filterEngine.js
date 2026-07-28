@@ -23,7 +23,7 @@ function addError(errors, code, path, message) {
 }
 
 function pairKey(dimensionId, valueId) {
-  return `${dimensionId}:${valueId}`;
+  return JSON.stringify([dimensionId, valueId]);
 }
 
 function compareStrings(left, right) {
@@ -75,7 +75,7 @@ function metadataIndex(metadata) {
 }
 
 function allowedUnresolved(allowedPairs, dimensionId, valueId) {
-  // The stable public representation is `${dimensionId}:${valueId}`. Also
+  // The stable public representation is JSON.stringify([dimensionId, valueId]). Also
   // accept pair objects/tuples to keep callers from having to encode IDs.
   const key = pairKey(dimensionId, valueId);
   if (allowedPairs.has(key)) return true;
@@ -224,8 +224,41 @@ function matchesGroup(facts, group) {
     : group.values.some((value) => factHas(facts, group.dimensionId, value));
 }
 
+// Evaluation intentionally cannot validate provider metadata, but it must not
+// turn a malformed persisted/request config into a match. This guard is kept
+// separate from validateFilterV2 so evaluation remains pure and provider-free.
+function isStructurallyValidForEvaluation(config) {
+  if (!isPlainObject(config) || Object.keys(config).some((key) => !ROOT_KEYS.has(key))) return false;
+  if (!Array.isArray(config.branches) || !Array.isArray(config.exclusions)) return false;
+  const validValues = (values) => Array.isArray(values)
+    && values.length > 0
+    && values.every((value) => typeof value === 'string')
+    && new Set(values).size === values.length;
+  const validGroup = (group) => isPlainObject(group)
+    && Object.keys(group).every((key) => GROUP_KEYS.has(key))
+    && typeof group.dimensionId === 'string'
+    && group.dimensionId.length > 0
+    && MODES.has(group.mode)
+    && validValues(group.values);
+  const validBranch = (branch) => isPlainObject(branch)
+    && Object.keys(branch).every((key) => BRANCH_KEYS.has(key))
+    && Array.isArray(branch.groups)
+    && branch.groups.length > 0
+    && branch.groups.every(validGroup)
+    && new Set(branch.groups.map((group) => group.dimensionId)).size === branch.groups.length;
+  const validExclusion = (group) => isPlainObject(group)
+    && Object.keys(group).every((key) => EXCLUSION_KEYS.has(key))
+    && typeof group.dimensionId === 'string'
+    && group.dimensionId.length > 0
+    && validValues(group.values);
+  return config.branches.every(validBranch)
+    && config.exclusions.every(validExclusion)
+    && new Set(config.exclusions.map((group) => group.dimensionId)).size === config.exclusions.length;
+}
+
 function evaluateFilterV2(facts, config) {
   const safeConfig = config || EMPTY_V2_FILTER;
+  if (!isStructurallyValidForEvaluation(safeConfig)) return false;
   const exclusions = Array.isArray(safeConfig.exclusions) ? safeConfig.exclusions : [];
   const branches = Array.isArray(safeConfig.branches) ? safeConfig.branches : [];
   const excluded = exclusions.some((group) => Array.isArray(group.values) && group.values.some((value) => factHas(facts, group.dimensionId, value)));
