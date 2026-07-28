@@ -180,13 +180,12 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   if (step === 'elvanto-review') {
     return (
       <section className="space-y-4">
-        <p className="text-sm text-gray-700">Review every match and change before importing. The saved batch remains available in Settings if you continue without importing.</p>
+        <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the proposed filter before you continue.</p>
         {busy && <p className="text-sm text-gray-500">Preparing review…</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         {batchReview && <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />}
         <div className="flex flex-wrap gap-3">
           {error && batch && <button type="button" onClick={() => void loadBatchReview(batch)} className="text-sm underline">Retry review</button>}
-          <button type="button" onClick={onContinueToGatherings} className="text-sm underline">Continue without importing</button>
         </div>
       </section>
     );

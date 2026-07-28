@@ -11,14 +11,16 @@ import {
   XMarkIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
-import { integrationsAPI, settingsAPI, SyncBatch } from '../../services/api';
+import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import Modal from '../Modal';
 import logger from '../../utils/logger';
 import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
+import FilterUpgradePanel from '../peopleSync/FilterUpgradePanel';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
+import type { PeopleSyncBatch } from '../peopleSync/types';
 
 const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' }> = ({
   status,
@@ -40,11 +42,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   }, [initialAction]);
   const [pcSyncEnabled, setPcSyncEnabled] = useState(false);
   const [pcTrackBackgroundChecks, setPcTrackBackgroundChecks] = useState(false);
-  const [batches, setBatches] = useState<SyncBatch[]>([]);
+  const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
-  const [editingBatch, setEditingBatch] = useState<SyncBatch | 'new' | null>(null);
+  const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
@@ -108,6 +110,15 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       await reloadAfterBatchMutation();
     } catch (e: any) {
       setPlanningCenterError(e.response?.data?.error || 'Failed to delete sync batch.');
+    }
+  };
+
+  const discardDraft = async (batchId: number) => {
+    try {
+      await peopleSyncAPI.discardFilterDraft('planning_center', batchId);
+      await reloadAfterBatchMutation();
+    } catch (e: any) {
+      setBatchesError(e.response?.data?.error || 'Failed to discard the filter draft.');
     }
   };
 
@@ -395,14 +406,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             {batch.gatheringTypeId ? 'Assigns to a gathering · ' : ''}
                             {batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}
                           </p>
-                          {batch.lastSyncResult && (
+                          {batch.lastSyncAt && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                              Last run {new Date(batch.lastSyncResult.at).toLocaleString()}: {batch.lastSyncResult.added} added, {batch.lastSyncResult.updated} updated, {batch.lastSyncResult.linked} linked
-                              {batch.lastSyncResult.ambiguous ? `, ${batch.lastSyncResult.ambiguous} need review` : ''}
-                              {batch.gatheringTypeId && batch.lastSyncResult.gatheringAssigned ? `, ${batch.lastSyncResult.gatheringAssigned} added to gathering` : ''}
-                              {batch.gatheringAutoRemoveEnabled && batch.lastSyncResult.gatheringRemoved ? `, ${batch.lastSyncResult.gatheringRemoved} removed from gathering` : ''}.
+                              Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${batch.lastSyncResult.replaceAll('_', ' ')}` : ''}.
                             </p>
                           )}
+                          {batch.needsFilterReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · {batch.filterSchemaVersion === 1 ? 'Active criteria still running' : 'Draft criteria will not run until reviewed.'}</p>}
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
@@ -416,17 +425,21 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
                           </button>
+                          {batch.needsFilterReview && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
                       </div>
                       {reviewingBatchId === batch.id && (
                         <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
-                          <PlanningCenterSyncReview connected={status.connected} batchId={batch.id} />
+                          <PlanningCenterSyncReview connected={status.connected} batchId={batch.id} onApplied={() => reloadAfterBatchMutation()} />
                         </div>
                       )}
                     </li>
                   ))}
                 </ul>
+                <div className="mt-3">
+                  <FilterUpgradePanel provider="planning_center" batches={batches} onChanged={reloadAfterBatchMutation} />
+                </div>
               </div>
 
               {peopleSourceControl}

@@ -1,18 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type SyncBatch, type SyncBatchInput, type SyncBatchSettingsInput } from '../../services/api';
+import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type PlanningCenterSyncBatchInput, type PlanningCenterSyncBatchPatch } from '../../services/api';
 import BatchFilterControls from '../peopleSync/BatchFilterControls';
 import type { BooleanFilterConfigV2, PeopleSyncBatch, PeopleType } from '../peopleSync/types';
 import { ordinalDay } from '../../utils/pcoSchedule';
 import Modal from '../Modal';
 
 interface GatheringOption { id: number; name: string; }
-type LegacyPcoBatch = SyncBatch;
-type PcoBatchBoundary = PeopleSyncBatch | LegacyPcoBatch;
 const emptyFilter = (): BooleanFilterConfigV2 => ({ branches: [], exclusions: [] });
 
 interface Props {
-  /** @deprecated The legacy half of this boundary is removed with the panel migration in Task 12. */
-  batch: PcoBatchBoundary | null;
+  batch: PeopleSyncBatch | null;
   onSaved: (batch: PeopleSyncBatch<BooleanFilterConfigV2>) => void;
   onCancel: () => void;
 }
@@ -22,7 +19,7 @@ function isV2FilterConfig(value: unknown): value is BooleanFilterConfigV2 {
     'exclusions' in value && Array.isArray(value.exclusions);
 }
 
-function isGenericBatch(batch: PcoBatchBoundary): batch is PeopleSyncBatch<BooleanFilterConfigV2> {
+function isGenericBatch(batch: PeopleSyncBatch): batch is PeopleSyncBatch<BooleanFilterConfigV2> {
   return 'provider' in batch && batch.provider === 'planning_center' &&
     'filterSchemaVersion' in batch && batch.filterSchemaVersion === 2 &&
     'filterRevision' in batch && typeof batch.filterRevision === 'number' &&
@@ -101,8 +98,8 @@ export default function PlanningCenterBatchEditor({ batch: boundaryBatch, onSave
         gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled,
         scheduleEnabled, scheduleFrequency, scheduleDay };
       if (!currentBatch) {
-        const payload: SyncBatchInput & { filterSchemaVersion: 2; draftFilterConfig: BooleanFilterConfigV2; broadMatchAcknowledged: boolean } = {
-          ...common, membershipFilterEnabled: false, membershipAllowlist: [], fieldFilterEnabled: false, fieldFilters: [],
+        const payload: PlanningCenterSyncBatchInput & { filterSchemaVersion: 2; draftFilterConfig: BooleanFilterConfigV2; broadMatchAcknowledged: boolean } = {
+          ...common,
           filterSchemaVersion: 2, draftFilterConfig: filterConfig, broadMatchAcknowledged: broadAcknowledged,
         };
         const created = await integrationsAPI.createPlanningCenterSyncBatch(payload);
@@ -110,7 +107,7 @@ export default function PlanningCenterBatchEditor({ batch: boundaryBatch, onSave
         onSaved(created.data.batch);
         return;
       }
-      const nonFilterPayload: SyncBatchSettingsInput = common;
+      const nonFilterPayload: PlanningCenterSyncBatchPatch = common;
       try { await integrationsAPI.updatePlanningCenterSyncBatch(currentBatch.id, nonFilterPayload); }
       catch (saveError) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${errorMessage(saveError, 'Failed to save batch settings.')}` : errorMessage(saveError, 'Failed to save batch settings.')); return; }
       let draft;

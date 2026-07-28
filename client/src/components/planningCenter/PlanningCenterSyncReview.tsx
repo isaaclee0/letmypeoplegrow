@@ -5,7 +5,7 @@ import type { PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
 
-export default function PlanningCenterSyncReview({ connected, batchId }: { connected: boolean; batchId: number }) {
+export default function PlanningCenterSyncReview({ connected, batchId, onApplied }: { connected: boolean; batchId: number; onApplied?: () => void | Promise<void> }) {
   const navigate = useNavigate();
   const [review, setReview] = useState<PeopleSyncReview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,6 +46,7 @@ export default function PlanningCenterSyncReview({ connected, batchId }: { conne
       const response = await integrationsAPI.applyPlanningCenterBatch(batchId, { reviewToken, selections });
       setResult(`Applied sync run ${response.data.runId}.`);
       await loadReview({ preserveResult: true });
+      await onApplied?.();
     } catch (caught: any) {
       logger.error('Failed to apply Planning Center batch sync', caught);
       setError(caught.response?.data?.error || 'Failed to apply sync.');

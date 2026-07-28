@@ -355,7 +355,8 @@ function createFilterBuilderRouter(overrides = {}) {
       const token = deps.createUpgradeToken({ churchId, provider, batchId: batch.id, filterRevision: batch.filterRevision,
         activeConfigDigest: require('../../services/peopleSync/planDigest').digestFilterConfig(batch.filterConfig), snapshotId: entry.snapshotId,
         convertedDigest: require('../../services/peopleSync/planDigest').digestFilterConfig(converted), compatible: comparison.compatible });
-      return res.json({ success: true, compatible: comparison.compatible, oldCount: comparison.oldCount, newCount: comparison.newCount, upgradeToken: token });
+      return res.json({ success: true, compatible: comparison.compatible, oldCount: comparison.oldCount, newCount: comparison.newCount,
+        convertedFilterConfig: converted, snapshot: snapshotDto(entry), upgradeToken: token });
     } catch (error) {
       return safeError(res, error, 'filter upgrade preview');
     }

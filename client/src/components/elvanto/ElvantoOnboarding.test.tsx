@@ -21,8 +21,10 @@ const metadata = {
 };
 
 const batch: PeopleSyncBatch = {
-  id: 12, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 1,
-  filterConfig: { statuses: ['active', 'contact'], categoryIds: [], groups: { ids: [], operator: 'any' }, demographics: { values: [], operator: 'any' }, departments: { values: [], operator: 'any' }, serviceTypes: { ids: [], operator: 'any' }, locations: { ids: [], operator: 'any' }, customFields: [] },
+  id: 12, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 2,
+  filterConfig: { branches: [], exclusions: [] }, filterRevision: 1,
+  draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] },
+  draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T08:00:00.000Z', needsFilterReview: true,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
@@ -138,21 +140,26 @@ describe('ElvantoOnboarding', () => {
     expect(elvantoSyncAPI.getMetadata).toHaveBeenCalledTimes(2);
   });
 
-  it('can skip before connecting or after saving the batch', async () => {
+  it('can skip before connecting', async () => {
     const beforeConnection = vi.fn();
-    const first = render(<Harness onContinue={beforeConnection} />);
+    render(<Harness onContinue={beforeConnection} />);
     fireEvent.click(screen.getByRole('button', { name: 'Skip Elvanto' }));
     expect(beforeConnection).toHaveBeenCalledTimes(1);
-    first.unmount();
+  });
 
-    const afterBatch = vi.fn();
-    render(<Harness onContinue={afterBatch} />);
+  it('keeps onboarding in the review when applying the first draft fails', async () => {
+    vi.mocked(elvantoSyncAPI.applyBatch).mockRejectedValueOnce({ response: { data: { error: 'Review expired' } } });
+    render(<Harness />);
     fireEvent.change(screen.getByLabelText('Elvanto API key'), { target: { value: 'valid-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Create batch' }));
     await screen.findByText('Elvanto sync review');
-    fireEvent.click(screen.getByRole('button', { name: 'Continue without importing' }));
-    expect(afterBatch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Continue without importing' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to apply sync.');
+    expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
+    expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
   });
 
   it('allows declining authority after the reviewed import', async () => {

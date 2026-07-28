@@ -97,6 +97,9 @@ export interface FilterUpgradePreview {
   oldCount: number;
   newCount: number;
   upgradeToken: string;
+  /** The server-calculated v2 expression. It is preview-only until reviewed. */
+  convertedFilterConfig: BooleanFilterConfigV2;
+  snapshot: FilterSnapshot;
 }
 
 // `applyCompatibleUpgrades()` deliberately returns only upgrade audit fields,

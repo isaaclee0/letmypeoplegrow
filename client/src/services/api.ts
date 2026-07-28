@@ -861,43 +861,21 @@ export const settingsAPI = {
   }) => api.put('/settings/integrations', data),
 };
 
-export interface SyncBatchInput {
+export interface PlanningCenterSyncBatchInput {
   name: string;
-  membershipFilterEnabled: boolean;
-  membershipAllowlist: string[];
-  fieldFilterEnabled: boolean;
-  fieldFilters: { fieldDefinitionId: string; tabName: string | null; fieldName: string; values: string[] }[];
   defaultPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;
   scheduleEnabled: boolean;
   scheduleFrequency: 'daily' | 'weekly' | 'monthly';
   scheduleDay: number;
+  filterSchemaVersion?: 2;
+  filterConfig?: BooleanFilterConfigV2;
+  draftFilterConfig?: BooleanFilterConfigV2;
+  broadMatchAcknowledged?: boolean;
 }
 
-export type SyncBatchSettingsInput = Omit<SyncBatchInput,
-  'membershipFilterEnabled' | 'membershipAllowlist' | 'fieldFilterEnabled' | 'fieldFilters'>;
-
-export interface SyncBatchLastResult {
-  at: string;
-  added: number;
-  updated: number;
-  archived: number;
-  reactivated: number;
-  linked: number;
-  gatheringAssigned: number;
-  gatheringRemoved: number;
-  ambiguous: number;
-  visitorMatches: number;
-  errors: number;
-}
-
-/** @deprecated Remove in Task 12 after generic panel/onboarding migration. */
-export interface SyncBatch extends SyncBatchInput {
-  id: number;
-  lastSyncAt: string | null;
-  lastSyncResult: SyncBatchLastResult | null;
-}
+export type PlanningCenterSyncBatchPatch = Partial<PlanningCenterSyncBatchInput>;
 
 // Integrations API
 export const integrationsAPI = {
@@ -934,10 +912,10 @@ export const integrationsAPI = {
   searchPlanningCenterPeople: (q: string) =>
     api.get('/integrations/planning-center/people-search', { params: { q }, timeout: 30000 }),
   getPlanningCenterSyncBatches: () =>
-    api.get('/integrations/planning-center/sync-batches'),
-  createPlanningCenterSyncBatch: (data: SyncBatchInput) =>
-    api.post('/integrations/planning-center/sync-batches', data, { timeout: 120000 }),
-  updatePlanningCenterSyncBatch: (id: number, data: SyncBatchSettingsInput) =>
+    api.get<{ success: true; batches: PeopleSyncBatch[] }>('/integrations/planning-center/sync-batches'),
+  createPlanningCenterSyncBatch: (data: PlanningCenterSyncBatchInput) =>
+    api.post<{ success: true; batch: PeopleSyncBatch }>('/integrations/planning-center/sync-batches', data, { timeout: 120000 }),
+  updatePlanningCenterSyncBatch: (id: number, data: PlanningCenterSyncBatchPatch) =>
     // Enabling gatheringAutoRemoveEnabled can trigger a live PCO fetch for the
     // toggle-enable backfill (server/routes/integrations.js), which can take well
     // over the global 15s default when the PCO people cache is cold.

@@ -1,8 +1,8 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { integrationsAPI, peopleSyncAPI, settingsAPI, type SyncBatch } from '../../services/api';
-import type { PeopleSyncSettings } from '../peopleSync/types';
+import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
+import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
 import PlanningCenterIntegrationPanel from './PlanningCenterIntegrationPanel';
 
 vi.mock('../../services/api', () => ({
@@ -42,13 +42,11 @@ const settings: PeopleSyncSettings = {
   fullReconciliationDay: 1,
 };
 
-const batch: SyncBatch = {
-  id: 12,
-  name: 'Members',
-  membershipFilterEnabled: false,
-  membershipAllowlist: [],
-  fieldFilterEnabled: false,
-  fieldFilters: [],
+const batch: PeopleSyncBatch = {
+  id: 12, provider: 'planning_center', name: 'Members', enabled: true,
+  filterSchemaVersion: 1, filterConfig: {}, filterRevision: 1,
+  draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null,
+  draftFilterUpdatedAt: null, needsFilterReview: false,
   defaultPeopleType: 'regular',
   gatheringTypeId: null,
   gatheringAutoRemoveEnabled: false,
@@ -106,8 +104,8 @@ describe('PlanningCenterIntegrationPanel', () => {
   });
 
   it('disables authority while deleting the last batch reloads', async () => {
-    let resolveReloadedBatches!: (value: { data: { batches: SyncBatch[] } }) => void;
-    const reloadedBatchesResponse = new Promise<{ data: { batches: SyncBatch[] } }>((resolve) => {
+    let resolveReloadedBatches!: (value: { data: { batches: PeopleSyncBatch[] } }) => void;
+    const reloadedBatchesResponse = new Promise<{ data: { batches: PeopleSyncBatch[] } }>((resolve) => {
       resolveReloadedBatches = resolve;
     });
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
@@ -118,7 +116,7 @@ describe('PlanningCenterIntegrationPanel', () => {
     vi.mocked(integrationsAPI.deletePlanningCenterSyncBatch).mockResolvedValue({ data: { success: true } });
     renderPanel();
 
-    await screen.findByText('Members');
+    await screen.findAllByText('Members');
     const sourceSwitch = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     expect(sourceSwitch).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -141,7 +139,7 @@ describe('PlanningCenterIntegrationPanel', () => {
     vi.mocked(integrationsAPI.deletePlanningCenterSyncBatch).mockResolvedValue({ data: { success: true } });
     renderPanel();
 
-    await screen.findByText('Members');
+    await screen.findAllByText('Members');
     const sourceSwitch = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
     expect(sourceSwitch).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -153,8 +151,8 @@ describe('PlanningCenterIntegrationPanel', () => {
   });
 
   it('ignores an older initial response after a post-save reload completes', async () => {
-    let resolveInitialBatches!: (value: { data: { batches: SyncBatch[] } }) => void;
-    const initialBatchesResponse = new Promise<{ data: { batches: SyncBatch[] } }>((resolve) => {
+    let resolveInitialBatches!: (value: { data: { batches: PeopleSyncBatch[] } }) => void;
+    const initialBatchesResponse = new Promise<{ data: { batches: PeopleSyncBatch[] } }>((resolve) => {
       resolveInitialBatches = resolve;
     });
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
@@ -207,7 +205,7 @@ describe('PlanningCenterIntegrationPanel', () => {
       .mockRejectedValueOnce({ response: { data: { error: 'Reconnect batch load failed.' } } });
     const { rerender } = renderPanel();
 
-    await screen.findByText('Members');
+    await screen.findAllByText('Members');
     rerender(panel({
       status: { enabled: true, connected: false, loading: false, planningCenterAccount: null },
       providerConnections: { planning_center: false, elvanto: true },

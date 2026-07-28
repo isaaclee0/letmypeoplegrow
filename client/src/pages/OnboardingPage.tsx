@@ -7,7 +7,7 @@ import { CheckIcon, MapPinIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import PlanningCenterBatchEditor from '../components/planningCenter/PlanningCenterBatchEditor';
 import PlanningCenterSyncReview from '../components/planningCenter/PlanningCenterSyncReview';
 import PCOCheckinImport from '../components/PCOCheckinImport';
-import { SyncBatch } from '../services/api';
+import type { PeopleSyncBatch } from '../components/peopleSync/types';
 import ElvantoOnboarding, { type ElvantoOnboardingStep } from '../components/elvanto/ElvantoOnboarding';
 
 interface SetupForm {
@@ -214,7 +214,7 @@ const OnboardingPage: React.FC = () => {
   // screen Settings uses, then explicitly applies (or continues without
   // applying; the batch is saved regardless and can be run later from
   // Settings).
-  const onFirstBatchSaved = (batch: SyncBatch) => {
+  const onFirstBatchSaved = (batch: PeopleSyncBatch) => {
     setFirstBatchId(batch.id);
     setStep('pco-review');
   };
@@ -405,20 +405,11 @@ const OnboardingPage: React.FC = () => {
           ) : step === 'pco-review' ? (
             <div className="space-y-4">
               <p className="text-sm text-gray-700">
-                Review what Planning Center found before continuing. You can also skip straight ahead — this batch is saved and can be run again later from Settings.
+                Review what Planning Center found before continuing. Applying this review promotes the proposed filter and starts the first sync safely.
               </p>
               {firstBatchId !== null && (
-                <PlanningCenterSyncReview connected={true} batchId={firstBatchId} />
+                <PlanningCenterSyncReview connected={true} batchId={firstBatchId} onApplied={() => setStep('pco-gatherings')} />
               )}
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setStep('pco-gatherings')}
-                  className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                >
-                  Continue
-                </button>
-              </div>
             </div>
           ) : step === 'pco-gatherings' ? (
             <div className="space-y-4">

@@ -5,6 +5,7 @@ import ElvantoBatchEditor, { type ElvantoGatheringOption } from '../elvanto/Elva
 import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import SyncReview from '../peopleSync/SyncReview';
+import FilterUpgradePanel from '../peopleSync/FilterUpgradePanel';
 import type {
   ElvantoMetadata,
   PeopleSyncBatch,
@@ -335,6 +336,15 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     }
   };
 
+  const discardDraft = async (batch: PeopleSyncBatch) => {
+    try {
+      await peopleSyncAPI.discardFilterDraft('elvanto', batch.id);
+      await reloadAfterBatchMutation();
+    } catch (cause) {
+      setError(errorMessage(cause, 'Failed to discard the filter draft.'));
+    }
+  };
+
   const peopleSourceControl = peopleSyncStatus === 'known' ? (
     <PeopleSourceControl
       provider="elvanto"
@@ -395,11 +405,13 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                     <div>
                       <p className="text-sm font-medium">{batch.name}</p>
                       <p className="text-xs text-gray-500">{batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}{batch.lastSyncAt ? ` · Last run ${new Date(batch.lastSyncAt).toLocaleString()}` : ''}</p>
+                      {batch.needsFilterReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · {batch.filterSchemaVersion === 1 ? 'Active criteria still running' : 'Draft criteria will not run until reviewed.'}</p>}
                     </div>
                     <div className="flex flex-wrap gap-3 text-sm">
                       <button type="button" onClick={() => setEditingBatch(batch)} className="underline">Edit</button>
                       <button type="button" aria-label={`Review & sync ${batch.name}`} onClick={() => void openReview(batch)} className="underline">Review & sync</button>
                       <button type="button" aria-label={`Run ${batch.name} now`} onClick={() => void runNow(batch)} className="underline">Run now</button>
+                      {batch.needsFilterReview && <button type="button" onClick={() => void discardDraft(batch)} className="underline">Discard draft</button>}
                       <button type="button" onClick={() => void deleteBatch(batch)} className="text-red-600 underline">Delete</button>
                     </div>
                   </div>
@@ -418,6 +430,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                 </li>
               ))}
             </ul>
+            <FilterUpgradePanel provider="elvanto" batches={batches} onChanged={reloadAfterBatchMutation} />
             {!loading && batches.length === 0 && <p className="text-sm text-gray-500">No Elvanto batches yet.</p>}
             {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           </section>

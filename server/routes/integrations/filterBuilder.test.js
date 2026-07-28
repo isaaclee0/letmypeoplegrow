@@ -295,6 +295,29 @@ test('saving an empty v2 filter does not require a broad acknowledgement', async
   assert.equal(saved, true);
 });
 
+test('legacy upgrade previews return the converted filter and safe snapshot details without persisting a draft', async () => {
+  const converted = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+  let convertedCalls = 0;
+  await withServer(deps({
+    getBatch: async () => ({ id: 1, provider: 'elvanto', filterSchemaVersion: 1, filterConfig: { statuses: ['active'] }, filterRevision: 3 }),
+    convertV1Filter: () => { convertedCalls++; return converted; },
+    compareUpgradeSets: () => ({ compatible: false, oldCount: 4, newCount: 5 }),
+    createUpgradeToken: () => 'signed-preview-token',
+    saveFilterDraft: async () => { throw new Error('preview must remain transient'); },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/sync-batches/1/filter-upgrade/preview', { method: 'POST', body: {} });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.convertedFilterConfig, converted);
+    assert.deepEqual(response.body.snapshot, {
+      id: 'snapshot-1', capturedAt: '2026-07-28T00:00:00.000Z', fresh: true,
+      expiresAt: '2030-07-28T00:00:00.000Z', coveredDimensionIds: ['status'],
+    });
+    assert.equal(response.body.upgradeToken, 'signed-preview-token');
+    assert.equal(response.body.compatible, false);
+  });
+  assert.equal(convertedCalls, 1);
+});
+
 test('raw chunked JSON larger than 64 KiB is rejected before the route evaluates it', async () => {
   let evaluated = false;
   await withServer(deps({ previewFilter: () => { evaluated = true; return {}; } }), ADMIN, async (base) => {

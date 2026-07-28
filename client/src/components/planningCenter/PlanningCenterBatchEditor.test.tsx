@@ -137,7 +137,7 @@ describe('PlanningCenterBatchEditor', () => {
     renderEditor();
 
     await screen.findByLabelText('Acknowledge broad filter');
-    expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled());
     fireEvent.click(screen.getByLabelText('Acknowledge broad filter'));
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
     await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('Batch settings were saved, but filter draft was not: Draft could not be saved.'))).toBe(true));
