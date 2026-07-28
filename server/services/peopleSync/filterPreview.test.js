@@ -203,6 +203,49 @@ test('PCO v1 validation rejects malformed values and preserves valid membership 
   assert.equal(evaluated, 0);
 });
 
+test('PCO v1 preview rejects unexpected root and field-rule keys before legacy evaluation', () => {
+  const pcoCache = {
+    ...cacheEntry, provider: 'planning_center', coveredDimensionIds: ['membership', 'custom_field:field-1'],
+    facts: [{ externalPersonId: 'p1', dimensions: { membership: ['member'], 'custom_field:field-1': ['yes'] } }],
+  };
+  const valid = {
+    membershipFilterEnabled: true, membershipAllowlist: ['member'],
+    fieldFilterEnabled: true, fieldFilters: [{ fieldDefinitionId: 'field-1', values: ['yes'] }],
+  };
+  for (const filterConfig of [
+    { ...valid, unexpected: true },
+    { ...valid, fieldFilters: [{ ...valid.fieldFilters[0], unexpected: true }] },
+  ]) {
+    let evaluated = 0;
+    const preview = previewFilter({
+      churchId: 'churcha1', provider: 'planning_center', batchId: null,
+      proposed: { enabled: true, filterSchemaVersion: 1, filterConfig },
+      cacheEntry: pcoCache, batches: [], metadata, populationGateDigest: 'gate-1',
+      evaluateLegacy: () => { evaluated += 1; return true; },
+    });
+    assert.equal(preview.matchCount, null);
+    assert.equal(evaluated, 0);
+  }
+});
+
+test('Elvanto v1 preview rejects surplus selection and custom-field keys before legacy evaluation', () => {
+  const valid = batches[1].filterConfig;
+  for (const filterConfig of [
+    { ...valid, groups: { ...valid.groups, unexpected: true } },
+    { ...valid, customFields: [{ fieldId: 'field-1', values: ['yes'], operator: 'any', unexpected: true }] },
+  ]) {
+    let evaluated = 0;
+    const preview = previewFilter({
+      churchId: 'churcha1', provider: 'elvanto', batchId: null,
+      proposed: { enabled: true, filterSchemaVersion: 1, filterConfig },
+      cacheEntry, batches: [], metadata, populationGateDigest: 'gate-1',
+      evaluateLegacy: () => { evaluated += 1; return true; },
+    });
+    assert.equal(preview.matchCount, null);
+    assert.equal(evaluated, 0);
+  }
+});
+
 test('preview never fabricates counts for absent, expired, gate-mismatched, or insufficient cache coverage', () => {
   const input = {
     churchId: 'churcha1', provider: 'elvanto', batchId: null,

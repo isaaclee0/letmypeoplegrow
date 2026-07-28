@@ -44,7 +44,39 @@ function selection(values, dimensionId) {
   return Array.isArray(values) && values.length > 0 ? [dimensionId] : [];
 }
 
+function hasExactKeys(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function hasExactElvantoV1Envelope(config) {
+  if (!hasExactKeys(config, [
+    'statuses', 'categoryIds', 'groups', 'demographics', 'departments', 'serviceTypes', 'locations', 'customFields',
+  ])) return false;
+  const selections = [
+    ['groups', 'ids'],
+    ['demographics', 'values'],
+    ['departments', 'values'],
+    ['serviceTypes', 'ids'],
+    ['locations', 'ids'],
+  ];
+  if (!selections.every(([property, valuesProperty]) => hasExactKeys(config[property], [valuesProperty, 'operator']))) {
+    return false;
+  }
+  return Array.isArray(config.customFields) && config.customFields.every((field) =>
+    hasExactKeys(field, ['fieldId', 'values', 'operator']));
+}
+
+function hasExactPlanningCenterV1Envelope(config) {
+  return hasExactKeys(config, [
+    'membershipFilterEnabled', 'membershipAllowlist', 'fieldFilterEnabled', 'fieldFilters',
+  ]) && Array.isArray(config.fieldFilters) && config.fieldFilters.every((field) =>
+    hasExactKeys(field, ['fieldDefinitionId', 'values']));
+}
+
 function elvantoV1SelectedDimensionIds(config) {
+  if (!hasExactElvantoV1Envelope(config)) return null;
   const validation = validateElvantoFilter(config);
   if (!validation.ok) return null;
   const valid = validation.value;
@@ -67,6 +99,7 @@ function elvantoV1SelectedDimensionIds(config) {
 }
 
 function planningCenterV1SelectedDimensionIds(config) {
+  if (!hasExactPlanningCenterV1Envelope(config)) return null;
   const validation = validatePcoFilter(config);
   if (!validation.ok) return null;
   const valid = validation.value;
