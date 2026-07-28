@@ -51,6 +51,27 @@ function canonicalJson(value) {
   return JSON.stringify(canonicalize(value));
 }
 
+// Filter configurations are durable user input, not review plans.  In
+// particular, a filter dimension/value ID is allowed to be named
+// "snapshot" or "cachedAt", so its digest must not use the plan-specific
+// volatile-path pruning above.
+function canonicalizeFilterConfig(value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new TypeError('Canonical JSON values must contain only finite numbers');
+  }
+  if (Array.isArray(value)) return value.map(canonicalizeFilterConfig);
+  if (!isPlainObject(value)) return value;
+  const normalized = {};
+  for (const key of Object.keys(value).sort()) {
+    if (value[key] !== undefined) normalized[key] = canonicalizeFilterConfig(value[key]);
+  }
+  return normalized;
+}
+
+function digestFilterConfig(config) {
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalizeFilterConfig(config))).digest('hex');
+}
+
 function digestPlan(plan) {
   return crypto.createHash('sha256').update(canonicalJson(plan)).digest('hex');
 }
@@ -156,4 +177,7 @@ function verifyReviewToken(token, expected) {
   }
 }
 
-module.exports = { canonicalJson, digestPlan, createReviewToken, verifyReviewToken, ReviewSigningSecretMissingError };
+module.exports = {
+  canonicalJson, digestPlan, digestFilterConfig,
+  createReviewToken, verifyReviewToken, ReviewSigningSecretMissingError,
+};

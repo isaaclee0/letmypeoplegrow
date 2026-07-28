@@ -207,6 +207,29 @@ async function promoteFilterDraftWithConnection(conn, {
     WHERE id = ? AND church_id = ? AND provider = ?`).get(batchId, churchId, provider));
 }
 
+// Used only after a reviewed, exact-compatible v1 upgrade has verified every
+// selected batch in the surrounding church transaction.  Keeping the update
+// connection-scoped makes a stale row roll the whole bulk operation back.
+async function upgradeLegacyFilterWithConnection(conn, {
+  churchId, provider, batchId, expectedRevision, convertedFilterConfig,
+}) {
+  assertProvider(provider);
+  assertBooleanFilterV2Envelope(convertedFilterConfig);
+  const result = await conn.query(`UPDATE people_sync_batches
+    SET filter_schema_version = 2, filter_config = ?, filter_revision = filter_revision + 1,
+        draft_filter_schema_version = NULL, draft_filter_config = NULL, draft_filter_base_revision = NULL,
+        draft_filter_updated_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND church_id = ? AND provider = ?
+      AND filter_schema_version = 1 AND filter_revision = ?`, [
+    JSON.stringify(convertedFilterConfig), batchId, churchId, provider, expectedRevision,
+  ]);
+  if (result.affectedRows !== 1) {
+    const error = new Error('Sync filter upgrade is stale');
+    error.code = 'SYNC_UPGRADE_STALE';
+    throw error;
+  }
+}
+
 async function updateBatch(input) {
   const { churchId, provider, batchId } = input || {};
   assertProvider(provider);
@@ -262,4 +285,5 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
+  upgradeLegacyFilterWithConnection,
 };

@@ -8,6 +8,7 @@
 const { evaluateFilterV2, selectedDimensionIds } = require('./filterEngine');
 const { validatePcoFilter } = require('./pcoAdapter');
 const { validateElvantoFilter } = require('../elvanto/filter');
+const { evaluateLegacyFacts } = require('./filterUpgrade');
 
 function compareBatchIds(left, right) {
   const leftNumber = Number(left);
@@ -135,12 +136,10 @@ function coverageForBatches(batches, cacheEntry) {
   };
 }
 
-function eligibleIdsForBatch(batch, cacheEntry, adapter, { evaluateLegacy } = {}) {
+function eligibleIdsForBatch(batch, cacheEntry, adapter, { evaluateLegacy = evaluateLegacyFacts } = {}) {
   const facts = Array.isArray(cacheEntry && cacheEntry.facts) ? cacheEntry.facts : [];
   const schemaVersion = Number(batch && batch.filterSchemaVersion);
-  if (schemaVersion === 1 && typeof evaluateLegacy !== 'function') {
-    throw new TypeError('Schema-1 preview requires an evaluateLegacy collaborator.');
-  }
+  if (schemaVersion === 1 && typeof evaluateLegacy !== 'function') throw new TypeError('Schema-1 preview requires an evaluateLegacy collaborator.');
   if (schemaVersion !== 1 && schemaVersion !== 2) return new Set();
   const ids = new Set();
   for (const factsForPerson of facts) {

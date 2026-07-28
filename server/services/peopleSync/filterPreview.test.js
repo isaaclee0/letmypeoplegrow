@@ -104,9 +104,9 @@ test('preview reports positive overlaps deterministically and warns about confli
   assert.deepEqual(preview.warnings, ['OVERLAP_DEFAULT_PEOPLE_TYPE', 'OVERLAP_GATHERING_TYPE']);
 });
 
-test('legacy eligibility requires an injected evaluator while schema 2 uses the common Boolean engine', () => {
+test('legacy eligibility uses its production evaluator by default while retaining injection', () => {
   const legacy = batches[1];
-  assert.throws(() => eligibleIdsForBatch(legacy, cacheEntry, null, {}), /evaluateLegacy/);
+  assert.deepEqual([...eligibleIdsForBatch(legacy, cacheEntry, null, {})], ['p1']);
   assert.deepEqual([...eligibleIdsForBatch(legacy, cacheEntry, null, { evaluateLegacy })], ['p1', 'p3']);
   assert.deepEqual([...eligibleIdsForBatch(batches[0], cacheEntry, null, {})], ['p1', 'p2', 'p4']);
 });
