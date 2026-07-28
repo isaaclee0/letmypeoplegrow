@@ -1335,6 +1335,41 @@ function validateBatchBody(body) {
   return null;
 }
 
+const PCO_SCHEMA2_SETTINGS_FIELDS = new Set([
+  'name', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
+]);
+const PCO_ACTIVE_FILTER_FIELDS = new Set([
+  'filterSchemaVersion', 'filterConfig', 'filterRevision', 'draftFilterSchemaVersion',
+  'draftFilterConfig', 'draftFilterBaseRevision', 'draftFilterUpdatedAt',
+  'needsFilterReview', 'broadMatchAcknowledged',
+]);
+
+function validateSchema2SettingsUpdate(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Request body must be an object.';
+  for (const key of Object.keys(body)) {
+    if (PCO_ACTIVE_FILTER_FIELDS.has(key)) return 'Schema-2 filter criteria must be saved through the filter draft endpoint.';
+    if (!PCO_SCHEMA2_SETTINGS_FIELDS.has(key)) return 'Schema-2 updates may only change batch settings.';
+  }
+  const { name, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
+  if (typeof name !== 'string' || !name.trim()) return 'name is required.';
+  if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
+  if (gatheringTypeId !== null && gatheringTypeId !== undefined && !Number.isInteger(gatheringTypeId)) return 'gatheringTypeId must be an integer or null.';
+  if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
+  if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
+  if (!PCO_BATCH_FREQUENCIES.includes(scheduleFrequency)) return 'scheduleFrequency must be one of daily, weekly, monthly.';
+  if (!Number.isInteger(scheduleDay)) return 'scheduleDay must be an integer.';
+  if (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6)) return 'scheduleDay must be an integer between 0 and 6 for weekly schedules.';
+  if (scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31)) return 'scheduleDay must be an integer between 1 and 31 for monthly schedules.';
+  return null;
+}
+
+function hasSmuggledActiveFilterFields(body) {
+  return body && typeof body === 'object' && Object.keys(body).some((key) =>
+    key === 'filterSchemaVersion' ? body[key] !== 1 : PCO_ACTIVE_FILTER_FIELDS.has(key)
+  );
+}
+
 // Old/stale clients (dismissible PWA update banner) may omit gatheringAutoRemoveEnabled
 // entirely; default to false rather than rejecting the whole request. Shared by the
 // create and update sync-batch routes below.
@@ -1409,20 +1444,29 @@ router.post('/planning-center/sync-batches', async (req, res) => {
 // Update a saved sync batch.
 router.put('/planning-center/sync-batches/:id', async (req, res) => {
   try {
-    const err = validateBatchBody(req.body);
-    if (err) return res.status(400).json({ error: err });
     const churchId = req.user.church_id;
     const batchId = Number(req.params.id);
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
-    const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+    const isSchema2 = existing.filterSchemaVersion === 2;
+    const err = isSchema2 ? validateSchema2SettingsUpdate(req.body) :
+      (hasSmuggledActiveFilterFields(req.body) ? 'Filter criteria must be saved through the filter draft endpoint.' : validateBatchBody(req.body));
+    if (err) return res.status(400).json({ error: err });
+    const { name, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
-    const batch = await pcoSync.updateBatch(churchId, batchId, {
-      name: name.trim(), membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-      defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
+    const settings = {
+      name: name.trim(), defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
-    });
+    };
+    const batch = isSchema2
+      ? await pcoSync.updateBatch(churchId, batchId, settings)
+      : await pcoSync.updateBatch(churchId, batchId, {
+        ...settings,
+        membershipFilterEnabled: req.body.membershipFilterEnabled,
+        membershipAllowlist: req.body.membershipAllowlist,
+        fieldFilterEnabled: req.body.fieldFilterEnabled,
+        fieldFilters: req.body.fieldFilters,
+      });
 
     // Backfill: the moment this toggle flips off -> on for a batch with a
     // gathering assigned, claim ownership of existing gathering_lists rows this
