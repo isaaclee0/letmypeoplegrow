@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   SyncProvider,
   PeopleSyncBatch,
+  PeopleSyncFilterState,
   ElvantoSyncBatchInput,
   ElvantoSyncBatchPatch,
   ElvantoSyncMetadata,
@@ -15,6 +16,11 @@ import type {
   ExternalLinks,
   ElvantoStatus,
   ElvantoConnection,
+  BooleanFilterConfigV2,
+  FilterMetadata,
+  FilterPreviewResult,
+  FilterSnapshot,
+  FilterUpgradePreview,
 } from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
@@ -1021,6 +1027,67 @@ export const peopleSyncAPI = {
     api.get<{ success: true; runs: PeopleSyncRun[] }>('/integrations/people-sync/runs', {
       params: limit ? { limit } : {},
     }),
+
+  getFilterMetadata: (provider: SyncProvider) =>
+    api.get<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
+      `/integrations/people-sync/providers/${provider}/filter-metadata`,
+    ),
+
+  // This is the only filter-builder route that fetches a complete provider
+  // roster, so it receives the same budget as the existing review endpoints.
+  refreshFilterSnapshot: (provider: SyncProvider, body?: { filterConfig?: BooleanFilterConfigV2 }) =>
+    api.post<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
+      `/integrations/people-sync/providers/${provider}/filter-snapshot/refresh`,
+      body,
+      { timeout: 120000 },
+    ),
+
+  // Preview deliberately reads the cached facts snapshot only; keep the
+  // normal API timeout so an unavailable cache surfaces promptly.
+  previewFilter: (provider: SyncProvider, body: {
+    batchId: number | null;
+    filterConfig: BooleanFilterConfigV2;
+    enabled: boolean;
+    defaultPeopleType: PeopleType;
+    gatheringTypeId: number | null;
+  }) => api.post<{ success: true } & FilterPreviewResult>(
+    `/integrations/people-sync/providers/${provider}/filter-preview`,
+    body,
+  ),
+
+  saveFilterDraft: (provider: SyncProvider, batchId: number, body: {
+    filterConfig: BooleanFilterConfigV2;
+    broadMatchAcknowledged: boolean;
+  }) => api.put<{ success: true; batch: PeopleSyncFilterState<BooleanFilterConfigV2> }>(
+    `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-draft`,
+    body,
+  ),
+
+  discardFilterDraft: (provider: SyncProvider, batchId: number) =>
+    api.delete<{ success: true; batch: PeopleSyncFilterState<BooleanFilterConfigV2> }>(
+      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-draft`,
+    ),
+
+  previewFilterUpgrade: (provider: SyncProvider, batchId: number) =>
+    api.post<{ success: true } & FilterUpgradePreview>(
+      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-upgrade/preview`,
+      undefined,
+      { timeout: 120000 },
+    ),
+
+  applyFilterUpgrade: (provider: SyncProvider, batchId: number, upgradeToken: string) =>
+    api.post<{ success: true; batches: PeopleSyncBatch<BooleanFilterConfigV2>[] }>(
+      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-upgrade/apply`,
+      { upgradeToken },
+      { timeout: 120000 },
+    ),
+
+  applyCompatibleFilterUpgrades: (provider: SyncProvider, upgrades: Array<{ batchId: number; upgradeToken: string }>) =>
+    api.post<{ success: true; batches: PeopleSyncBatch<BooleanFilterConfigV2>[] }>(
+      `/integrations/people-sync/providers/${provider}/filter-upgrades/apply-compatible`,
+      { upgrades },
+      { timeout: 120000 },
+    ),
 };
 
 // ─── Elvanto-specific people-sync API (Task 17) ─────────────────────────────

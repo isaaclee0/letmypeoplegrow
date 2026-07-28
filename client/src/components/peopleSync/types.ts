@@ -23,6 +23,81 @@ export type AuthorityProvider = SyncProvider | 'none';
 
 export type PeopleType = 'regular' | 'local_visitor' | 'traveller_visitor';
 
+// ─── Provider-neutral Boolean filters (Task 9) ────────────────────────────
+
+export type FilterValueState = 'off' | 'include' | 'not';
+export type FilterGroupMode = 'any' | 'all';
+export type FilterDimensionCardinality = 'single' | 'multi';
+
+export interface BooleanFilterGroup {
+  dimensionId: string;
+  mode: FilterGroupMode;
+  values: string[];
+}
+
+export interface BooleanFilterBranch {
+  groups: BooleanFilterGroup[];
+}
+
+export interface BooleanFilterExclusion {
+  dimensionId: string;
+  values: string[];
+}
+
+export interface BooleanFilterConfigV2 {
+  branches: BooleanFilterBranch[];
+  exclusions: BooleanFilterExclusion[];
+}
+
+export interface FilterDimensionValue {
+  id: string;
+  label: string;
+  count: number;
+}
+
+export interface FilterDimension {
+  id: string;
+  label: string;
+  cardinality: FilterDimensionCardinality;
+  values: FilterDimensionValue[];
+}
+
+export interface FilterMetadata {
+  dimensions: FilterDimension[];
+}
+
+export interface FilterSnapshot {
+  id: string | null;
+  capturedAt: string;
+  fresh: boolean;
+  expiresAt: string | null;
+  coveredDimensionIds: string[];
+}
+
+export interface FilterPreviewOverlap {
+  batchId: number;
+  batchName: string;
+  count: number;
+}
+
+export type FilterPreviewWarning = 'BROAD_FILTER' | 'OVERLAP_GATHERING_TYPE' | 'OVERLAP_DEFAULT_PEOPLE_TYPE';
+
+export interface FilterPreviewResult {
+  matchCount: number | null;
+  snapshot: FilterSnapshot | null;
+  overlaps: FilterPreviewOverlap[];
+  uniqueEnabledPopulationCount: number | null;
+  missingDimensionIds: string[];
+  warnings: FilterPreviewWarning[];
+}
+
+export interface FilterUpgradePreview {
+  compatible: boolean;
+  oldCount: number;
+  newCount: number;
+  upgradeToken: string;
+}
+
 // server/routes/individuals.js and server/routes/families.js already attach
 // this exact shape to every individual/family DTO (see `externalLinks`
 // construction in both files) -- confirmed against
@@ -48,6 +123,12 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   enabled: boolean;
   filterSchemaVersion: number;
   filterConfig: TFilter;
+  filterRevision: number;
+  draftFilterSchemaVersion: number | null;
+  draftFilterConfig: TFilter | null;
+  draftFilterBaseRevision: number | null;
+  draftFilterUpdatedAt: string | null;
+  needsFilterReview: boolean;
   defaultPeopleType: PeopleType;
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;
@@ -66,6 +147,21 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   // still contain a JSON summary written by the retired legacy path, so the
   // shared DTO deliberately remains the broad `string | null` shape.
   lastSyncResult: string | null;
+}
+
+// The filter-draft endpoints deliberately return only this non-PII subset,
+// rather than the complete batch record returned by list/create/update APIs.
+export interface PeopleSyncFilterState<TFilter = Record<string, unknown>> {
+  id: number;
+  provider: SyncProvider;
+  filterSchemaVersion: number;
+  filterConfig: TFilter;
+  filterRevision: number;
+  draftFilterSchemaVersion: number | null;
+  draftFilterConfig: TFilter | null;
+  draftFilterBaseRevision: number | null;
+  draftFilterUpdatedAt: string | null;
+  needsFilterReview: boolean;
 }
 
 // Elvanto batches are only ever written through batchRepository's own
