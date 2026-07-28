@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import FilterBuilder from './FilterBuilder';
 import type { BooleanFilterConfigV2, FilterMetadata } from './types';
 
@@ -20,18 +20,27 @@ describe('FilterBuilder', () => {
   it('builds bracketed AND branches and allows the same dimension in another OR branch', () => {
     render(<Controlled />);
     fireEvent.click(screen.getByRole('button', { name: 'Add Branch 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Status to Branch 1' }));
+    expect(screen.getByLabelText('Filter value')).toHaveTextContent('"branches":[]');
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Status for Branch 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Include Active' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 1' }));
-    expect(screen.queryByRole('button', { name: 'Add Status to Branch 1' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add Groups to Branch 1' }));
+    expect(screen.queryByRole('button', { name: 'Choose Status for Branch 1' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Groups for Branch 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Include Youth' }));
     expect(screen.getByText('AND')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add OR alternative branch' }));
     expect(screen.getByText('OR')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
-    expect(screen.getByRole('button', { name: 'Add Status to Branch 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose Status for Branch 2' })).toBeInTheDocument();
+  });
+
+  it('keeps staged branch construction local until its first included value', () => {
+    const onChange = vi.fn();
+    render(<FilterBuilder metadata={metadata} value={{ branches: [], exclusions: [] }} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Status for Branch 1' }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('defaults multi brackets to Match all, hides it for single values, and supports removal', () => {
@@ -87,7 +96,7 @@ describe('FilterBuilder', () => {
 
   it('prevents invalid Match all combinations with Not set', () => {
     render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', '$not_set'] }] }], exclusions: [] }} />);
-    expect(screen.queryByRole('button', { name: 'Match all for Groups' })).not.toBeInTheDocument();
-    expect(screen.getByText('Not set cannot be combined with Match all; this bracket now matches any selected value.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Match any for Groups' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Filter value')).toHaveTextContent('"mode":"any"');
   });
 });

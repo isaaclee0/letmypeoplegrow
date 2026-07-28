@@ -40,7 +40,7 @@ function normaliseBranch(branch: BooleanFilterBranch): BooleanFilterBranch | nul
   return groups.length > 0 ? { groups } : null;
 }
 
-function normalise(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
+export function normaliseFilterConfig(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
   const branches = config.branches
     .map(normaliseBranch)
     .filter((branch): branch is BooleanFilterBranch => branch !== null);
@@ -57,7 +57,7 @@ function normalise(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
 }
 
 function withoutValue(config: BooleanFilterConfigV2, dimensionId: string, valueId: string): BooleanFilterConfigV2 {
-  return normalise({
+  return normaliseFilterConfig({
     branches: config.branches.map((branch) => ({
       groups: branch.groups.map((group) => group.dimensionId === dimensionId
         ? { ...group, values: group.values.filter((value) => value !== valueId) }
@@ -74,7 +74,7 @@ export function emptyBooleanFilter(): BooleanFilterConfigV2 {
 }
 
 export function addBranch(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
-  const value = normalise(config);
+  const value = normaliseFilterConfig(config);
   return { ...value, branches: [...value.branches, { groups: [] }] };
 }
 
@@ -97,17 +97,17 @@ export function addGroup(
 }
 
 export function removeBranch(config: BooleanFilterConfigV2, branchIndex: number): BooleanFilterConfigV2 {
-  const value = normalise(config);
+  const value = normaliseFilterConfig(config);
   return { ...value, branches: value.branches.filter((_, index) => index !== branchIndex) };
 }
 
 export function removeGroup(config: BooleanFilterConfigV2, branchIndex: number, groupIndex: number): BooleanFilterConfigV2 {
-  const value = normalise(config);
+  const value = normaliseFilterConfig(config);
   if (!Number.isInteger(branchIndex) || !Number.isInteger(groupIndex) || !value.branches[branchIndex]) return value;
   const branches = value.branches.map((branch, index) => index === branchIndex
     ? { groups: branch.groups.filter((_, currentGroupIndex) => currentGroupIndex !== groupIndex) }
     : branch);
-  return normalise({ ...value, branches });
+  return normaliseFilterConfig({ ...value, branches });
 }
 
 export function setValueState(
@@ -121,7 +121,7 @@ export function setValueState(
   const cleared = withoutValue(config, dimensionId, valueId);
   if (state === 'off') return cleared;
   if (state === 'not') {
-    return normalise({
+    return normaliseFilterConfig({
       ...cleared,
       exclusions: [...cleared.exclusions, { dimensionId, values: [valueId] }],
     });
@@ -137,7 +137,7 @@ export function setValueState(
     ? branch.groups.map((group, index) => index === groupIndex ? { ...group, values: [...group.values, valueId] } : group)
     : [...branch.groups, { dimensionId, mode, values: [valueId] }];
 
-  return normalise({
+  return normaliseFilterConfig({
     ...cleared,
     branches: branches.map((currentBranch, index) => index === branchIndex ? { groups } : currentBranch),
   });
@@ -171,19 +171,19 @@ export function setBranchValueState(
   });
 
   if (state === 'not') {
-    const withoutPositive = normalise({
+  const withoutPositive = normaliseFilterConfig({
       ...next,
       branches: next.branches.map((branch) => ({ groups: branch.groups.map((group) => group.dimensionId === dimensionId
         ? { ...group, values: group.values.filter((value) => value !== valueId) }
         : group) })),
     });
     const withoutExclusion = removeFromExclusions(withoutPositive);
-    return normalise({ ...withoutExclusion, exclusions: [...withoutExclusion.exclusions, { dimensionId, values: [valueId] }] });
+    return normaliseFilterConfig({ ...withoutExclusion, exclusions: [...withoutExclusion.exclusions, { dimensionId, values: [valueId] }] });
   }
 
   const withoutExclusion = removeFromExclusions(next);
   if (state === 'off') {
-    return normalise({
+    return normaliseFilterConfig({
       ...withoutExclusion,
       branches: withoutExclusion.branches.map((branch, index) => index === branchIndex
         ? { groups: branch.groups.map((group) => group.dimensionId === dimensionId
@@ -193,8 +193,12 @@ export function setBranchValueState(
     });
   }
 
-  if (!Number.isInteger(branchIndex) || branchIndex < 0 || branchIndex >= withoutExclusion.branches.length) return withoutExclusion;
-  return normalise({
+  if (!Number.isInteger(branchIndex) || branchIndex < 0 || branchIndex > withoutExclusion.branches.length) return normaliseFilterConfig(withoutExclusion);
+  if (branchIndex === withoutExclusion.branches.length) {
+    const mode: FilterGroupMode = resolvedCardinality === 'single' ? 'any' : 'all';
+    return normaliseFilterConfig({ ...withoutExclusion, branches: [...withoutExclusion.branches, { groups: [{ dimensionId, mode, values: [valueId] }] }] });
+  }
+  return normaliseFilterConfig({
     ...withoutExclusion,
     branches: withoutExclusion.branches.map((branch, index) => {
       if (index !== branchIndex) return branch;
@@ -208,7 +212,7 @@ export function setBranchValueState(
 }
 
 export function removeExclusionValue(config: BooleanFilterConfigV2, dimensionId: string, valueId: string): BooleanFilterConfigV2 {
-  return normalise({
+  return normaliseFilterConfig({
     ...config,
     exclusions: config.exclusions.map((exclusion) => exclusion.dimensionId === dimensionId
       ? { ...exclusion, values: exclusion.values.filter((value) => value !== valueId) }
@@ -217,7 +221,7 @@ export function removeExclusionValue(config: BooleanFilterConfigV2, dimensionId:
 }
 
 export function setGroupMode(config: BooleanFilterConfigV2, branchIndex: number, groupIndex: number, mode: FilterGroupMode): BooleanFilterConfigV2 {
-  return normalise({
+  return normaliseFilterConfig({
     ...config,
     branches: config.branches.map((branch, currentBranchIndex) => currentBranchIndex === branchIndex
       ? { groups: branch.groups.map((group, currentGroupIndex) => currentGroupIndex === groupIndex ? { ...group, mode } : group) }

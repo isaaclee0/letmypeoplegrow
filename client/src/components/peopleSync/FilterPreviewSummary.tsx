@@ -31,8 +31,9 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
   const [refreshing, setRefreshing] = useState(false);
   const sequence = useRef(0);
   const mounted = useRef(true);
-  const preview = useCallback(async () => {
-    const current = ++sequence.current;
+  const debounceTimer = useRef<number | null>(null);
+  const preview = useCallback(async (existingEpoch?: number) => {
+    const current = existingEpoch ?? ++sequence.current;
     setError(null);
     try {
       const response = await peopleSyncAPI.previewFilter(provider, { batchId, filterConfig: value, enabled, defaultPeopleType, gatheringTypeId });
@@ -52,11 +53,12 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
 
   useEffect(() => {
     setRefreshing(false);
-    const timer = window.setTimeout(() => { void preview(); }, 350);
-    return () => { window.clearTimeout(timer); sequence.current += 1; };
+    debounceTimer.current = window.setTimeout(() => { debounceTimer.current = null; void preview(); }, 350);
+    return () => { if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current); debounceTimer.current = null; sequence.current += 1; };
   }, [preview]);
 
   const refresh = async () => {
+    if (debounceTimer.current !== null) { window.clearTimeout(debounceTimer.current); debounceTimer.current = null; }
     const current = ++sequence.current;
     const isCurrent = () => mounted.current && current === sequence.current;
     setRefreshing(true);
@@ -67,8 +69,7 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
       if (!isCurrent()) return;
       onMetadata(metadata.data.metadata);
       if (!isCurrent()) return;
-      setRefreshing(false);
-      await preview();
+      await preview(current);
     } catch {
       if (isCurrent()) { setResult(null); setError('Count unavailable'); }
     } finally {

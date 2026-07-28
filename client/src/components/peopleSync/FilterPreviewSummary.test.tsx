@@ -74,6 +74,18 @@ describe('FilterPreviewSummary', () => {
     expect(onMetadata).toHaveBeenCalledWith(metadata);
   });
 
+  it('cancels a not-yet-due debounce when refresh starts and re-enables when its preview finishes', async () => {
+    const metadata: FilterMetadata = { dimensions: [] };
+    vi.mocked(peopleSyncAPI.refreshFilterSnapshot).mockResolvedValue({ data: { success: true, metadata, snapshot: preview().snapshot! } });
+    vi.mocked(peopleSyncAPI.getFilterMetadata).mockResolvedValue({ data: { success: true, metadata, snapshot: preview().snapshot! } });
+    vi.mocked(peopleSyncAPI.previewFilter).mockReturnValue(response(preview()));
+    render(<FilterPreviewSummary provider="elvanto" batchId={1} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={null} onMetadata={vi.fn()} />);
+    await act(async () => { screen.getByRole('button', { name: 'Refresh people data' }).click(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    expect(peopleSyncAPI.previewFilter).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Refresh people data' })).toBeEnabled();
+  });
+
   it('ignores a delayed refresh after identity changes or unmount', async () => {
     let resolveRefresh: (() => void) | undefined;
     const delayedRefresh = new Promise<{ data: { success: true; metadata: FilterMetadata; snapshot: NonNullable<FilterPreviewResult['snapshot']> } }>((resolve) => {
