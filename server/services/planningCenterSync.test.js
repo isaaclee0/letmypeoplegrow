@@ -241,9 +241,14 @@ test('createBatch preserves stale v1 fields while atomically creating a v2 activ
   });
 });
 
-test('updating v2 Planning Center batch settings preserves active and draft filter state', async () => {
+test('updating v2 Planning Center batch settings preserves canonical and compatibility filter criteria', async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
+    const active = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Regular'] }] }], exclusions: [] };
+    const retainedLegacyFilters = {
+      membershipAllowlist: ['Legacy members'],
+      fieldFilters: [{ fieldDefinitionId: 'membership_status', tabName: 'Profile', fieldName: 'Membership status', values: ['Member'] }],
+    };
     filterFactsCache.putComplete({
       churchId, provider: 'planning_center', mode: 'full', complete: true,
       coveredDimensionIds: ['membership'], populationGateDigest: 'gate', facts: [],
@@ -254,21 +259,70 @@ test('updating v2 Planning Center batch settings preserves active and draft filt
       broadMatchAcknowledged: false, defaultPeopleType: 'regular', gatheringTypeId: null,
       gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
     });
-    const before = await pcoSync.getBatch(churchId, created.id);
+
+    // A reviewed batch may retain its previous legacy criteria for provenance
+    // while its canonical v2 active criteria and draft are independently set.
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET filter_config = ?, filter_revision = 7, draft_filter_schema_version = 2,
+              draft_filter_config = ?, draft_filter_base_revision = 7
+        WHERE id = ? AND church_id = ?`,
+      [JSON.stringify(active), JSON.stringify(draft), created.id, churchId]
+    );
+    await Database.query(
+      `UPDATE planning_center_sync_batches
+          SET membership_filter_enabled = 1, membership_allowlist = ?, field_filter_enabled = 1, field_filters = ?
+        WHERE id = ? AND church_id = ?`,
+      [JSON.stringify(retainedLegacyFilters.membershipAllowlist), JSON.stringify(retainedLegacyFilters.fieldFilters), created.legacyProviderBatchId, churchId]
+    );
+    const beforeCanonical = await Database.query(
+      `SELECT filter_config, filter_schema_version, filter_revision, draft_filter_schema_version,
+              draft_filter_config, draft_filter_base_revision
+         FROM people_sync_batches WHERE id = ? AND church_id = ?`,
+      [created.id, churchId]
+    );
+    const beforeLegacy = await Database.query(
+      `SELECT membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters
+         FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`,
+      [created.legacyProviderBatchId, churchId]
+    );
     const updated = await pcoSync.updateBatch(churchId, created.id, {
-      name: 'Renamed members', membershipFilterEnabled: false, membershipAllowlist: [],
-      fieldFilterEnabled: false, fieldFilters: [], defaultPeopleType: 'local_visitor',
+      name: 'Renamed members', defaultPeopleType: 'local_visitor',
       gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: true,
       scheduleFrequency: 'monthly', scheduleDay: 15,
     });
+    const afterCanonical = await Database.query(
+      `SELECT filter_config, filter_schema_version, filter_revision, draft_filter_schema_version,
+              draft_filter_config, draft_filter_base_revision, default_people_type, schedule_enabled, schedule_frequency, schedule_day
+         FROM people_sync_batches WHERE id = ? AND church_id = ?`,
+      [created.id, churchId]
+    );
+    const afterLegacy = await Database.query(
+      `SELECT membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
+              default_people_type, schedule_enabled, schedule_frequency, schedule_day
+         FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`,
+      [created.legacyProviderBatchId, churchId]
+    );
 
     assert.equal(updated.name, 'Renamed members');
     assert.equal(updated.defaultPeopleType, 'local_visitor');
-    assert.deepEqual(updated.filterConfig, before.filterConfig);
-    assert.equal(updated.filterSchemaVersion, before.filterSchemaVersion);
-    assert.equal(updated.filterRevision, before.filterRevision);
-    assert.deepEqual(updated.draftFilterConfig, before.draftFilterConfig);
-    assert.equal(updated.draftFilterSchemaVersion, before.draftFilterSchemaVersion);
-    assert.equal(updated.draftFilterBaseRevision, before.draftFilterBaseRevision);
+    assert.deepEqual(afterCanonical[0].filter_config, beforeCanonical[0].filter_config);
+    assert.equal(afterCanonical[0].filter_schema_version, beforeCanonical[0].filter_schema_version);
+    assert.equal(afterCanonical[0].filter_revision, beforeCanonical[0].filter_revision);
+    assert.equal(afterCanonical[0].draft_filter_schema_version, beforeCanonical[0].draft_filter_schema_version);
+    assert.deepEqual(afterCanonical[0].draft_filter_config, beforeCanonical[0].draft_filter_config);
+    assert.equal(afterCanonical[0].draft_filter_base_revision, beforeCanonical[0].draft_filter_base_revision);
+    assert.equal(afterCanonical[0].default_people_type, 'local_visitor');
+    assert.equal(afterCanonical[0].schedule_enabled, 1);
+    assert.equal(afterCanonical[0].schedule_frequency, 'monthly');
+    assert.equal(afterCanonical[0].schedule_day, 15);
+    assert.deepEqual(afterLegacy[0].membership_filter_enabled, beforeLegacy[0].membership_filter_enabled);
+    assert.deepEqual(afterLegacy[0].membership_allowlist, beforeLegacy[0].membership_allowlist);
+    assert.deepEqual(afterLegacy[0].field_filter_enabled, beforeLegacy[0].field_filter_enabled);
+    assert.deepEqual(afterLegacy[0].field_filters, beforeLegacy[0].field_filters);
+    assert.equal(afterLegacy[0].default_people_type, 'local_visitor');
+    assert.equal(afterLegacy[0].schedule_enabled, 1);
+    assert.equal(afterLegacy[0].schedule_frequency, 'monthly');
+    assert.equal(afterLegacy[0].schedule_day, 15);
   });
 });

@@ -67,6 +67,12 @@ describe('ElvantoBatchEditor', () => {
     expect(screen.getByText(/criteria must be upgraded/)).toBeInTheDocument();
     expect(screen.queryByText('Qualification rules')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
+    expect(screen.getByLabelText('Batch name')).toBeDisabled();
+    expect(screen.getByLabelText('Enable this batch')).toBeDisabled();
+    expect(screen.getByLabelText('New people from this batch are added as')).toBeDisabled();
+    expect(screen.getByLabelText('Gathering assignment')).toBeDisabled();
+    expect(screen.getByLabelText('Runs automatically')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(peopleSyncAPI.getFilterMetadata).not.toHaveBeenCalled();
     expect(elvantoSyncAPI.updateBatch).not.toHaveBeenCalled();
     expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();

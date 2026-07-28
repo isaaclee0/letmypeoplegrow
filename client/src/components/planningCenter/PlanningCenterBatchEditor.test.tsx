@@ -69,6 +69,11 @@ describe('PlanningCenterBatchEditor', () => {
     expect(screen.getByText(/criteria must be upgraded/)).toBeInTheDocument();
     expect(screen.queryByText('Qualification rules')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
+    expect(screen.getByLabelText('Batch name')).toBeDisabled();
+    expect(screen.getByLabelText('New people from this batch are added as')).toBeDisabled();
+    expect(screen.getByLabelText('Gathering assignment')).toBeDisabled();
+    expect(screen.getByLabelText('Runs automatically')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(peopleSyncAPI.getFilterMetadata).not.toHaveBeenCalled();
     expect(integrationsAPI.updatePlanningCenterSyncBatch).not.toHaveBeenCalled();
     expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();
@@ -112,6 +117,10 @@ describe('PlanningCenterBatchEditor', () => {
 
     await screen.findByText('Who qualifies?');
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+    await waitFor(() => expect(integrationsAPI.updatePlanningCenterSyncBatch).toHaveBeenCalledWith(4, expect.not.objectContaining({
+      membershipFilterEnabled: expect.anything(), membershipAllowlist: expect.anything(),
+      fieldFilterEnabled: expect.anything(), fieldFilters: expect.anything(),
+    })));
     expect(onSaved).not.toHaveBeenCalled();
     resolveUpdate({ data: { batch: v2Batch } });
     await waitFor(() => expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledWith('planning_center', 4, expect.objectContaining({ filterConfig: filter })));

@@ -480,18 +480,34 @@ async function updateBatch(churchId, batchId, input) {
   await batchRepository.updateBatch(genericUpdate);
 
   if (current.legacyProviderBatchId) {
-    await Database.query(
-      `UPDATE planning_center_sync_batches
-          SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
-              field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
-              gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
-              updated_at = datetime('now')
-        WHERE id = ? AND church_id = ?`,
-      [input.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
-       filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), input.defaultPeopleType,
-       input.gatheringTypeId || null, input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
-       input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
-    );
+    if (current.filterSchemaVersion === 2) {
+      // The compatibility row remains a provenance record for a reviewed v2
+      // batch. A settings-only save must not replace its original v1 criteria
+      // with missing or UI-defaulted values from a newer editor.
+      await Database.query(
+        `UPDATE planning_center_sync_batches
+            SET name = ?, default_people_type = ?, gathering_type_id = ?,
+                gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND church_id = ?`,
+        [input.name, input.defaultPeopleType, input.gatheringTypeId || null,
+         input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
+         input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
+      );
+    } else {
+      await Database.query(
+        `UPDATE planning_center_sync_batches
+            SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
+                field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
+                gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
+                updated_at = datetime('now')
+          WHERE id = ? AND church_id = ?`,
+        [input.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
+         filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), input.defaultPeopleType,
+         input.gatheringTypeId || null, input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
+         input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
+      );
+    }
   }
 
   return getBatch(churchId, batchId);

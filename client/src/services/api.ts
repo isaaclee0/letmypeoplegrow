@@ -875,6 +875,9 @@ export interface SyncBatchInput {
   scheduleDay: number;
 }
 
+export type SyncBatchSettingsInput = Omit<SyncBatchInput,
+  'membershipFilterEnabled' | 'membershipAllowlist' | 'fieldFilterEnabled' | 'fieldFilters'>;
+
 export interface SyncBatchLastResult {
   at: string;
   added: number;
@@ -934,7 +937,7 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/sync-batches'),
   createPlanningCenterSyncBatch: (data: SyncBatchInput) =>
     api.post('/integrations/planning-center/sync-batches', data, { timeout: 120000 }),
-  updatePlanningCenterSyncBatch: (id: number, data: SyncBatchInput) =>
+  updatePlanningCenterSyncBatch: (id: number, data: SyncBatchSettingsInput) =>
     // Enabling gatheringAutoRemoveEnabled can trigger a live PCO fetch for the
     // toggle-enable backfill (server/routes/integrations.js), which can take well
     // over the global 15s default when the PCO people cache is cold.
