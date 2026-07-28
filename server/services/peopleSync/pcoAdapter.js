@@ -69,7 +69,7 @@ function dimension({ id, label, cardinality, category, metadataValues = [], fact
     category,
     values: [
       ...ids.map((value) => ({ id: value, label: value, count: counts.get(value) || 0 })),
-      { id: NOT_SET, label: 'Not set', count: notSetCount },
+      ...(notSetCount > 0 ? [{ id: NOT_SET, label: 'Not set', count: notSetCount }] : []),
     ],
   };
 }
@@ -91,14 +91,20 @@ function toPcoFilterFacts(person, coveredDimensionIds) {
   return { externalPersonId: String(person && person.id || ''), dimensions };
 }
 
-function buildPcoFilterDimensions({ facts = [], providerMetadata = {} } = {}) {
+function buildPcoFilterDimensions({ facts = [], providerMetadata = {}, coveredDimensionIds } = {}) {
+  const covered = coveredDimensionIds === undefined
+    ? null
+    : new Set(coveredDimensionIds instanceof Set ? coveredDimensionIds : coveredDimensionIds || []);
+  const isCovered = (dimensionId) => !covered || covered.has(dimensionId);
   const memberships = (providerMetadata.memberships || []).map((item) => item && item.membership);
   const fieldDefinitions = Array.isArray(providerMetadata.fieldDefinitions) ? providerMetadata.fieldDefinitions : [];
-  const dimensions = [dimension({
+  const dimensions = [];
+  if (isCovered('membership')) dimensions.push(dimension({
     id: 'membership', label: 'Membership', cardinality: 'single', category: 'People', metadataValues: memberships, facts,
-  })];
+  }));
   for (const field of fieldDefinitions) {
     if (!field || typeof field.id !== 'string' || !field.id) continue;
+    if (!isCovered(`custom_field:${field.id}`)) continue;
     dimensions.push(dimension({
       id: `custom_field:${field.id}`,
       label: field.name || `Custom field ${field.id}`,

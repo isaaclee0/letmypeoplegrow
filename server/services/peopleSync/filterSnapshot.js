@@ -41,7 +41,7 @@ function captureFilterSnapshotInput({ provider, snapshot, providerMetadata, sett
   facts.sort((left, right) => left.externalPersonId.localeCompare(right.externalPersonId));
   return {
     facts,
-    dimensions: adapter.buildFilterDimensions({ facts, providerMetadata }),
+    dimensions: adapter.buildFilterDimensions({ facts, providerMetadata, coveredDimensionIds: coverage }),
     coverage,
     populationGateDigest: populationGateDigest(provider, settings),
   };

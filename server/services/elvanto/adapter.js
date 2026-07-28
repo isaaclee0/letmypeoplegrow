@@ -170,7 +170,7 @@ function filterDimension({ id, label, cardinality, category, metadataValues = []
     category,
     values: [
       ...valueIds.map((value) => ({ id: value, label: valueLabels.get(value) || value, count: counts.get(value) || 0 })),
-      { id: NOT_SET, label: 'Not set', count: notSetCount },
+      ...(notSetCount > 0 ? [{ id: NOT_SET, label: 'Not set', count: notSetCount }] : []),
     ],
   };
 }
@@ -215,14 +215,18 @@ function metadataItems(items, valueKey = 'id') {
   return { values, labels };
 }
 
-function buildElvantoFilterDimensions({ facts = [], providerMetadata = {} } = {}) {
+function buildElvantoFilterDimensions({ facts = [], providerMetadata = {}, coveredDimensionIds } = {}) {
+  const covered = coveredDimensionIds === undefined
+    ? null
+    : new Set(coveredDimensionIds instanceof Set ? coveredDimensionIds : coveredDimensionIds || []);
+  const isCovered = (dimensionId) => !covered || covered.has(dimensionId);
   const categories = metadataItems(providerMetadata.categories);
   const groups = metadataItems(providerMetadata.groups);
   const demographics = metadataItems(providerMetadata.demographics, 'value');
   const departments = metadataItems(providerMetadata.departments, 'value');
   const serviceTypes = metadataItems(providerMetadata.serviceTypes);
   const locations = metadataItems(providerMetadata.locations);
-  const dimensions = [
+  const candidates = [
     filterDimension({ id: 'status', label: 'Status', cardinality: 'single', category: 'People', facts, omitValues: new Set(['archived', 'deceased']) }),
     filterDimension({ id: 'category', label: 'Category', cardinality: 'single', category: 'People', metadataValues: categories.values, valueLabels: categories.labels, facts }),
     filterDimension({ id: 'groups', label: 'Groups', cardinality: 'multi', category: 'Groups', metadataValues: groups.values, valueLabels: groups.labels, facts }),
@@ -231,8 +235,10 @@ function buildElvantoFilterDimensions({ facts = [], providerMetadata = {} } = {}
     filterDimension({ id: 'service_types', label: 'Service types', cardinality: 'multi', category: 'People', metadataValues: serviceTypes.values, valueLabels: serviceTypes.labels, facts }),
     filterDimension({ id: 'locations', label: 'Locations', cardinality: 'multi', category: 'People', metadataValues: locations.values, valueLabels: locations.labels, facts }),
   ];
+  const dimensions = candidates.filter((dimension) => isCovered(dimension.id));
   for (const field of asArray(providerMetadata.customFields)) {
     if (!field || typeof field.id !== 'string' || !field.id) continue;
+    if (!isCovered(`custom_field:${field.id}`)) continue;
     const values = metadataItems(field.values);
     dimensions.push(filterDimension({
       id: `custom_field:${field.id}`,

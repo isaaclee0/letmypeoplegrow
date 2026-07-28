@@ -82,6 +82,20 @@ test('maps the legacy PCO absence sentinel to an omitted canonical fact', () => 
   assert.deepEqual(facts, { externalPersonId: 'p3', dimensions: {} });
 });
 
+test('does not expose uncovered PCO custom fields or a zero-count Not set option', () => {
+  const a = adapter();
+  const dimensions = a.buildFilterDimensions({
+    facts: [{ externalPersonId: 'p1', dimensions: { membership: ['Member'] } }],
+    providerMetadata: {
+      memberships: [{ membership: 'Member', count: 1 }],
+      fieldDefinitions: [{ id: '12', name: 'Ministries', dataType: 'checkboxes', options: ['Choir'] }],
+    },
+    coveredDimensionIds: ['membership'],
+  });
+  assert.deepEqual(dimensions.map((dimension) => dimension.id), ['membership']);
+  assert.deepEqual(dimensions[0].values, [{ id: 'Member', label: 'Member', count: 1 }]);
+});
+
 test('fetchSnapshot normalizes an active PCO person: state, provider tag, familyId from householdId', async () => {
   const a = adapter();
   const snapshot = await a.fetchSnapshot({ churchId: 'c1', credentials: { accessToken: 'token' }, mode: 'full' });

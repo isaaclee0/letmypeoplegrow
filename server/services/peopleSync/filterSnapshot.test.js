@@ -64,3 +64,17 @@ test('keeps an absent covered dimension distinct from an uncovered dimension', (
   assert.deepEqual(result.coverage, ['membership']);
   assert.equal(result.coverage.includes('custom_field:12'), false);
 });
+
+test('passes explicit coverage to dimension builders', () => {
+  let seenCoverage;
+  captureFilterSnapshotInput({
+    provider: 'planning_center', snapshot: { people: [] }, providerMetadata: {}, settings: {},
+    coveredDimensionIds: ['membership'],
+    adapter: {
+      isInFilterPopulation() { return true; },
+      toFilterFacts() { throw new Error('no people should be projected'); },
+      buildFilterDimensions({ coveredDimensionIds }) { seenCoverage = coveredDimensionIds; return []; },
+    },
+  });
+  assert.deepEqual(seenCoverage, ['membership']);
+});
