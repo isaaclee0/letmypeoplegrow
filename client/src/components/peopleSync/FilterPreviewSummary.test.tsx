@@ -48,7 +48,7 @@ describe('FilterPreviewSummary', () => {
   });
 
   it('renders stale, unavailable, and all preview warning states', async () => {
-    vi.mocked(peopleSyncAPI.previewFilter).mockReturnValue(response(preview({ matchCount: null, snapshot: { ...preview().snapshot!, fresh: false }, missingDimensionIds: ['groups'], warnings: ['BROAD_FILTER', 'OVERLAP_GATHERING_TYPE', 'OVERLAP_DEFAULT_PEOPLE_TYPE'] })));
+    vi.mocked(peopleSyncAPI.previewFilter).mockReturnValue(response(preview({ matchCount: null, overlaps: [], snapshot: { ...preview().snapshot!, fresh: false }, missingDimensionIds: ['groups'], warnings: ['BROAD_FILTER', 'OVERLAP_GATHERING_TYPE', 'OVERLAP_DEFAULT_PEOPLE_TYPE'] })));
     render(<FilterPreviewSummary provider="planning_center" batchId={null} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={1} onMetadata={vi.fn()} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(350); });
     expect(screen.getByText('Count unavailable')).toBeInTheDocument();
@@ -57,6 +57,7 @@ describe('FilterPreviewSummary', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('matches the whole available population');
     expect(screen.getByRole('alert')).toHaveTextContent('different gathering');
     expect(screen.getByRole('alert')).toHaveTextContent('different default people type');
+    expect(screen.getByText('20 people across enabled batches')).toBeInTheDocument();
   });
 
   it('refreshes explicitly, then updates metadata before requesting a fresh preview', async () => {
@@ -71,5 +72,32 @@ describe('FilterPreviewSummary', () => {
     expect(peopleSyncAPI.refreshFilterSnapshot).toHaveBeenCalledWith('elvanto', { filterConfig: filter });
     expect(peopleSyncAPI.getFilterMetadata).toHaveBeenCalledWith('elvanto');
     expect(onMetadata).toHaveBeenCalledWith(metadata);
+  });
+
+  it('ignores a delayed refresh after identity changes or unmount', async () => {
+    let resolveRefresh: (() => void) | undefined;
+    const delayedRefresh = new Promise<{ data: { success: true; metadata: FilterMetadata; snapshot: NonNullable<FilterPreviewResult['snapshot']> } }>((resolve) => {
+      resolveRefresh = () => resolve({ data: { success: true, metadata: { dimensions: [] }, snapshot: preview().snapshot! } });
+    });
+    vi.mocked(peopleSyncAPI.previewFilter).mockReturnValue(response(preview()));
+    vi.mocked(peopleSyncAPI.refreshFilterSnapshot).mockReturnValue(delayedRefresh);
+    const onMetadata = vi.fn();
+    const { rerender, unmount } = render(<FilterPreviewSummary provider="elvanto" batchId={1} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={null} onMetadata={onMetadata} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    await act(async () => { screen.getByRole('button', { name: 'Refresh people data' }).click(); });
+    rerender(<FilterPreviewSummary provider="planning_center" batchId={2} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={null} onMetadata={onMetadata} />);
+    await act(async () => { resolveRefresh?.(); });
+    expect(peopleSyncAPI.getFilterMetadata).not.toHaveBeenCalled();
+    expect(onMetadata).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('reports an explicit refresh failure without replacing newer preview data', async () => {
+    vi.mocked(peopleSyncAPI.previewFilter).mockReturnValue(response(preview()));
+    vi.mocked(peopleSyncAPI.refreshFilterSnapshot).mockRejectedValue(new Error('offline'));
+    render(<FilterPreviewSummary provider="elvanto" batchId={1} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={null} onMetadata={vi.fn()} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    await act(async () => { screen.getByRole('button', { name: 'Refresh people data' }).click(); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Count unavailable');
   });
 });

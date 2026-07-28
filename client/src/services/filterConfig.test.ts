@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FilterDimension } from '../components/peopleSync/types';
-import { addBranch, addGroup, emptyBooleanFilter, removeBranch, removeGroup, setValueState } from './filterConfig';
+import { addBranch, addGroup, emptyBooleanFilter, removeBranch, removeGroup, removeExclusionValue, setBranchValueState, setValueState } from './filterConfig';
 
 const multiGroups: FilterDimension = {
   id: 'groups',
@@ -102,5 +102,30 @@ describe('filterConfig', () => {
     expect(addGroup(withGroup, 0, multiGroups)).toEqual(withGroup);
     expect(removeGroup(withGroup, 0, 0)).toEqual(emptyBooleanFilter());
     expect(removeBranch(withBranch, 0)).toEqual(emptyBooleanFilter());
+  });
+
+  it('updates a specific branch without retaining empty groups or duplicate exclusions', () => {
+    const config = {
+      branches: [
+        { groups: [{ dimensionId: 'groups', mode: 'all' as const, values: ['music'] }] },
+        { groups: [{ dimensionId: 'groups', mode: 'all' as const, values: ['youth'] }] },
+      ],
+      exclusions: [{ dimensionId: 'groups', values: ['seniors', 'seniors'] }],
+    };
+
+    expect(setBranchValueState(config, 1, multiGroups, 'youth', 'off')).toEqual({
+      branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] }],
+      exclusions: [{ dimensionId: 'groups', values: ['seniors'] }],
+    });
+    expect(setBranchValueState(config, 1, multiGroups, 'music', 'not')).toEqual({
+      branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth'] }] }],
+      exclusions: [{ dimensionId: 'groups', values: ['music', 'seniors'] }],
+    });
+  });
+
+  it('removes one exclusion pair and leaves a server-valid filter', () => {
+    expect(removeExclusionValue({ branches: [], exclusions: [{ dimensionId: 'groups', values: ['music', 'youth'] }] }, 'groups', 'music')).toEqual({
+      branches: [], exclusions: [{ dimensionId: 'groups', values: ['youth'] }],
+    });
   });
 });

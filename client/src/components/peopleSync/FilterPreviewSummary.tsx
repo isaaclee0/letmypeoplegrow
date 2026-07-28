@@ -47,22 +47,32 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
 
   useEffect(() => {
     mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    setRefreshing(false);
     const timer = window.setTimeout(() => { void preview(); }, 350);
-    return () => { window.clearTimeout(timer); mounted.current = false; sequence.current += 1; };
+    return () => { window.clearTimeout(timer); sequence.current += 1; };
   }, [preview]);
 
   const refresh = async () => {
+    const current = ++sequence.current;
+    const isCurrent = () => mounted.current && current === sequence.current;
     setRefreshing(true);
     try {
       await peopleSyncAPI.refreshFilterSnapshot(provider, { filterConfig: value });
+      if (!isCurrent()) return;
       const metadata = await peopleSyncAPI.getFilterMetadata(provider);
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       onMetadata(metadata.data.metadata);
+      if (!isCurrent()) return;
+      setRefreshing(false);
       await preview();
     } catch {
-      if (mounted.current) { setResult(null); setError('Count unavailable'); }
+      if (isCurrent()) { setResult(null); setError('Count unavailable'); }
     } finally {
-      if (mounted.current) setRefreshing(false);
+      if (isCurrent()) setRefreshing(false);
     }
   };
 
@@ -71,7 +81,7 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
   return <section aria-label="Filter preview" className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Match preview</h3><p className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100">{unavailable ? 'Count unavailable' : `${result.matchCount === 1 ? '1 person matches' : `${result.matchCount} people match`}`}</p>{snapshot ? <p title={snapshot.capturedAt} className="mt-1 text-xs text-gray-600 dark:text-gray-300">Data updated {relativeTime(snapshot.capturedAt)}{snapshot.fresh ? '' : ' · Data is stale'}</p> : <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">No cached people snapshot is available.</p>}</div><button type="button" disabled={refreshing} onClick={() => { void refresh(); }} className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-700">{refreshing ? 'Refreshing people data…' : 'Refresh people data'}</button></div>
     {error ? <p role="alert" className="mt-3 text-sm text-amber-800 dark:text-amber-200">{error}</p> : null}
-    {result?.overlaps.length ? <details className="mt-3 rounded-md bg-gray-50 p-3 dark:bg-gray-900/40"><summary className="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-100">Overlap with enabled batches</summary><ul className="mt-2 space-y-1 text-sm text-gray-700 dark:text-gray-200">{result.overlaps.map((overlap) => <li key={overlap.batchId}>{overlap.count} also match {overlap.batchName}</li>)}</ul>{result.uniqueEnabledPopulationCount !== null ? <p className="mt-2 text-sm font-medium text-gray-800 dark:text-gray-100">{result.uniqueEnabledPopulationCount} people across enabled batches</p> : null}</details> : null}
+    {result?.overlaps.length ? <details className="mt-3 rounded-md bg-gray-50 p-3 dark:bg-gray-900/40"><summary className="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-100">Overlap with enabled batches</summary><ul className="mt-2 space-y-1 text-sm text-gray-700 dark:text-gray-200">{result.overlaps.map((overlap) => <li key={overlap.batchId}>{overlap.count} also match {overlap.batchName}</li>)}</ul></details> : null}{result && result.uniqueEnabledPopulationCount !== null ? <p className="mt-3 text-sm font-medium text-gray-800 dark:text-gray-100">{result.uniqueEnabledPopulationCount} people across enabled batches</p> : null}
     {result && (result.missingDimensionIds.length > 0 || result.warnings.length > 0) ? <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">{result.missingDimensionIds.length ? <p>Count coverage is missing for: {result.missingDimensionIds.map((id) => id.replace(/(^|_)([a-z])/g, (_, prefix: string, letter: string) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`)).join(', ')}.</p> : null}{result.warnings.map((warning) => <p key={warning}>{warningText(warning)}</p>)}</div> : null}
   </section>;
 }

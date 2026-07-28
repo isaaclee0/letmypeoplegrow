@@ -25,7 +25,11 @@ function uniqueSorted(values: readonly string[]): string[] {
 
 function normaliseGroup(group: BooleanFilterGroup): BooleanFilterGroup | null {
   const values = uniqueSorted(group.values);
-  return values.length > 0 ? { dimensionId: group.dimensionId, mode: group.mode, values } : null;
+  // `$not_set` means a dimension has no values. It cannot be combined with
+  // another value under `all`, so keep the draft valid while preserving both
+  // user choices by falling back to `any`.
+  const mode = group.mode === 'all' && values.includes('$not_set') && values.length > 1 ? 'any' : group.mode;
+  return values.length > 0 ? { dimensionId: group.dimensionId, mode, values } : null;
 }
 
 function normaliseBranch(branch: BooleanFilterBranch): BooleanFilterBranch | null {
@@ -136,5 +140,87 @@ export function setValueState(
   return normalise({
     ...cleared,
     branches: branches.map((currentBranch, index) => index === branchIndex ? { groups } : currentBranch),
+  });
+}
+
+/**
+ * Applies a value action to the bracket in one branch. Unlike the original
+ * convenience helper, positive values can legitimately recur in a separate
+ * OR branch, so only the requested branch is changed. Every exit path passes
+ * through `normalise` to prevent transient empty groups/branches and duplicate
+ * exclusions from reaching the server.
+ */
+export function setBranchValueState(
+  config: BooleanFilterConfigV2,
+  branchIndex: number,
+  dimension: DimensionReference,
+  valueId: string,
+  state: FilterValueState,
+  cardinality: FilterDimensionCardinality = 'multi',
+): BooleanFilterConfigV2 {
+  const { id: dimensionId, cardinality: resolvedCardinality } = dimensionDetails(dimension, cardinality);
+  const next: BooleanFilterConfigV2 = {
+    branches: config.branches.map((branch) => ({ groups: branch.groups.map((group) => ({ ...group, values: [...group.values] })) })),
+    exclusions: config.exclusions.map((exclusion) => ({ ...exclusion, values: [...exclusion.values] })),
+  };
+  const removeFromExclusions = (source: BooleanFilterConfigV2): BooleanFilterConfigV2 => ({
+    ...source,
+    exclusions: source.exclusions.map((exclusion) => exclusion.dimensionId === dimensionId
+      ? { ...exclusion, values: exclusion.values.filter((value) => value !== valueId) }
+      : exclusion),
+  });
+
+  if (state === 'not') {
+    const withoutPositive = normalise({
+      ...next,
+      branches: next.branches.map((branch) => ({ groups: branch.groups.map((group) => group.dimensionId === dimensionId
+        ? { ...group, values: group.values.filter((value) => value !== valueId) }
+        : group) })),
+    });
+    const withoutExclusion = removeFromExclusions(withoutPositive);
+    return normalise({ ...withoutExclusion, exclusions: [...withoutExclusion.exclusions, { dimensionId, values: [valueId] }] });
+  }
+
+  const withoutExclusion = removeFromExclusions(next);
+  if (state === 'off') {
+    return normalise({
+      ...withoutExclusion,
+      branches: withoutExclusion.branches.map((branch, index) => index === branchIndex
+        ? { groups: branch.groups.map((group) => group.dimensionId === dimensionId
+          ? { ...group, values: group.values.filter((value) => value !== valueId) }
+          : group) }
+        : branch),
+    });
+  }
+
+  if (!Number.isInteger(branchIndex) || branchIndex < 0 || branchIndex >= withoutExclusion.branches.length) return withoutExclusion;
+  return normalise({
+    ...withoutExclusion,
+    branches: withoutExclusion.branches.map((branch, index) => {
+      if (index !== branchIndex) return branch;
+      const group = branch.groups.find((candidate) => candidate.dimensionId === dimensionId);
+      const mode: FilterGroupMode = resolvedCardinality === 'single' ? 'any' : 'all';
+      return { groups: group
+        ? branch.groups.map((candidate) => candidate.dimensionId === dimensionId ? { ...candidate, values: [...candidate.values, valueId] } : candidate)
+        : [...branch.groups, { dimensionId, mode, values: [valueId] }] };
+    }),
+  });
+}
+
+export function removeExclusionValue(config: BooleanFilterConfigV2, dimensionId: string, valueId: string): BooleanFilterConfigV2 {
+  return normalise({
+    ...config,
+    exclusions: config.exclusions.map((exclusion) => exclusion.dimensionId === dimensionId
+      ? { ...exclusion, values: exclusion.values.filter((value) => value !== valueId) }
+      : exclusion),
+  });
+}
+
+export function setGroupMode(config: BooleanFilterConfigV2, branchIndex: number, groupIndex: number, mode: FilterGroupMode): BooleanFilterConfigV2 {
+  return normalise({
+    ...config,
+    branches: config.branches.map((branch, currentBranchIndex) => currentBranchIndex === branchIndex
+      ? { groups: branch.groups.map((group, currentGroupIndex) => currentGroupIndex === groupIndex ? { ...group, mode } : group) }
+      : branch),
   });
 }

@@ -22,9 +22,11 @@ describe('FilterBuilder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add Branch 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Status to Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Include Active' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 1' }));
     expect(screen.queryByRole('button', { name: 'Add Status to Branch 1' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add Groups to Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Include Youth' }));
     expect(screen.getByText('AND')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add OR alternative branch' }));
     expect(screen.getByText('OR')).toBeInTheDocument();
@@ -43,15 +45,16 @@ describe('FilterBuilder', () => {
   });
 
   it('moves NOT values into the persistent exclusion ledger and restores focus after removal', () => {
-    render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth'] }] }, { groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music'] }] }], exclusions: [] }} />);
+    render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music', 'seniors'] }] }, { groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music', 'seniors'] }] }], exclusions: [] }} />);
     const groups = screen.getAllByRole('region', { name: /Groups in Branch/ });
+    groups.forEach((group) => fireEvent.click(within(group).getByRole('button', { name: 'Open Groups values' })));
     fireEvent.click(within(groups[0]).getByRole('button', { name: 'NOT Youth' }));
     expect(screen.getByRole('region', { name: 'Always exclude' })).toHaveTextContent('Youth');
     expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}').branches).toEqual([
-      { groups: [{ dimensionId: 'groups', mode: 'all', values: [] }] },
-      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] },
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music', 'seniors'] }] },
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music', 'seniors'] }] },
     ]);
-    fireEvent.click(within(groups[1]).getByRole('button', { name: 'NOT Music' }));
+    fireEvent.click(within(screen.getAllByRole('region', { name: /Groups in Branch/ })[1]).getByRole('button', { name: 'NOT Music' }));
     const ledger = screen.getByRole('region', { name: 'Always exclude' });
     expect(ledger).toHaveTextContent('Youth');
     expect(ledger).toHaveTextContent('Music');
@@ -69,7 +72,10 @@ describe('FilterBuilder', () => {
     expect(screen.queryByRole('button', { name: 'Include Music' })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('button', { name: 'Include Youth' }), { key: 'Enter' });
     expect(screen.getByLabelText('Filter value')).toHaveTextContent('youth');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Status values' }));
     expect(screen.getByText('Not set')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove missing_dimension from Branch 1' }));
+    expect(screen.queryByText('missing_dimension')).not.toBeInTheDocument();
   });
 
   it('keeps a NOT-only filter editable', () => {
@@ -77,5 +83,11 @@ describe('FilterBuilder', () => {
     expect(screen.getByText('Everyone except the excluded people matches.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove exclusion Active' }));
     expect(screen.getByText('No one matches until you add a branch or an exclusion.')).toBeInTheDocument();
+  });
+
+  it('prevents invalid Match all combinations with Not set', () => {
+    render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', '$not_set'] }] }], exclusions: [] }} />);
+    expect(screen.queryByRole('button', { name: 'Match all for Groups' })).not.toBeInTheDocument();
+    expect(screen.getByText('Not set cannot be combined with Match all; this bracket now matches any selected value.')).toBeInTheDocument();
   });
 });
