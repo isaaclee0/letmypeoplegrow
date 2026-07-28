@@ -53,6 +53,14 @@ function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function hasPoisonedDemographicCache(metadata) {
+  if (!metadata || !Array.isArray(metadata.demographics)) return false;
+  return metadata.demographics.some((item) => {
+    const value = item && item.value;
+    return typeof value !== 'string' || value.includes('[object Object]');
+  });
+}
+
 function parseBatchId(raw) {
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
@@ -373,12 +381,13 @@ function createElvantoRouter(overrides = {}) {
 
       // Cheap path: serve the persisted cache (connectionStore's own
       // metadata.syncMetadata, written by a prior live fetch) without a
-      // live Elvanto call. Only falls through to a live fetch when nothing
-      // has ever been cached yet — POST /metadata/refresh is the explicit
-      // "go fetch fresh" action.
+      // live Elvanto call. A cache produced before nested demographic
+      // collection objects were normalized is also replaced automatically;
+      // otherwise those persisted "[object Object]" labels would survive a
+      // deployment until an administrator manually refreshed metadata.
       const connection = await deps.getConnection(churchId, PROVIDER);
       const cached = connection && connection.metadata && connection.metadata.syncMetadata;
-      if (cached) {
+      if (cached && !hasPoisonedDemographicCache(cached)) {
         return res.json({ success: true, metadata: cached, stale: false, cached: true, metadataCachedAt: connection.metadataCachedAt || null });
       }
 

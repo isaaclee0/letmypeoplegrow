@@ -163,6 +163,41 @@ test('normalizePerson projects raw demographics object entries into a sorted att
   assert.deepEqual(result.attributes.demographics, [{ field: 'marital_status', value: 'Married' }]);
 });
 
+test('normalizePerson unwraps Elvanto demographic collection objects into selectable names', () => {
+  const single = normalizePerson({
+    ...fixtures.activePerson,
+    demographics: { demographic: { id: 'demo-adults', name: 'Adults' } },
+  });
+  const multiple = normalizePerson({
+    ...fixtures.activePerson,
+    demographics: {
+      demographic: [
+        { id: 'demo-adults', name: 'Adults' },
+        { id: 'demo-seniors', name: 'Seniors' },
+      ],
+    },
+  });
+
+  assert.deepEqual(single.attributes.demographics, [
+    { field: 'demo-adults', value: 'Adults' },
+  ]);
+  assert.deepEqual(multiple.attributes.demographics, [
+    { field: 'demo-adults', value: 'Adults' },
+    { field: 'demo-seniors', value: 'Seniors' },
+  ]);
+});
+
+test('normalizePerson preserves the field name from demographic name/value entries', () => {
+  const result = normalizePerson({
+    ...fixtures.activePerson,
+    demographics: [{ name: 'Life stage', value: 'Young Adults' }],
+  });
+
+  assert.deepEqual(result.attributes.demographics, [
+    { field: 'Life stage', value: 'Young Adults' },
+  ]);
+});
+
 test('normalizePerson folds an injected per-person membership bundle into attributes', () => {
   const result = normalizePerson(fixtures.activePerson, {
     groups: ['Choir', 'Choir', 'Welcome Team'],

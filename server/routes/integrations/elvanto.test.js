@@ -539,6 +539,41 @@ test('GET /metadata serves the persisted cache without a live fetch when one exi
   assert.equal(fetchSnapshotCalled, false);
 });
 
+test('GET /metadata replaces a cache poisoned by nested demographic object labels', async () => {
+  let fetchSnapshotCalled = false;
+  const fresh = {
+    fetchedAt: 'live', categories: [], groups: [],
+    demographics: [{ value: 'Adults', count: 49 }],
+    departments: [], serviceTypes: [], locations: [], customFields: [],
+  };
+  await withServer(noopDeps({
+    getCredentials: async () => ({ apiKey: 'k' }),
+    getConnection: async () => ({
+      metadata: {
+        syncMetadata: {
+          ...fresh,
+          fetchedAt: 'cached',
+          demographics: [
+            { value: '[object Object]', count: 49 },
+            { value: '[object Object],[object Object]', count: 3 },
+          ],
+        },
+      },
+      metadataCachedAt: 'cached-at',
+    }),
+    adapter: {
+      fetchSnapshot: async () => { fetchSnapshotCalled = true; return { people: [] }; },
+      fetchMetadata: async () => fresh,
+    },
+  }), { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/metadata`);
+    assert.equal(status, 200);
+    assert.equal(body.cached, false);
+    assert.deepEqual(body.metadata.demographics, [{ value: 'Adults', count: 49 }]);
+  });
+  assert.equal(fetchSnapshotCalled, true);
+});
+
 test('GET /metadata falls back to a live fetch when nothing has been cached yet', async () => {
   let fetchSnapshotCalled = false;
   await withServer(noopDeps({

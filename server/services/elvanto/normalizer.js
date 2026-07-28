@@ -143,29 +143,50 @@ function sortedUniqueStrings(value) {
   return [...new Set(cleaned)].sort();
 }
 
-// Demographics' raw wire shape is not confirmed (see file-header note), so
-// this accepts either an object map (`{ field: value }`) or an array of
-// `{ field | name | key, value }` entries, and normalizes both into a sorted
-// array of `{ field, value }` — matching the Interfaces section's
-// `demographics: []` shape. Blank/null/undefined values are dropped, the same
-// way projection.js's projectPerson() drops blank PCO field-datum values.
+// Elvanto collection fields can arrive wrapped as
+// `{ demographic: { id, name } }` or `{ demographic: [{ id, name }] }`.
+// Older fixtures/account variants also expose an object map (`{ field: value }`)
+// or `{ field | key, value }` entries. Recursively flatten those wire shapes
+// into scalar `{ field, value }` pairs so nested objects can never leak into
+// metadata labels as "[object Object]".
 function normalizeDemographics(raw) {
   const entries = [];
-  if (Array.isArray(raw)) {
-    for (const item of raw) {
-      if (!item || typeof item !== 'object') continue;
-      const field = item.field ?? item.name ?? item.key;
-      const value = item.value;
-      if (field === null || field === undefined) continue;
-      if (value === null || value === undefined || value === '') continue;
-      entries.push({ field: String(field), value });
+
+  const scalarText = (value) => {
+    if (typeof value === 'string') return value.trim() || null;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return null;
+  };
+  const add = (field, value) => {
+    const normalizedValue = scalarText(value);
+    if (!normalizedValue) return;
+    entries.push({ field: scalarText(field) || normalizedValue, value: normalizedValue });
+  };
+  const visit = (value, fieldHint = null) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, fieldHint);
+      return;
     }
-  } else if (raw && typeof raw === 'object') {
-    for (const [field, value] of Object.entries(raw)) {
-      if (value === null || value === undefined || value === '') continue;
-      entries.push({ field, value });
+    if (!value || typeof value !== 'object') {
+      add(fieldHint, value);
+      return;
     }
-  }
+
+    const directValue = scalarText(value.value);
+    const name = scalarText(value.name);
+    const explicitValue = directValue || name;
+    if (explicitValue) {
+      add(value.field ?? value.key ?? value.id ?? (directValue ? name : null) ?? fieldHint, explicitValue);
+      return;
+    }
+
+    for (const [field, nested] of Object.entries(value)) {
+      const nestedHint = field === 'demographic' || field === 'demographics' ? fieldHint : field;
+      visit(nested, nestedHint);
+    }
+  };
+
+  visit(raw);
   return entries.sort((a, b) => a.field.localeCompare(b.field));
 }
 
