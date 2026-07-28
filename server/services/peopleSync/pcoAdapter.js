@@ -76,7 +76,12 @@ function dimension({ id, label, cardinality, category, metadataValues = [], fact
 
 function toPcoFilterFacts(person, coveredDimensionIds) {
   const covered = coveredDimensionIds instanceof Set ? coveredDimensionIds : new Set(coveredDimensionIds || []);
-  const attributes = person && person.attributes || {};
+  // The live PCO cache stores projected people while filter snapshots store
+  // normalized people. Treat both representations deliberately here.
+  const attributes = person && person.attributes || {
+    membership: person && person.membership,
+    fieldValues: person && person.fieldValues,
+  };
   const dimensions = {};
   if (covered.has('membership')) {
     const values = sortedValues([attributes.membership]);
@@ -89,6 +94,14 @@ function toPcoFilterFacts(person, coveredDimensionIds) {
     if (values.length) dimensions[dimensionId] = values;
   }
   return { externalPersonId: String(person && person.id || ''), dimensions };
+}
+
+function metadataPerson(person) {
+  const attributes = person && person.attributes || {};
+  return {
+    membership: person?.membership ?? attributes.membership ?? null,
+    fieldValues: person?.fieldValues ?? attributes.fieldValues ?? {},
+  };
 }
 
 function buildPcoFilterDimensions({ facts = [], providerMetadata = {}, coveredDimensionIds } = {}) {
@@ -164,6 +177,7 @@ function validatePcoFilter(filterConfig, schemaVersion = FILTER_SCHEMA_VERSION) 
 // nothing here reimplements HTTPS, token refresh, caching, or field-definition
 // fetching. Injected in tests so no test in this file makes a real network call.
 const defaultDeps = {
+  fetchFieldDefinitions,
   async validateToken(accessToken) {
     return validatePlanningCenterToken(accessToken);
   },
@@ -174,14 +188,14 @@ const defaultDeps = {
   // planningCenter/metadataCache.js's persisted, church-scoped cache directly). This
   // gives the provider-neutral fetchMetadata contract a working PCO implementation
   // ahead of Task 9+ deciding whether/how to route the batch editor through it.
-  async fetchMetadata(churchId, accessToken, options = {}) {
+  async fetchMetadata(churchId, accessToken, options = {}, fieldDefinitionsFetcher = fetchFieldDefinitions, peopleFetcher = getCachedPcoPeople) {
     // Explicit filter refresh already fetched this full roster. Reuse that
     // exact snapshot rather than asking the PCO people cache/provider again.
     const peoplePromise = options.snapshot
       ? Promise.resolve({ people: options.snapshot.people || [] })
-      : getCachedPcoPeople(churchId, accessToken, options);
-    const [{ people }, fieldDefinitions] = await Promise.all([peoplePromise, fetchFieldDefinitions(accessToken)]);
-    return { memberships: tallyMembership(people).values, fieldDefinitions };
+      : peopleFetcher(churchId, accessToken, options);
+    const [{ people }, fieldDefinitions] = await Promise.all([peoplePromise, fieldDefinitionsFetcher(accessToken)]);
+    return { memberships: tallyMembership(people.map(metadataPerson)).values, fieldDefinitions };
   },
 };
 
@@ -223,7 +237,7 @@ function createPcoAdapter(deps = {}) {
 
     async fetchMetadata({ churchId, credentials, force, snapshot } = {}) {
       const accessToken = credentials && credentials.accessToken;
-      return resolved.fetchMetadata(churchId, accessToken, snapshot === undefined ? { force } : { force, snapshot });
+      return resolved.fetchMetadata(churchId, accessToken, snapshot === undefined ? { force } : { force, snapshot }, resolved.fetchFieldDefinitions, resolved.fetchPeople);
     },
 
     validateFilter: validatePcoFilter,
@@ -240,9 +254,9 @@ function createPcoAdapter(deps = {}) {
     buildFilterDimensions: buildPcoFilterDimensions,
 
     isInFilterPopulation(person) {
-      return person && person.state === 'active';
+      return person && (person.state === 'active' || person.status === 'active');
     },
   };
 }
 
-module.exports = { createPcoAdapter, validatePcoFilter, FILTER_SCHEMA_VERSION };
+module.exports = { createPcoAdapter, validatePcoFilter, FILTER_SCHEMA_VERSION, metadataPerson };

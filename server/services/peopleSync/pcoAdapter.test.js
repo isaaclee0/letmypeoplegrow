@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createPcoAdapter, validatePcoFilter } = require('./pcoAdapter');
+const { createPcoAdapter, validatePcoFilter, metadataPerson } = require('./pcoAdapter');
 const { isEligible } = require('../planningCenter/eligibility');
 const { validateAdapter } = require('./providerRegistry');
 
@@ -40,6 +40,42 @@ test('fetchMetadata receives and reuses the refresh snapshot instead of requesti
   const snapshot = { mode: 'full', people: [{ id: 'p1', attributes: { membership: 'Member' } }] };
   await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'secret' }, force: false, snapshot });
   assert.equal(metadataOptions.snapshot, snapshot);
+});
+
+test('warm projected people and refreshed normalized people yield the same PCO metadata values', () => {
+  const projected = rawProjectedPerson({ membership: 'Member', fieldValues: { choir: ['Soprano'] } });
+  const normalized = {
+    id: projected.id, state: 'active', attributes: { membership: 'Member', fieldValues: { choir: ['Soprano'] } },
+  };
+  assert.deepEqual(metadataPerson(projected), { membership: 'Member', fieldValues: { choir: ['Soprano'] } });
+  assert.deepEqual(metadataPerson(normalized), { membership: 'Member', fieldValues: { choir: ['Soprano'] } });
+  const a = adapter();
+  assert.equal(a.isInFilterPopulation(projected), true);
+  assert.equal(a.isInFilterPopulation(normalized), true);
+  assert.deepEqual(a.toFilterFacts(projected, new Set(['membership', 'custom_field:choir'])).dimensions,
+    a.toFilterFacts(normalized, new Set(['membership', 'custom_field:choir'])).dimensions);
+  const facts = [projected, normalized].map((person) => a.toFilterFacts(person, new Set(['membership', 'custom_field:choir'])));
+  const dimensions = a.buildFilterDimensions({ facts, providerMetadata: {
+    memberships: [{ membership: 'Member' }], fieldDefinitions: [{ id: 'choir', name: 'Choir', dataType: 'checkboxes', options: ['Soprano'] }],
+  }, coveredDimensionIds: ['membership', 'custom_field:choir'] });
+  assert.deepEqual(dimensions.map((dimension) => [dimension.id, dimension.values[0].id, dimension.values[0].count]), [
+    ['custom_field:choir', 'Soprano', 2], ['membership', 'Member', 2],
+  ]);
+});
+
+test('default metadata path counts memberships from both warm projected and explicit normalized people', async () => {
+  let peopleCalls = 0;
+  const projected = rawProjectedPerson({ membership: 'Member', fieldValues: { choir: ['Soprano'] } });
+  const a = createPcoAdapter({
+    fetchPeople: async () => { peopleCalls++; return { people: [projected], householdPrimaryContacts: new Map() }; },
+    fetchFieldDefinitions: async () => [{ id: 'choir', name: 'Choir', dataType: 'checkboxes', options: ['Soprano'] }],
+  });
+  const warm = await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'token' }, force: false });
+  assert.deepEqual(warm.memberships, [{ membership: 'Member', count: 1 }]);
+  const normalized = { id: 'p1', state: 'active', attributes: { membership: 'Member', fieldValues: { choir: ['Soprano'] } } };
+  const refreshed = await a.fetchMetadata({ churchId: 'churcha1', credentials: { accessToken: 'token' }, force: false, snapshot: { people: [normalized] } });
+  assert.deepEqual(refreshed.memberships, [{ membership: 'Member', count: 1 }]);
+  assert.equal(peopleCalls, 1, 'an explicit snapshot must not fetch people again');
 });
 
 test('projects PCO people into PII-free facts and canonical dimensions', () => {

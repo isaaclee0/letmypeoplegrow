@@ -257,11 +257,16 @@ function createFilterBuilderRouter(overrides = {}) {
       }
       const cacheEntry = deps.cache.get(churchId, provider);
       if (!cacheEntry) return res.status(409).json({ error: 'A complete filter snapshot is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE' });
+      const current = body.batchId === null ? null : await deps.getBatch(churchId, provider, body.batchId);
+      const validation = deps.validateFilterV2(body.filterConfig, metadataFromEntry(cacheEntry), {
+        allowedUnresolvedPairs: unresolvedPairsFromDraft(current, deps.selectedPairs),
+      });
+      if (!validation.ok) return res.status(400).json({ error: 'Invalid filter preview.', code: 'SYNC_FILTER_INVALID' });
       const batches = await deps.listBatches(churchId, provider);
       const settings = await deps.getSettings(churchId, provider);
       const result = deps.previewFilter({ churchId, provider, batchId: body.batchId, cacheEntry, batches,
         metadata: metadataFromEntry(cacheEntry), populationGateDigest: deps.populationGateDigest(provider, settings),
-        proposed: { filterSchemaVersion: 2, filterConfig: body.filterConfig, enabled: body.enabled,
+        proposed: { filterSchemaVersion: 2, filterConfig: validation.value, enabled: body.enabled,
           defaultPeopleType: body.defaultPeopleType, gatheringTypeId: body.gatheringTypeId } });
       return res.json({ success: true, matchCount: result.matchCount, snapshot: result.snapshot, overlaps: result.overlaps,
         uniqueEnabledPopulationCount: result.uniqueEnabledPopulationCount, missingDimensionIds: result.missingDimensionIds, warnings: result.warnings });
@@ -352,7 +357,8 @@ function createFilterBuilderRouter(overrides = {}) {
     const provider = req.params.provider;
     const upgrades = req.body?.upgrades;
     if (!isPlainObject(req.body) || Object.keys(req.body).length !== 1 || !Array.isArray(upgrades) || upgrades.length === 0 ||
-        !upgrades.every((item) => isPlainObject(item) && Object.keys(item).length === 2 && parseBatchId(item.batchId) !== null && typeof item.upgradeToken === 'string')) {
+        !upgrades.every((item) => isPlainObject(item) && Object.keys(item).length === 2 &&
+          Number.isSafeInteger(item.batchId) && item.batchId > 0 && typeof item.upgradeToken === 'string')) {
       return res.status(400).json({ error: 'Invalid filter upgrade.', code: 'SYNC_FILTER_INVALID' });
     }
     try {

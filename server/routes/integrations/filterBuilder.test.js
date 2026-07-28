@@ -94,6 +94,22 @@ test('preview uses only cached collaborators and returns the exact safe contract
   assert.equal(providerCalls, 0);
 });
 
+test('preview rejects an over-limit canonical filter before preview evaluation', async () => {
+  let previewCalls = 0;
+  const overLimit = { branches: Array.from({ length: 21 }, () => ({ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] })), exclusions: [] };
+  await withServer(deps({
+    validateFilterV2: () => ({ ok: false, value: null, errors: [{ code: 'TOO_MANY_BRANCHES' }] }),
+    previewFilter: () => { previewCalls++; return {}; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/filter-preview', {
+      method: 'POST', body: { batchId: null, filterConfig: overLimit, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
+    });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.code, 'SYNC_FILTER_INVALID');
+  });
+  assert.equal(previewCalls, 0);
+});
+
 test('refresh makes one full snapshot call, unions active and proposed dimensions, and does not replace a cache on incomplete data', async () => {
   const calls = [];
   const old = { snapshotId: 'old' };
@@ -211,6 +227,7 @@ test('invalid provider, exact JSON batch IDs, and another church batch are rejec
     assert.equal((await request(base, '/unknown/filter-metadata')).status, 404);
     assert.equal((await request(base, '/elvanto/sync-batches/nope/filter-draft', { method: 'PUT', body: {} })).status, 400);
     assert.equal((await request(base, '/elvanto/filter-preview', { method: 'POST', body: { batchId: '1', filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null } })).status, 400);
+    assert.equal((await request(base, '/elvanto/filter-upgrades/apply-compatible', { method: 'POST', body: { upgrades: [{ batchId: '1e0', upgradeToken: 'x' }] } })).status, 400);
     const response = await request(base, '/elvanto/sync-batches/1/filter-draft', { method: 'PUT', body: { filterConfig: filter, broadMatchAcknowledged: true } });
     assert.equal(response.status, 404);
     assert.equal(JSON.stringify(response.body).includes('secret'), false);
