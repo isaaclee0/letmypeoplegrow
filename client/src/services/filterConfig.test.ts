@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FilterDimension } from '../components/peopleSync/types';
-import { addBranch, addGroup, emptyBooleanFilter, removeBranch, removeGroup, removeExclusionValue, setBranchValueState, setValueState } from './filterConfig';
+import type { BooleanFilterConfigV2, FilterDimension } from '../components/peopleSync/types';
+import { addBranch, addGroup, emptyBooleanFilter, normaliseFilterConfig, removeBranch, removeGroup, removeExclusionValue, setBranchValueState, setValueState } from './filterConfig';
 
 const multiGroups: FilterDimension = {
   id: 'groups',
@@ -126,6 +126,50 @@ describe('filterConfig', () => {
   it('removes one exclusion pair and leaves a server-valid filter', () => {
     expect(removeExclusionValue({ branches: [], exclusions: [{ dimensionId: 'groups', values: ['music', 'youth'] }] }, 'groups', 'music')).toEqual({
       branches: [], exclusions: [{ dimensionId: 'groups', values: ['youth'] }],
+    });
+  });
+
+  it('canonicalizes equivalent permutations with the server ordering', () => {
+    const first: BooleanFilterConfigV2 = {
+      branches: [
+        { groups: [{ dimensionId: 'status', mode: 'any', values: ['inactive', 'active'] }] },
+        { groups: [
+          { dimensionId: 'status', mode: 'any', values: ['visitor', 'member'] },
+          { dimensionId: 'groups', mode: 'all', values: ['music', 'choir'] },
+        ] },
+      ],
+      exclusions: [
+        { dimensionId: 'status', values: ['inactive', 'active'] },
+        { dimensionId: 'groups', values: ['music', 'choir'] },
+      ],
+    };
+    const equivalent: BooleanFilterConfigV2 = {
+      branches: [
+        { groups: [
+          { dimensionId: 'groups', mode: 'all', values: ['choir', 'music'] },
+          { dimensionId: 'status', mode: 'any', values: ['member', 'visitor'] },
+        ] },
+        { groups: [{ dimensionId: 'status', mode: 'any', values: ['active', 'inactive'] }] },
+      ],
+      exclusions: [
+        { dimensionId: 'groups', values: ['choir', 'music'] },
+        { dimensionId: 'status', values: ['active', 'inactive'] },
+      ],
+    };
+
+    expect(normaliseFilterConfig(first)).toEqual(normaliseFilterConfig(equivalent));
+    expect(normaliseFilterConfig(first)).toEqual({
+      branches: [
+        { groups: [
+          { dimensionId: 'groups', mode: 'all', values: ['choir', 'music'] },
+          { dimensionId: 'status', mode: 'any', values: ['member', 'visitor'] },
+        ] },
+        { groups: [{ dimensionId: 'status', mode: 'any', values: ['active', 'inactive'] }] },
+      ],
+      exclusions: [
+        { dimensionId: 'groups', values: ['choir', 'music'] },
+        { dimensionId: 'status', values: ['active', 'inactive'] },
+      ],
     });
   });
 });

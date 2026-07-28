@@ -43,6 +43,46 @@ describe('FilterBuilder', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('can clear and include a pending value without persisting an invalid branch', () => {
+    render(<Controlled initial={{ branches: [], exclusions: [{ dimensionId: 'status', values: ['active'] }] }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Status for Branch 1' }));
+    expect(screen.getByRole('button', { name: 'NOT Active' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Off Active' }));
+    expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}')).toEqual({ branches: [], exclusions: [] });
+    expect(screen.getByRole('searchbox', { name: 'Search pending Status values' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Include Active' }));
+    expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}')).toEqual({
+      branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }],
+      exclusions: [],
+    });
+  });
+
+  it('keeps NOT in a pending branch as a valid global exclusion', () => {
+    render(<Controlled />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Status for Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'NOT Active' }));
+    expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}')).toEqual({
+      branches: [],
+      exclusions: [{ dimensionId: 'status', values: ['active'] }],
+    });
+    expect(screen.getByRole('searchbox', { name: 'Search pending Status values' })).toBeInTheDocument();
+  });
+
+  it('returns focus to the exact cancelled AND or OR construction control', () => {
+    render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] }} />);
+    const andButton = screen.getByRole('button', { name: 'Add AND filter type to Branch 1' });
+    fireEvent.click(andButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Add AND filter type to Branch 1' })).toHaveFocus();
+
+    const orButton = screen.getByRole('button', { name: 'Add OR alternative branch' });
+    fireEvent.click(orButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Add OR alternative branch' })).toHaveFocus();
+  });
+
   it('defaults multi brackets to Match all, hides it for single values, and supports removal', () => {
     render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music'] }, { dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] }} />);
     expect(screen.getByRole('button', { name: 'Match all for Groups' })).toHaveAttribute('aria-pressed', 'true');

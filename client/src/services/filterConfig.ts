@@ -19,8 +19,12 @@ function dimensionDetails(dimension: DimensionReference, cardinality: FilterDime
     : { id: dimension.id, cardinality: dimension.cardinality };
 }
 
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function uniqueSorted(values: readonly string[]): string[] {
-  return [...new Set(values.filter((value) => typeof value === 'string' && value.length > 0))].sort();
+  return [...new Set(values.filter((value) => typeof value === 'string' && value.length > 0))].sort(compareStrings);
 }
 
 function normaliseGroup(group: BooleanFilterGroup): BooleanFilterGroup | null {
@@ -36,14 +40,15 @@ function normaliseBranch(branch: BooleanFilterBranch): BooleanFilterBranch | nul
   const groups = branch.groups
     .map(normaliseGroup)
     .filter((group): group is BooleanFilterGroup => group !== null)
-    .sort((left, right) => left.dimensionId.localeCompare(right.dimensionId));
+    .sort((left, right) => compareStrings(JSON.stringify([left.dimensionId, left.mode, left.values]), JSON.stringify([right.dimensionId, right.mode, right.values])));
   return groups.length > 0 ? { groups } : null;
 }
 
 export function normaliseFilterConfig(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
   const branches = config.branches
     .map(normaliseBranch)
-    .filter((branch): branch is BooleanFilterBranch => branch !== null);
+    .filter((branch): branch is BooleanFilterBranch => branch !== null)
+    .sort((left, right) => compareStrings(JSON.stringify(left.groups), JSON.stringify(right.groups)));
   const exclusionValuesByDimension = new Map<string, string[]>();
   for (const exclusion of config.exclusions) {
     const values = exclusionValuesByDimension.get(exclusion.dimensionId) || [];
@@ -52,7 +57,7 @@ export function normaliseFilterConfig(config: BooleanFilterConfigV2): BooleanFil
   const exclusions = [...exclusionValuesByDimension.entries()]
     .map(([dimensionId, values]) => ({ dimensionId, values: uniqueSorted(values) }))
     .filter((exclusion) => exclusion.values.length > 0)
-    .sort((left, right) => left.dimensionId.localeCompare(right.dimensionId));
+    .sort((left, right) => compareStrings(JSON.stringify([left.dimensionId, left.values]), JSON.stringify([right.dimensionId, right.values])));
   return { branches, exclusions };
 }
 
@@ -171,7 +176,7 @@ export function setBranchValueState(
   });
 
   if (state === 'not') {
-  const withoutPositive = normaliseFilterConfig({
+    const withoutPositive = normaliseFilterConfig({
       ...next,
       branches: next.branches.map((branch) => ({ groups: branch.groups.map((group) => group.dimensionId === dimensionId
         ? { ...group, values: group.values.filter((value) => value !== valueId) }
