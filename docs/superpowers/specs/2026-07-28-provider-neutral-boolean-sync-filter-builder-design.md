@@ -1,7 +1,7 @@
 # Provider-Neutral Boolean Sync Filter Builder Design
 
 **Date:** 2026-07-28
-**Status:** Design approved in conversation; awaiting written-spec review
+**Status:** Approved for implementation planning
 **Applies to:** Planning Center and Elvanto people-sync batches
 
 ## Summary
