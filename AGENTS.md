@@ -223,9 +223,11 @@ go through `server/services/peopleSync/filterEngine.js`.
   10 minutes; retained as stale for up to 24 hours).
 - Use `filterPreview.js` for previews. Previews are cache-only: they must not
   fetch Planning Center or Elvanto people and must not return facts, external
-  IDs, raw provider records, or credentials. Only the explicit refresh route
-  in `server/routes/integrations/filterBuilder.js` may fetch a complete
-  provider snapshot.
+  IDs, raw provider records, or credentials. Among filter-builder HTTP
+  endpoints, only the explicit refresh route in
+  `server/routes/integrations/filterBuilder.js` may fetch a complete provider
+  snapshot; cached metadata and preview endpoints never fetch. Reviewed
+  reconciliation and onboarding may fetch complete snapshots as documented.
 - Filter edits are drafts in `batchRepository.js`, never active eligibility.
   Promote a draft only through reviewed reconciliation and its atomic
   `apply.js`/`orchestrator.js` transaction. A normal pending schema-v2 draft
