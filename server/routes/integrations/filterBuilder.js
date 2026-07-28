@@ -6,13 +6,14 @@
 // facts snapshot without ever putting provider people/IDs on the wire.
 const express = require('express');
 const logger = require('../../config/logger');
+const Database = require('../../config/database');
 const { requireRole } = require('../../middleware/auth');
 const { ensureChurchIsolation } = require('../../middleware/churchIsolation');
 const providerRegistry = require('../../services/peopleSync/providerRegistry');
 const connectionStore = require('../../services/peopleSync/connectionStore');
 const batchRepository = require('../../services/peopleSync/batchRepository');
 const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
-const { captureFilterSnapshotInput, populationGateDigest } = require('../../services/peopleSync/filterSnapshot');
+const { captureFilterSnapshotInput, populationGateDigest, normalizeProviderMetadata } = require('../../services/peopleSync/filterSnapshot');
 const { previewFilter, requiredDimensionIdsForBatch } = require('../../services/peopleSync/filterPreview');
 const { validateFilterV2, evaluateFilterV2, selectedDimensionIds, selectedPairs } = require('../../services/peopleSync/filterEngine');
 const { convertV1Filter, compareUpgradeSets, createUpgradeToken, applyCompatibleUpgrades } = require('../../services/peopleSync/filterUpgrade');
@@ -136,6 +137,20 @@ async function defaultCredentials(churchId, provider) {
   return owned?.tokens?.access_token ? { accessToken: owned.tokens.access_token } : null;
 }
 
+async function defaultGetSettings(churchId) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT elvanto_include_contacts, elvanto_align_people_type
+       FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  const row = rows[0] || {};
+  return {
+    includeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
+    alignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
+  };
+}
+
 const defaultDeps = {
   getProvider: providerRegistry.getProvider,
   getCredentials: defaultCredentials,
@@ -144,9 +159,10 @@ const defaultDeps = {
   saveFilterDraft: batchRepository.saveFilterDraft,
   discardFilterDraft: batchRepository.discardFilterDraft,
   cache: filterFactsCache,
-  getSettings: async () => ({}),
+  getSettings: defaultGetSettings,
   captureFilterSnapshotInput,
   populationGateDigest,
+  normalizeProviderMetadata,
   previewFilter,
   validateFilterV2,
   evaluateFilterV2,
@@ -232,7 +248,8 @@ function createFilterBuilderRouter(overrides = {}) {
       // PCO's metadata adapter reuses its just-refreshed people cache when
       // force is false; Elvanto consumes `snapshot` directly. In both cases
       // this does not initiate a second roster fetch.
-      const providerMetadata = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
+      const metadataResult = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
+      const providerMetadata = deps.normalizeProviderMetadata(provider, metadataResult);
       const settings = await deps.getSettings(churchId, provider);
       const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
       const entry = deps.cache.putComplete({ churchId, provider, mode: 'full', complete: true,

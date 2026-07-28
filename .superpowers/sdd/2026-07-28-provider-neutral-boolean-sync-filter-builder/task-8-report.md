@@ -20,3 +20,9 @@ Result: 122 passing, 0 failing.
 - Unattended reconciliation now blocks on any enabled schema-2 ordinary draft for the authoritative provider, not only the requested batch. Schema-1 migration drafts remain schedulable.
 - Elvanto's stale metadata fallback wrapper is unwrapped before complete snapshot fact/dimension capture; incremental snapshots are explicitly covered as non-replacing.
 - Added review-context regressions for active revision, snapshot/plan staleness, and selection tampering, each preserving the draft and preventing people writes.
+
+## Cross-path fix round 2
+
+- Explicit filter snapshot refresh now loads the church's real Elvanto contact setting, so captured preview facts use the same population as live reconciliation.
+- The shared metadata normalizer unwraps Elvanto's persisted stale-metadata envelope for both reconciliation and explicit refresh before dimension/fact capture.
+- Added route-level regressions for contact exclusion and stale fallback metadata (including custom fields).

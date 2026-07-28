@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
 const { createFilterBuilderRouter, createFilterBuilderJsonParser } = require('./filterBuilder');
+const { captureFilterSnapshotInput, populationGateDigest } = require('../../services/peopleSync/filterSnapshot');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 const OTHER_ADMIN = { id: 2, church_id: 'churchb2', role: 'admin' };
@@ -189,6 +190,62 @@ test('refresh unions exact v1 and v2 custom-field dimensions and passes one snap
   assert.equal(seen.snapshots, 1);
   assert.equal(seen.metadata, 1);
   assert.deepEqual(seen.args.customFieldIds.sort(), ['new', 'old', 'proposed']);
+});
+
+test('Elvanto refresh applies includeContacts=false to captured facts so cached previews match live eligibility', async () => {
+  let entry = null;
+  let previewFacts = null;
+  const cache = {
+    get: () => entry,
+    putComplete: (next) => {
+      entry = { ...next, snapshotId: 'snapshot-contacts', capturedAt: '2026-07-28T00:00:00.000Z', expiresAt: '2030-07-28T00:00:00.000Z', fresh: true };
+      return entry;
+    },
+  };
+  const adapter = {
+    provider: 'elvanto',
+    fetchSnapshot: async () => ({ mode: 'full', complete: true, people: [{ id: 'active', state: 'active' }, { id: 'contact', state: 'contact' }] }),
+    fetchMetadata: async () => ({ categories: [] }),
+    isInFilterPopulation: (person, settings) => person.state !== 'contact' || settings.includeContacts !== false,
+    toFilterFacts: (person, covered) => ({ externalPersonId: person.id, dimensions: covered.has('status') ? { status: [person.state] } : {} }),
+    buildFilterDimensions: ({ facts }) => [{ id: 'status', cardinality: 'single', values: ['active', 'contact'].map((id) => ({ id, count: facts.filter((fact) => fact.dimensions.status?.includes(id)).length })) }],
+  };
+  await withServer(deps({
+    cache, getProvider: () => adapter, getSettings: async () => ({ includeContacts: false, alignPeopleType: true }),
+    captureFilterSnapshotInput,
+    populationGateDigest,
+    previewFilter: ({ cacheEntry }) => { previewFacts = cacheEntry.facts; return { matchCount: cacheEntry.facts.length, snapshot: null, overlaps: [], uniqueEnabledPopulationCount: cacheEntry.facts.length, missingDimensionIds: [], warnings: [] }; },
+  }), ADMIN, async (base) => {
+    const refresh = await request(base, '/elvanto/filter-snapshot/refresh', { method: 'POST', body: { filterConfig: filter } });
+    assert.equal(refresh.status, 200);
+    const preview = await request(base, '/elvanto/filter-preview', {
+      method: 'POST', body: { batchId: null, filterConfig: filter, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
+    });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.matchCount, 1);
+  });
+  assert.deepEqual(previewFacts.map((fact) => fact.externalPersonId), ['active']);
+  assert.equal(entry.populationGateDigest, populationGateDigest('elvanto', { includeContacts: false }));
+});
+
+test('Elvanto refresh unwraps persisted stale metadata before custom-field fact capture', async () => {
+  let providerMetadata;
+  await withServer(deps({
+    getProvider: () => ({
+      provider: 'elvanto',
+      fetchSnapshot: async () => ({ mode: 'full', complete: true, people: [] }),
+      fetchMetadata: async () => ({ metadata: { categories: [{ id: 'member', name: 'Member' }], customFields: [{ id: 'choir', name: 'Choir' }] }, stale: true }),
+      isInFilterPopulation: () => true, toFilterFacts: () => ({}), buildFilterDimensions: () => [],
+    }),
+    captureFilterSnapshotInput: (input) => {
+      providerMetadata = input.providerMetadata;
+      return { facts: [], dimensions: [], coverage: [], populationGateDigest: 'gate' };
+    },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/filter-snapshot/refresh', { method: 'POST', body: { filterConfig: filter } });
+    assert.equal(response.status, 200);
+  });
+  assert.deepEqual(providerMetadata, { categories: [{ id: 'member', name: 'Member' }], customFields: [{ id: 'choir', name: 'Choir' }] });
 });
 
 test('saving a draft is church scoped, validates canonical metadata, and requires acknowledgement for broad filters', async () => {

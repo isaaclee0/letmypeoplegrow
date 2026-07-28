@@ -62,7 +62,7 @@ const { applyPeopleSyncPlan, validateSelections } = require('./apply');
 const { digestPlan, createReviewToken, verifyReviewToken, digestFilterConfig } = require('./planDigest');
 const { notifyReviewRequired } = require('./reviewNotification');
 const filterFactsCache = require('./filterFactsCache');
-const { captureFilterSnapshotInput } = require('./filterSnapshot');
+const { captureFilterSnapshotInput, normalizeProviderMetadata } = require('./filterSnapshot');
 const { requiredDimensionIdsForBatch } = require('./filterPreview');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
@@ -187,6 +187,7 @@ const defaultDeps = {
   notifyReviewRequired,
   filterFactsCache,
   captureFilterSnapshotInput,
+  normalizeProviderMetadata,
   requiredDimensionIdsForBatch,
 };
 
@@ -482,10 +483,7 @@ async function runPipelineBody({
       typeof adapter.isInFilterPopulation === 'function') {
     const coveredDimensionIds = [...new Set(batches.flatMap((batch) => deps.requiredDimensionIdsForBatch(batch) || []))].sort();
     const metadataResult = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
-    const providerMetadata = provider === 'elvanto' && metadataResult && typeof metadataResult === 'object' &&
-      metadataResult.metadata && typeof metadataResult.metadata === 'object'
-      ? metadataResult.metadata
-      : metadataResult;
+    const providerMetadata = deps.normalizeProviderMetadata(provider, metadataResult);
     const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
     const entry = deps.filterFactsCache.putComplete({
       churchId, provider, mode: 'full', complete: true, coveredDimensionIds,

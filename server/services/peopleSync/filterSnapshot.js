@@ -20,6 +20,17 @@ function populationGateDigest(provider, settings) {
   return crypto.createHash('sha256').update(JSON.stringify(gateSettings(provider, settings))).digest('hex');
 }
 
+// Elvanto's metadata service returns a stale-cache envelope on a definitions
+// outage. Snapshot consumers require the metadata payload itself, regardless
+// of whether it was live or persisted, so normalize this one provider-specific
+// transport detail at the shared boundary.
+function normalizeProviderMetadata(provider, result) {
+  return provider === 'elvanto' && result && typeof result === 'object' && !Array.isArray(result) &&
+    result.metadata && typeof result.metadata === 'object' && !Array.isArray(result.metadata)
+    ? result.metadata
+    : result;
+}
+
 function copyFacts(facts, coveredDimensionIds) {
   const dimensions = {};
   for (const [dimensionId, values] of Object.entries(facts && facts.dimensions || {})) {
@@ -47,4 +58,4 @@ function captureFilterSnapshotInput({ provider, snapshot, providerMetadata, sett
   };
 }
 
-module.exports = { captureFilterSnapshotInput, populationGateDigest };
+module.exports = { captureFilterSnapshotInput, populationGateDigest, normalizeProviderMetadata };
