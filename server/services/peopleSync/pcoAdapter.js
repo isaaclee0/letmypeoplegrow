@@ -25,9 +25,90 @@ const { tallyMembership } = require('../planningCenter/summary');
 // filterConfig looks like would need a version 2 here alongside a migration — see
 // server/services/peopleSync/batchRepository.js's filterSchemaVersion column.
 const FILTER_SCHEMA_VERSION = 1;
+const NOT_SET = '$not_set';
 
 function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function canonicalValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  // Existing PCO filter metadata uses this display-only absence sentinel.
+  // Canonical v2 facts represent the same condition by omitting the key.
+  if (trimmed === '(none)') return null;
+  return trimmed === NOT_SET ? '$$not_set' : trimmed;
+}
+
+function sortedValues(values) {
+  return [...new Set((values || []).map(canonicalValue).filter(Boolean))].sort();
+}
+
+function valuesForFacts(facts, dimensionId) {
+  const counts = new Map();
+  let notSetCount = 0;
+  for (const fact of facts || []) {
+    const values = fact && fact.dimensions && fact.dimensions[dimensionId];
+    if (!Array.isArray(values) || values.length === 0) {
+      notSetCount += 1;
+      continue;
+    }
+    for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return { counts, notSetCount };
+}
+
+function dimension({ id, label, cardinality, category, metadataValues = [], facts }) {
+  const { counts, notSetCount } = valuesForFacts(facts, id);
+  const ids = sortedValues([...metadataValues, ...counts.keys()]);
+  return {
+    id,
+    label,
+    cardinality,
+    category,
+    values: [
+      ...ids.map((value) => ({ id: value, label: value, count: counts.get(value) || 0 })),
+      { id: NOT_SET, label: 'Not set', count: notSetCount },
+    ],
+  };
+}
+
+function toPcoFilterFacts(person, coveredDimensionIds) {
+  const covered = coveredDimensionIds instanceof Set ? coveredDimensionIds : new Set(coveredDimensionIds || []);
+  const attributes = person && person.attributes || {};
+  const dimensions = {};
+  if (covered.has('membership')) {
+    const values = sortedValues([attributes.membership]);
+    if (values.length) dimensions.membership = values;
+  }
+  for (const dimensionId of covered) {
+    if (!dimensionId.startsWith('custom_field:')) continue;
+    const fieldId = dimensionId.slice('custom_field:'.length);
+    const values = sortedValues(attributes.fieldValues && attributes.fieldValues[fieldId]);
+    if (values.length) dimensions[dimensionId] = values;
+  }
+  return { externalPersonId: String(person && person.id || ''), dimensions };
+}
+
+function buildPcoFilterDimensions({ facts = [], providerMetadata = {} } = {}) {
+  const memberships = (providerMetadata.memberships || []).map((item) => item && item.membership);
+  const fieldDefinitions = Array.isArray(providerMetadata.fieldDefinitions) ? providerMetadata.fieldDefinitions : [];
+  const dimensions = [dimension({
+    id: 'membership', label: 'Membership', cardinality: 'single', category: 'People', metadataValues: memberships, facts,
+  })];
+  for (const field of fieldDefinitions) {
+    if (!field || typeof field.id !== 'string' || !field.id) continue;
+    dimensions.push(dimension({
+      id: `custom_field:${field.id}`,
+      label: field.name || `Custom field ${field.id}`,
+      cardinality: field.dataType === 'checkboxes' ? 'multi' : 'single',
+      category: 'Custom fields',
+      metadataValues: field.options || [],
+      facts,
+    }));
+  }
+  return dimensions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 // Validates the filter portion of a PCO batch only — name/schedule/gathering fields
@@ -144,6 +225,14 @@ function createPcoAdapter(deps = {}) {
     // into what it already expects, so nothing about eligibility is reinterpreted.
     isEligible(person, filterConfig) {
       return isEligible(fromNormalized(person), filterConfig);
+    },
+
+    toFilterFacts: toPcoFilterFacts,
+
+    buildFilterDimensions: buildPcoFilterDimensions,
+
+    isInFilterPopulation(person) {
+      return person && person.state === 'active';
     },
   };
 }

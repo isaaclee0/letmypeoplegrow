@@ -1,4 +1,7 @@
-const REQUIRED = ['validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible'];
+const REQUIRED = [
+  'validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible',
+  'toFilterFacts', 'buildFilterDimensions', 'isInFilterPopulation',
+];
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const ALLOWED_KEYS = new Set(['provider', ...REQUIRED]);
 const adapters = new Map();

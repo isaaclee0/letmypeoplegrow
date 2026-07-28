@@ -78,6 +78,7 @@ const { DEFINITION_ENDPOINTS, fetchElvantoMetadata, asArray } = require('./metad
 const { validateElvantoFilter, isElvantoEligible } = require('./filter');
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const NOT_SET = '$not_set';
 
 const PEOPLE_PATH = '/people/getAll.json';
 const PEOPLE_COLLECTION_KEY = 'people';
@@ -132,6 +133,118 @@ function sortNames(names) {
     if (a === b) return 0;
     return a < b ? -1 : 1;
   });
+}
+
+function canonicalFilterValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed === NOT_SET ? '$$not_set' : trimmed;
+}
+
+function filterValues(values) {
+  return [...new Set(asArray(values).map(canonicalFilterValue).filter(Boolean))].sort();
+}
+
+function filterCounts(facts, dimensionId) {
+  const counts = new Map();
+  let notSetCount = 0;
+  for (const fact of facts || []) {
+    const values = fact && fact.dimensions && fact.dimensions[dimensionId];
+    if (!Array.isArray(values) || values.length === 0) {
+      notSetCount += 1;
+      continue;
+    }
+    for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return { counts, notSetCount };
+}
+
+function filterDimension({ id, label, cardinality, category, metadataValues = [], facts, valueLabels = new Map(), omitValues = new Set() }) {
+  const { counts, notSetCount } = filterCounts(facts, id);
+  const valueIds = filterValues([...metadataValues, ...counts.keys()]).filter((value) => !omitValues.has(value));
+  return {
+    id,
+    label,
+    cardinality,
+    category,
+    values: [
+      ...valueIds.map((value) => ({ id: value, label: valueLabels.get(value) || value, count: counts.get(value) || 0 })),
+      { id: NOT_SET, label: 'Not set', count: notSetCount },
+    ],
+  };
+}
+
+function toElvantoFilterFacts(person, coveredDimensionIds) {
+  const covered = coveredDimensionIds instanceof Set ? coveredDimensionIds : new Set(coveredDimensionIds || []);
+  const attributes = person && person.attributes || {};
+  const candidates = {
+    status: [person && person.state],
+    category: [person && person.categoryId],
+    groups: attributes.groups,
+    demographics: asArray(attributes.demographics).map((entry) => entry && entry.value),
+    departments: attributes.departments,
+    service_types: attributes.serviceTypes,
+    locations: attributes.locations,
+  };
+  const dimensions = {};
+  for (const [dimensionId, values] of Object.entries(candidates)) {
+    if (!covered.has(dimensionId)) continue;
+    const normalized = filterValues(values);
+    if (normalized.length) dimensions[dimensionId] = normalized;
+  }
+  for (const dimensionId of covered) {
+    if (!dimensionId.startsWith('custom_field:')) continue;
+    const fieldId = dimensionId.slice('custom_field:'.length);
+    const values = filterValues(attributes.customFields && attributes.customFields[fieldId]);
+    if (values.length) dimensions[dimensionId] = values;
+  }
+  return { externalPersonId: String(person && person.id || ''), dimensions };
+}
+
+function metadataItems(items, valueKey = 'id') {
+  const labels = new Map();
+  const values = [];
+  for (const item of asArray(items)) {
+    const value = canonicalFilterValue(item && item[valueKey]);
+    if (!value) continue;
+    values.push(value);
+    const label = item && (item.name || item.value);
+    if (typeof label === 'string' && label.trim()) labels.set(value, label.trim());
+  }
+  return { values, labels };
+}
+
+function buildElvantoFilterDimensions({ facts = [], providerMetadata = {} } = {}) {
+  const categories = metadataItems(providerMetadata.categories);
+  const groups = metadataItems(providerMetadata.groups);
+  const demographics = metadataItems(providerMetadata.demographics, 'value');
+  const departments = metadataItems(providerMetadata.departments, 'value');
+  const serviceTypes = metadataItems(providerMetadata.serviceTypes);
+  const locations = metadataItems(providerMetadata.locations);
+  const dimensions = [
+    filterDimension({ id: 'status', label: 'Status', cardinality: 'single', category: 'People', facts, omitValues: new Set(['archived', 'deceased']) }),
+    filterDimension({ id: 'category', label: 'Category', cardinality: 'single', category: 'People', metadataValues: categories.values, valueLabels: categories.labels, facts }),
+    filterDimension({ id: 'groups', label: 'Groups', cardinality: 'multi', category: 'Groups', metadataValues: groups.values, valueLabels: groups.labels, facts }),
+    filterDimension({ id: 'demographics', label: 'Demographics', cardinality: 'multi', category: 'People', metadataValues: demographics.values, valueLabels: demographics.labels, facts }),
+    filterDimension({ id: 'departments', label: 'Departments', cardinality: 'multi', category: 'People', metadataValues: departments.values, valueLabels: departments.labels, facts }),
+    filterDimension({ id: 'service_types', label: 'Service types', cardinality: 'multi', category: 'People', metadataValues: serviceTypes.values, valueLabels: serviceTypes.labels, facts }),
+    filterDimension({ id: 'locations', label: 'Locations', cardinality: 'multi', category: 'People', metadataValues: locations.values, valueLabels: locations.labels, facts }),
+  ];
+  for (const field of asArray(providerMetadata.customFields)) {
+    if (!field || typeof field.id !== 'string' || !field.id) continue;
+    const values = metadataItems(field.values);
+    dimensions.push(filterDimension({
+      id: `custom_field:${field.id}`,
+      label: field.name || `Custom field ${field.id}`,
+      cardinality: field.type === 'select_multi' ? 'multi' : 'single',
+      category: 'Custom fields',
+      metadataValues: values.values,
+      valueLabels: values.labels,
+      facts,
+    }));
+  }
+  return dimensions.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 // ─── Optional people fields ─────────────────────────────────────────────────
@@ -510,6 +623,12 @@ function createElvantoAdapter({ clientFactory = createElvantoClient, now = () =>
 
     validateFilter: validateElvantoFilter,
     isEligible: isElvantoEligible,
+    toFilterFacts: toElvantoFilterFacts,
+    buildFilterDimensions: buildElvantoFilterDimensions,
+    isInFilterPopulation(person, settings) {
+      if (!person || person.state === 'archived' || person.state === 'deceased') return false;
+      return !(person.state === 'contact' && settings && settings.includeContacts === false);
+    },
   };
 }
 

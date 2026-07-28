@@ -11,6 +11,9 @@ function adapter(provider = 'planning_center', overrides = {}) {
     fetchMetadata() {},
     validateFilter() {},
     isEligible() {},
+    toFilterFacts() {},
+    buildFilterDimensions() {},
+    isInFilterPopulation() {},
     ...overrides,
   };
 }
@@ -54,7 +57,7 @@ test('registerProvider rejects a mismatched adapter provider', () => {
   );
 });
 
-for (const method of ['validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible']) {
+for (const method of ['validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible', 'toFilterFacts', 'buildFilterDimensions', 'isInFilterPopulation']) {
   test(`validateAdapter rejects a missing ${method} method`, () => {
     const incomplete = adapter('planning_center', { [method]: undefined });
 

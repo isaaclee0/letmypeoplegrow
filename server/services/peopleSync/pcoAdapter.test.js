@@ -30,8 +30,56 @@ test('createPcoAdapter satisfies the Task 5 provider contract shape exactly', ()
   assert.equal(a.provider, 'planning_center');
   assert.doesNotThrow(() => validateAdapter(a));
   assert.deepEqual(Object.getOwnPropertyNames(a).sort(), [
-    'fetchMetadata', 'fetchSnapshot', 'isEligible', 'provider', 'validateConnection', 'validateFilter',
+    'buildFilterDimensions', 'fetchMetadata', 'fetchSnapshot', 'isEligible', 'isInFilterPopulation', 'provider', 'toFilterFacts', 'validateConnection', 'validateFilter',
   ]);
+});
+
+test('projects PCO people into PII-free facts and canonical dimensions', () => {
+  const a = adapter();
+  const person = {
+    id: 'p1', firstName: 'Ada', lastName: 'Lovelace', familyId: 'house-1', state: 'active',
+    attributes: { membership: 'Member', fieldValues: { 12: ['Choir', 'Youth'] } },
+  };
+
+  const facts = a.toFilterFacts(person, new Set(['membership', 'custom_field:12']));
+  assert.deepEqual(facts, {
+    externalPersonId: 'p1',
+    dimensions: { membership: ['Member'], 'custom_field:12': ['Choir', 'Youth'] },
+  });
+  assert.doesNotMatch(JSON.stringify(facts), /Ada|Lovelace|house-1|firstName|lastName|familyId|email|phone|address|raw/i);
+
+  const dimensions = a.buildFilterDimensions({
+    facts: [facts],
+    providerMetadata: {
+      memberships: [{ membership: 'Member', count: 1 }],
+      fieldDefinitions: [{ id: '12', name: 'Ministries', dataType: 'checkboxes', options: ['Choir', 'Youth'] }],
+    },
+  });
+  assert.equal(dimensions.find((dimension) => dimension.id === 'membership').cardinality, 'single');
+  assert.equal(dimensions.find((dimension) => dimension.id === 'custom_field:12').cardinality, 'multi');
+});
+
+test('does not place archived PCO people in the filter population', () => {
+  const a = adapter();
+  assert.equal(a.isInFilterPopulation({ state: 'archived' }, {}), false);
+  assert.equal(a.isInFilterPopulation({ state: 'active' }, {}), true);
+});
+
+test('omits covered missing PCO fields and escapes a provider value reserved for not set', () => {
+  const a = adapter();
+  const facts = a.toFilterFacts({
+    id: 'p2', state: 'active', attributes: { membership: '$not_set', fieldValues: { 12: [] } },
+  }, new Set(['membership', 'custom_field:12']));
+  assert.deepEqual(facts, { externalPersonId: 'p2', dimensions: { membership: ['$$not_set'] } });
+  assert.equal(Object.hasOwn(facts.dimensions, 'custom_field:12'), false);
+});
+
+test('maps the legacy PCO absence sentinel to an omitted canonical fact', () => {
+  const a = adapter();
+  const facts = a.toFilterFacts({
+    id: 'p3', state: 'active', attributes: { membership: '(none)', fieldValues: { 12: ['(none)'] } },
+  }, new Set(['membership', 'custom_field:12']));
+  assert.deepEqual(facts, { externalPersonId: 'p3', dimensions: {} });
 });
 
 test('fetchSnapshot normalizes an active PCO person: state, provider tag, familyId from householdId', async () => {

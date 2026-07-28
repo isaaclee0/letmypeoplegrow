@@ -53,8 +53,63 @@ test('createElvantoAdapter satisfies the Task 5 provider contract shape exactly'
   assert.equal(adapter.provider, 'elvanto');
   assert.doesNotThrow(() => validateAdapter(adapter));
   assert.deepEqual(Object.getOwnPropertyNames(adapter).sort(), [
-    'fetchMetadata', 'fetchSnapshot', 'isEligible', 'provider', 'validateConnection', 'validateFilter',
+    'buildFilterDimensions', 'fetchMetadata', 'fetchSnapshot', 'isEligible', 'isInFilterPopulation', 'provider', 'toFilterFacts', 'validateConnection', 'validateFilter',
   ]);
+});
+
+test('projects Elvanto dimensions with exact IDs and custom-field cardinality', () => {
+  const adapter = createElvantoAdapter();
+  const facts = adapter.toFilterFacts({
+    id: 'elv-1', state: 'active', categoryId: 'cat-1', firstName: 'Grace', lastName: 'Hopper', familyId: 'fam-1',
+    attributes: {
+      groups: ['group-1'], demographics: [{ field: 'Age', value: 'Adult' }], departments: ['Music'],
+      serviceTypes: ['service-1'], locations: ['location-1'], customFields: { single: 'Yes', multi: ['Blue', 'Green'] },
+    },
+  }, new Set(['status', 'category', 'groups', 'demographics', 'departments', 'service_types', 'locations', 'custom_field:single', 'custom_field:multi']));
+  assert.deepEqual(facts, {
+    externalPersonId: 'elv-1',
+    dimensions: {
+      status: ['active'], category: ['cat-1'], groups: ['group-1'], demographics: ['Adult'], departments: ['Music'],
+      service_types: ['service-1'], locations: ['location-1'], 'custom_field:single': ['Yes'], 'custom_field:multi': ['Blue', 'Green'],
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(facts), /Grace|Hopper|fam-1|firstName|lastName|familyId|email|phone|address|raw/i);
+
+  const dimensions = adapter.buildFilterDimensions({ facts: [facts], providerMetadata: {
+    categories: [{ id: 'cat-1', name: 'Member' }], groups: [{ id: 'group-1', name: 'Choir' }],
+    demographics: [{ value: 'Adult' }], departments: [{ value: 'Music' }],
+    serviceTypes: [{ id: 'service-1', name: 'Sunday' }], locations: [{ id: 'location-1', name: 'Main' }],
+    customFields: [
+      { id: 'single', name: 'Confirmed', type: 'select_single', values: [{ id: 'Yes', name: 'Yes' }] },
+      { id: 'multi', name: 'Colours', type: 'select_multi', values: [{ id: 'Blue', name: 'Blue' }, { id: 'Green', name: 'Green' }] },
+    ],
+  } });
+  const card = (id) => dimensions.find((dimension) => dimension.id === id).cardinality;
+  assert.equal(card('status'), 'single');
+  assert.equal(card('category'), 'single');
+  for (const id of ['groups', 'demographics', 'departments', 'service_types', 'locations', 'custom_field:multi']) assert.equal(card(id), 'multi');
+  assert.equal(card('custom_field:single'), 'single');
+});
+
+test('gates terminal Elvanto people and only gates contacts when explicitly disabled', () => {
+  const adapter = createElvantoAdapter();
+  assert.equal(adapter.isInFilterPopulation({ state: 'archived' }, { includeContacts: true }), false);
+  assert.equal(adapter.isInFilterPopulation({ state: 'deceased' }, { includeContacts: true }), false);
+  assert.equal(adapter.isInFilterPopulation({ state: 'contact' }, { includeContacts: false }), false);
+  assert.equal(adapter.isInFilterPopulation({ state: 'contact' }, {}), true);
+  assert.equal(adapter.isInFilterPopulation({ state: 'active' }, { includeContacts: false }), true);
+});
+
+test('does not expose terminal Elvanto statuses as positive selectable values', () => {
+  const adapter = createElvantoAdapter();
+  const dimensions = adapter.buildFilterDimensions({ facts: [
+    { externalPersonId: 'active', dimensions: { status: ['active'] } },
+    { externalPersonId: 'contact', dimensions: { status: ['contact'] } },
+    { externalPersonId: 'archived', dimensions: { status: ['archived'] } },
+    { externalPersonId: 'deceased', dimensions: { status: ['deceased'] } },
+  ], providerMetadata: {} });
+  const status = dimensions.find((dimension) => dimension.id === 'status');
+  assert.deepEqual(status.values.map((value) => value.id), ['active', 'contact', '$not_set']);
 });
 
 test('registerBuiltInProviders registers both providers idempotently (a second call does not throw)', () => {
