@@ -160,6 +160,43 @@ test('a forced link collision rolls back every newly created person and family f
   });
 });
 
+test('authority activation and reconciliation share one transaction', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
+       VALUES (?, 'none', 'planning_center')
+       ON CONFLICT(church_id) DO UPDATE SET
+         authority_provider = 'none', pending_authority_provider = 'planning_center'`,
+      [churchId]
+    );
+    const plan = emptyPlan({
+      addPeople: [{
+        id: 'addPeople:ext-atomic', externalPersonId: 'ext-atomic', firstName: 'Atomic', lastName: 'Person',
+        isChild: false, familyId: null, peopleType: 'regular',
+      }],
+    });
+
+    await assert.rejects(
+      applyPeopleSyncPlan({ churchId, provider: 'elvanto', plan, activateAuthority: true }),
+      /pending authority switch/i
+    );
+    assert.deepEqual(await counts(churchId), { individuals: 0, families: 0, links: 0 });
+
+    await Database.query(
+      `UPDATE people_sync_settings SET pending_authority_provider = 'elvanto' WHERE church_id = ?`,
+      [churchId]
+    );
+    await applyPeopleSyncPlan({ churchId, provider: 'elvanto', plan, activateAuthority: true });
+
+    assert.deepEqual(await counts(churchId), { individuals: 1, families: 0, links: 1 });
+    const [settings] = await Database.query(
+      `SELECT authority_provider, pending_authority_provider FROM people_sync_settings WHERE church_id = ?`,
+      [churchId]
+    );
+    assert.deepEqual(settings, { authority_provider: 'elvanto', pending_authority_provider: null });
+  });
+});
+
 test('managed field updates ignore an isChild change whose externalValue is null', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId, { firstName: 'Old' });

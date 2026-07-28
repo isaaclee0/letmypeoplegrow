@@ -461,11 +461,6 @@ export interface PeopleSyncApplyResult {
   // logging server-side rather than failing an apply that already committed
   // real mutations. See orchestrator.js's safeSummarizePlan.
   summary: Partial<PeopleSyncPlanSummary>;
-  // Present only when an authority-switch apply's commitAuthoritySwitch
-  // step failed AFTER the plan itself was already successfully applied --
-  // see orchestrator.js's applyReviewed for why this never rolls back or
-  // fails the run.
-  authorityCommitError?: string;
 }
 
 // ─── Reviewer selections (server/services/peopleSync/apply.js's validateSelections) ──

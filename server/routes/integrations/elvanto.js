@@ -527,10 +527,6 @@ function createElvantoRouter(overrides = {}) {
         deps.applyReviewed({ churchId, provider: PROVIDER, batchId, reviewToken, selections, userId: req.user.id }),
         deps.routeTimeoutMs
       );
-      // As with /people-sync/authority/apply: `result.authorityCommitError`
-      // (if present) is surfaced as-is rather than dropped — a batch apply
-      // can coincide with a pending authority switch left over from a
-      // separate preview.
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /sync-batches/:id/apply' });

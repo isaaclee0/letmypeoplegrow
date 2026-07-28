@@ -92,6 +92,21 @@ CREATE INDEX IF NOT EXISTS idx_external_family_links_church ON external_family_l
 CREATE INDEX IF NOT EXISTS idx_external_family_links_lookup ON external_family_links(church_id, provider, external_family_id);
 CREATE INDEX IF NOT EXISTS idx_external_family_links_family ON external_family_links(family_id);
 
+CREATE TABLE IF NOT EXISTS people_sync_migration_issues (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  entity_type TEXT NOT NULL CHECK(entity_type IN ('person', 'family')),
+  external_id TEXT NOT NULL,
+  local_entity_ids TEXT NOT NULL,
+  reason_code TEXT NOT NULL CHECK(reason_code IN ('duplicate_legacy_external_id')),
+  first_detected_at TEXT DEFAULT (datetime('now')),
+  last_detected_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, entity_type, external_id, reason_code)
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_migration_issues_church
+  ON people_sync_migration_issues(church_id, provider);
+
 CREATE TABLE IF NOT EXISTS people_sync_settings (
   church_id TEXT PRIMARY KEY,
   authority_provider TEXT NOT NULL DEFAULT 'none'

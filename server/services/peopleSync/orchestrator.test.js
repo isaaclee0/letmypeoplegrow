@@ -79,11 +79,9 @@ function makeDeps({
     getCredentials: async () => ({ apiKey: 'test-key' }),
     getProvider: () => wrappedAdapter,
     listBatches: record(calls, 'listBatches', async () => batches),
-    getBatch: record(calls, 'getBatch', async (churchId, provider, batchId) => batches.find((b) => b.id === batchId) || null),
     getSyncSettings: async () => ({ includeContacts: true, alignPeopleType: true }),
     getAuthority: async () => authorityState,
     beginAuthoritySwitch: record(calls, 'beginAuthoritySwitch', async () => ({ active: authorityState.active, pending: 'elvanto' })),
-    commitAuthoritySwitch: record(calls, 'commitAuthoritySwitch', async () => ({ active: 'elvanto', pending: null })),
     startRun: record(calls, 'startRun', async () => ({ id: nextRunId++ })),
     finishRun: record(calls, 'finishRun', async (input) => input),
     failRun: record(calls, 'failRun', async (input) => input),
@@ -113,7 +111,7 @@ test('buildReview follows the exact 10-step order (minus apply/presence, which i
   const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
 
   assert.deepEqual(calls, [
-    'getConnection', 'getBatch', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
+    'getConnection', 'listBatches', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
     'matchPeople', 'computePeopleSyncPlan', 'createReviewToken', 'finishRun',
   ]);
   assert.equal(review.runId, 1);
@@ -148,7 +146,7 @@ test('a fetch error calls failRun and never reaches apply/token creation', async
     buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
     /upstream exploded/
   );
-  assert.deepEqual(calls, ['getConnection', 'getBatch', 'startRun', 'fetchSnapshot', 'failRun']);
+  assert.deepEqual(calls, ['getConnection', 'listBatches', 'startRun', 'fetchSnapshot', 'failRun']);
 });
 
 test('a plan-computation (validation) error calls failRun and never reaches apply/token creation', async () => {
@@ -159,7 +157,7 @@ test('a plan-computation (validation) error calls failRun and never reaches appl
     buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
     /bad plan input/
   );
-  assert.deepEqual(calls, ['getConnection', 'getBatch', 'startRun', 'fetchSnapshot', 'listLocalIndividuals', 'matchPeople', 'computePeopleSyncPlan', 'failRun']);
+  assert.deepEqual(calls, ['getConnection', 'listBatches', 'startRun', 'fetchSnapshot', 'listLocalIndividuals', 'matchPeople', 'computePeopleSyncPlan', 'failRun']);
 });
 
 test('a missing connection throws before any run is started (nothing to failRun)', async () => {
@@ -226,7 +224,7 @@ test('runUnattended (clean, no held items) follows the full 10-step order and cl
   const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: true }, deps);
 
   assert.deepEqual(calls, [
-    'getConnection', 'getBatch', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
+    'getConnection', 'listBatches', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
     'matchPeople', 'computePeopleSyncPlan', 'applyPeopleSyncPlan', 'recordFullFetchPresence', 'finishRun',
   ]);
   assert.equal(result.status, 'applied');
@@ -261,6 +259,73 @@ test('runUnattended never reads or writes disappearance counters on an increment
   const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: false }, deps);
   assert.equal(result.fetchMode, 'incremental');
   assert.equal(calls.includes('recordFullFetchPresence'), false);
+});
+
+test('runUnattended protects the union of every enabled batch when one scheduled batch triggers reconciliation', async () => {
+  const batches = [
+    fakeBatch({ id: 1, filterConfig: { externalIds: ['ext-1'] } }),
+    fakeBatch({ id: 2, name: 'Youth', filterConfig: { externalIds: ['ext-2'] } }),
+  ];
+  const adapter = fakeAdapter({
+    isEligible: (person, filterConfig) => filterConfig.externalIds.includes(person.id),
+    fetchSnapshot: async () => ({
+      provider: 'elvanto', mode: 'full', complete: true, fetchedAt: '2026-01-02T00:00:00.000Z', watermark: null,
+      people: [fakeExternalPerson(), fakeExternalPerson({ id: 'ext-2', firstName: 'Grace', lastName: 'Hopper' })], families: [],
+    }),
+  });
+  const localIndividuals = [
+    { id: 2, firstName: 'Grace', lastName: 'Hopper', peopleType: 'regular', isActive: true, isChild: false, familyId: null },
+  ];
+  const personLinks = [{ externalPersonId: 'ext-2', individualId: 2, missingFullSyncCount: 0 }];
+  let appliedPlan;
+  const { deps } = makeDeps({
+    batches, adapter, localIndividuals, personLinks,
+    extra: {
+      applyPeopleSyncPlan: async ({ plan }) => {
+        appliedPlan = plan;
+        return emptyApplyResult();
+      },
+    },
+  });
+
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: true }, deps);
+
+  assert.deepEqual(appliedPlan.archive, [], 'a person qualifying for another enabled batch must stay active');
+});
+
+test('runUnattended does not infer local absence or gathering removal from an incremental snapshot', async () => {
+  const batch = fakeBatch({ lastExternalWatermark: 'wm-1', gatheringTypeId: 5, gatheringAutoRemoveEnabled: true });
+  const adapter = fakeAdapter({
+    fetchSnapshot: async () => ({
+      provider: 'elvanto', mode: 'incremental', complete: true, fetchedAt: '2026-01-02T00:00:00.000Z',
+      watermark: 'wm-2', people: [fakeExternalPerson()], families: [],
+    }),
+  });
+  const localIndividuals = [
+    { id: 1, firstName: 'Ada', lastName: 'Lovelace', peopleType: 'regular', isActive: true, isChild: false, familyId: null },
+    { id: 2, firstName: 'Grace', lastName: 'Hopper', peopleType: 'regular', isActive: true, isChild: false, familyId: null },
+  ];
+  const personLinks = [
+    { externalPersonId: 'ext-1', individualId: 1, missingFullSyncCount: 0 },
+    { externalPersonId: 'ext-2', individualId: 2, missingFullSyncCount: 0 },
+  ];
+  let appliedPlan;
+  const { deps } = makeDeps({
+    batches: [batch], adapter, localIndividuals, personLinks,
+    extra: {
+      listGatheringMemberships: async () => [{ gatheringTypeId: 5, individualId: 2, addedBySyncBatchId: 1 }],
+      applyPeopleSyncPlan: async ({ plan }) => {
+        appliedPlan = plan;
+        return emptyApplyResult();
+      },
+    },
+  });
+
+  const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: false }, deps);
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(appliedPlan.unmatchedLocalRegulars, []);
+  assert.deepEqual(appliedPlan.removeFromGathering, []);
 });
 
 test('runUnattended is permitted only when provider is the active authority, and rejects before starting a run', async () => {
@@ -310,7 +375,7 @@ test('applyReviewed follows the full 10-step order and persists presence exactly
   }, deps);
 
   assert.deepEqual(calls, [
-    'getConnection', 'getBatch', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
+    'getConnection', 'listBatches', 'startRun', 'fetchSnapshot', 'listLocalIndividuals',
     'matchPeople', 'computePeopleSyncPlan', 'applyPeopleSyncPlan', 'recordFullFetchPresence', 'finishRun',
   ]);
   assert.equal(result.status, 'applied');
@@ -336,37 +401,34 @@ test('applyReviewed requires a review token', async () => {
   );
 });
 
-test('applyReviewed for a pending authority switch commits the switch only after apply succeeds, before presence', async () => {
+test('applyReviewed delegates a pending authority switch to the same transaction as plan application', async () => {
   const { deps, calls } = makeDeps({ authorityState: { active: 'none', pending: 'elvanto' } });
+  const apply = deps.applyPeopleSyncPlan;
+  let applyInput;
+  deps.applyPeopleSyncPlan = async (input) => {
+    applyInput = input;
+    return apply(input);
+  };
   const result = await applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: null, reviewToken: 'tok' }, deps);
 
   assert.equal(result.status, 'applied');
-  const applyIndex = calls.indexOf('applyPeopleSyncPlan');
-  const commitIndex = calls.indexOf('commitAuthoritySwitch');
-  const presenceIndex = calls.indexOf('recordFullFetchPresence');
-  assert.ok(applyIndex >= 0 && commitIndex > applyIndex, 'commit must happen after apply succeeds');
-  assert.ok(presenceIndex > commitIndex, 'presence must be recorded after the switch commits');
+  assert.equal(applyInput.activateAuthority, true);
+  assert.equal(calls.includes('commitAuthoritySwitch'), false, 'authority activation must not be a second transaction');
 });
 
-test('a commitAuthoritySwitch failure after a successful apply is logged, not treated as a run failure', async () => {
-  // The Important fix from code review: applyPeopleSyncPlan has already
-  // committed real church-data mutations (people created/archived/linked)
-  // by the time commitAuthoritySwitch runs. A failure there (e.g. a
-  // concurrent settings change) must never retroactively mark this run
-  // 'failed' — that would misrepresent a successful import as not having
-  // happened.
+test('an atomic authority-apply failure fails the run before presence accounting', async () => {
   const { deps, calls } = makeDeps({
     authorityState: { active: 'none', pending: 'elvanto' },
-    extra: { commitAuthoritySwitch: async () => { throw new Error('pending authority switch changed before commit'); } },
+    extra: { applyPeopleSyncPlan: async () => { throw new Error('pending authority switch changed before commit'); } },
   });
-  const result = await applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: null, reviewToken: 'tok' }, deps);
+  await assert.rejects(
+    applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: null, reviewToken: 'tok' }, deps),
+    /pending authority switch changed/i
+  );
 
-  assert.equal(result.status, 'applied', 'the function must still report the apply succeeded');
-  assert.equal(result.authorityCommitError, 'pending authority switch changed before commit');
-  assert.equal(calls.includes('applyPeopleSyncPlan'), true);
-  assert.equal(calls.includes('recordFullFetchPresence'), true, 'presence must still be recorded despite the commit failure');
-  assert.equal(calls.includes('finishRun'), true, 'the run must still be finished (as applied), not abandoned');
-  assert.equal(calls.includes('failRun'), false, 'a run that already applied real mutations must never be recorded failed');
+  assert.equal(calls.includes('failRun'), true);
+  assert.equal(calls.includes('recordFullFetchPresence'), false);
+  assert.equal(calls.includes('finishRun'), false);
 });
 
 test('a finishRun failure in applyReviewed after a successful apply is logged, not treated as a run failure', async () => {
@@ -381,7 +443,14 @@ test('a finishRun failure in applyReviewed after a successful apply is logged, n
 
 test('applyReviewed does not commit an authority switch when nothing is pending for this provider', async () => {
   const { deps, calls } = makeDeps({ authorityState: { active: 'elvanto', pending: null } });
+  const apply = deps.applyPeopleSyncPlan;
+  let applyInput;
+  deps.applyPeopleSyncPlan = async (input) => {
+    applyInput = input;
+    return apply(input);
+  };
   await applyReviewed({ churchId: 'church-a', provider: 'elvanto', batchId: 1, reviewToken: 'tok' }, deps);
+  assert.equal(applyInput.activateAuthority, false);
   assert.equal(calls.includes('commitAuthoritySwitch'), false);
 });
 

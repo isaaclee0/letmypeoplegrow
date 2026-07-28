@@ -51,31 +51,35 @@ async function beginAuthoritySwitch(churchId, provider) {
   });
 }
 
-async function commitAuthoritySwitch(churchId, provider) {
+async function commitAuthoritySwitchWithConnection(conn, churchId, provider) {
   assertAuthorityProvider(provider);
-  return Database.transactionForChurch(churchId, async (conn) => {
-    const rows = await conn.query(
-      `SELECT pending_authority_provider
-         FROM people_sync_settings
-        WHERE church_id = ?
-        LIMIT 1`,
-      [churchId]
-    );
-    if (rows[0]?.pending_authority_provider !== provider) {
-      throw new Error(`No pending authority switch for provider: ${provider}`);
-    }
-    const result = await conn.query(
-      `UPDATE people_sync_settings
-          SET authority_provider = ?, pending_authority_provider = NULL,
-              updated_at = datetime('now')
-        WHERE church_id = ? AND pending_authority_provider = ?`,
-      [provider, churchId, provider]
-    );
-    if (result.affectedRows !== 1) {
-      throw new Error(`Pending authority switch changed before commit: ${provider}`);
-    }
-    return { active: provider, pending: null };
-  });
+  const rows = await conn.query(
+    `SELECT pending_authority_provider
+       FROM people_sync_settings
+      WHERE church_id = ?
+      LIMIT 1`,
+    [churchId]
+  );
+  if (rows[0]?.pending_authority_provider !== provider) {
+    throw new Error(`No pending authority switch for provider: ${provider}`);
+  }
+  const result = await conn.query(
+    `UPDATE people_sync_settings
+        SET authority_provider = ?, pending_authority_provider = NULL,
+            updated_at = datetime('now')
+      WHERE church_id = ? AND pending_authority_provider = ?`,
+    [provider, churchId, provider]
+  );
+  if (result.affectedRows !== 1) {
+    throw new Error(`Pending authority switch changed before commit: ${provider}`);
+  }
+  return { active: provider, pending: null };
+}
+
+async function commitAuthoritySwitch(churchId, provider) {
+  return Database.transactionForChurch(churchId, (conn) =>
+    commitAuthoritySwitchWithConnection(conn, churchId, provider)
+  );
 }
 
 async function disableAuthority(churchId) {
@@ -181,6 +185,7 @@ module.exports = {
   PEOPLE_SOURCE_LOCKED,
   getAuthority,
   beginAuthoritySwitch,
+  commitAuthoritySwitchWithConnection,
   commitAuthoritySwitch,
   disableAuthority,
   getManagedLinks,

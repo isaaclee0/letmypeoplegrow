@@ -101,17 +101,67 @@ function backfillProviderNeutralSync(db, churchId) {
       CASE WHEN planning_center_sync_indicator = 1 THEN 'planning_center' ELSE 'none' END
     FROM church_settings WHERE church_id = ?`).run(churchId);
 
+  db.prepare(`INSERT INTO people_sync_migration_issues
+    (church_id, provider, entity_type, external_id, local_entity_ids, reason_code)
+    SELECT church_id, 'planning_center', 'person', planning_center_id,
+      GROUP_CONCAT(id, ','), 'duplicate_legacy_external_id'
+    FROM individuals
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+    GROUP BY church_id, planning_center_id
+    HAVING COUNT(*) > 1
+    ON CONFLICT(church_id, provider, entity_type, external_id, reason_code) DO UPDATE SET
+      local_entity_ids = excluded.local_entity_ids,
+      last_detected_at = datetime('now')`).run(churchId);
+
+  db.prepare(`DELETE FROM external_person_links
+    WHERE church_id = ? AND provider = 'planning_center' AND link_source = 'legacy_backfill'
+      AND external_person_id IN (
+        SELECT planning_center_id FROM individuals
+        WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+        GROUP BY planning_center_id HAVING COUNT(*) > 1
+      )`).run(churchId, churchId);
+
   db.prepare(`INSERT OR IGNORE INTO external_person_links
     (church_id, provider, external_person_id, individual_id, link_source, last_seen_at)
     SELECT church_id, 'planning_center', planning_center_id, id, 'legacy_backfill', datetime('now')
     FROM individuals
-    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''`).run(churchId);
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+      AND planning_center_id IN (
+        SELECT planning_center_id FROM individuals
+        WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+        GROUP BY planning_center_id HAVING COUNT(*) = 1
+      )`).run(churchId, churchId);
+
+  db.prepare(`INSERT INTO people_sync_migration_issues
+    (church_id, provider, entity_type, external_id, local_entity_ids, reason_code)
+    SELECT church_id, 'planning_center', 'family', planning_center_id,
+      GROUP_CONCAT(id, ','), 'duplicate_legacy_external_id'
+    FROM families
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+    GROUP BY church_id, planning_center_id
+    HAVING COUNT(*) > 1
+    ON CONFLICT(church_id, provider, entity_type, external_id, reason_code) DO UPDATE SET
+      local_entity_ids = excluded.local_entity_ids,
+      last_detected_at = datetime('now')`).run(churchId);
+
+  db.prepare(`DELETE FROM external_family_links
+    WHERE church_id = ? AND provider = 'planning_center' AND link_source = 'legacy_backfill'
+      AND external_family_id IN (
+        SELECT planning_center_id FROM families
+        WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+        GROUP BY planning_center_id HAVING COUNT(*) > 1
+      )`).run(churchId, churchId);
 
   db.prepare(`INSERT OR IGNORE INTO external_family_links
     (church_id, provider, external_family_id, family_id, link_source, last_seen_at)
     SELECT church_id, 'planning_center', planning_center_id, id, 'legacy_backfill', datetime('now')
     FROM families
-    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''`).run(churchId);
+    WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+      AND planning_center_id IN (
+        SELECT planning_center_id FROM families
+        WHERE church_id = ? AND planning_center_id IS NOT NULL AND planning_center_id <> ''
+        GROUP BY planning_center_id HAVING COUNT(*) = 1
+      )`).run(churchId, churchId);
 
   const legacyBatches = db.prepare(
     `SELECT * FROM planning_center_sync_batches WHERE church_id = ?`

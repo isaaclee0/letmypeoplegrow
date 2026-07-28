@@ -181,13 +181,7 @@ test('the first authority reconciliation stays pending until applied, then commi
   });
 });
 
-test('a commitAuthoritySwitch failure after a successful apply never hides that the import actually happened', async () => {
-  // Code-review fix: applyPeopleSyncPlan commits real church data (a new
-  // regular here) before commitAuthoritySwitch ever runs. If the commit
-  // step then fails (e.g. a concurrent settings change), the run must
-  // still be recorded 'applied' — never 'failed', which would misrepresent
-  // real, already-committed data as not having happened — and the person
-  // must really be there regardless of the authority flag lagging behind.
+test('a changed pending authority invalidates the review before reconciliation', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await seedBatch(churchId);
@@ -196,22 +190,22 @@ test('a commitAuthoritySwitch failure after a successful apply never hides that 
     const preview = await orchestrator.previewAuthoritySwitch({ churchId, provider: 'elvanto' });
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'elvanto' });
 
-    const applied = await orchestrator.applyReviewed(
-      { churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken },
-      { commitAuthoritySwitch: async () => { throw new Error('simulated concurrent settings change'); } }
+    await Database.query(
+      `UPDATE people_sync_settings SET pending_authority_provider = 'planning_center' WHERE church_id = ?`,
+      [churchId]
+    );
+    await assert.rejects(
+      orchestrator.applyReviewed({
+        churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      }),
+      /out of date/i
     );
 
-    assert.equal(applied.status, 'applied', 'the import itself must still be reported as successful');
-    assert.equal(applied.authorityCommitError, 'simulated concurrent settings change');
-    assert.equal(await individualsCount(churchId), 1, 'the person must really have been created despite the lagging authority commit');
+    assert.equal(await individualsCount(churchId), 0, 'a stale authority review must not mutate people');
 
     const runs = await runRepository.listRecentRuns(churchId, 'elvanto');
-    assert.equal(runs[0].status, 'applied', 'the audit record must not read failed for a run that actually imported real people');
-
-    // The authority switch itself did NOT commit — that is the one thing
-    // that legitimately still needs a retry, and is exactly what the
-    // logged authorityCommitError/warning is for.
-    assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'elvanto' });
+    assert.equal(runs[0].status, 'failed');
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'planning_center' });
   });
 });
 

@@ -220,7 +220,7 @@ async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveInd
  * projection) are NOT this function's concern — they belong outside/after
  * the critical transaction, in whichever caller wires up that provider.
  */
-async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId }) {
+async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
   if (!plan || typeof plan !== 'object') throw new Error('A plan is required to apply');
@@ -484,6 +484,13 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       );
       result.removeFromGathering++;
       if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
+    }
+
+    // Authority activation is part of this same critical transaction. If
+    // the pending provider changed after review, the switch fails and every
+    // person/link/family/gathering mutation above rolls back with it.
+    if (activateAuthority) {
+      await authority.commitAuthoritySwitchWithConnection(conn, churchId, provider);
     }
 
     return result;

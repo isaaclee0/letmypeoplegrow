@@ -382,23 +382,6 @@ test('POST /people-authority/apply rejects a non-object selections payload by tr
   assert.deepEqual(calls[0].selections, {});
 });
 
-// ─── Surfacing authorityCommitError distinctly ──────────────────────────────
-
-test('POST /people-authority/apply surfaces authorityCommitError with a 200 rather than dropping it', async () => {
-  await withServer({
-    applyReviewed: async () => ({
-      runId: 9, status: 'applied', applied: {}, summary: {},
-      authorityCommitError: 'Authority switch commit failed after a successful apply; see server logs.',
-    }),
-  }, { user: ADMIN_USER }, async (base) => {
-    const { status, body } = await requestJson(`${base}/people-authority/apply`, {
-      method: 'POST', body: { provider: 'elvanto', reviewToken: 'tok' },
-    });
-    assert.equal(status, 200);
-    assert.equal(body.authorityCommitError, 'Authority switch commit failed after a successful apply; see server logs.');
-  });
-});
-
 // ─── Safe error mapping (exhaustive OrchestratorError codes) ────────────────
 
 const ORCHESTRATOR_CODE_STATUS = [

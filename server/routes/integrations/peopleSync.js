@@ -403,10 +403,6 @@ function createPeopleSyncRouter(overrides = {}) {
         }),
         deps.routeTimeoutMs
       );
-      // result may include `authorityCommitError` (set when the apply itself
-      // succeeded but committing the authority switch afterward failed) —
-      // spread through as-is so it is never silently dropped; still a 200
-      // since the reviewed apply did succeed.
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, 'people-sync POST /people-authority/apply');

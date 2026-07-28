@@ -329,6 +329,7 @@ function addUnmatchedActions(context) {
 }
 
 function addUnmatchedLocalReview(plan, matcherResult, localById) {
+  if (!plan.presenceProjection.completeFullSnapshot) return;
   for (const rawIndividualId of matcherResult.unmatchedLocalIds || []) {
     const individualId = positiveInteger(rawIndividualId, 'Unmatched local individual ID');
     const localPerson = localById.get(individualId);
@@ -449,6 +450,7 @@ function addGatheringActions(context) {
     if (!ownerBatch || ownerBatch.gatheringAutoRemoveEnabled !== true || ownerBatch.gatheringTypeId !== gatheringTypeId) continue;
     if (protectedIndividualIds.has(individualId)) continue;
     const externalPersonId = externalByIndividual.get(individualId);
+    if (!plan.presenceProjection.completeFullSnapshot && !externalPersonId) continue;
     const remainsEligible = externalPersonId && batches.some((batch) =>
       batch.gatheringTypeId === gatheringTypeId &&
       eligibleByBatch.get(batch.id)?.has(externalPersonId) && populationIds.has(externalPersonId));

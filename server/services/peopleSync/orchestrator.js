@@ -161,11 +161,9 @@ const defaultDeps = {
   getConnection: connectionStore.getConnection,
   getCredentials: connectionStore.getCredentials,
   listBatches: batchRepository.listBatches,
-  getBatch: batchRepository.getBatch,
   getSyncSettings: defaultGetSyncSettings,
   getAuthority: authority.getAuthority,
   beginAuthoritySwitch: authority.beginAuthoritySwitch,
-  commitAuthoritySwitch: authority.commitAuthoritySwitch,
   startRun: runRepository.startRun,
   finishRun: runRepository.finishRun,
   failRun: runRepository.failRun,
@@ -407,17 +405,15 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const adapter = deps.getProvider(provider);
 
   // 2. load/validate batches and settings
-  let batches;
+  const all = await deps.listBatches(churchId, provider);
+  const providerBatches = all || [];
   if (batchId !== null && batchId !== undefined) {
-    const batch = await deps.getBatch(churchId, provider, batchId);
+    const batch = providerBatches.find((candidate) => candidate.id === batchId);
     if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${provider}`, 404);
     if (!batch.enabled) throw new OrchestratorError('SYNC_BATCH_DISABLED', `Batch ${batchId} is disabled`, 400);
-    batches = [batch];
-  } else {
-    const all = await deps.listBatches(churchId, provider);
-    batches = (all || []).filter((batch) => batch.enabled);
-    if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);
   }
+  const batches = providerBatches.filter((batch) => batch.enabled);
+  if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);
 
   for (const batch of batches) {
     const validation = adapter.validateFilter(batch.filterConfig, batch.filterSchemaVersion);
@@ -545,7 +541,8 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
 // and builds a full reconciliation review AS IF `provider` were already
 // authoritative (authoritative: true, activeAuthority: provider), even
 // though people_sync_settings.authority_provider itself does not flip
-// until a later applyReviewed call succeeds and calls commitAuthoritySwitch.
+// until a later applyReviewed call succeeds and activates it inside the
+// same transaction as the reviewed reconciliation.
 // Always review-only — never applies anything, never touches presence
 // counters.
 async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {}) {
@@ -621,10 +618,9 @@ function reviewTokenErrorMessage(code) {
 // already been durably mutated (people created/archived/linked). Nothing
 // after that point may ever cause this run's audit record to read
 // 'failed' — that would misrepresent a successful import/archive as
-// having not happened. commitAuthoritySwitch, presence accounting, and
-// finishRun itself are therefore each independently best-effort from here
-// on: a failure in any of them is logged and does not roll anything back,
-// does not retry the apply, and does not reach safeFailRun.
+// having not happened. Authority activation is committed inside that same
+// apply transaction; only presence accounting and finishRun remain
+// best-effort after it returns.
 async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -670,28 +666,13 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
     // 8. apply — the last step that may still cause this run to be
     // recorded as failed.
-    applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections, userId });
+    applyResult = await deps.applyPeopleSyncPlan({
+      churchId, provider, plan: body.plan, selections, userId,
+      activateAuthority: isAuthoritySwitch,
+    });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
     throw err;
-  }
-
-  // applyPeopleSyncPlan has committed. Only after that does the authority
-  // switch itself become real — but a failure here (e.g. a concurrent
-  // settings change moved pending_authority_provider between preview and
-  // apply) must not retroactively fail a run that already imported/
-  // archived real people; it is logged so an operator can retry the
-  // switch commit separately.
-  let authorityCommitError = null;
-  if (isAuthoritySwitch) {
-    try {
-      await deps.commitAuthoritySwitch(churchId, provider);
-    } catch (commitErr) {
-      authorityCommitError = safeErrorMessage(commitErr);
-      logger.error(
-        `peopleSync orchestrator: authority switch commit failed after a successful apply for church ${churchId} run ${run.id}: ${authorityCommitError}`
-      );
-    }
   }
 
   // 9. persist full-fetch presence at most once. applyReviewed always
@@ -715,7 +696,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
   return {
     runId: run.id, status, applied: applyResult, summary: safeSummarizePlan({ churchId, runId: run.id }, body.plan),
-    ...(authorityCommitError ? { authorityCommitError } : {}),
   };
 }
 

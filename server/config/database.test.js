@@ -607,7 +607,7 @@ test('connection saves fail closed without an encryption key while non-integrati
   }
 });
 
-test('getChurchDb upgrades an old PCO database with duplicate legacy IDs without adding the legacy unique index', () => {
+test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique IDs', () => {
   // Catches an upgrade that runs the entire current schema and retroactively
   // applies idx_individuals_pco_id_unique to legacy duplicate PCO data.
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lmpg-legacy-sync-test-'));
@@ -687,6 +687,14 @@ test('getChurchDb upgrades an old PCO database with duplicate legacy IDs without
       .run('First', 'Duplicate', churchId, 'legacy-duplicate-id');
     legacyDb.prepare('INSERT INTO individuals (first_name, last_name, church_id, planning_center_id) VALUES (?, ?, ?, ?)')
       .run('Second', 'Duplicate', churchId, 'legacy-duplicate-id');
+    legacyDb.prepare('INSERT INTO individuals (first_name, last_name, church_id, planning_center_id) VALUES (?, ?, ?, ?)')
+      .run('Only', 'Unique', churchId, 'legacy-unique-id');
+    legacyDb.prepare('INSERT INTO families (family_name, church_id, planning_center_id) VALUES (?, ?, ?)')
+      .run('First Duplicate Family', churchId, 'legacy-duplicate-family');
+    legacyDb.prepare('INSERT INTO families (family_name, church_id, planning_center_id) VALUES (?, ?, ?)')
+      .run('Second Duplicate Family', churchId, 'legacy-duplicate-family');
+    legacyDb.prepare('INSERT INTO families (family_name, church_id, planning_center_id) VALUES (?, ?, ?)')
+      .run('Unique Family', churchId, 'legacy-unique-family');
     legacyDb.prepare("INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters) VALUES (?, ?, '[]', '[]')")
       .run(churchId, 'Legacy Batch');
     legacyDb.close();
@@ -705,7 +713,47 @@ test('getChurchDb upgrades an old PCO database with duplicate legacy IDs without
     assert.strictEqual(
       migrated.prepare('SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ?').get(churchId).count,
       1,
-      'neutral backfill should still link one provider-scoped legacy ID'
+      'only the unique legacy person ID should be linked'
+    );
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT external_person_id FROM external_person_links WHERE church_id = ?').all(churchId),
+      [{ external_person_id: 'legacy-unique-id' }]
+    );
+    assert.deepStrictEqual(
+      migrated.prepare('SELECT external_family_id FROM external_family_links WHERE church_id = ?').all(churchId),
+      [{ external_family_id: 'legacy-unique-family' }]
+    );
+    assert.deepStrictEqual(
+      migrated.prepare(`SELECT entity_type, external_id, local_entity_ids, reason_code
+        FROM people_sync_migration_issues WHERE church_id = ? ORDER BY entity_type`).all(churchId),
+      [
+        {
+          entity_type: 'family', external_id: 'legacy-duplicate-family',
+          local_entity_ids: '1,2', reason_code: 'duplicate_legacy_external_id',
+        },
+        {
+          entity_type: 'person', external_id: 'legacy-duplicate-id',
+          local_entity_ids: '1,2', reason_code: 'duplicate_legacy_external_id',
+        },
+      ],
+      'every ambiguous legacy ID must be persisted for administrator/support review'
+    );
+
+    // Repair databases that were already through the earlier arbitrary
+    // INSERT OR IGNORE migration, and keep the report idempotent.
+    migrated.prepare(`INSERT INTO external_person_links
+      (church_id, provider, external_person_id, individual_id, link_source)
+      VALUES (?, 'planning_center', 'legacy-duplicate-id', 1, 'legacy_backfill')`).run(churchId);
+    Database.backfillProviderNeutralSync(migrated, churchId);
+    assert.strictEqual(
+      migrated.prepare("SELECT COUNT(*) AS count FROM external_person_links WHERE church_id = ? AND external_person_id = 'legacy-duplicate-id'").get(churchId).count,
+      0,
+      'a previously arbitrary legacy link must be removed when its duplicate is detected'
+    );
+    assert.strictEqual(
+      migrated.prepare('SELECT COUNT(*) AS count FROM people_sync_migration_issues WHERE church_id = ?').get(churchId).count,
+      2,
+      're-running the backfill must not duplicate quarantine reports'
     );
     assert.ok(
       migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'people_sync_batches'").get(),

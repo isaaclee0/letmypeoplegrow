@@ -71,7 +71,6 @@ export default function PeopleSourceControl({
   const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [partialSuccess, setPartialSuccess] = useState<string | null>(null);
   const [disableMutationSucceeded, setDisableMutationSucceeded] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const switchDialogRef = useRef<HTMLDivElement>(null);
@@ -139,7 +138,6 @@ export default function PeopleSourceControl({
     try {
       const response = await peopleSyncAPI.previewAuthority(nextProvider);
       setPendingReview(response.data);
-      setPartialSuccess(null);
       setState('reviewing');
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to preview the authority change.'));
@@ -167,24 +165,11 @@ export default function PeopleSourceControl({
     if (!pendingProvider) return;
     setState('applying');
     setError(null);
-    setPartialSuccess(null);
-    let response;
     try {
-      response = await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
+      await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
     } catch (cause) {
       setState('reviewing');
       throw displayError(cause, 'Failed to apply the authority change.');
-    }
-    if (response.data.authorityCommitError) {
-      setPartialSuccess(response.data.authorityCommitError);
-      setState('error');
-      try {
-        await onRefresh();
-      } catch (refreshCause) {
-        const detail = errorMessage(refreshCause, 'Refresh failed.');
-        setError(`Could not refresh authoritative source status: ${detail}`);
-      }
-      return;
     }
     await refreshAfterApply();
   };
@@ -226,7 +211,6 @@ export default function PeopleSourceControl({
     setPendingProvider(null);
     setPendingReview(null);
     setError(null);
-    setPartialSuccess(null);
     setState('idle');
   };
 
@@ -340,13 +324,6 @@ export default function PeopleSourceControl({
         </p>
       )}
       {error && !confirmDisable && !applyRefreshPending && <p ref={errorRef} role="alert" tabIndex={-1} className="text-sm text-red-600">{error}</p>}
-      {partialSuccess && (
-        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-          <p>{partialSuccess}</p>
-          <p className="mt-1">The reviewed people changes were applied, but the authoritative source did not change. Refresh the plan before trying again.</p>
-        </div>
-      )}
-
       {pendingReview && pendingProvider && (
         <div
           ref={reviewRegionRef}
