@@ -63,7 +63,7 @@ export default function BatchFilterControls({ provider, batch, value, onChange, 
     setRefreshingColdCache(true);
     setMetadataError(null);
     try {
-      const response = await peopleSyncAPI.refreshFilterSnapshot(provider, { filterConfig: value });
+      const response = await peopleSyncAPI.refreshFilterSnapshot(provider, { batchId: batch?.id ?? null, filterConfig: value });
       setMetadata(response.data.metadata);
     } catch (error) {
       setMetadataError(message(error, 'Filter metadata is unavailable.'));

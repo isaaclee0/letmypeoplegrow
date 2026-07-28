@@ -125,6 +125,34 @@ function unresolvedPairsFromDraft(batch, selectedPairsFn) {
     .map((pair) => JSON.stringify([pair.dimensionId, pair.valueId])));
 }
 
+function retainUnresolvedMetadata(dimensions, unresolvedPairs) {
+  const retained = (Array.isArray(dimensions) ? dimensions : []).map((dimension) => ({
+    ...dimension,
+    values: Array.isArray(dimension?.values) ? dimension.values.map((value) => ({ ...value })) : [],
+  }));
+  const byId = new Map(retained.map((dimension) => [dimension.id, dimension]));
+  for (const pair of unresolvedPairs || []) {
+    let dimension = byId.get(pair.dimensionId);
+    if (!dimension) {
+      dimension = {
+        id: pair.dimensionId,
+        label: pair.dimensionId,
+        cardinality: 'multi',
+        category: 'Unavailable saved selections',
+        unresolved: true,
+        values: [],
+      };
+      retained.push(dimension);
+      byId.set(pair.dimensionId, dimension);
+    }
+    if (!dimension.values.some((value) => value.id === pair.valueId)) {
+      dimension.values.push({ id: pair.valueId, label: pair.valueId, count: null, unresolved: true });
+    }
+  }
+  for (const dimension of retained) dimension.values.sort((left, right) => left.id.localeCompare(right.id));
+  return retained.sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function safeError(res, error, label) {
   const code = error?.code;
   if (code === 'SYNC_FILTER_DRAFT_STALE') return res.status(409).json({ error: 'The filter draft changed. Refresh and try again.', code });
@@ -232,9 +260,16 @@ function createFilterBuilderRouter(overrides = {}) {
     try {
       const body = req.body;
       if (body !== undefined && !isPlainObject(body)) return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
-      if (body && !Object.keys(body).every((key) => key === 'filterConfig') || body?.filterConfig !== undefined && !isPlainObject(body.filterConfig)) {
+      if (body && !Object.keys(body).every((key) => key === 'batchId' || key === 'filterConfig') ||
+          body?.filterConfig !== undefined && !isPlainObject(body.filterConfig) ||
+          body?.batchId !== undefined && body.batchId !== null &&
+            (!Number.isSafeInteger(body.batchId) || body.batchId <= 0)) {
         return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
       }
+      const batchId = body?.batchId === undefined || body.batchId === null ? null : body.batchId;
+      const targetBatch = batchId === null ? null : await deps.getBatch(churchId, provider, batchId);
+      if (batchId !== null && !targetBatch) return res.status(404).json({ error: 'Sync batch not found.' });
+      const allowedUnresolvedPairs = unresolvedPairsFromDraft(targetBatch, deps.selectedPairs);
       const proposedValidation = validateProposedFilterStructure(body?.filterConfig || EMPTY_V2, deps);
       if (!proposedValidation.ok) return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
       const proposedConfig = proposedValidation.value;
@@ -258,12 +293,13 @@ function createFilterBuilderRouter(overrides = {}) {
       const providerMetadata = deps.normalizeProviderMetadata(provider, metadataResult);
       const settings = await deps.getSettings(churchId, provider);
       const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
-      const canonicalValidation = deps.validateFilterV2(proposedConfig, { dimensions: captured.dimensions });
+      const canonicalValidation = deps.validateFilterV2(proposedConfig, { dimensions: captured.dimensions }, { allowedUnresolvedPairs });
       if (!canonicalValidation.ok) {
         return res.status(400).json({ error: 'Invalid filter request.', code: 'SYNC_FILTER_INVALID' });
       }
+      const retainedDimensions = retainUnresolvedMetadata(captured.dimensions, canonicalValidation.unresolved);
       const entry = deps.cache.putComplete({ churchId, provider, mode: 'full', complete: true,
-        coveredDimensionIds: captured.coverage, facts: captured.facts, dimensions: captured.dimensions,
+        coveredDimensionIds: captured.coverage, facts: captured.facts, dimensions: retainedDimensions,
         populationGateDigest: captured.populationGateDigest });
       return res.json({ success: true, metadata: metadataFromEntry(entry), snapshot: snapshotDto(entry) });
     } catch (error) {

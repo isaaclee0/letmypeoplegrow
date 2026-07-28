@@ -7,6 +7,8 @@ const http = require('node:http');
 const { createFilterBuilderRouter, createFilterBuilderJsonParser } = require('./filterBuilder');
 const { captureFilterSnapshotInput, populationGateDigest } = require('../../services/peopleSync/filterSnapshot');
 const { validateFilterV2, selectedDimensionIds, selectedPairs } = require('../../services/peopleSync/filterEngine');
+const { createPcoAdapter } = require('../../services/peopleSync/pcoAdapter');
+const { createElvantoAdapter } = require('../../services/elvanto/adapter');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 const OTHER_ADMIN = { id: 2, church_id: 'churchb2', role: 'admin' };
@@ -278,6 +280,155 @@ for (const providerCase of [
     assert.equal(fetched, 1);
   });
 }
+
+const realRefreshCases = [
+  {
+    provider: 'planning_center',
+    existingDimensionId: 'membership',
+    removedValue: 'Former',
+    currentValue: 'Member',
+    adapter() {
+      const real = createPcoAdapter();
+      return {
+        ...real,
+        fetchSnapshot: async () => ({
+          provider: 'planning_center', mode: 'full', complete: true, fetchedAt: '2026-07-29T00:00:00.000Z',
+          people: [{ id: 'private-pco-person', state: 'active', attributes: { membership: 'Member', fieldValues: {} } }], families: [],
+        }),
+        fetchMetadata: async () => ({ memberships: [{ membership: 'Member', count: 1 }], fieldDefinitions: [] }),
+      };
+    },
+  },
+  {
+    provider: 'elvanto',
+    existingDimensionId: 'category',
+    removedValue: 'former-category',
+    currentValue: 'member-category',
+    adapter() {
+      const real = createElvantoAdapter();
+      return {
+        ...real,
+        fetchSnapshot: async () => ({
+          provider: 'elvanto', mode: 'full', complete: true, fetchedAt: '2026-07-29T00:00:00.000Z',
+          people: [{ id: 'private-elvanto-person', state: 'active', categoryId: 'member-category', attributes: { customFields: {} } }], families: [],
+        }),
+        fetchMetadata: async () => ({ categories: [{ id: 'member-category', name: 'Member' }], customFields: [] }),
+      };
+    },
+  },
+];
+
+function onePairFilter(dimensionId, valueId) {
+  return { branches: [{ groups: [{ dimensionId, mode: 'any', values: [valueId] }] }], exclusions: [] };
+}
+
+function refreshCache() {
+  let entry = null;
+  let puts = 0;
+  return {
+    get: () => entry,
+    putComplete: (next) => {
+      puts += 1;
+      entry = { ...next, snapshotId: `refresh-${puts}`, capturedAt: '2026-07-29T00:00:00.000Z', fresh: true, expiresAt: null };
+      return entry;
+    },
+    current: () => entry,
+    puts: () => puts,
+  };
+}
+
+for (const providerCase of realRefreshCases) {
+  test(`${providerCase.provider} refresh retains a persisted removed dimension from a null cache without exposing people facts`, async () => {
+    const saved = onePairFilter('custom_field:retired', 'old-choice');
+    const target = { id: 7, provider: providerCase.provider, filterSchemaVersion: 2, filterConfig: saved, draftFilterConfig: null };
+    const cache = refreshCache();
+    await withServer(deps({
+      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target],
+      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider && id === 7 ? target : null,
+      validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
+    }), ADMIN, async (base) => {
+      const strictWithoutIdentity = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
+        method: 'POST', body: { filterConfig: saved },
+      });
+      assert.equal(strictWithoutIdentity.status, 400);
+      assert.equal(strictWithoutIdentity.body.code, 'SYNC_FILTER_INVALID');
+      assert.equal(cache.current(), null);
+
+      const refresh = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
+        method: 'POST', body: { batchId: 7, filterConfig: saved },
+      });
+      assert.equal(refresh.status, 200);
+      const retired = refresh.body.metadata.dimensions.find((dimension) => dimension.id === 'custom_field:retired');
+      assert.equal(retired.unresolved, true);
+      assert.deepEqual(retired.values, [{ id: 'old-choice', label: 'old-choice', count: null, unresolved: true }]);
+      assert.deepEqual(Object.keys(refresh.body).sort(), ['metadata', 'snapshot', 'success']);
+      const serialized = JSON.stringify(refresh.body);
+      assert.equal(serialized.includes('private-pco-person'), false);
+      assert.equal(serialized.includes('private-elvanto-person'), false);
+      assert.equal(serialized.includes('externalPersonId'), false);
+      assert.equal(serialized.includes('people'), false);
+
+      const preview = await request(base, `/${providerCase.provider}/filter-preview`, {
+        method: 'POST', body: { batchId: 7, filterConfig: saved, enabled: true, defaultPeopleType: 'regular', gatheringTypeId: null },
+      });
+      assert.equal(preview.status, 200);
+    });
+  });
+
+  test(`${providerCase.provider} refresh retains a persisted removed value but rejects a new unknown pair and preserves the cache`, async () => {
+    const saved = onePairFilter(providerCase.existingDimensionId, providerCase.removedValue);
+    const target = {
+      id: 8, provider: providerCase.provider, filterSchemaVersion: 2,
+      filterConfig: { branches: [], exclusions: [] }, draftFilterConfig: saved,
+    };
+    const cache = refreshCache();
+    await withServer(deps({
+      cache, getProvider: () => providerCase.adapter(), listBatches: async () => [target],
+      getBatch: async (churchId, provider, id) => churchId === ADMIN.church_id && provider === providerCase.provider && id === 8 ? target : null,
+      validateFilterV2, selectedDimensionIds, selectedPairs, captureFilterSnapshotInput,
+    }), ADMIN, async (base) => {
+      const refresh = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
+        method: 'POST', body: { batchId: 8, filterConfig: saved },
+      });
+      assert.equal(refresh.status, 200);
+      const dimension = refresh.body.metadata.dimensions.find((candidate) => candidate.id === providerCase.existingDimensionId);
+      assert.deepEqual(dimension.values.find((value) => value.id === providerCase.removedValue), {
+        id: providerCase.removedValue, label: providerCase.removedValue, count: null, unresolved: true,
+      });
+      assert.equal(dimension.values.find((value) => value.id === providerCase.currentValue).unresolved, undefined);
+      const retainedEntry = cache.current();
+
+      const invented = onePairFilter(providerCase.existingDimensionId, 'invented-new-value');
+      const rejected = await request(base, `/${providerCase.provider}/filter-snapshot/refresh`, {
+        method: 'POST', body: { batchId: 8, filterConfig: invented },
+      });
+      assert.equal(rejected.status, 400);
+      assert.equal(rejected.body.code, 'SYNC_FILTER_INVALID');
+      assert.equal(cache.current(), retainedEntry);
+      assert.equal(cache.puts(), 1);
+    });
+  });
+}
+
+test('refresh rejects unsafe or cross-scope batch identities before provider fetch', async () => {
+  let fetches = 0;
+  await withServer(deps({
+    getBatch: async () => null,
+    getProvider: () => ({ ...deps().getProvider(), fetchSnapshot: async () => { fetches += 1; return {}; } }),
+  }), ADMIN, async (base) => {
+    for (const batchId of [0, -1, 1.5, '7', Number.MAX_SAFE_INTEGER + 1]) {
+      const response = await request(base, '/elvanto/filter-snapshot/refresh', {
+        method: 'POST', body: { batchId, filterConfig: filter },
+      });
+      assert.equal(response.status, 400);
+    }
+    const missing = await request(base, '/elvanto/filter-snapshot/refresh', {
+      method: 'POST', body: { batchId: 999, filterConfig: filter },
+    });
+    assert.equal(missing.status, 404);
+  });
+  assert.equal(fetches, 0);
+});
 
 test('Elvanto refresh applies includeContacts=false to captured facts so cached previews match live eligibility', async () => {
   let entry = null;

@@ -116,16 +116,20 @@ function validateDimensionValues({ dimensionId, values, mode, path, index, allow
     addError(errors, 'MALFORMED_DIMENSION', `${path}.dimensionId`, 'dimensionId must be a non-empty string.');
     return;
   }
+  if (mode === 'all' && values && values.includes(NOT_SET) && values.length > 1) {
+    addError(errors, 'NOT_SET_ALL_CONFLICT', `${path}.values`, '$not_set cannot be combined with another all value.');
+  }
   const dimension = index.get(dimensionId);
   if (!dimension) {
+    if (values && values.length > 0 && values.every((valueId) => allowedUnresolved(allowedPairs, dimensionId, valueId))) {
+      for (const valueId of values) unresolved.push({ dimensionId, valueId });
+      return;
+    }
     addError(errors, 'UNKNOWN_DIMENSION', `${path}.dimensionId`, `Unknown dimension: ${dimensionId}`);
     return;
   }
   if (mode === 'all' && dimension.cardinality === 'single') {
     addError(errors, 'SINGLE_DIMENSION_ALL', `${path}.mode`, 'Single-valued dimensions cannot use all.');
-  }
-  if (mode === 'all' && values && values.includes(NOT_SET) && values.length > 1) {
-    addError(errors, 'NOT_SET_ALL_CONFLICT', `${path}.values`, '$not_set cannot be combined with another all value.');
   }
   for (const valueId of values || []) {
     if (!dimension.valuesById.has(valueId)) {

@@ -371,4 +371,20 @@ describe('ElvantoIntegrationPanel', () => {
     fireEvent.click(alignPeopleType);
     await waitFor(() => expect(peopleSyncAPI.updateSettings).toHaveBeenCalledWith({ elvantoAlignPeopleType: false }));
   });
+
+  it('does not offer to discard the unpromoted initial Elvanto draft', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({
+      data: { success: true, batches: [{
+        ...batch, filterSchemaVersion: 2, filterRevision: 1,
+        filterConfig: { branches: [], exclusions: [] },
+        draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [], exclusions: [] },
+        draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z',
+        needsFilterReview: true, initialFilterReviewPending: true,
+      }] },
+    });
+    setupConnected();
+
+    expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard draft' })).not.toBeInTheDocument();
+  });
 });

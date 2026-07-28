@@ -280,4 +280,27 @@ describe('PlanningCenterIntegrationPanel', () => {
     expect(screen.getByText('Runs weekly')).toBeInTheDocument();
     expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
   });
+
+  it('does not offer to discard the unpromoted initial Planning Center draft', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...draftBatch, filterRevision: 1, initialFilterReviewPending: true }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard draft' })).not.toBeInTheDocument();
+  });
+
+  it('explains the automatic-sync master switch and marks scheduled batches paused while off', async () => {
+    vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({
+      data: { planningCenterSyncEnabled: false, planningCenterTrackBackgroundChecks: false },
+    });
+    renderPanel();
+
+    expect(await screen.findByText(/automatic scheduled sync/i)).toBeInTheDocument();
+    expect(screen.getByText(/manual Review & sync remains available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Automatic sync paused/i)).toBeInTheDocument();
+    expect(screen.queryByText('Runs weekly')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review & sync' })).toBeEnabled();
+  });
 });

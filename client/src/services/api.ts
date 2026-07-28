@@ -1018,7 +1018,7 @@ export const peopleSyncAPI = {
 
   // This is the only filter-builder route that fetches a complete provider
   // roster, so it receives the same budget as the existing review endpoints.
-  refreshFilterSnapshot: (provider: SyncProvider, body?: { filterConfig?: BooleanFilterConfigV2 }) =>
+  refreshFilterSnapshot: (provider: SyncProvider, body?: { batchId?: number | null; filterConfig?: BooleanFilterConfigV2 }) =>
     api.post<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
       `/integrations/people-sync/providers/${provider}/filter-snapshot/refresh`,
       body,

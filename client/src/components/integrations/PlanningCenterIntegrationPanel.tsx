@@ -337,7 +337,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div>
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Planning Center sync</p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      Master switch — turns all batches below on or off.
+                      Controls automatic scheduled sync for the batches below. When off, manual Review &amp; sync remains available.
                     </p>
                   </div>
                   <button
@@ -404,7 +404,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{batch.name}</p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
                             {batch.gatheringTypeId ? 'Assigns to a gathering · ' : ''}
-                            {batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}
+                            {batch.scheduleEnabled ? (pcSyncEnabled ? `Runs ${batch.scheduleFrequency}` : 'Automatic sync paused') : 'Manual only'}
                           </p>
                           {batch.lastSyncAt && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -425,7 +425,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
                           </button>
-                          {batch.needsFilterReview && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard draft</button>}
+                          {batch.needsFilterReview && !batch.initialFilterReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
                       </div>

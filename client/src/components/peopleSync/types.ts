@@ -54,6 +54,8 @@ export interface FilterDimensionValue {
   label: string;
   /** null means the dimension was discovered but this snapshot did not capture its per-person facts. */
   count: number | null;
+  /** True only for a persisted selection that the provider no longer exposes. */
+  unresolved?: boolean;
 }
 
 export interface FilterDimension {
@@ -62,6 +64,8 @@ export interface FilterDimension {
   cardinality: FilterDimensionCardinality;
   category: string;
   values: FilterDimensionValue[];
+  /** True only when the complete provider snapshot no longer exposes this saved dimension. */
+  unresolved?: boolean;
 }
 
 export interface FilterMetadata {

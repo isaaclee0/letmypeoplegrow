@@ -411,7 +411,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                       <button type="button" onClick={() => setEditingBatch(batch)} className="underline">Edit</button>
                       <button type="button" aria-label={`Review & sync ${batch.name}`} onClick={() => void openReview(batch)} className="underline">Review & sync</button>
                       <button type="button" aria-label={`Run ${batch.name} now`} onClick={() => void runNow(batch)} className="underline">Run now</button>
-                      {batch.needsFilterReview && <button type="button" onClick={() => void discardDraft(batch)} className="underline">Discard draft</button>}
+                      {batch.needsFilterReview && !batch.initialFilterReviewPending && <button type="button" onClick={() => void discardDraft(batch)} className="underline">Discard draft</button>}
                       <button type="button" onClick={() => void deleteBatch(batch)} className="text-red-600 underline">Delete</button>
                     </div>
                   </div>

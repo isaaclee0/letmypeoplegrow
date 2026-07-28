@@ -66,7 +66,7 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
     const isCurrent = () => mounted.current && current === sequence.current;
     setRefreshing(true);
     try {
-      await peopleSyncAPI.refreshFilterSnapshot(provider, { filterConfig: value });
+      await peopleSyncAPI.refreshFilterSnapshot(provider, { batchId, filterConfig: value });
       if (!isCurrent()) return;
       const metadata = await peopleSyncAPI.getFilterMetadata(provider);
       if (!isCurrent()) return;

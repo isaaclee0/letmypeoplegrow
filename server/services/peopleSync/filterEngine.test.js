@@ -152,6 +152,28 @@ test('validateFilterV2 accepts only explicitly allowed unresolved dimension/valu
   assert.deepEqual(accepted.value, config);
 });
 
+test('validateFilterV2 retains an absent dimension only when every selected pair is explicitly allowed', () => {
+  const retained = validConfig({ branches: [{ groups: [{ dimensionId: 'custom_field:retired', mode: 'all', values: ['one', 'two'] }] }] });
+  const rejected = validateFilterV2(retained, metadata, {
+    allowedUnresolvedPairs: new Set([JSON.stringify(['custom_field:retired', 'one'])]),
+  });
+  assert.equal(rejected.ok, false);
+  assert.ok(codes(rejected).includes('UNKNOWN_DIMENSION'));
+
+  const accepted = validateFilterV2(retained, metadata, {
+    allowedUnresolvedPairs: new Set([
+      JSON.stringify(['custom_field:retired', 'one']),
+      JSON.stringify(['custom_field:retired', 'two']),
+    ]),
+  });
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(accepted.unresolved, [
+    { dimensionId: 'custom_field:retired', valueId: 'one' },
+    { dimensionId: 'custom_field:retired', valueId: 'two' },
+  ]);
+  assert.deepEqual(accepted.value, retained);
+});
+
 test('tuple identity keeps colon-containing dimension and value IDs distinct', () => {
   const colonMetadata = {
     provider: 'elvanto',

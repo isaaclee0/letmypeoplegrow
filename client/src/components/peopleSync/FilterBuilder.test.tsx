@@ -202,6 +202,33 @@ describe('FilterBuilder', () => {
     expect(screen.queryByText('missing_dimension')).not.toBeInTheDocument();
   });
 
+  it('shows refreshed persisted unresolved dimensions and values as unavailable and removable', () => {
+    const refreshedMetadata: FilterMetadata = { dimensions: [
+      { id: 'custom_field:retired', label: 'custom_field:retired', cardinality: 'multi', category: 'Unavailable saved selections', unresolved: true,
+        values: [{ id: 'old-choice', label: 'old-choice', count: null, unresolved: true }] },
+      { id: 'groups', label: 'Groups', cardinality: 'multi', category: 'People', values: [
+        { id: 'current', label: 'Current', count: 1 },
+        { id: 'old-group', label: 'old-group', count: null, unresolved: true },
+      ] },
+    ] };
+    function RefreshedControlled() {
+      const [value, setValue] = useState<BooleanFilterConfigV2>({ branches: [{ groups: [
+        { dimensionId: 'custom_field:retired', mode: 'any', values: ['old-choice'] },
+        { dimensionId: 'groups', mode: 'any', values: ['old-group'] },
+      ] }], exclusions: [] });
+      return <><FilterBuilder metadata={refreshedMetadata} value={value} onChange={setValue} /><output aria-label="Refreshed filter value">{JSON.stringify(value)}</output></>;
+    }
+    render(<RefreshedControlled />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('custom_field:retired');
+    expect(screen.getByRole('alert')).toHaveTextContent('old-group');
+    fireEvent.click(screen.getByRole('button', { name: 'Open custom_field:retired values' }));
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove custom_field:retired from Branch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Groups from Branch 1' }));
+    expect(JSON.parse(screen.getByLabelText('Refreshed filter value').textContent || '{}')).toEqual({ branches: [], exclusions: [] });
+  });
+
   it('keeps a NOT-only filter editable', () => {
     render(<Controlled initial={{ branches: [], exclusions: [{ dimensionId: 'status', values: ['active'] }] }} />);
     expect(screen.getByText('Everyone except the excluded people matches.')).toBeInTheDocument();

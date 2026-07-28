@@ -248,6 +248,7 @@ The server holds at most one latest complete filter-facts snapshot per church/pr
 - Canonical dimension discovery is separate from facts coverage. An explicit refresh returns intrinsic dimensions and provider custom-field definitions, while values outside `coveredDimensionIds` carry `count: null`.
 - Metadata reads and previews never fetch a provider. On a cold cache the builder still renders an explicit **Refresh people data** action; that refresh is the only filter-builder endpoint allowed to fetch provider data.
 - A proposed uncovered dimension is structurally checked before refresh, then canonically validated against metadata derived from that same refreshed snapshot before the old cache is replaced.
+- An existing editor sends its positive safe `batchId` with refresh. Canonical validation may retain unresolved pairs only when that church/provider-scoped batch already persists the exact pair in its active filter or draft. Missing/new-batch identity remains strict, and retained unresolved metadata is marked unavailable with `count: null` so it stays visible and removable without fabricating provider facts.
 - PCO populates it from its existing complete people cache when that cache is available; otherwise count remains unavailable until an explicit refresh or complete preview populates it.
 - Elvanto populates it during explicit people-data refresh, full reviewed preview, or full reconciliation.
 - An Elvanto refresh requests the union of custom-field dimensions required by active filters and the current draft. It does not retrieve every custom field automatically when unnecessary.
@@ -366,7 +367,7 @@ are authenticated admin routes and are mounted beneath
 | Operation | Exact endpoint | Network and safety boundary |
 | --- | --- | --- |
 | Read metadata/cache state | `GET /:provider/filter-metadata` | Reads a complete facts snapshot only; a warm PCO roster may be projected locally, but this route never fetches a provider roster. |
-| Explicitly refresh people data | `POST /:provider/filter-snapshot/refresh` | The only filter-builder endpoint that fetches a complete provider snapshot; it accepts an optional proposed `filterConfig`. |
+| Explicitly refresh people data | `POST /:provider/filter-snapshot/refresh` | The only filter-builder endpoint that fetches a complete provider snapshot; it accepts an optional proposed `filterConfig` and optional numeric `batchId` used only to retain that scoped batch's persisted unresolved pairs. |
 | Count/overlap preview | `POST /:provider/filter-preview` | Cache-only; returns counts, freshness, overlap, union, warnings, and missing coverage, never facts or external IDs. |
 | Save or discard draft | `PUT` / `DELETE /:provider/sync-batches/:id/filter-draft` | Save writes draft columns only. Neither operation changes active eligibility. |
 | Compare a v1 filter | `POST /:provider/sync-batches/:id/filter-upgrade/preview` | Requires a fresh complete snapshot and returns only counts, the converted v2 config, safe snapshot metadata, and a signed proof. |

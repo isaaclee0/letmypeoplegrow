@@ -69,7 +69,7 @@ describe('FilterPreviewSummary', () => {
     render(<FilterPreviewSummary provider="elvanto" batchId={1} value={filter} enabled defaultPeopleType="regular" gatheringTypeId={null} onMetadata={onMetadata} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(350); });
     await act(async () => { screen.getByRole('button', { name: 'Refresh people data' }).click(); });
-    expect(peopleSyncAPI.refreshFilterSnapshot).toHaveBeenCalledWith('elvanto', { filterConfig: filter });
+    expect(peopleSyncAPI.refreshFilterSnapshot).toHaveBeenCalledWith('elvanto', { batchId: 1, filterConfig: filter });
     expect(peopleSyncAPI.getFilterMetadata).toHaveBeenCalledWith('elvanto');
     expect(onMetadata).toHaveBeenCalledWith(metadata);
   });
