@@ -349,6 +349,69 @@ Every route is church-scoped and provider-scoped. Draft bodies are size-limited 
 - V1 schedules continue until an explicit upgrade; failed upgrades are non-destructive.
 - All caches and queries remain church-isolated.
 
+## Implemented Operations Contract (Verified)
+
+This section is the operational contract for the implementation, rather than
+an abbreviated version of the design examples above. All filter-builder routes
+are authenticated admin routes and are mounted beneath
+`/api/integrations/people-sync/providers/:provider`, where `:provider` is
+`planning_center` or `elvanto`.
+
+| Operation | Exact endpoint | Network and safety boundary |
+| --- | --- | --- |
+| Read metadata/cache state | `GET /:provider/filter-metadata` | Reads a complete facts snapshot only; a warm PCO roster may be projected locally, but this route never fetches a provider roster. |
+| Explicitly refresh people data | `POST /:provider/filter-snapshot/refresh` | The only filter-builder endpoint that fetches a complete provider snapshot; it accepts an optional proposed `filterConfig`. |
+| Count/overlap preview | `POST /:provider/filter-preview` | Cache-only; returns counts, freshness, overlap, union, warnings, and missing coverage, never facts or external IDs. |
+| Save or discard draft | `PUT` / `DELETE /:provider/sync-batches/:id/filter-draft` | Save writes draft columns only. Neither operation changes active eligibility. |
+| Compare a v1 filter | `POST /:provider/sync-batches/:id/filter-upgrade/preview` | Requires a fresh complete snapshot and returns only counts, the converted v2 config, safe snapshot metadata, and a signed proof. |
+| Apply an exact-compatible upgrade | `POST /:provider/sync-batches/:id/filter-upgrade/apply` | Requires the current signed proof and upgrades one batch atomically. |
+| Apply compatible upgrades together | `POST /:provider/filter-upgrades/apply-compatible` | Rechecks every batch and cache identity before any write; the group is all-or-nothing. |
+
+The exact cache constants are `FRESH_MS = 10 * 60 * 1000`,
+`RETAIN_MS = 24 * 60 * 60 * 1000`, and `MAX_ENTRIES = 200` in
+`server/services/peopleSync/filterFactsCache.js`. A complete full snapshot is
+fresh for ten minutes, usable with a stale label until 24 hours, and then
+removed. Entries are keyed by church and provider. They contain only external
+person IDs and selected dimension value IDs in server memory; names, contact
+details, addresses, family details, credentials, raw provider people, and
+matched-ID sets are never returned by the filter-builder responses.
+
+Filter-builder validation and cache states use `SYNC_FILTER_INVALID`,
+`SYNC_FILTER_CACHE_UNAVAILABLE`, and `SYNC_FILTER_BROAD_ACK_REQUIRED`.
+Concurrent or superseded draft application uses `SYNC_FILTER_DRAFT_STALE`.
+Legacy-upgrade preview/apply uses `SYNC_FILTER_UPGRADE_STALE` at the HTTP
+boundary (including an underlying `SYNC_UPGRADE_STALE` proof/cache mismatch).
+Reviewed reconciliation continues to use `SYNC_REVIEW_INVALID`,
+`SYNC_REVIEW_EXPIRED`, and `SYNC_PLAN_STALE`; an authoritative unattended run
+with any normal schema-v2 draft is refused with
+`SYNC_FILTER_REVIEW_REQUIRED`. Error responses must remain generic and must
+not expose provider facts, credentials, or raw provider error content.
+
+### Cross-layer acceptance matrix
+
+| Verified flow | Evidence paths | Required result |
+| --- | --- | --- |
+| `(A AND B) OR (C AND D) NOT E` | `server/services/peopleSync/filterEngine.test.js`; `client/src/components/peopleSync/FilterBuilder.test.tsx` | Groups are ANDed in a branch, branches are ORed, and every exclusion vetoes the result. |
+| Multiple NOT exclusions | `server/services/peopleSync/filterEngine.test.js`; `client/src/components/peopleSync/FilterBuilder.test.tsx` | Any matching exclusion vetoes every positive branch. |
+| NOT-only filter | `server/services/peopleSync/filterEngine.test.js`; `server/routes/integrations/filterBuilder.test.js`; `client/src/components/peopleSync/FilterBuilder.test.tsx` | No branches plus exclusions is valid, warns as broad, and requires acknowledgement before draft save. |
+| Empty filter | `server/services/peopleSync/filterEngine.test.js`; `server/routes/integrations/filterBuilder.test.js` | No branches and no exclusions matches nobody and does not demand broad acknowledgement. |
+| Missing coverage | `server/services/peopleSync/filterSnapshot.test.js`; `server/services/peopleSync/filterPreview.test.js`; `client/src/components/peopleSync/FilterPreviewSummary.test.tsx` | Preview reports unavailable/missing dimension IDs, never zero matches or an empty value. |
+| Fresh versus stale cache | `server/services/peopleSync/filterFactsCache.test.js`; `server/services/peopleSync/filterPreview.test.js`; `client/src/components/peopleSync/FilterPreviewSummary.test.tsx` | Ten-minute freshness and 24-hour retention are surfaced; expiry removes the entry. |
+| Mixed v1/v2 overlap and population gates | `server/services/peopleSync/filterPreview.test.js`; `server/services/peopleSync/orchestrator.test.js`; `server/services/peopleSync/pcoAdapter.test.js`; `server/services/elvanto/adapter.test.js` | Active v1 and v2 batches participate in overlap/union and use the same provider population gate as preview and sync. |
+| Atomic reviewed promotion | `server/services/peopleSync/batchRepository.dbintegration.test.js`; `server/services/peopleSync/apply.dbintegration.test.js`; `server/services/peopleSync/orchestrator.dbintegration.test.js` | Reviewed reconciliation promotes the draft and applies people changes in one transaction; failed work leaves the active filter unchanged. |
+| Stale review/draft-token rollback | `server/services/peopleSync/batchRepository.dbintegration.test.js`; `server/services/peopleSync/apply.dbintegration.test.js`; `server/services/peopleSync/orchestrator.dbintegration.test.js` | Revision, draft digest, snapshot, or review-token mismatch rejects with no people or active-filter write; the draft remains available. |
+| Authoritative draft scheduling block | `server/services/peopleSync/orchestrator.test.js`; `server/services/peopleSync/scheduler.test.js` | A normal pending schema-v2 draft blocks unattended authoritative sync before fetching; a v1 migration draft does not pause the v1 schedule. |
+| Exact-compatible v1 upgrade | `server/services/peopleSync/filterUpgrade.test.js`; `server/routes/integrations/filterBuilder.test.js`; `client/src/components/peopleSync/FilterUpgradePanel.test.tsx` | Compatibility compares the full external-ID set, needs a fresh proof at preview and apply, and supports individual or all-compatible atomic upgrade. |
+| Incompatible reviewed upgrade | `server/services/peopleSync/filterUpgrade.test.js`; `server/routes/integrations/filterBuilder.test.js`; `client/src/components/peopleSync/FilterUpgradePanel.test.tsx` | A mismatch cannot bulk-upgrade; it becomes a v2 draft for individual full review while v1 schedule/eligibility remains unchanged. |
+| Planning Center onboarding | `client/src/pages/OnboardingPage.integrations.test.tsx`; `client/src/components/integrations/PlanningCenterIntegrationPanel.test.tsx` | The first v2 draft reaches the real review, only successful reviewed apply advances onboarding, and the promoted filter is reloaded. |
+| Elvanto onboarding | `client/src/components/elvanto/ElvantoOnboarding.test.tsx`; `client/src/components/integrations/ElvantoIntegrationPanel.test.tsx` | Connection, first-draft review, and optional authority review are explicit; a failed first apply stays on review and cannot advance. |
+
+The shared UI contract is covered by
+`client/src/components/planningCenter/PlanningCenterBatchEditor.test.tsx` and
+`client/src/components/elvanto/ElvantoBatchEditor.test.tsx`: both provider
+editors render the same filter-builder subtree while retaining only their
+provider-specific non-filter controls.
+
 ## Testing Strategy
 
 ### Shared engine
