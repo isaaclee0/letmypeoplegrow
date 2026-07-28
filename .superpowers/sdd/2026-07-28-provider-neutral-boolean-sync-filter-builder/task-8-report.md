@@ -12,4 +12,11 @@ Verification:
 
 `cd server && node --test services/peopleSync/orchestrator.test.js services/peopleSync/orchestrator.dbintegration.test.js services/peopleSync/apply.dbintegration.test.js services/peopleSync/scheduler.test.js services/elvanto/filter.test.js`
 
-Result: 113 passing, 0 failing.
+Result: 122 passing, 0 failing.
+
+## Review fix round 1
+
+- Schema-2 reconciliation now passes church sync settings to the provider population gate; schema-1 eligibility continues without this new gate.
+- Unattended reconciliation now blocks on any enabled schema-2 ordinary draft for the authoritative provider, not only the requested batch. Schema-1 migration drafts remain schedulable.
+- Elvanto's stale metadata fallback wrapper is unwrapped before complete snapshot fact/dimension capture; incremental snapshots are explicitly covered as non-replacing.
+- Added review-context regressions for active revision, snapshot/plan staleness, and selection tampering, each preserving the draft and preventing people writes.

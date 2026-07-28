@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan } = require('./plan');
 const { digestPlan } = require('./planDigest');
+const { createPcoAdapter } = require('./pcoAdapter');
+const { createElvantoAdapter } = require('../elvanto/adapter');
 const {
   buildReview, applyReviewed, runUnattended, previewAuthoritySwitch, OrchestratorError,
 } = require('./orchestrator');
@@ -158,6 +160,54 @@ test('buildReview evaluates a schema-2 draft only for the requested batch and ga
   ]);
 });
 
+test('PCO and Elvanto evaluate equivalent schema-2 custom-field facts identically', () => {
+  const filter = { branches: [{ groups: [{ dimensionId: 'custom_field:choir', mode: 'any', values: ['Soprano'] }] }], exclusions: [] };
+  const pco = createPcoAdapter();
+  const elvanto = createElvantoAdapter({ clientFactory: () => ({}) });
+  assert.equal(pco.isEligible({ id: 'pco-1', status: 'active', fieldValues: { choir: ['Soprano'] } }, filter, 2), true);
+  assert.equal(elvanto.isEligible({ id: 'elvanto-1', state: 'active', attributes: { customFields: { choir: ['Soprano'] } } }, filter, 2), true);
+  assert.equal(pco.isEligible({ id: 'pco-2', status: 'active', fieldValues: { choir: ['Alto'] } }, filter, 2), false);
+  assert.equal(elvanto.isEligible({ id: 'elvanto-2', state: 'active', attributes: { customFields: { choir: ['Alto'] } } }, filter, 2), false);
+});
+
+test('schema-2 Elvanto eligibility excludes contacts when includeContacts is disabled', async () => {
+  let eligibleByBatch;
+  const adapter = fakeAdapter({
+    isInFilterPopulation: (person, settings) => person.state !== 'contact' || settings.includeContacts !== false,
+    isEligible: () => true,
+    fetchSnapshot: async () => ({
+      provider: 'elvanto', mode: 'full', complete: true, fetchedAt: '2026-01-01T00:00:00.000Z', watermark: null,
+      people: [fakeExternalPerson({ id: 'active', state: 'active' }), fakeExternalPerson({ id: 'contact', state: 'contact' })], families: [],
+    }),
+  });
+  const { deps } = makeDeps({ batches: [fakeBatch({ filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] } })], adapter });
+  deps.getSyncSettings = async () => ({ includeContacts: false, alignPeopleType: true });
+  deps.computePeopleSyncPlan = (input) => {
+    eligibleByBatch = input.eligibleByBatch;
+    return computePeopleSyncPlan(input);
+  };
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.deepEqual([...eligibleByBatch.get(1)], ['active']);
+});
+
+test('schema-1 eligibility remains ungated by schema-2 population rules', async () => {
+  const seen = [];
+  const adapter = fakeAdapter({
+    isInFilterPopulation: () => false,
+    isEligible: (person, _config, schemaVersion) => {
+      seen.push([person.id, schemaVersion]);
+      return true;
+    },
+    fetchSnapshot: async () => ({
+      provider: 'elvanto', mode: 'full', complete: true, fetchedAt: '2026-01-01T00:00:00.000Z', watermark: null,
+      people: [fakeExternalPerson({ id: 'active' }), fakeExternalPerson({ id: 'contact', state: 'contact' })], families: [],
+    }),
+  });
+  const { deps } = makeDeps({ adapter });
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.deepEqual(seen, [['active', 1], ['contact', 1]]);
+});
+
 test('a full review captures filter facts and binds the review digest to its filter context', async () => {
   const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
   const captured = [];
@@ -191,6 +241,24 @@ test('a full review captures filter facts and binds the review digest to its fil
     draftDigest: require('./planDigest').digestFilterConfig(draft),
     snapshotId: 'snapshot-1',
   });
+});
+
+test('a complete review unwraps persisted Elvanto metadata before fact capture', async () => {
+  let capturedMetadata;
+  const adapter = fakeAdapter({
+    isInFilterPopulation: () => true,
+    toFilterFacts: (person) => ({ externalPersonId: person.id, dimensions: {} }),
+    buildFilterDimensions: () => [],
+    fetchMetadata: async () => ({ metadata: { customFields: [{ id: 'choir', name: 'Choir' }] }, stale: true }),
+  });
+  const { deps } = makeDeps({ adapter });
+  deps.captureFilterSnapshotInput = (input) => {
+    capturedMetadata = input.providerMetadata;
+    return { facts: [], dimensions: [], coverage: [], populationGateDigest: 'gate' };
+  };
+  deps.filterFactsCache = { putComplete: () => ({ snapshotId: 'snapshot-1' }) };
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  assert.deepEqual(capturedMetadata, { customFields: [{ id: 'choir', name: 'Choir' }] });
 });
 
 test('buildReview rejects an unsupported trigger before touching any collaborator', async () => {
@@ -297,6 +365,42 @@ test('runUnattended blocks an authoritative schema-2 draft before starting a run
   );
   assert.equal(calls.includes('startRun'), false);
   assert.equal(calls.includes('fetchSnapshot'), false);
+});
+
+test('runUnattended blocks every enabled schema-2 draft before a different requested batch starts', async () => {
+  const { deps, calls } = makeDeps({
+    batches: [
+      fakeBatch({ id: 1, filterSchemaVersion: 2, draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [], exclusions: [] } }),
+      fakeBatch({ id: 2, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] } }),
+    ],
+  });
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 2 }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_FILTER_REVIEW_REQUIRED'
+  );
+  assert.equal(calls.includes('startRun'), false);
+  assert.equal(calls.includes('fetchSnapshot'), false);
+});
+
+test('runUnattended permits a schema-1 batch with a schema-2 migration draft', async () => {
+  const { deps, calls } = makeDeps({
+    batches: [fakeBatch({ filterSchemaVersion: 1, draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [], exclusions: [] } })],
+  });
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+  assert.equal(calls.includes('startRun'), true);
+  assert.equal(calls.includes('fetchSnapshot'), true);
+});
+
+test('an incremental Elvanto run never replaces a complete filter facts cache entry', async () => {
+  const adapter = fakeAdapter({
+    isInFilterPopulation: () => true,
+    toFilterFacts: (person) => ({ externalPersonId: person.id, dimensions: {} }),
+    buildFilterDimensions: () => [],
+    fetchSnapshot: async () => ({ provider: 'elvanto', mode: 'incremental', complete: true, fetchedAt: '2026-01-01T00:00:00.000Z', watermark: 'w2', people: [], families: [] }),
+  });
+  const { deps } = makeDeps({ batches: [fakeBatch({ lastExternalWatermark: 'w1' })], adapter });
+  deps.filterFactsCache = { putComplete: () => { throw new Error('incremental snapshots must not replace cache'); } };
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
 });
 
 test('runUnattended (clean, no held items) follows the full 10-step order and classifies applied', async () => {

@@ -213,12 +213,13 @@ function collectCustomFieldIds(batches) {
   return [...ids];
 }
 
-function buildEligibleByBatch(batches, people, adapter) {
+function buildEligibleByBatch(batches, people, adapter, settings) {
   const eligibleByBatch = new Map();
   for (const batch of batches) {
     const eligible = new Set();
     for (const person of people) {
-      if (typeof adapter.isInFilterPopulation === 'function' && !adapter.isInFilterPopulation(person)) continue;
+      if (Number(batch.filterSchemaVersion) === 2 && typeof adapter.isInFilterPopulation === 'function' &&
+          !adapter.isInFilterPopulation(person, settings)) continue;
       if (adapter.isEligible(person, batch.filterConfig, batch.filterSchemaVersion)) eligible.add(String(person.id));
     }
     eligibleByBatch.set(batch.id, eligible);
@@ -480,7 +481,11 @@ async function runPipelineBody({
       typeof adapter.toFilterFacts === 'function' && typeof adapter.buildFilterDimensions === 'function' &&
       typeof adapter.isInFilterPopulation === 'function') {
     const coveredDimensionIds = [...new Set(batches.flatMap((batch) => deps.requiredDimensionIdsForBatch(batch) || []))].sort();
-    const providerMetadata = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
+    const metadataResult = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
+    const providerMetadata = provider === 'elvanto' && metadataResult && typeof metadataResult === 'object' &&
+      metadataResult.metadata && typeof metadataResult.metadata === 'object'
+      ? metadataResult.metadata
+      : metadataResult;
     const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
     const entry = deps.filterFactsCache.putComplete({
       churchId, provider, mode: 'full', complete: true, coveredDimensionIds,
@@ -510,7 +515,7 @@ async function runPipelineBody({
   // 7. compute the plan (plan.js's own presenceProjection computes the
   // projected next missing count for a complete full snapshot from the
   // personLinks passed in here — this module never re-derives that logic).
-  const eligibleByBatch = buildEligibleByBatch(batches, snapshot.people, adapter);
+  const eligibleByBatch = buildEligibleByBatch(batches, snapshot.people, adapter, settings);
   const plan = deps.computePeopleSyncPlan({
     provider,
     externalPeople: snapshot.people,
@@ -798,7 +803,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   }
 
   const requestedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-  if (requestedBatch?.filterSchemaVersion === 2 && requestedBatch.draftFilterConfig) {
+  if (pre.batches.some((batch) => batch.filterSchemaVersion === 2 && batch.draftFilterConfig)) {
     throw new OrchestratorError('SYNC_FILTER_REVIEW_REQUIRED', 'A schema-2 filter draft must be reviewed before unattended sync can run', 409);
   }
   const mode = (forceFull || !requestedBatch.lastExternalWatermark) ? 'full' : 'incremental';

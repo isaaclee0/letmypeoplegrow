@@ -171,6 +171,55 @@ test('a stale plan (data changed after preview) returns a typed 409 and never ap
   });
 });
 
+test('a changed active filter revision invalidates a reviewed draft before people writes and retains the draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+    const batch = await seedBatch(churchId, 'elvanto', {
+      filterSchemaVersion: 2,
+      initialDraftFilterConfig: draft,
+    });
+    await Database.query(`UPDATE people_sync_settings SET authority_provider = 'elvanto' WHERE church_id = ?`, [churchId]);
+    scenario = { people: [personFixture()], families: [] };
+    const review = await orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual' });
+
+    await Database.query(
+      `UPDATE people_sync_batches SET filter_revision = filter_revision + 1 WHERE id = ? AND church_id = ? AND provider = ?`,
+      [batch.id, churchId, 'elvanto']
+    );
+    await assert.rejects(
+      orchestrator.applyReviewed({ churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken }),
+      (err) => err.code === 'SYNC_PLAN_STALE' && err.status === 409
+    );
+    assert.equal(await individualsCount(churchId), 0);
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', batch.id)).draftFilterConfig, draft);
+  });
+});
+
+test('tampered review selections fail before reviewed-draft promotion and retain the draft', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+    const batch = await seedBatch(churchId, 'elvanto', {
+      filterSchemaVersion: 2,
+      initialDraftFilterConfig: draft,
+    });
+    await Database.query(`UPDATE people_sync_settings SET authority_provider = 'elvanto' WHERE church_id = ?`, [churchId]);
+    scenario = { people: [personFixture()], families: [] };
+    const review = await orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual' });
+
+    await assert.rejects(
+      orchestrator.applyReviewed({
+        churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+        selections: { skipExternalPersonIds: ['not-offered'] },
+      }),
+      (err) => err.code === 'SYNC_SELECTIONS_INVALID'
+    );
+    assert.equal(await individualsCount(churchId), 0);
+    assert.deepEqual((await batchRepository.getBatch(churchId, 'elvanto', batch.id)).draftFilterConfig, draft);
+  });
+});
+
 test('the first authority reconciliation stays pending until applied, then commits', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
