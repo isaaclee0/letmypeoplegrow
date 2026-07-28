@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { peopleSyncAPI } from '../../services/api';
 import FilterUpgradePanel from './FilterUpgradePanel';
@@ -8,6 +8,7 @@ import type { PeopleSyncBatch } from './types';
 vi.mock('../../services/api', () => ({
   peopleSyncAPI: {
     previewFilterUpgrade: vi.fn(),
+    refreshFilterSnapshot: vi.fn(),
     applyFilterUpgrade: vi.fn(),
     applyCompatibleFilterUpgrades: vi.fn(),
     saveFilterDraft: vi.fn(),
@@ -96,5 +97,55 @@ describe('FilterUpgradePanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The filter upgrade is no longer current.');
     expect(screen.getByRole('button', { name: 'Apply upgrade Members' })).toBeEnabled();
+  });
+
+  it('disables direct and bulk upgrades for a retained stale snapshot and refreshes before re-comparing', async () => {
+    const stale = { success: true, compatible: true, oldCount: 8, newCount: 8, upgradeToken: 'stale-token',
+      convertedFilterConfig: { branches: [{ groups: [{ dimensionId: 'status', mode: 'any' as const, values: ['active'] }] }], exclusions: [] },
+      snapshot: { id: 'snap', capturedAt: '2026-07-28T08:00:00.000Z', fresh: false, expiresAt: null, coveredDimensionIds: ['status'] } };
+    const fresh = { ...stale, upgradeToken: 'fresh-token', snapshot: { ...stale.snapshot, fresh: true } };
+    vi.mocked(peopleSyncAPI.previewFilterUpgrade).mockResolvedValueOnce({ data: stale }).mockResolvedValueOnce({ data: fresh });
+    vi.mocked(peopleSyncAPI.refreshFilterSnapshot).mockResolvedValue({ data: { success: true, metadata: { dimensions: [] }, snapshot: fresh.snapshot } });
+    render(<FilterUpgradePanel provider="elvanto" batches={[legacy(1, 'Members')]} onChanged={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade filter Members' }));
+    expect(await screen.findByText(/Snapshot is stale/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply upgrade Members' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upgrade all compatible batches' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh people data and compare Members' }));
+
+    await waitFor(() => expect(peopleSyncAPI.refreshFilterSnapshot).toHaveBeenCalledWith('elvanto'));
+    expect(await screen.findByRole('button', { name: 'Apply upgrade Members' })).toBeEnabled();
+  });
+
+  it('keeps the newest same-batch preview when an older request resolves afterwards', async () => {
+    let resolveFirst!: (value: { data: FilterUpgradePreviewResponse }) => void;
+    let resolveSecond!: (value: { data: FilterUpgradePreviewResponse }) => void;
+    type FilterUpgradePreviewResponse = Awaited<ReturnType<typeof peopleSyncAPI.previewFilterUpgrade>>['data'];
+    const first = new Promise<{ data: FilterUpgradePreviewResponse }>((resolve) => { resolveFirst = resolve; });
+    const second = new Promise<{ data: FilterUpgradePreviewResponse }>((resolve) => { resolveSecond = resolve; });
+    vi.mocked(peopleSyncAPI.previewFilterUpgrade).mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const { rerender } = render(<FilterUpgradePanel provider="elvanto" batches={[legacy(1, 'Members')]} onChanged={vi.fn()} />);
+
+    const compare = screen.getByRole('button', { name: 'Upgrade filter Members' });
+    fireEvent.click(compare);
+    // A batch refresh can remove and restore the same legacy row while its
+    // earlier preview is still in flight. The restored row must own a newer
+    // request and cannot inherit the old token/result.
+    rerender(<FilterUpgradePanel provider="elvanto" batches={[]} onChanged={vi.fn()} />);
+    rerender(<FilterUpgradePanel provider="elvanto" batches={[legacy(1, 'Members')]} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade filter Members' }));
+    const response = (token: string): FilterUpgradePreviewResponse => ({
+      success: true, compatible: true, oldCount: 1, newCount: 1, upgradeToken: token,
+      convertedFilterConfig: { branches: [], exclusions: [] },
+      snapshot: { id: 'snap', capturedAt: '2026-07-28T08:00:00.000Z', fresh: true, expiresAt: null, coveredDimensionIds: [] },
+    });
+
+    await act(async () => { resolveSecond({ data: response('new-token') }); });
+    expect(await screen.findByRole('button', { name: 'Apply upgrade Members' })).toBeInTheDocument();
+    await act(async () => { resolveFirst({ data: response('old-token') }); });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply upgrade Members' }));
+    await waitFor(() => expect(peopleSyncAPI.applyFilterUpgrade).toHaveBeenCalledWith('elvanto', 1, 'new-token'));
   });
 });

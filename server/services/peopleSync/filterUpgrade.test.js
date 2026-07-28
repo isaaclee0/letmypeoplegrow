@@ -197,7 +197,7 @@ test('compatible upgrades verify every re-read row and cache snapshot before ato
     const cache = { get(requestChurchId, provider) {
       assert.equal(requestChurchId, churchId);
       assert.equal(provider, 'elvanto');
-      return { churchId, provider, snapshotId: 'snapshot-atomic', populationGateDigest: 'gate-atomic', facts };
+      return { churchId, provider, snapshotId: 'snapshot-atomic', populationGateDigest: 'gate-atomic', facts, fresh: true };
     } };
     const tokenFor = (batch) => createUpgradeToken({
       churchId, provider: 'elvanto', batchId: batch.id, filterRevision: batch.filterRevision,
@@ -237,8 +237,8 @@ test('a cache refresh between verification and writes aborts the whole compatibl
       get() {
         this.reads += 1;
         return this.reads === 1
-          ? { churchId, provider: 'elvanto', snapshotId: 'snapshot-before-write', populationGateDigest: 'gate-1', facts }
-          : { churchId, provider: 'elvanto', snapshotId: 'snapshot-after-refresh', populationGateDigest: 'gate-2', facts };
+          ? { churchId, provider: 'elvanto', snapshotId: 'snapshot-before-write', populationGateDigest: 'gate-1', facts, fresh: true }
+          : { churchId, provider: 'elvanto', snapshotId: 'snapshot-after-refresh', populationGateDigest: 'gate-2', facts, fresh: true };
       },
     };
     const token = createUpgradeToken({
@@ -252,5 +252,35 @@ test('a cache refresh between verification and writes aborts the whole compatibl
     assert.equal(cache.reads, 2);
     assert.equal((await getBatch(churchId, 'elvanto', batch.id)).filterSchemaVersion, 1);
     assert.equal((await getBatch(churchId, 'elvanto', batch.id)).filterRevision, 1);
+  });
+}));
+
+test('a retained-but-stale snapshot cannot apply a direct upgrade, including when it expires after token issuance', async () => withSecret('upgrade-secret', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Only', filterConfig: elvantoConfig });
+    const facts = [{ externalPersonId: 'person-1', dimensions: {
+      status: ['active'], category: ['members'], groups: ['music', 'youth'], departments: ['Welcome'],
+      service_types: ['sunday'], 'custom_field:role': ['leader', 'helper'],
+    } }];
+    const token = createUpgradeToken({
+      churchId, provider: 'elvanto', batchId: batch.id, filterRevision: batch.filterRevision,
+      activeConfigDigest: digestFilterConfig(batch.filterConfig), snapshotId: 'snapshot-fresh',
+      convertedDigest: digestFilterConfig(convertV1Filter('elvanto', batch.filterConfig)), compatible: true,
+    });
+    const cache = {
+      reads: 0,
+      get() {
+        this.reads += 1;
+        return { churchId, provider: 'elvanto', snapshotId: 'snapshot-fresh', populationGateDigest: 'gate', facts,
+          fresh: this.reads === 1 };
+      },
+    };
+
+    await assert.rejects(applyCompatibleUpgrades({
+      churchId, provider: 'elvanto', cache, upgrades: [{ batchId: batch.id, upgradeToken: token }],
+    }), (error) => error?.code === 'SYNC_UPGRADE_STALE');
+    const unchanged = await getBatch(churchId, 'elvanto', batch.id);
+    assert.equal(unchanged.filterSchemaVersion, 1);
+    assert.equal(unchanged.filterRevision, 1);
   });
 }));

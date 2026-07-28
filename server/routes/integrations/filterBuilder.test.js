@@ -318,6 +318,20 @@ test('legacy upgrade previews return the converted filter and safe snapshot deta
   assert.equal(convertedCalls, 1);
 });
 
+test('a retained stale snapshot cannot mint a direct-upgrade token', async () => {
+  let converted = false;
+  await withServer(deps({
+    getBatch: async () => ({ id: 1, provider: 'elvanto', filterSchemaVersion: 1, filterConfig: { statuses: ['active'] }, filterRevision: 3 }),
+    cache: { get: () => ({ ...cachedEntry, fresh: false }) },
+    convertV1Filter: () => { converted = true; return filter; },
+  }), ADMIN, async (base) => {
+    const response = await request(base, '/elvanto/sync-batches/1/filter-upgrade/preview', { method: 'POST', body: {} });
+    assert.equal(response.status, 409);
+    assert.equal(response.body.code, 'SYNC_FILTER_UPGRADE_STALE');
+  });
+  assert.equal(converted, false);
+});
+
 test('raw chunked JSON larger than 64 KiB is rejected before the route evaluates it', async () => {
   let evaluated = false;
   await withServer(deps({ previewFilter: () => { evaluated = true; return {}; } }), ADMIN, async (base) => {

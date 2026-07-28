@@ -349,7 +349,7 @@ function createFilterBuilderRouter(overrides = {}) {
       const batch = await deps.getBatch(churchId, provider, batchId);
       const entry = deps.cache.get(churchId, provider);
       if (!batch) return res.status(404).json({ error: 'Sync batch not found.' });
-      if (Number(batch.filterSchemaVersion) !== 1 || !entry) return res.status(409).json({ error: 'A current legacy filter snapshot is required.', code: 'SYNC_FILTER_UPGRADE_STALE' });
+      if (Number(batch.filterSchemaVersion) !== 1 || !entry || entry.fresh !== true) return res.status(409).json({ error: 'A fresh legacy filter snapshot is required.', code: 'SYNC_FILTER_UPGRADE_STALE' });
       const converted = deps.convertV1Filter(provider, batch.filterConfig);
       const comparison = deps.compareUpgradeSets({ provider, config: batch.filterConfig, facts: entry.facts, convertedConfig: converted });
       const token = deps.createUpgradeToken({ churchId, provider, batchId: batch.id, filterRevision: batch.filterRevision,

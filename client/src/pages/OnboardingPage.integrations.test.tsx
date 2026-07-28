@@ -19,9 +19,66 @@ vi.mock('../contexts/AuthContext', () => ({ useAuth: () => authState }));
 vi.mock('../services/api', () => ({
   authAPI: { requestCode: vi.fn(), verifyCode: vi.fn() },
   onboardingAPI: { saveChurchInfo: vi.fn(), complete: vi.fn() },
-  integrationsAPI: { authorizePlanningCenter: vi.fn() },
+  integrationsAPI: {
+    authorizePlanningCenter: vi.fn(),
+    getPlanningCenterBatchPlan: vi.fn(),
+    applyPlanningCenterBatch: vi.fn(),
+    getCheckinAvailability: vi.fn(),
+  },
   elvantoSyncAPI: {}, peopleSyncAPI: {}, gatheringsAPI: {},
 }));
+
+// Keep the test focused on onboarding's transition into the shared, real
+// review component. The editor's create payload is covered by its own suite.
+vi.mock('../components/planningCenter/PlanningCenterBatchEditor', () => ({
+  default: ({ onSaved }: { onSaved: (batch: unknown) => void }) => (
+    <button type="button" onClick={() => onSaved({
+      id: 91,
+      provider: 'planning_center',
+      name: 'First PCO batch',
+      enabled: true,
+      filterSchemaVersion: 2,
+      filterConfig: { branches: [], exclusions: [] },
+      filterRevision: 1,
+      draftFilterSchemaVersion: 2,
+      draftFilterConfig: { branches: [], exclusions: [] },
+      draftFilterBaseRevision: 1,
+      draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z',
+      needsFilterReview: true,
+      defaultPeopleType: 'regular',
+      gatheringTypeId: null,
+      gatheringAutoRemoveEnabled: false,
+      scheduleEnabled: false,
+      scheduleFrequency: 'weekly',
+      scheduleDay: 1,
+      legacyProviderBatchId: null,
+      lastExternalWatermark: null,
+      lastSyncAt: null,
+      lastSyncResult: null,
+    })}>Create reviewed PCO batch</button>
+  ),
+}));
+
+const pcoReview = {
+  runId: 17,
+  reviewToken: 'onboarding-pco-review',
+  snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' as const },
+  plan: {
+    provider: 'planning_center' as const,
+    authoritative: false,
+    snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' as const },
+    linkPeople: [], linkFamilies: [], addPeople: [], addFamilies: [], updateManagedFields: [],
+    promoteToRegular: [], demoteToLocalVisitor: [], archive: [], reactivate: [], moveFamily: [],
+    renameFamily: [], addToGathering: [], removeFromGathering: [], ambiguousPeople: [],
+    familyConflicts: [], unmatchedLocalRegulars: [], skipped: [],
+  },
+  summary: {
+    linkPeople: 0, linkFamilies: 0, addPeople: 0, addFamilies: 0, updateManagedFields: 0,
+    promoteToRegular: 0, demoteToLocalVisitor: 0, archive: 0, reactivate: 0, moveFamily: 0,
+    renameFamily: 0, addToGathering: 0, removeFromGathering: 0, ambiguousPeople: 0,
+    familyConflicts: 0, unmatchedLocalRegulars: 0, skipped: 0,
+  },
+};
 
 async function reachChoosePath() {
   render(<OnboardingPage />);
@@ -42,6 +99,9 @@ describe('OnboardingPage integration choices', () => {
     vi.mocked(onboardingAPI.saveChurchInfo).mockResolvedValue({ data: {} } as never);
     vi.mocked(onboardingAPI.complete).mockResolvedValue({ data: {} } as never);
     vi.mocked(integrationsAPI.authorizePlanningCenter).mockResolvedValue({ data: { authUrl: '#pco-oauth' } } as never);
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockResolvedValue({ data: pcoReview } as never);
+    vi.mocked(integrationsAPI.applyPlanningCenterBatch).mockResolvedValue({ data: { runId: 17, status: 'applied', applied: {}, summary: pcoReview.summary } } as never);
+    vi.mocked(integrationsAPI.getCheckinAvailability).mockResolvedValue({ data: { available: true, hasImported: false, peopleLinked: true } } as never);
   });
 
   it('offers Planning Center, Elvanto, and Start fresh at choose-path', async () => {
@@ -69,5 +129,36 @@ describe('OnboardingPage integration choices', () => {
     await reachChoosePath();
     fireEvent.click(screen.getByRole('button', { name: 'Start fresh' }));
     expect(navigate).toHaveBeenCalledWith('/app/gatherings');
+  });
+
+  it('uses the real PCO review and only advances after a successful reviewed apply', async () => {
+    window.history.replaceState({}, '', '/app/onboarding?pco=connected');
+    render(<OnboardingPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create reviewed PCO batch' }));
+    expect(await screen.findByRole('heading', { name: 'Planning Center sync review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+
+    await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(91, {
+      reviewToken: 'onboarding-pco-review', selections: expect.any(Object),
+    }));
+    await waitFor(() => expect(integrationsAPI.getCheckinAvailability).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/Create your gatherings from Planning Center events/)).toBeInTheDocument();
+  });
+
+  it('keeps onboarding on the real PCO review when applying it fails', async () => {
+    vi.mocked(integrationsAPI.applyPlanningCenterBatch).mockRejectedValue({
+      response: { data: { error: 'PCO apply failed.' } },
+    });
+    window.history.replaceState({}, '', '/app/onboarding?pco=connected');
+    render(<OnboardingPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create reviewed PCO batch' }));
+    expect(await screen.findByRole('heading', { name: 'Planning Center sync review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByText('PCO apply failed.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Planning Center sync review' })).toBeInTheDocument();
+    expect(integrationsAPI.getCheckinAvailability).not.toHaveBeenCalled();
   });
 });

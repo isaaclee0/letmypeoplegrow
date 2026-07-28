@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
@@ -13,6 +14,8 @@ vi.mock('../../services/api', () => ({
     authorizePlanningCenter: vi.fn(),
     disconnectPlanningCenter: vi.fn(),
     deletePlanningCenterSyncBatch: vi.fn(),
+    getPlanningCenterBatchPlan: vi.fn(),
+    applyPlanningCenterBatch: vi.fn(),
   },
   settingsAPI: {
     getIntegrationSettings: vi.fn(),
@@ -22,11 +25,11 @@ vi.mock('../../services/api', () => ({
     previewAuthority: vi.fn(),
     applyAuthority: vi.fn(),
     disableAuthority: vi.fn(),
+    discardFilterDraft: vi.fn(),
   },
 }));
 
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
-vi.mock('../planningCenter/PlanningCenterSyncReview', () => ({ default: () => null }));
 vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({
   default: ({ onSaved }: { onSaved: (batch: unknown) => void }) => (
     <button type="button" onClick={() => onSaved({})}>Complete batch save</button>
@@ -57,6 +60,23 @@ const batch: PeopleSyncBatch = {
   lastSyncResult: null,
 };
 
+const draftBatch: PeopleSyncBatch = {
+  ...batch, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] }, filterRevision: 2,
+  draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] },
+  draftFilterBaseRevision: 2, draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z', needsFilterReview: true,
+};
+const promotedBatch: PeopleSyncBatch = {
+  ...draftBatch, filterRevision: 3, filterConfig: draftBatch.draftFilterConfig!,
+  draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false,
+};
+const review = {
+  success: true, runId: 7, reviewToken: 'pco-review',
+  snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' as const },
+  plan: { provider: 'planning_center' as const, authoritative: false, snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' as const },
+    linkPeople: [], linkFamilies: [], addPeople: [], addFamilies: [], updateManagedFields: [], promoteToRegular: [], demoteToLocalVisitor: [], archive: [], reactivate: [], moveFamily: [], renameFamily: [], addToGathering: [], removeFromGathering: [], ambiguousPeople: [], familyConflicts: [], unmatchedLocalRegulars: [], skipped: [] },
+  summary: { linkPeople: 0, linkFamilies: 0, addPeople: 0, addFamilies: 0, updateManagedFields: 0, promoteToRegular: 0, demoteToLocalVisitor: 0, archive: 0, reactivate: 0, moveFamily: 0, renameFamily: 0, addToGathering: 0, removeFromGathering: 0, ambiguousPeople: 0, familyConflicts: 0, unmatchedLocalRegulars: 0, skipped: 0 },
+};
+
 type PanelProps = React.ComponentProps<typeof PlanningCenterIntegrationPanel>;
 
 function panel(overrides: Partial<PanelProps> = {}) {
@@ -76,7 +96,7 @@ function panel(overrides: Partial<PanelProps> = {}) {
 }
 
 function renderPanel(overrides: Partial<PanelProps> = {}) {
-  return render(panel(overrides));
+  return render(<MemoryRouter>{panel(overrides)}</MemoryRouter>);
 }
 
 describe('PlanningCenterIntegrationPanel', () => {
@@ -94,6 +114,8 @@ describe('PlanningCenterIntegrationPanel', () => {
     vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({
       data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false },
     });
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockResolvedValue({ data: review });
+    vi.mocked(integrationsAPI.applyPlanningCenterBatch).mockResolvedValue({ data: { success: true, runId: 7, status: 'applied', applied: {} as never, summary: review.summary } });
   });
 
   it('enables authority for an actual-shaped legacy sync batch', async () => {
@@ -220,5 +242,42 @@ describe('PlanningCenterIntegrationPanel', () => {
     expect(sourceSwitch).toBeDisabled();
     fireEvent.click(sourceSwitch);
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
+  });
+
+  it('uses the real review, then reloads the promoted active filter after apply', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockReset();
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValueOnce({ data: { batches: [draftBatch] } })
+      .mockResolvedValueOnce({ data: { batches: [promotedBatch] } });
+    renderPanel();
+
+    expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
+    expect(screen.getByText(/Draft criteria will not run until reviewed/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review & sync' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(12, {
+      reviewToken: 'pco-review', selections: expect.any(Object),
+    }));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument());
+  });
+
+  it('discards only a Planning Center draft and retains the active schedule', async () => {
+    const discarded = { ...draftBatch, draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false };
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockReset();
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
+      .mockResolvedValueOnce({ data: { batches: [draftBatch] } })
+      .mockResolvedValueOnce({ data: { batches: [discarded] } });
+    vi.mocked(peopleSyncAPI.discardFilterDraft).mockResolvedValue({ data: { success: true, batch: {} as never } });
+    renderPanel();
+
+    expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
+    expect(screen.getByText('Runs weekly')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+    await waitFor(() => expect(peopleSyncAPI.discardFilterDraft).toHaveBeenCalledWith('planning_center', 12));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Runs weekly')).toBeInTheDocument();
+    expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
   });
 });

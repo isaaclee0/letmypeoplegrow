@@ -32,35 +32,72 @@ function errorMessage(error: unknown): string {
   return 'Unable to compare this legacy filter. Refresh the snapshot and try again.';
 }
 
+function hasFreshDirectProof(preview: PreviewState | undefined): boolean {
+  return preview?.compatible === true && typeof preview.upgradeToken === 'string' && preview.upgradeToken.length > 0 &&
+    preview.snapshot?.fresh === true && typeof preview.snapshot.id === 'string' && preview.snapshot.id.length > 0;
+}
+
 export default function FilterUpgradePanel({ provider, batches, onChanged }: Props) {
   const legacy = useMemo(() => batches.filter((batch) => batch.filterSchemaVersion === 1), [batches]);
   const [previews, setPreviews] = useState<Record<number, PreviewState>>({});
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const generation = useRef(0);
+  const mounted = useRef(true);
+  const previewSequence = useRef<Record<number, number>>({});
   const mutationInFlight = useRef(false);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   useEffect(() => {
     generation.current += 1;
     setPreviews((current) => Object.fromEntries(Object.entries(current).filter(([id]) => legacy.some((batch) => batch.id === Number(id)))));
   }, [legacy]);
 
-  const loadPreview = async (batch: PeopleSyncBatch) => {
+  const beginPreview = (batch: PeopleSyncBatch) => {
     const requestGeneration = generation.current;
+    const requestSequence = (previewSequence.current[batch.id] || 0) + 1;
+    previewSequence.current[batch.id] = requestSequence;
     setPreviews((current) => ({ ...current, [batch.id]: { ...(current[batch.id] || {} as PreviewState), loading: true } }));
+    return { requestGeneration, requestSequence };
+  };
+
+  const isCurrentPreview = (batchId: number, request: { requestGeneration: number; requestSequence: number }) =>
+    mounted.current && request.requestGeneration === generation.current && previewSequence.current[batchId] === request.requestSequence;
+
+  const fetchPreview = async (batch: PeopleSyncBatch, request: { requestGeneration: number; requestSequence: number }) => {
     try {
       const response = await peopleSyncAPI.previewFilterUpgrade(provider, batch.id);
-      if (requestGeneration !== generation.current) return;
+      if (!isCurrentPreview(batch.id, request)) return;
       setPreviews((current) => ({ ...current, [batch.id]: response.data }));
     } catch (error) {
-      if (requestGeneration !== generation.current) return;
+      if (!isCurrentPreview(batch.id, request)) return;
+      setPreviews((current) => ({ ...current, [batch.id]: { ...(current[batch.id] || {} as PreviewState), loading: false, error: errorMessage(error) } }));
+    }
+  };
+
+  const loadPreview = async (batch: PeopleSyncBatch) => {
+    const request = beginPreview(batch);
+    await fetchPreview(batch, request);
+  };
+
+  const refreshAndPreview = async (batch: PeopleSyncBatch) => {
+    const request = beginPreview(batch);
+    try {
+      await peopleSyncAPI.refreshFilterSnapshot(provider);
+      if (!isCurrentPreview(batch.id, request)) return;
+      await fetchPreview(batch, request);
+    } catch (error) {
+      if (!isCurrentPreview(batch.id, request)) return;
       setPreviews((current) => ({ ...current, [batch.id]: { ...(current[batch.id] || {} as PreviewState), loading: false, error: errorMessage(error) } }));
     }
   };
 
   const compatible = legacy.flatMap((batch) => {
     const preview = previews[batch.id];
-    return preview?.compatible && preview.upgradeToken ? [{ batchId: batch.id, upgradeToken: preview.upgradeToken }] : [];
+    return hasFreshDirectProof(preview) ? [{ batchId: batch.id, upgradeToken: preview.upgradeToken }] : [];
   });
 
   const upgradeCompatible = async () => {
@@ -80,7 +117,7 @@ export default function FilterUpgradePanel({ provider, batches, onChanged }: Pro
   };
 
   const upgradeExact = async (batch: PeopleSyncBatch, preview: PreviewState) => {
-    if (!preview.compatible || !preview.upgradeToken || busy || mutationInFlight.current) return;
+    if (!hasFreshDirectProof(preview) || busy || mutationInFlight.current) return;
     mutationInFlight.current = true;
     setBusy(true);
     setActionError(null);
@@ -129,8 +166,8 @@ export default function FilterUpgradePanel({ provider, batches, onChanged }: Pro
         const delta = preview ? Math.abs(preview.newCount - preview.oldCount) : 0;
         return <li key={batch.id} className="rounded border border-amber-200 bg-white p-3 dark:border-amber-800 dark:bg-gray-900">
           <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">Legacy batch: {batch.name}</p><p className="text-xs text-gray-600 dark:text-gray-300">{batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'} · Active criteria still running</p></div><button type="button" aria-label={`Upgrade filter ${batch.name}`} onClick={() => void loadPreview(batch)} disabled={busy || preview?.loading} className="underline disabled:opacity-50">{preview?.loading ? 'Comparing…' : 'Upgrade filter'}</button></div>
-          {preview?.error && <p role="alert" className="mt-2 text-red-700">{preview.error}</p>}
-          {preview && !preview.loading && !preview.error && <div className="mt-3 space-y-1 border-t border-amber-100 pt-3 text-xs dark:border-amber-900"><p><span className="font-medium">Converted expression:</span> {expression(preview.convertedFilterConfig)}</p><p>{preview.oldCount} legacy matches → {preview.newCount} converted matches</p><p>{snapshotAge(preview.snapshot.capturedAt)}</p>{preview.compatible ? <><p className="font-medium text-green-700 dark:text-green-300">Exact-compatible</p><button type="button" aria-label={`Apply upgrade ${batch.name}`} onClick={() => void upgradeExact(batch, preview)} disabled={busy} className="underline disabled:opacity-50">Apply upgrade</button></> : <><p>Overlap impact: {delta} {delta === 1 ? 'person changes' : 'people change'}</p><p className="font-medium text-amber-800 dark:text-amber-200">Needs full review</p><button type="button" aria-label={`Review converted filter ${batch.name}`} onClick={() => void reviewMismatch(batch, preview)} disabled={busy} className="underline disabled:opacity-50">Review converted filter</button></>}</div>}
+          {preview?.error && <div className="mt-2 space-y-1"><p role="alert" className="text-red-700">{preview.error}</p><button type="button" aria-label={`Refresh people data and compare ${batch.name}`} onClick={() => void refreshAndPreview(batch)} disabled={busy || preview.loading} className="underline disabled:opacity-50">Refresh people data and compare again</button></div>}
+          {preview && !preview.loading && !preview.error && <div className="mt-3 space-y-1 border-t border-amber-100 pt-3 text-xs dark:border-amber-900"><p><span className="font-medium">Converted expression:</span> {expression(preview.convertedFilterConfig)}</p><p>{preview.oldCount} legacy matches → {preview.newCount} converted matches</p><p>{snapshotAge(preview.snapshot.capturedAt)}</p>{preview.compatible && !hasFreshDirectProof(preview) ? <><p className="font-medium text-amber-800 dark:text-amber-200">Snapshot is stale. Direct upgrades need fresh people data.</p><button type="button" aria-label={`Refresh people data and compare ${batch.name}`} onClick={() => void refreshAndPreview(batch)} disabled={busy} className="underline disabled:opacity-50">Refresh people data and compare again</button></> : null}{hasFreshDirectProof(preview) ? <><p className="font-medium text-green-700 dark:text-green-300">Exact-compatible</p><button type="button" aria-label={`Apply upgrade ${batch.name}`} onClick={() => void upgradeExact(batch, preview)} disabled={busy} className="underline disabled:opacity-50">Apply upgrade</button></> : !preview.compatible ? <><p>Overlap impact: {delta} {delta === 1 ? 'person changes' : 'people change'}</p><p className="font-medium text-amber-800 dark:text-amber-200">Needs full review</p><button type="button" aria-label={`Review converted filter ${batch.name}`} onClick={() => void reviewMismatch(batch, preview)} disabled={busy} className="underline disabled:opacity-50">Review converted filter</button></> : null}</div>}
         </li>;
       })}
     </ul>

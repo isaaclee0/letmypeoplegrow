@@ -284,7 +284,7 @@ function staleError() {
 function validSnapshot(entry, churchId, provider) {
   return entry && entry.churchId === churchId && entry.provider === provider &&
     typeof entry.snapshotId === 'string' && entry.snapshotId &&
-    typeof entry.populationGateDigest === 'string' && entry.populationGateDigest && Array.isArray(entry.facts);
+    entry.fresh === true && typeof entry.populationGateDigest === 'string' && entry.populationGateDigest && Array.isArray(entry.facts);
 }
 
 async function applyCompatibleUpgrades({ churchId, provider, upgrades, cache = filterFactsCache } = {}) {
