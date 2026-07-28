@@ -6,6 +6,7 @@ const multiGroups: FilterDimension = {
   id: 'groups',
   label: 'Groups',
   cardinality: 'multi',
+  category: 'Groups',
   values: [{ id: 'music', label: 'Music', count: 4 }],
 };
 
@@ -13,6 +14,7 @@ const singleStatus: FilterDimension = {
   id: 'status',
   label: 'Status',
   cardinality: 'single',
+  category: 'People',
   values: [{ id: 'active', label: 'Active', count: 4 }],
 };
 
@@ -55,6 +57,28 @@ describe('filterConfig', () => {
     expect(setValueState(config, multiGroups, 'youth', 'include')).toEqual({
       branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['music', 'youth'] }] }],
       exclusions: [{ dimensionId: 'groups', values: ['music'] }],
+    });
+  });
+
+  it('coalesces multiple NOT values per dimension and preserves the remaining exclusion through transitions', () => {
+    const withTwoExclusions = setValueState(
+      setValueState(emptyBooleanFilter(), multiGroups, 'music', 'not'),
+      multiGroups,
+      'youth',
+      'not',
+    );
+
+    expect(withTwoExclusions).toEqual({
+      branches: [],
+      exclusions: [{ dimensionId: 'groups', values: ['music', 'youth'] }],
+    });
+    expect(setValueState(withTwoExclusions, multiGroups, 'music', 'include')).toEqual({
+      branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] }],
+      exclusions: [{ dimensionId: 'groups', values: ['youth'] }],
+    });
+    expect(setValueState(withTwoExclusions, multiGroups, 'music', 'off')).toEqual({
+      branches: [],
+      exclusions: [{ dimensionId: 'groups', values: ['youth'] }],
     });
   });
 

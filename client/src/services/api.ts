@@ -21,6 +21,7 @@ import type {
   FilterPreviewResult,
   FilterSnapshot,
   FilterUpgradePreview,
+  FilterUpgradeApplyResult,
 } from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
@@ -888,6 +889,7 @@ export interface SyncBatchLastResult {
   errors: number;
 }
 
+/** @deprecated Remove in Task 12 after generic panel/onboarding migration. */
 export interface SyncBatch extends SyncBatchInput {
   id: number;
   lastSyncAt: string | null;
@@ -1076,14 +1078,14 @@ export const peopleSyncAPI = {
     ),
 
   applyFilterUpgrade: (provider: SyncProvider, batchId: number, upgradeToken: string) =>
-    api.post<{ success: true; batches: PeopleSyncBatch<BooleanFilterConfigV2>[] }>(
+    api.post<{ success: true; batches: FilterUpgradeApplyResult[] }>(
       `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-upgrade/apply`,
       { upgradeToken },
       { timeout: 120000 },
     ),
 
   applyCompatibleFilterUpgrades: (provider: SyncProvider, upgrades: Array<{ batchId: number; upgradeToken: string }>) =>
-    api.post<{ success: true; batches: PeopleSyncBatch<BooleanFilterConfigV2>[] }>(
+    api.post<{ success: true; batches: FilterUpgradeApplyResult[] }>(
       `/integrations/people-sync/providers/${provider}/filter-upgrades/apply-compatible`,
       { upgrades },
       { timeout: 120000 },

@@ -59,6 +59,7 @@ export interface FilterDimension {
   id: string;
   label: string;
   cardinality: FilterDimensionCardinality;
+  category: string;
   values: FilterDimensionValue[];
 }
 
@@ -96,6 +97,14 @@ export interface FilterUpgradePreview {
   oldCount: number;
   newCount: number;
   upgradeToken: string;
+}
+
+// `applyCompatibleUpgrades()` deliberately returns only upgrade audit fields,
+// not the complete batch DTO. This mirrors filterUpgrade.js exactly.
+export interface FilterUpgradeApplyResult {
+  id: number;
+  filterSchemaVersion: 2;
+  filterRevision: number;
 }
 
 // server/routes/individuals.js and server/routes/families.js already attach

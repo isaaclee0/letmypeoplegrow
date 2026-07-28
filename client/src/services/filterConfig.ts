@@ -40,8 +40,13 @@ function normalise(config: BooleanFilterConfigV2): BooleanFilterConfigV2 {
   const branches = config.branches
     .map(normaliseBranch)
     .filter((branch): branch is BooleanFilterBranch => branch !== null);
-  const exclusions = config.exclusions
-    .map((exclusion) => ({ dimensionId: exclusion.dimensionId, values: uniqueSorted(exclusion.values) }))
+  const exclusionValuesByDimension = new Map<string, string[]>();
+  for (const exclusion of config.exclusions) {
+    const values = exclusionValuesByDimension.get(exclusion.dimensionId) || [];
+    exclusionValuesByDimension.set(exclusion.dimensionId, [...values, ...exclusion.values]);
+  }
+  const exclusions = [...exclusionValuesByDimension.entries()]
+    .map(([dimensionId, values]) => ({ dimensionId, values: uniqueSorted(values) }))
     .filter((exclusion) => exclusion.values.length > 0)
     .sort((left, right) => left.dimensionId.localeCompare(right.dimensionId));
   return { branches, exclusions };
