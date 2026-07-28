@@ -5,6 +5,10 @@ const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('./planningCenterSync');
 const { isDueToday } = pcoSync;
 
+test('peekCachedPcoPeople returns null for a cold church without fetching', () => {
+  assert.equal(pcoSync.peekCachedPcoPeople('church-without-a-warm-cache'), null);
+});
+
 test('isDueToday: daily is always due', () => {
   const monday = new Date('2026-07-06T02:00:00'); // a Monday
   const wednesday = new Date('2026-07-08T02:00:00');

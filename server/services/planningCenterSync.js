@@ -36,6 +36,16 @@ function invalidatePcoPeopleCache(churchId) {
   else pcoPeopleCache.clear();
 }
 
+// Read-only cache probe for filter-metadata construction. Unlike
+// getCachedPcoPeople this must never fetch or refresh: preview and metadata
+// requests are allowed to reuse a warm full roster, but only an explicit
+// refresh/reconciliation may make a provider call.
+function peekCachedPcoPeople(churchId) {
+  const cached = pcoPeopleCache.get(churchId);
+  if (!cached || !Array.isArray(cached.people) || (Date.now() - cached.fetchedAt) >= PCO_PEOPLE_TTL_MS) return null;
+  return cached;
+}
+
 // ─── HTTP helper ────────────────────────────────────────────────────────────
 
 function httpsGet(url, accessToken) {
@@ -569,7 +579,7 @@ function runNow() { return scheduler.runNow(); }
 module.exports = {
   start, stop, runNow, isDueToday,
   getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
-  getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
+  getCachedPcoPeople, peekCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, createBatch, updateBatch, deleteBatch,
   batchFilterConfig, computePlanForBatch, recordBatchSyncResult, toLegacyPcoBatchDto,
   getPlanningCenterTokens, ensureValidPlanningCenterTokens,

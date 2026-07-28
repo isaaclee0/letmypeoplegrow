@@ -12,6 +12,7 @@ const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
+const filterFactsCache = require('../services/peopleSync/filterFactsCache');
 const {
   INTEGRATION_CREDENTIALS_KEY_INVALID,
   INTEGRATION_CREDENTIAL_DECRYPT_FAILED,
@@ -1013,6 +1014,7 @@ router.post('/planning-center/disconnect', async (req, res) => {
     // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
     // or a non-connecting admin's click would silently no-op.
     await connectionStore.disconnectConnection(churchId, 'planning_center');
+    filterFactsCache.clear(churchId, 'planning_center');
 
     // Belt-and-suspenders: also clear any legacy (pre-Task-10) per-admin
     // tokens. This matters even after the migration to integration_connections

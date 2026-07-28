@@ -369,6 +369,32 @@ test('PUT /settings accepts a valid partial patch and never switches authority',
   assert.deepEqual(patchSeen, { elvantoIncludeContacts: false, fullReconciliationDay: 3 });
 });
 
+test('PUT /settings clears only this church\'s Elvanto facts after changing the contact population gate', async () => {
+  const cleared = [];
+  await withServer({
+    getSettings: async () => ({ elvantoIncludeContacts: true, fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1 }),
+    updateSettings: async (_churchId, patch) => ({ elvantoIncludeContacts: patch.elvantoIncludeContacts, fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1 }),
+    clearFilterFactsCache: (churchId, provider) => { cleared.push({ churchId, provider }); },
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status } = await requestJson(`${base}/settings`, { method: 'PUT', body: { elvantoIncludeContacts: false } });
+    assert.equal(status, 200);
+  });
+  assert.deepEqual(cleared, [{ churchId: 'churcha1', provider: 'elvanto' }]);
+});
+
+test('PUT /settings leaves cache entries alone when the contact gate is unchanged or saving fails', async () => {
+  const cleared = [];
+  await withServer({
+    getSettings: async () => ({ elvantoIncludeContacts: true, fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1 }),
+    updateSettings: async () => { throw new Error('database unavailable'); },
+    clearFilterFactsCache: (churchId, provider) => { cleared.push({ churchId, provider }); },
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status } = await requestJson(`${base}/settings`, { method: 'PUT', body: { elvantoIncludeContacts: false } });
+    assert.equal(status, 500);
+  });
+  assert.deepEqual(cleared, []);
+});
+
 test('POST /people-authority/apply rejects a non-object selections payload by treating it as empty rather than crashing', async () => {
   const calls = [];
   await withServer({

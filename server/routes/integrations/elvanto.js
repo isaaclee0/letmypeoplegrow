@@ -36,6 +36,7 @@ const orchestrator = require('../../services/peopleSync/orchestrator');
 const { createElvantoAdapter } = require('../../services/elvanto/adapter');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
 const legacyCredential = require('../../services/elvanto/legacyCredential');
+const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
@@ -186,6 +187,7 @@ const defaultDeps = {
   markValidated: connectionStore.markValidated,
   getOrMigrateCredentials: legacyCredential.getOrMigrateCredentials,
   deleteLegacyPreferences: defaultDeleteLegacyPreferences,
+  clearFilterFactsCache: filterFactsCache.clear,
   getAuthority: authority.getAuthority,
   disableAuthority: authority.disableAuthority,
   listBatches: batchRepository.listBatches,
@@ -359,6 +361,7 @@ function createElvantoRouter(overrides = {}) {
         await deps.disableAuthority(churchId);
       }
       const disconnected = await deps.disconnectConnection(churchId, PROVIDER);
+      deps.clearFilterFactsCache(churchId, PROVIDER);
       // Belt-and-suspenders: also clear any legacy (pre-Task-16) per-admin
       // API key rows, mirroring Planning Center's own disconnect route —
       // without this, a church whose legacy row was never read (so never
