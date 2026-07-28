@@ -1,32 +1,377 @@
-# People-sync filter rules
+# AGENTS.md
 
-Planning Center and Elvanto use the same provider-neutral Boolean filter
-contract. Do not add provider-specific Boolean evaluation, preview, or draft
-promotion paths.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
-- Put all schema-v2 normalization, validation, evaluation, selected-dimension
-  discovery, and summaries in
-  `server/services/peopleSync/filterEngine.js`.
-- Use `server/services/peopleSync/filterSnapshot.js` for PII-free provider
-  facts, dimensions, and population gating; use
-  `server/services/peopleSync/filterFactsCache.js` for the church/provider
-  complete-snapshot cache.
-- Keep previews in `server/services/peopleSync/filterPreview.js` cache-only.
-  A preview must never fetch a Planning Center or Elvanto roster and must never
-  return facts, external IDs, credentials, or raw provider records.
-- The only filter-builder roster fetch is the explicit refresh route in
-  `server/routes/integrations/filterBuilder.js`. It may replace cache content
-  only with a complete full snapshot.
-- Save changed criteria as a draft through
-  `server/services/peopleSync/batchRepository.js`; never write them into the
-  active filter directly. Promote drafts only through reviewed reconciliation
-  and its atomic transaction in `server/services/peopleSync/apply.js` /
-  `server/services/peopleSync/orchestrator.js`.
-- Keep schema-v1 provider logic in
-  `server/services/planningCenter/eligibility.js` and
-  `server/services/elvanto/filter.js`. Version-1 batches and schedules remain
-  active until an explicit, reviewed compatibility upgrade through
-  `server/services/peopleSync/filterUpgrade.js`.
-- Enforce church isolation on every cache key, route, query, snapshot, draft,
-  review, and scheduled operation. Authoritative unattended sync must refuse a
-  normal pending schema-v2 draft with `SYNC_FILTER_REVIEW_REQUIRED`.
+## Project Overview
+
+Let My People Grow is a church attendance tracking and member management system with a React/TypeScript frontend, Node.js/Express backend, and per-church SQLite databases. The application is fully containerized using Docker.
+
+## Development Commands
+
+### Running the Application
+
+**Development mode (with hot reload):**
+```bash
+# Start all services
+docker-compose -f docker-compose.dev.yml up -d
+
+# View logs
+docker-compose -f docker-compose.dev.yml logs -f [service-name]
+
+# Stop services
+docker-compose -f docker-compose.dev.yml down
+```
+
+**Production mode:**
+```bash
+docker-compose up -d
+docker-compose logs -f
+docker-compose down
+```
+
+### Testing and Building
+
+**Client:**
+```bash
+cd client
+npm start          # Start Vite dev server
+npm run build      # Build for production (generates service worker + builds)
+npm test           # Run tests
+npm run preview    # Preview production build
+```
+
+**Server:**
+```bash
+cd server
+npm run dev        # Start with nodemon (auto-reload)
+npm start          # Start production server
+npm run admin      # Start admin panel (port 7777)
+```
+
+### Database Operations
+
+**SQLite databases are created automatically** when the server starts or when a new church registers. No manual schema setup is needed.
+
+**Migrating from MariaDB:**
+```bash
+cd server
+DB_HOST=127.0.0.1 DB_PORT=3307 DB_USER=root DB_PASSWORD=root \
+  npm run migrate:mariadb
+```
+
+**Data location:**
+- `server/data/registry.sqlite` — church list and login routing
+- `server/data/churches/{church_id}.sqlite` — per-church data
+
+### Adding Dependencies
+
+**ALWAYS rebuild containers after adding dependencies:**
+```bash
+# Server dependencies
+docker-compose -f docker-compose.dev.yml build server
+docker-compose -f docker-compose.dev.yml up -d server
+
+# Client dependencies
+docker-compose -f docker-compose.dev.yml build client
+docker-compose -f docker-compose.dev.yml up -d client
+```
+
+## Architecture
+
+### Multi-Tenancy and Church Isolation
+
+**Critical Security Feature**: The application uses a church isolation system to ensure data separation between different churches.
+
+- **Church ID System**: Each church has a unique `church_id` stored in JWT tokens
+  - Development: Simple IDs (e.g., `devch1`, `redcc1`)
+  - Production: Secure IDs (e.g., `dev_abc123def456`) with format `{base}_{random_hex}`
+- **Middleware Enforcement**: `churchIsolation.js` middleware ensures users only access their church's data
+- **Database Filtering**: All queries automatically filter by `church_id`
+- **Token-Based**: Church context is embedded in JWT tokens and validated on every request
+
+**IMPORTANT**: When adding new database tables or queries, ALWAYS include `church_id` filtering. See `server/middleware/churchIsolation.js` for the isolation logic.
+
+### Authentication Flow
+
+The application uses a passwordless authentication system:
+
+1. **Request Code**: User enters email/mobile number → server sends OTC (One-Time Code) via Brevo (email) or Crazytel (SMS)
+2. **Verify Code**: User enters code → server validates and returns JWT token in HTTP-only cookie
+3. **Token Management**: JWT tokens include `userId` and `churchId`, stored in cookies with `httpOnly: true`
+4. **Token Refresh**: Automatic refresh via `/api/auth/refresh` endpoint before expiration
+5. **Church Isolation**: Middleware validates church_id on every authenticated request
+
+**Key files:**
+- `server/routes/auth.js` - Authentication endpoints
+- `server/middleware/auth.js` - Token verification and role-based access control
+- `client/src/services/api.ts` - API client with automatic token refresh interceptor
+
+### Frontend Architecture
+
+**React 19 + TypeScript + Vite:**
+- **Routing**: React Router v7 for navigation
+- **State Management**: React Context (AuthContext, KioskContext, PWAUpdateContext)
+- **API Client**: Axios with interceptors for token refresh and church isolation
+- **UI**: Tailwind CSS + Headless UI components
+- **Forms**: React Hook Form + Yup validation
+- **Charts**: Chart.js for attendance visualization
+- **Real-time**: Socket.io for live attendance updates
+
+**Key patterns:**
+- Cache-first loading: Show cached data immediately, then refresh in background
+- Optimistic updates: Update UI immediately, rollback on error
+- WebSocket updates: Broadcast attendance changes to all connected clients
+- PWA support: Service worker for offline functionality and update notifications
+
+### Backend Architecture
+
+**Express + SQLite (per-church):**
+- **Database**: SQLite via `better-sqlite3` with per-church file isolation (`server/config/database.js`)
+- **Registry**: `registry.sqlite` maps emails/phones to church IDs for login routing
+- **Church context**: `AsyncLocalStorage` threads the church ID through middleware and route handlers
+- **Routes**: RESTful API organized by domain (`server/routes/`)
+- **Middleware**: Authentication (sets church context), church isolation, security (Helmet, rate limiting)
+- **WebSocket**: Socket.io service for real-time updates (`server/services/websocket.js`)
+- **Logging**: Winston for structured logging to files and console
+
+**Route organization:**
+- `/api/auth` - Authentication (login, logout, token refresh)
+- `/api/users` - User management
+- `/api/gatherings` - Service/gathering management
+- `/api/attendance` - Attendance tracking (standard + headcount modes)
+- `/api/individuals` - Member management
+- `/api/families` - Family grouping
+- `/api/reports` - Dashboard and analytics
+- `/api/settings` - Church configuration
+- `/api/integrations` - External integrations (Elvanto, Planning Center — see "Planning Center Online (PCO) Integration" below)
+- `/api/ai` - AI insights (optional feature)
+
+### Database Schema
+
+**Core tables:**
+- `users` - User accounts with role-based permissions (admin, coordinator, attendance_taker)
+- `gathering_types` - Services/gatherings with scheduling info, supports `attendance_type` ('standard' | 'headcount')
+- `individuals` - Church members and visitors with `people_type` ('regular' | 'local_visitor' | 'traveller_visitor')
+- `families` - Family groupings
+- `attendance_sessions` - Attendance records per gathering per date
+- `attendance_records` - Individual attendance (present/absent) for standard mode
+- `headcount_records` - Headcount data for headcount mode gatherings
+- `visitor_config` - Church-specific visitor thresholds
+
+**Each church has its own SQLite file.** Tables retain `church_id` columns for query compatibility.
+Schema is defined in `server/config/schema.js`.
+
+### Attendance System
+
+The application supports two attendance tracking modes:
+
+1. **Standard Mode**: Individual check-ins with present/absent status
+   - Family-grouped display
+   - Visitor tracking with family grouping
+   - Tri-state attendance: present, absent, not-tracking
+   - Quick add for regulars and visitors
+   - Includes an optional **self check-in / kiosk mode**, gated behind
+     `KIOSK_MODE_ENABLED` in `server/.env` (default off). It's disabled by
+     default because the current self-checkin UI loads the entire church
+     roster into the browser for use on an unattended, PIN-locked device —
+     see `docs/superpowers/specs/2026-07-13-kiosk-mode-env-gate-design.md`.
+     Only turn it on once that's redesigned.
+
+2. **Headcount Mode**: Simple headcount entry
+   - Multiple attendance takers can submit counts independently
+   - Supports three aggregation modes:
+     - `separate` - Show individual counts
+     - `combined` - Sum all counts
+     - `averaged` - Average all counts
+   - Real-time updates via WebSocket
+
+**Key files:**
+- `client/src/pages/AttendancePage.tsx` - Main attendance UI
+- `server/routes/attendance.js` - Attendance endpoints
+- `server/services/websocket.js` - Real-time updates
+
+### Planning Center Online (PCO) Integration
+
+Optional, ongoing two-way sync with Planning Center's People and Check-ins APIs. This is a different shape of integration than Elvanto: Elvanto is a one-shot, unlinked import (admin ticks people/families, they get copied in, no persistent relationship). PCO links individuals/families to PCO IDs and keeps syncing — matching, archiving, and reactivating people as their PCO status changes, on a schedule.
+
+**Key files:**
+- `server/routes/integrations.js` - OAuth flow + batch CRUD/plan/apply + check-in import routes (shares this file with Elvanto; PCO occupies roughly lines 1600+ of ~3,600). Contains ~670 lines of dead pre-rewrite routes (`/planning-center/people`, `/import-people`, `/link-family`) with no client callers — don't build on these, they're superseded.
+- `server/services/planningCenterSync.js` - HTTPS client, PCO-people cache (10-min TTL), cron scheduler (daily 02:00), batch data access
+- `server/services/planningCenter/` - one module per concern: `matcher.js` (name/household matching), `eligibility.js` (batch filter evaluation), `diffEngine.js` (computes a sync plan), `apply.js` (mutates DB per plan), `projection.js`/`fieldDefinitions.js` (PCO custom field handling), `metadataCache.js` (persisted filter-picker cache), `checkinsImport.js` (attendance-history import), `checkinGate.js` (blocks check-in import until at least one person is linked — the importer matches by `planning_center_id` only, never by name, so importing before any linking would create a duplicate individual per attendee), `mode.js` (source-of-truth lock). Each has a co-located `.test.js`.
+- `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` and `client/src/components/planningCenter/*` - admin UI (batch editor, sync review)
+
+**Data model:**
+- `individuals.planning_center_id` / `families.planning_center_id` - link to a PCO Person/Household, unique-indexed per church
+- `planning_center_sync_batches` table - a named, independently schedulable sync unit: its own membership/custom-field filter, default `people_type` for newly-created people, optional gathering auto-assignment, own schedule
+- `church_settings` holds ~19 PCO-prefixed columns, several of which are legacy (single-filter/single-schedule, superseded by the batches table) and unused but left in place per the additive-only migration convention
+- OAuth tokens live in `user_preferences` (`preference_key = 'planning_center_tokens'`), scoped to whichever *user* connected PCO — there is no church-level credential row, so `getTokensForChurch` grabs any user in the church with tokens (`LIMIT 1`, no ordering)
+
+**Core concepts:**
+- **Batches**: a church can run multiple named batches (e.g. "Members", "Youth Group") each with its own filter/schedule/target gathering. Matching always runs against PCO's full unfiltered people set; only the *output* buckets (link/restore/ambiguous/visitor-match) are scoped to the batch's own filter.
+- **Source-of-truth mode**: when `church_settings.planning_center_sync_indicator = 1` — labeled "Show sync indicator" in the UI, with copy that only mentions a cosmetic badge — any individual with a `planning_center_id` becomes locked: manual name/age edits, archive, reactivate, delete, and merge are all rejected (403 `PCO_MODE_LOCKED`). Enforced in `mode.js`/`individuals.js`, mirrored client-side in `client/src/utils/pcoLock.ts`. The UI does not disclose this behavioral side effect — be aware when touching this toggle or its copy.
+- **Matching**: name + household corroboration only (`matcher.js`) — PCO email/phone/custom IDs are never consulted. Ambiguous matches are surfaced for manual review, not auto-resolved.
+
+### Provider-neutral Boolean people-sync filters
+
+Planning Center and Elvanto share the schema-v2 Boolean filter contract. Keep
+provider-specific version-1 behavior in `server/services/planningCenter/eligibility.js`
+and `server/services/elvanto/filter.js`; all new schema-v2 filter logic must
+go through `server/services/peopleSync/filterEngine.js`.
+
+- Use `filterSnapshot.js` and `filterFactsCache.js` for the PII-free,
+  church/provider-scoped complete snapshot and its freshness rules (fresh for
+  10 minutes; retained as stale for up to 24 hours).
+- Use `filterPreview.js` for previews. Previews are cache-only: they must not
+  fetch Planning Center or Elvanto people and must not return facts, external
+  IDs, raw provider records, or credentials. Only the explicit refresh route
+  in `server/routes/integrations/filterBuilder.js` may fetch a complete
+  provider snapshot.
+- Filter edits are drafts in `batchRepository.js`, never active eligibility.
+  Promote a draft only through reviewed reconciliation and its atomic
+  `apply.js`/`orchestrator.js` transaction. A normal pending schema-v2 draft
+  blocks authoritative unattended scheduling with
+  `SYNC_FILTER_REVIEW_REQUIRED`.
+- Version-1 schedules continue unchanged until an explicit reviewed upgrade.
+  `filterUpgrade.js` compares exact matched external-ID sets; fresh proof and
+  compatibility are required again at apply, and compatible bulk upgrades are
+  all-or-nothing.
+
+**Known rough edges** (from an architecture review; fix opportunistically, don't assume they're intentional):
+- Token-refresh is implemented independently three times (`integrations.js` x2, `planningCenterSync.js`) against the same `user_preferences` row — PCO rotates the refresh token on every use, so concurrent refreshes across these paths can overwrite a fresh token with a stale one.
+- `server/routes/families.js` and `server/routes/settings.js` both return a field called `planningCenterSyncEnabled`, backed by two *different* columns (`planning_center_sync_indicator` vs `planning_center_sync_enabled`) with two different meanings — don't assume they mean the same thing just because the name matches.
+- "Run now" in the batch UI applies with zero review (no ambiguous-match/family-name confirmation); onboarding does the same for its first batch by design. Given matching/eligibility bugs have shipped and been fixed multiple times in this feature's short life, treat blind-apply paths as higher-risk than "Review & sync."
+
+### PWA and Service Worker
+
+The application is a Progressive Web App:
+- **Service Worker**: Generated at build time with unique cache names
+- **Offline Support**: Static resources cached, API requests require network
+- **Update Notifications**: Automatic detection and user prompts for new versions
+- **Install Prompt**: Can be installed to home screen on mobile/desktop
+
+**Build process:** `npm run build` in client directory runs `generate-sw.js` before Vite build.
+
+### WebSocket Implementation
+
+Real-time updates for attendance tracking:
+- Server: `server/services/websocket.js` manages Socket.io connections
+- Client: Auto-connects on attendance page, receives live updates
+- Events: `attendance:update`, `visitor:update`, `headcount:update`
+- Church isolation: Rooms are scoped by `church_id` and `gathering_id`
+
+## Important Patterns and Conventions
+
+### Error Handling
+
+- Backend: Comprehensive error handling with specific error codes
+- Frontend: User-friendly error messages, retry logic for network errors
+- Authentication: Automatic token refresh, graceful fallback to login
+- Database: Transaction support for multi-step operations
+
+### Security Practices
+
+1. **Input Validation**: All inputs sanitized via `server/middleware/security.js`
+2. **SQL Injection Protection**: Prepared statements for all queries
+3. **Rate Limiting**: Global and endpoint-specific rate limits
+4. **CORS**: Configured for frontend-backend communication
+5. **HTTP-Only Cookies**: Tokens stored securely, not accessible via JavaScript
+6. **Church Isolation**: Enforced at middleware and database levels
+
+### Naming Conventions
+
+- **Database**: snake_case (e.g., `church_id`, `gathering_type_id`)
+- **API Routes**: kebab-case (e.g., `/api/gathering-types`, `/api/advanced-migrations`)
+- **TypeScript/React**: camelCase for variables, PascalCase for components
+- **Files**: PascalCase for React components, camelCase for utilities
+
+### Version Management
+
+- Version stored in `VERSION` file at project root
+- Synchronized across client and server package.json files
+- Displayed in UI for troubleshooting
+- Built into Docker images at build time
+
+## External Services
+
+**Email (Brevo):**
+- Required for email-based authentication
+- Configure: `BREVO_API_KEY` in `server/.env`
+
+**SMS (Crazytel):**
+- Optional for SMS-based authentication
+- Configure: `CRAZYTEL_API_KEY` and `CRAZYTEL_FROM_NUMBER` in `server/.env`
+
+**AI Insights (Optional):**
+- Supports OpenAI or Anthropic
+- Configure via Settings page in UI
+- Not required for core functionality
+
+**Elvanto Integration (Optional):**
+- Import members and gatherings from Elvanto
+- API key-based authentication
+- Configure via Integrations page
+
+**Planning Center Integration (Optional):**
+- Ongoing, linked two-way sync with Planning Center People + Check-ins (not a one-shot import — see "Planning Center Online (PCO) Integration" under Architecture)
+- OAuth2 authentication, configure `PLANNING_CENTER_CLIENT_ID`/`PLANNING_CENTER_CLIENT_SECRET` (or `PLANNING_CENTRE_*`) in `server/.env`
+- Configure via Settings → Integrations tab; gated behind `PLANNING_CENTER_ENABLED=true`
+
+## Database Migrations
+
+Schema is defined in `server/config/schema.js`. New columns/tables should be added there. The schema is applied automatically when a church database is first created.
+
+For migrating from MariaDB, see `docs/MIGRATE_MARIADB_TO_SQLITE.md`.
+
+## Docker Configuration
+
+**Services:**
+- `client` - React frontend (port 3000)
+- `server` - Node.js backend (port 3001) — includes SQLite databases in `data/` volume
+- `nginx` - Reverse proxy (port 80, dev only) - routes `/api` to server, `/` to client
+- `admin` - Internal admin panel (port 7777, localhost only)
+
+**Environment files:**
+- `server/.env` - Server configuration (API keys, database credentials)
+- `docker-compose.dev.yml` - Development configuration
+- `docker-compose.yml` - Production configuration
+
+**Data persistence:**
+- SQLite databases: `server_data_dev` / `server_data` volume (mounted at `/app/data`)
+- Uploads: `server/uploads` directory mounted
+
+## Admin Panel
+
+Internal admin panel accessible at `http://localhost:7777` (dev only):
+- Direct database access for troubleshooting
+- Church management
+- System health checks
+- Accessible only from localhost for security
+
+## Common Gotchas
+
+1. **Church Context Required**: All `Database.query()` calls require church context (set by `verifyToken` middleware via `AsyncLocalStorage`). For code outside the request chain (e.g., scripts, websockets), use `Database.queryForChurch(churchId, ...)` or `Database.setChurchContext(churchId, callback)`.
+2. **Schema Changes**: Add new tables/columns in `server/config/schema.js`. They are applied automatically when a church database is created.
+3. **SQLite SQL Differences**: The database layer auto-translates common MariaDB syntax (`NOW()`, `INSERT IGNORE`, `ON DUPLICATE KEY UPDATE`, `DATE_FORMAT`, boolean literals). For new queries, use SQLite-compatible SQL.
+4. **Docker Rebuilds**: After adding npm dependencies, rebuild the Docker container
+5. **Token Cookies**: Authentication uses HTTP-only cookies, not localStorage or Authorization headers
+6. **WebSocket Rooms**: Always scope WebSocket events by church_id to prevent cross-church leaks
+7. **PWA Caching**: Static assets are cached; clear service worker cache when debugging frontend issues
+8. **Rate Limiting**: Be aware of rate limits when testing authentication flows
+9. **Service Worker**: Must be regenerated on build - run `npm run build`, not just `vite build`
+
+## Documentation Reference
+
+Key documentation files in `docs/`:
+- `SECURITY_MODEL.md` - Church isolation and security architecture
+- `DOCKER_DEVELOPMENT.md` - Docker development workflow
+- `PWA_UPDATE_SYSTEM.md` - Service worker and PWA update flow
+- `DATABASE_MIGRATION_GUIDE_SIMPLIFIED.md` - Database schema updates
+- `WEBSOCKET_IMPLEMENTATION.md` - Real-time update system
+- `DEPLOYMENT.md` - Production deployment guide
+
+## Useful Ports
+
+- 3000 - Client (frontend)
+- 3001 - Server (backend API)
+- 7777 - Admin panel (localhost only)
+- 80 - Nginx (reverse proxy, dev only)
