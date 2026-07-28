@@ -28,8 +28,15 @@ const batch: PeopleSyncBatch<BooleanFilterConfigV2> = {
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 };
+const productionLegacyBatch: PeopleSyncBatch = {
+  ...batch,
+  filterSchemaVersion: 1,
+  filterConfig: { statuses: ['active'], categoryIds: ['members'], groups: { ids: ['youth'], operator: 'all' } },
+  draftFilterSchemaVersion: null,
+  draftFilterConfig: null,
+};
 function preview() { return { data: { success: true, matchCount: 12, snapshot: { id: 'snapshot', capturedAt: '2026-07-28T00:00:00.000Z', fresh: true, expiresAt: null, coveredDimensionIds: ['groups', 'status'] }, overlaps: [{ batchId: 7, batchName: 'Youth', count: 3 }], uniqueEnabledPopulationCount: 20, missingDimensionIds: [], warnings: [] } }; }
-function renderEditor(current: PeopleSyncBatch<BooleanFilterConfigV2> | null = batch, onSaved = vi.fn()) { return render(<ElvantoBatchEditor batch={current} metadata={legacyMetadata} gatherings={[{ id: 3, name: 'Sunday gathering' }]} onSaved={onSaved} onCancel={vi.fn()} />); }
+function renderEditor(current: PeopleSyncBatch | null = batch, onSaved = vi.fn()) { return render(<ElvantoBatchEditor batch={current} metadata={legacyMetadata} gatherings={[{ id: 3, name: 'Sunday gathering' }]} onSaved={onSaved} onCancel={vi.fn()} />); }
 
 describe('ElvantoBatchEditor', () => {
   beforeEach(() => {
@@ -52,6 +59,19 @@ describe('ElvantoBatchEditor', () => {
     expect(screen.getByText('Schedule')).toBeInTheDocument();
   });
 
+  it('keeps a production-shaped legacy Elvanto batch read-only when metadata is unavailable', async () => {
+    vi.mocked(peopleSyncAPI.getFilterMetadata).mockRejectedValue(new Error('metadata unavailable'));
+    renderEditor(productionLegacyBatch);
+
+    expect(await screen.findByText('Who qualifies?')).toBeInTheDocument();
+    expect(screen.getByText(/criteria must be upgraded/)).toBeInTheDocument();
+    expect(screen.queryByText('Qualification rules')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
+    expect(peopleSyncAPI.getFilterMetadata).not.toHaveBeenCalled();
+    expect(elvantoSyncAPI.updateBatch).not.toHaveBeenCalled();
+    expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();
+  });
+
   it('creates exactly one v2 batch carrying the draft and review state', async () => {
     vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch } });
     const onSaved = vi.fn();
@@ -66,13 +86,16 @@ describe('ElvantoBatchEditor', () => {
 
   it('does not mutate active filter criteria through the non-filter update', async () => {
     vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch } });
-    vi.mocked(peopleSyncAPI.saveFilterDraft).mockResolvedValue({ data: { success: true, batch } });
-    renderEditor();
+    const latestDraft = { ...batch, draftFilterConfig: null, draftFilterSchemaVersion: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false };
+    vi.mocked(peopleSyncAPI.saveFilterDraft).mockResolvedValue({ data: { success: true, batch: latestDraft } });
+    const onSaved = vi.fn();
+    renderEditor(batch, onSaved);
     await screen.findByText('Who qualifies?');
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
 
     await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(11, expect.not.objectContaining({ filterConfig: expect.anything(), filterSchemaVersion: expect.anything() })));
     expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledWith('elvanto', 11, expect.objectContaining({ filterConfig: filter }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(latestDraft));
   });
 
   it('keeps the editor open with a specific settings error', async () => {
@@ -84,5 +107,27 @@ describe('ElvantoBatchEditor', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Settings could not be saved.');
     expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Save batch' })).toBeInTheDocument();
+  });
+
+  it('reuses a newly created gathering when a saved batch needs its filter draft retried', async () => {
+    vi.mocked(gatheringsAPI.create).mockResolvedValue({ data: { id: 77 } });
+    vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch } });
+    vi.mocked(peopleSyncAPI.saveFilterDraft)
+      .mockRejectedValueOnce({ response: { data: { error: 'Draft could not be saved.' } } })
+      .mockResolvedValueOnce({ data: { success: true, batch } });
+    const onSaved = vi.fn();
+    renderEditor(batch, onSaved);
+
+    await screen.findByText('Who qualifies?');
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'new' } });
+    fireEvent.change(screen.getByLabelText('New gathering name'), { target: { value: 'New gathering' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+    await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('The gathering was created and Batch settings were saved, but filter draft was not: Draft could not be saved.'))).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(gatheringsAPI.create).toHaveBeenCalledTimes(1);
+    expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledTimes(2);
+    expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledTimes(2);
   });
 });

@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanningCenterBatchEditor from './PlanningCenterBatchEditor';
-import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type SyncBatch } from '../../services/api';
+import { gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import type { BooleanFilterConfigV2, FilterMetadata, PeopleSyncBatch } from '../peopleSync/types';
 
 vi.mock('../../services/api', () => ({
@@ -32,11 +32,12 @@ const v2Batch: PeopleSyncBatch<BooleanFilterConfigV2> = {
   legacyProviderBatchId: 8, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 };
 
-const legacyBatch: SyncBatch = {
-  id: 9, name: 'Legacy members', membershipFilterEnabled: true, membershipAllowlist: ['Member'],
-  fieldFilterEnabled: false, fieldFilters: [], defaultPeopleType: 'regular', gatheringTypeId: null,
-  gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
-  lastSyncAt: null, lastSyncResult: null,
+const productionLegacyBatch: PeopleSyncBatch = {
+  ...v2Batch,
+  filterSchemaVersion: 1,
+  filterConfig: { membershipFilterEnabled: true, membershipAllowlist: ['Member'], fieldFilterEnabled: true, fieldFilters: [{ fieldDefinitionId: 'membership', values: ['Member'] }] },
+  draftFilterSchemaVersion: null,
+  draftFilterConfig: null,
 };
 
 function preview(warnings: Array<'BROAD_FILTER'> = []) {
@@ -49,7 +50,7 @@ function preview(warnings: Array<'BROAD_FILTER'> = []) {
   };
 }
 
-function renderEditor(batch: PeopleSyncBatch<BooleanFilterConfigV2> | SyncBatch | null = v2Batch, onSaved = vi.fn()) {
+function renderEditor(batch: PeopleSyncBatch | null = v2Batch, onSaved = vi.fn()) {
   return render(<PlanningCenterBatchEditor batch={batch} onSaved={onSaved} onCancel={vi.fn()} />);
 }
 
@@ -61,15 +62,16 @@ describe('PlanningCenterBatchEditor', () => {
     vi.mocked(peopleSyncAPI.previewFilter).mockResolvedValue(preview());
   });
 
-  it('keeps the legacy panel DTO at a typed boundary while rendering the shared v2 filter editor', async () => {
-    renderEditor(legacyBatch);
+  it('keeps a production-shaped legacy PCO batch read-only without loading or clearing its criteria', async () => {
+    renderEditor(productionLegacyBatch);
 
     expect(await screen.findByText('Who qualifies?')).toBeInTheDocument();
-    expect(screen.getByText('Qualification rules')).toBeInTheDocument();
-    expect(screen.getByLabelText('Always exclude')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Refresh people data' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Gathering assignment')).toBeInTheDocument();
-    expect(screen.getByText('Schedule')).toBeInTheDocument();
+    expect(screen.getByText(/criteria must be upgraded/)).toBeInTheDocument();
+    expect(screen.queryByText('Qualification rules')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
+    expect(peopleSyncAPI.getFilterMetadata).not.toHaveBeenCalled();
+    expect(integrationsAPI.updatePlanningCenterSyncBatch).not.toHaveBeenCalled();
+    expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();
   });
 
   it('uses a draft on reopen, retains the active criteria, and can discard only the draft', async () => {
@@ -114,8 +116,9 @@ describe('PlanningCenterBatchEditor', () => {
     resolveUpdate({ data: { batch: v2Batch } });
     await waitFor(() => expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledWith('planning_center', 4, expect.objectContaining({ filterConfig: filter })));
     expect(onSaved).not.toHaveBeenCalled();
-    resolveDraft({ data: { success: true, batch: v2Batch } });
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: 4 })));
+    const latestDraft = { ...v2Batch, draftFilterConfig: null, draftFilterSchemaVersion: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false };
+    resolveDraft({ data: { success: true, batch: latestDraft } });
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(latestDraft));
   });
 
   it('requires acknowledgement for a broad warning and keeps the editor open when saving the draft fails', async () => {
@@ -128,7 +131,29 @@ describe('PlanningCenterBatchEditor', () => {
     expect(screen.getByRole('button', { name: 'Save batch' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Acknowledge broad filter'));
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
-    expect(await screen.findByText('Draft could not be saved.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('Batch settings were saved, but filter draft was not: Draft could not be saved.'))).toBe(true));
     expect(screen.getByRole('button', { name: 'Save batch' })).toBeInTheDocument();
+  });
+
+  it('reuses a newly created gathering when a saved batch needs its filter draft retried', async () => {
+    vi.mocked(gatheringsAPI.create).mockResolvedValue({ data: { id: 77 } });
+    vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch: v2Batch } });
+    vi.mocked(peopleSyncAPI.saveFilterDraft)
+      .mockRejectedValueOnce({ response: { data: { error: 'Draft could not be saved.' } } })
+      .mockResolvedValueOnce({ data: { success: true, batch: v2Batch } });
+    const onSaved = vi.fn();
+    renderEditor(v2Batch, onSaved);
+
+    await screen.findByText('Who qualifies?');
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'new' } });
+    fireEvent.change(screen.getByLabelText('New gathering name'), { target: { value: 'New gathering' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+    await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('The gathering was created and Batch settings were saved, but filter draft was not: Draft could not be saved.'))).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(gatheringsAPI.create).toHaveBeenCalledTimes(1);
+    expect(integrationsAPI.updatePlanningCenterSyncBatch).toHaveBeenCalledTimes(2);
+    expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledTimes(2);
   });
 });
