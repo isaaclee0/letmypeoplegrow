@@ -1,5 +1,6 @@
 const Database = require('../config/database');
 const { sendWeeklyCaregiverDigestEmail } = require('../utils/email');
+const { calculateConsecutiveAbsenceStreaks } = require('./attendancePeriodStreaks');
 
 /**
  * For a given church, build a digest for every caregiver who has at least one
@@ -68,17 +69,26 @@ async function generateCaregiverDigests(churchId) {
 
   if (members.length === 0) return [];
 
-  // --- 4. Get the last 12 standard attendance sessions ---
+  // --- 4. Get enough standard attendance sessions to form 12 periods ---
   const sessions = await Database.query(
-    `SELECT s.id, s.session_date, s.gathering_type_id, gt.name AS gathering_name
-     FROM attendance_sessions s
-     JOIN gathering_types gt ON gt.id = s.gathering_type_id
-     WHERE s.church_id = ?
-       AND gt.attendance_type = 'standard'
-       AND s.excluded_from_stats = 0
-     ORDER BY s.session_date DESC
-     LIMIT 12`,
-    [churchId]
+    `WITH ranked_sessions AS (
+       SELECT s.id, s.session_date, s.gathering_type_id,
+              gt.name AS gathering_name, gt.frequency,
+              ROW_NUMBER() OVER (
+                PARTITION BY s.gathering_type_id
+                ORDER BY s.session_date DESC, s.id DESC
+              ) AS gathering_rank
+         FROM attendance_sessions s
+         JOIN gathering_types gt ON gt.id = s.gathering_type_id
+        WHERE s.church_id = ? AND gt.church_id = ?
+          AND gt.attendance_type = 'standard' AND gt.is_active = 1
+          AND s.excluded_from_stats = 0
+     )
+     SELECT id, session_date, gathering_type_id, gathering_name, frequency
+       FROM ranked_sessions
+      WHERE gathering_rank <= 12
+      ORDER BY session_date DESC, id DESC`,
+    [churchId, churchId]
   );
 
   if (sessions.length === 0) return [];
@@ -95,35 +105,19 @@ async function generateCaregiverDigests(churchId) {
     [...sessionIds, churchId]
   );
 
-  // Build lookup: individualId → Map<sessionId, present>
-  const attendanceByPerson = new Map();
-  for (const row of attendanceRows) {
-    if (!attendanceByPerson.has(row.individual_id)) {
-      attendanceByPerson.set(row.individual_id, new Map());
-    }
-    attendanceByPerson.get(row.individual_id).set(row.session_id, !!row.present);
-  }
-
   // --- 6. Compute consecutive absence streak per member ---
-  // Sessions are sorted DESC (most recent first). We walk forward and count
-  // sessions where the member was NOT present (present === false OR no record).
-  // We break only on an explicit present=true, matching the Reports page logic.
   const memberStreak = new Map(); // individualId → { streak, gatheringName }
+  const streaks = calculateConsecutiveAbsenceStreaks({
+    sessions,
+    attendanceRows,
+    individualIds: members.map((member) => member.id),
+    maxPeriods: 12,
+  });
+  const latestGatheringName = sessions[0]?.gathering_name || null;
   for (const member of members) {
-    const attendance = attendanceByPerson.get(member.id) || new Map();
-    let streak = 0;
-    let lastGatheringName = null;
-    for (const session of sessions) {
-      const present = attendance.get(session.id);
-      if (present === true) {
-        break; // attended — streak ends
-      }
-      // present === false (explicit absence) or undefined (no record) → count as absent
-      streak++;
-      if (!lastGatheringName) lastGatheringName = session.gathering_name;
-    }
+    const streak = streaks.get(Number(member.id)) || 0;
     if (streak >= threshold) {
-      memberStreak.set(member.id, { streak, gatheringName: lastGatheringName });
+      memberStreak.set(member.id, { streak, gatheringName: latestGatheringName });
     }
   }
 
