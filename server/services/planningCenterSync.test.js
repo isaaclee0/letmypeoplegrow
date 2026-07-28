@@ -240,3 +240,35 @@ test('createBatch preserves stale v1 fields while atomically creating a v2 activ
     assert.deepEqual(created.membershipAllowlist, []);
   });
 });
+
+test('updating v2 Planning Center batch settings preserves active and draft filter state', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
+    filterFactsCache.putComplete({
+      churchId, provider: 'planning_center', mode: 'full', complete: true,
+      coveredDimensionIds: ['membership'], populationGateDigest: 'gate', facts: [],
+      dimensions: [{ id: 'membership', cardinality: 'single', values: [{ id: 'Member' }] }],
+    });
+    const created = await pcoSync.createBatch(churchId, {
+      name: 'Reviewed members', filterSchemaVersion: 2, draftFilterConfig: draft,
+      broadMatchAcknowledged: false, defaultPeopleType: 'regular', gatheringTypeId: null,
+      gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
+    });
+    const before = await pcoSync.getBatch(churchId, created.id);
+    const updated = await pcoSync.updateBatch(churchId, created.id, {
+      name: 'Renamed members', membershipFilterEnabled: false, membershipAllowlist: [],
+      fieldFilterEnabled: false, fieldFilters: [], defaultPeopleType: 'local_visitor',
+      gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: true,
+      scheduleFrequency: 'monthly', scheduleDay: 15,
+    });
+
+    assert.equal(updated.name, 'Renamed members');
+    assert.equal(updated.defaultPeopleType, 'local_visitor');
+    assert.deepEqual(updated.filterConfig, before.filterConfig);
+    assert.equal(updated.filterSchemaVersion, before.filterSchemaVersion);
+    assert.equal(updated.filterRevision, before.filterRevision);
+    assert.deepEqual(updated.draftFilterConfig, before.draftFilterConfig);
+    assert.equal(updated.draftFilterSchemaVersion, before.draftFilterSchemaVersion);
+    assert.equal(updated.draftFilterBaseRevision, before.draftFilterBaseRevision);
+  });
+});

@@ -1,390 +1,134 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { gatheringsAPI, integrationsAPI, SyncBatch, SyncBatchInput } from '../../services/api';
-import logger from '../../utils/logger';
-import MembershipAllowlistEditor from './MembershipAllowlistEditor';
-import FieldFilterEditor, { FieldFilterRule } from './FieldFilterEditor';
-import { usePcoRefreshPoll } from '../../hooks/usePcoRefreshPoll';
+import React, { useEffect, useMemo, useState } from 'react';
+import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type SyncBatch, type SyncBatchInput } from '../../services/api';
+import BatchFilterControls from '../peopleSync/BatchFilterControls';
+import type { BooleanFilterConfigV2, PeopleSyncBatch, PeopleType } from '../peopleSync/types';
 import { ordinalDay } from '../../utils/pcoSchedule';
-import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import Modal from '../Modal';
 
 interface GatheringOption { id: number; name: string; }
+type LegacyPcoBatch = SyncBatch;
+type PcoBatchBoundary = PeopleSyncBatch<BooleanFilterConfigV2> | LegacyPcoBatch;
+const emptyFilter = (): BooleanFilterConfigV2 => ({ branches: [], exclusions: [] });
 
 interface Props {
-  batch: SyncBatch | null; // null = creating a new batch
-  onSaved: (batch: SyncBatch) => void;
+  /** @deprecated The legacy half of this boundary is removed with the panel migration in Task 12. */
+  batch: PcoBatchBoundary | null;
+  onSaved: (batch: PeopleSyncBatch<BooleanFilterConfigV2>) => void;
   onCancel: () => void;
 }
 
-export default function PlanningCenterBatchEditor({ batch, onSaved, onCancel }: Props) {
-  const [name, setName] = useState(batch?.name || '');
-  const [membershipFilterEnabled, setMembershipFilterEnabled] = useState(batch?.membershipFilterEnabled ?? true);
-  const [membershipAllowlist, setMembershipAllowlist] = useState<string[]>(batch?.membershipAllowlist || []);
-  const [fieldFilterEnabled, setFieldFilterEnabled] = useState(batch?.fieldFilterEnabled ?? false);
-  const [fieldFilters, setFieldFilters] = useState<FieldFilterRule[]>(batch?.fieldFilters || []);
-  const [defaultPeopleType, setDefaultPeopleType] = useState<SyncBatchInput['defaultPeopleType']>(batch?.defaultPeopleType || 'regular');
-  const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(batch?.gatheringTypeId ? 'existing' : 'none');
-  const [gatheringTypeId, setGatheringTypeId] = useState<number | null>(batch?.gatheringTypeId ?? null);
-  const [gatheringAutoRemoveEnabled, setGatheringAutoRemoveEnabled] = useState(batch?.gatheringAutoRemoveEnabled ?? false);
-  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
-  const [newGatheringName, setNewGatheringName] = useState('');
+function isGenericBatch(batch: PcoBatchBoundary): batch is PeopleSyncBatch<BooleanFilterConfigV2> {
+  return 'provider' in batch && batch.provider === 'planning_center' &&
+    'filterSchemaVersion' in batch && typeof batch.filterSchemaVersion === 'number' &&
+    'filterRevision' in batch && typeof batch.filterRevision === 'number';
+}
+
+function normaliseBatch(batch: PcoBatchBoundary): PeopleSyncBatch<BooleanFilterConfigV2> {
+  if (isGenericBatch(batch)) return batch;
+  return {
+    id: batch.id, provider: 'planning_center', name: batch.name, enabled: true,
+    filterSchemaVersion: 1, filterConfig: emptyFilter(), filterRevision: 1,
+    draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null,
+    draftFilterUpdatedAt: null, needsFilterReview: false, defaultPeopleType: batch.defaultPeopleType,
+    gatheringTypeId: batch.gatheringTypeId, gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
+    scheduleEnabled: batch.scheduleEnabled, scheduleFrequency: batch.scheduleFrequency,
+    scheduleDay: batch.scheduleDay, legacyProviderBatchId: null, lastExternalWatermark: null,
+    lastSyncAt: batch.lastSyncAt, lastSyncResult: null,
+  };
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    const response = error.response;
+    if (typeof response === 'object' && response !== null && 'data' in response) {
+      const data = response.data;
+      if (typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string') return data.error;
+    }
+  }
+  return fallback;
+}
+
+export default function PlanningCenterBatchEditor({ batch: boundaryBatch, onSaved, onCancel }: Props) {
+  const initial = useMemo(() => boundaryBatch ? normaliseBatch(boundaryBatch) : null, [boundaryBatch]);
+  const [currentBatch, setCurrentBatch] = useState(initial);
+  const [name, setName] = useState(initial?.name || '');
+  const [defaultPeopleType, setDefaultPeopleType] = useState<PeopleType>(initial?.defaultPeopleType || 'regular');
   const [gatherings, setGatherings] = useState<GatheringOption[]>([]);
-  const [scheduleEnabled, setScheduleEnabled] = useState(batch?.scheduleEnabled ?? false);
-  const [scheduleFrequency, setScheduleFrequency] = useState<SyncBatchInput['scheduleFrequency']>(batch?.scheduleFrequency || 'weekly');
-  const [scheduleDay, setScheduleDay] = useState(batch?.scheduleDay ?? 1);
-  const [membershipValues, setMembershipValues] = useState<{ membership: string; count: number }[]>([]);
-  const [membershipLoading, setMembershipLoading] = useState(false);
-  const [membershipError, setMembershipError] = useState<string | null>(null);
-  const [membershipRefreshing, setMembershipRefreshing] = useState(false);
-  const [fieldsRefreshing, setFieldsRefreshing] = useState(false);
+  const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(initial?.gatheringTypeId ? 'existing' : 'none');
+  const [gatheringTypeId, setGatheringTypeId] = useState<number | null>(initial?.gatheringTypeId ?? null);
+  const [newGatheringName, setNewGatheringName] = useState('');
+  const [gatheringAutoRemoveEnabled, setGatheringAutoRemoveEnabled] = useState(initial?.gatheringAutoRemoveEnabled ?? false);
+  const [confirmAutoRemove, setConfirmAutoRemove] = useState(false);
+  const [scheduleEnabled, setScheduleEnabled] = useState(initial?.scheduleEnabled ?? false);
+  const [scheduleFrequency, setScheduleFrequency] = useState<'daily' | 'weekly' | 'monthly'>(initial?.scheduleFrequency || 'weekly');
+  const [scheduleDay, setScheduleDay] = useState(initial?.scheduleDay ?? 1);
+  const [filterConfig, setFilterConfig] = useState<BooleanFilterConfigV2>(initial?.draftFilterConfig ?? initial?.filterConfig ?? emptyFilter());
+  const [broadAcknowledged, setBroadAcknowledged] = useState(false);
+  const [hasBroadWarning, setHasBroadWarning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const anyRefreshing = membershipRefreshing || fieldsRefreshing;
 
-  // Mirrors membershipValues so loadMembershipSummary (a stable useCallback) can check
-  // "do we already have data?" at catch-time without going stale — same pattern as
-  // FieldFilterEditor's definitionsRef.
-  const membershipValuesRef = useRef(membershipValues);
-  membershipValuesRef.current = membershipValues;
+  useEffect(() => { gatheringsAPI.getAll().then((response: { data: GatheringOption[] | { gatherings?: GatheringOption[] } }) => setGatherings(Array.isArray(response.data) ? response.data : response.data.gatherings || [])).catch(() => setGatherings([])); }, []);
 
-  const loadMembershipSummary = useCallback(async () => {
-    setMembershipError(null);
-    try {
-      const sum = await integrationsAPI.getPlanningCenterMembershipSummary();
-      setMembershipValues(sum.data.values || []);
-      setMembershipRefreshing(!!sum.data.refreshing);
-    } catch (e: any) {
-      setMembershipRefreshing(false);
-      // Only surface an error if we have no data to fall back on — a failed
-      // background refresh shouldn't blow away an already-populated list.
-      if (membershipValuesRef.current.length === 0) {
-        setMembershipError(e.response?.data?.error || 'Failed to load membership categories.');
-      }
-    } finally {
-      setMembershipLoading(false);
-    }
-  }, []);
-
-  usePcoRefreshPoll(membershipRefreshing, loadMembershipSummary);
-
-  // Used only by the explicit user-facing Retry action in MembershipAllowlistEditor —
-  // distinct from the silent background-poll path, so Retry still shows a loading
-  // state while polling stays silent.
-  const retryMembershipSummary = () => {
-    setMembershipLoading(true);
-    loadMembershipSummary();
+  const changeFrequency = (frequency: 'daily' | 'weekly' | 'monthly') => {
+    setScheduleFrequency(frequency);
+    setScheduleDay((day) => frequency === 'weekly' ? (day >= 0 && day <= 6 ? day : 1) : frequency === 'monthly' ? (day >= 1 && day <= 31 ? day : 1) : day);
   };
 
-  useEffect(() => {
-    gatheringsAPI.getAll()
-      .then((r: any) => setGatherings(r.data.gatherings || r.data || []))
-      .catch(() => setGatherings([]));
-    setMembershipLoading(true);
-    loadMembershipSummary();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const save = async () => {
-    setSaving(true); setError(null);
+    setError(null);
+    if (!name.trim()) { setError('Enter a batch name.'); return; }
+    if (hasBroadWarning && !broadAcknowledged) { setError('Acknowledge the broad filter before saving.'); return; }
+    setSaving(true);
     try {
       let finalGatheringTypeId: number | null = null;
       if (gatheringMode === 'existing') {
+        if (!gatheringTypeId) { setError('Choose a gathering.'); return; }
         finalGatheringTypeId = gatheringTypeId;
-      } else if (gatheringMode === 'new') {
-        if (!newGatheringName.trim()) { setError('Enter a name for the new gathering.'); setSaving(false); return; }
-        const created = await gatheringsAPI.create({
-          name: newGatheringName.trim(),
-          attendanceType: 'standard',
-          dayOfWeek: 'Sunday',
-          startTime: '10:00',
-          frequency: 'weekly',
-        });
-        finalGatheringTypeId = (created.data as any).id ?? null;
-        if (!finalGatheringTypeId) { setError('Failed to create the new gathering.'); setSaving(false); return; }
       }
-      const payload: SyncBatchInput = {
-        name: name.trim(),
-        membershipFilterEnabled,
-        membershipAllowlist,
-        fieldFilterEnabled,
-        fieldFilters,
-        defaultPeopleType,
-        gatheringTypeId: finalGatheringTypeId,
-        gatheringAutoRemoveEnabled,
-        scheduleEnabled,
-        scheduleFrequency,
-        scheduleDay,
-      };
-      const res = batch
-        ? await integrationsAPI.updatePlanningCenterSyncBatch(batch.id, payload)
-        : await integrationsAPI.createPlanningCenterSyncBatch(payload);
-      onSaved(res.data.batch);
-    } catch (e: any) {
-      logger.error('Failed to save PCO sync batch', e);
-      setError(e.response?.data?.error || 'Failed to save sync batch.');
-    } finally {
-      setSaving(false);
-    }
+      if (gatheringMode === 'new') {
+        if (!newGatheringName.trim()) { setError('Enter a name for the new gathering.'); return; }
+        const created = await gatheringsAPI.create({ name: newGatheringName.trim(), attendanceType: 'standard', dayOfWeek: 'Sunday', startTime: '10:00', frequency: 'weekly' });
+        finalGatheringTypeId = created.data.id ?? null;
+        if (!finalGatheringTypeId) { setError('Failed to create the new gathering.'); return; }
+      }
+      const common = { name: name.trim(), defaultPeopleType, gatheringTypeId: finalGatheringTypeId,
+        gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled,
+        scheduleEnabled, scheduleFrequency, scheduleDay };
+      if (!currentBatch) {
+        const payload: SyncBatchInput & { filterSchemaVersion: 2; draftFilterConfig: BooleanFilterConfigV2; broadMatchAcknowledged: boolean } = {
+          ...common, membershipFilterEnabled: false, membershipAllowlist: [], fieldFilterEnabled: false, fieldFilters: [],
+          filterSchemaVersion: 2, draftFilterConfig: filterConfig, broadMatchAcknowledged: broadAcknowledged,
+        };
+        const created = await integrationsAPI.createPlanningCenterSyncBatch(payload);
+        onSaved(normaliseBatch(created.data.batch));
+        return;
+      }
+      // The legacy PCO transport still needs these no-op fields until Task 12
+      // replaces the panel/API boundary. They are not filter criteria and no
+      // active v2 filter fields are sent from this editor.
+      const nonFilterPayload: SyncBatchInput = { ...common, membershipFilterEnabled: false, membershipAllowlist: [], fieldFilterEnabled: false, fieldFilters: [] };
+      let updated;
+      try { updated = await integrationsAPI.updatePlanningCenterSyncBatch(currentBatch.id, nonFilterPayload); }
+      catch (saveError) { setError(errorMessage(saveError, 'Failed to save batch settings.')); return; }
+      try {
+        await peopleSyncAPI.saveFilterDraft('planning_center', currentBatch.id, { filterConfig, broadMatchAcknowledged: broadAcknowledged });
+      } catch (draftError) { setError(errorMessage(draftError, 'Failed to save filter draft.')); return; }
+      onSaved(normaliseBatch(updated.data.batch));
+    } catch (saveError) { setError(errorMessage(saveError, 'Failed to save sync batch.')); }
+    finally { setSaving(false); }
   };
 
-  // Turning this on can immediately remove existing roster members who don't
-  // match this batch (via the toggle-enable backfill), so confirm before enabling.
-  // Turning it off needs no confirmation — it only stops future removals.
-  const requestGatheringAutoRemoveToggle = (value: boolean) => {
-    if (value) {
-      setShowRemoveConfirm(true);
-    } else {
-      setGatheringAutoRemoveEnabled(false);
-    }
-  };
-
-  const confirmEnableGatheringAutoRemove = () => {
-    setShowRemoveConfirm(false);
-    setGatheringAutoRemoveEnabled(true);
-  };
-
-  return (
-    <div className="space-y-4 border border-gray-200 dark:border-gray-700 rounded-md p-4">
-      <div>
-        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">Batch name</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Members, Youth Group, Visitors"
-          className="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-        />
-      </div>
-
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by membership category</p>
-          <button type="button" onClick={() => setMembershipFilterEnabled((v) => !v)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${membershipFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-            role="switch" aria-checked={membershipFilterEnabled}>
-            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${membershipFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-          </button>
-        </div>
-        {membershipFilterEnabled && (
-          <MembershipAllowlistEditor
-            values={membershipValues}
-            loading={membershipLoading}
-            error={membershipError}
-            selected={membershipAllowlist}
-            onChange={setMembershipAllowlist}
-            onReload={retryMembershipSummary}
-          />
-        )}
-      </div>
-
-      <div className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Filter by custom tab fields</p>
-          <button type="button" onClick={() => setFieldFilterEnabled((v) => !v)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${fieldFilterEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-            role="switch" aria-checked={fieldFilterEnabled}>
-            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${fieldFilterEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-          </button>
-        </div>
-        {fieldFilterEnabled && (
-          <FieldFilterEditor rules={fieldFilters} onChange={setFieldFilters} onRefreshingChange={setFieldsRefreshing} />
-        )}
-      </div>
-
-      {!membershipFilterEnabled && !fieldFilterEnabled && (
-        <div className="text-sm text-yellow-700 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md px-3 py-2">
-          No one will match this batch — enable at least one filter above.
-        </div>
-      )}
-
-      <div>
-        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">New people from this batch are added as</label>
-        <select
-          value={defaultPeopleType}
-          onChange={(e) => setDefaultPeopleType(e.target.value as SyncBatchInput['defaultPeopleType'])}
-          className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-        >
-          <option value="regular">Regulars</option>
-          <option value="local_visitor">Local visitors</option>
-          <option value="traveller_visitor">Traveller visitors</option>
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">Add everyone from this batch to a gathering</label>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={gatheringMode}
-            onChange={(e) => setGatheringMode(e.target.value as 'none' | 'existing' | 'new')}
-            className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-          >
-            <option value="none">Don't assign a gathering</option>
-            <option value="existing">Existing gathering</option>
-            <option value="new">Create a new gathering</option>
-          </select>
-          {gatheringMode === 'existing' && (
-            <select
-              value={gatheringTypeId ?? ''}
-              onChange={(e) => setGatheringTypeId(e.target.value ? Number(e.target.value) : null)}
-              className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-            >
-              <option value="">Choose…</option>
-              {gatherings.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-          )}
-          {gatheringMode === 'new' && (
-            <input
-              type="text"
-              value={newGatheringName}
-              onChange={(e) => setNewGatheringName(e.target.value)}
-              placeholder="New gathering name"
-              className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-            />
-          )}
-        </div>
-      </div>
-
-      {gatheringMode !== 'none' && (
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={() => requestGatheringAutoRemoveToggle(!gatheringAutoRemoveEnabled)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${gatheringAutoRemoveEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-            role="switch" aria-checked={gatheringAutoRemoveEnabled}>
-            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${gatheringAutoRemoveEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-          </button>
-          <span className="text-sm text-gray-700 dark:text-gray-300">
-            Automatically remove people from this gathering when they no longer match this batch
-          </span>
-        </div>
-      )}
-
-      <div>
-        <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Schedule</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={() => setScheduleEnabled((v) => !v)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${scheduleEnabled ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'}`}
-            role="switch" aria-checked={scheduleEnabled}>
-            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${scheduleEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-          </button>
-          <span className="text-sm text-gray-700 dark:text-gray-300">{scheduleEnabled ? 'Runs automatically' : 'Manual only'}</span>
-          {scheduleEnabled && (
-            <>
-              <select
-                value={scheduleFrequency}
-                onChange={(e) => {
-                  const freq = e.target.value as SyncBatchInput['scheduleFrequency'];
-                  setScheduleFrequency(freq);
-                  setScheduleDay((prev) => {
-                    if (freq === 'weekly') return prev >= 0 && prev <= 6 ? prev : 1;
-                    if (freq === 'monthly') return prev >= 1 && prev <= 31 ? prev : 1;
-                    return prev; // daily: value unused
-                  });
-                }}
-                className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </select>
-              {scheduleFrequency === 'weekly' && (
-                <select
-                  value={scheduleDay}
-                  onChange={(e) => setScheduleDay(Number(e.target.value))}
-                  className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-                >
-                  <option value={0}>Sunday</option>
-                  <option value={1}>Monday</option>
-                  <option value={2}>Tuesday</option>
-                  <option value={3}>Wednesday</option>
-                  <option value={4}>Thursday</option>
-                  <option value={5}>Friday</option>
-                  <option value={6}>Saturday</option>
-                </select>
-              )}
-              {scheduleFrequency === 'monthly' && (
-                <>
-                  <select
-                    value={scheduleDay}
-                    onChange={(e) => setScheduleDay(Number(e.target.value))}
-                    className="rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm focus:ring-green-500 focus:border-green-500"
-                  >
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                      <option key={d} value={d}>{ordinalDay(d)}</option>
-                    ))}
-                  </select>
-                  {scheduleDay >= 29 && (
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      Runs on the last day of the month if it's shorter.
-                    </span>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving || !name.trim() || (!membershipFilterEnabled && !fieldFilterEnabled)}
-          className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : batch ? 'Save batch' : 'Create batch'}
-        </button>
-        <button type="button" onClick={onCancel} className="text-sm underline text-gray-600 dark:text-gray-300">Cancel</button>
-      </div>
-
-      {anyRefreshing && (
-        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-3">
-          <span className="inline-block h-3 w-3 rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-green-600 animate-spin" />
-          Checking Planning Center for the latest data…
-        </div>
-      )}
-
-      <Modal isOpen={showRemoveConfirm} onClose={() => setShowRemoveConfirm(false)}>
-        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
-          <div className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-                Enable automatic removal for this batch?
-              </h3>
-              <button
-                onClick={() => setShowRemoveConfirm(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
-                <XMarkIcon className="h-6 w-6" />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
-              <ExclamationTriangleIcon className="h-8 w-8 text-yellow-600" />
-            </div>
-
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 text-center">
-              This will also remove anyone already on the roster who doesn't currently
-              match this batch, next time it syncs.
-            </p>
-
-            <div className="flex space-x-3">
-              <button
-                onClick={() => setShowRemoveConfirm(false)}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmEnableGatheringAutoRemove}
-                className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-              >
-                Enable
-              </button>
-            </div>
-          </div>
-        </div>
-      </Modal>
-    </div>
-  );
+  const selectedGathering = gatheringMode === 'existing' ? gatheringTypeId : null;
+  return <div className="space-y-5 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+    <div><label htmlFor="pco-batch-name" className="mb-1 block text-sm font-medium">Batch name</label><input id="pco-batch-name" value={name} onChange={(event) => setName(event.target.value)} className="w-full rounded-md border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-700" /></div>
+    <BatchFilterControls provider="planning_center" batch={currentBatch} value={filterConfig} onChange={(value) => { setFilterConfig(value); setBroadAcknowledged(false); }} enabled={currentBatch?.enabled ?? true} defaultPeopleType={defaultPeopleType} gatheringTypeId={selectedGathering} broadAcknowledged={broadAcknowledged} onBroadAcknowledgedChange={setBroadAcknowledged} onBroadWarningChange={setHasBroadWarning} onDiscarded={(discarded) => { setCurrentBatch(discarded); setFilterConfig(discarded.filterConfig); setBroadAcknowledged(false); }} />
+    <div><label className="mb-1 block text-sm font-medium" htmlFor="pco-people-type">New people from this batch are added as</label><select id="pco-people-type" value={defaultPeopleType} onChange={(event) => setDefaultPeopleType(event.target.value as PeopleType)}><option value="regular">Regulars</option><option value="local_visitor">Local visitors</option><option value="traveller_visitor">Traveller visitors</option></select></div>
+    <div><label className="mb-1 block text-sm font-medium" htmlFor="pco-gathering-mode">Add everyone from this batch to a gathering</label><select id="pco-gathering-mode" aria-label="Gathering assignment" value={gatheringMode} onChange={(event) => { const mode = event.target.value as 'none' | 'existing' | 'new'; setGatheringMode(mode); if (mode === 'none') setGatheringAutoRemoveEnabled(false); }}><option value="none">Don't assign a gathering</option><option value="existing">Existing gathering</option><option value="new">Create a new gathering</option></select>{gatheringMode === 'existing' ? <select aria-label="Existing gathering" value={gatheringTypeId ?? ''} onChange={(event) => setGatheringTypeId(event.target.value ? Number(event.target.value) : null)}><option value="">Choose…</option>{gatherings.map((gathering) => <option key={gathering.id} value={gathering.id}>{gathering.name}</option>)}</select> : null}{gatheringMode === 'new' ? <input aria-label="New gathering name" value={newGatheringName} onChange={(event) => setNewGatheringName(event.target.value)} placeholder="New gathering name" /> : null}</div>
+    {gatheringMode !== 'none' ? <label className="flex items-center gap-2 text-sm"><button type="button" role="switch" aria-label="Automatically remove people from this gathering" aria-checked={gatheringAutoRemoveEnabled} disabled={gatheringMode === 'existing' && gatheringTypeId === null} onClick={() => gatheringAutoRemoveEnabled ? setGatheringAutoRemoveEnabled(false) : setConfirmAutoRemove(true)} className="h-6 w-11 rounded-full bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-600" /><span>Automatically remove people from this gathering when they no longer match this batch</span></label> : null}
+    <div><p className="mb-2 text-sm font-medium">Schedule</p><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} />Runs automatically</label>{scheduleEnabled ? <div className="mt-2 flex flex-wrap gap-2"><select aria-label="Schedule frequency" value={scheduleFrequency} onChange={(event) => changeFrequency(event.target.value as 'daily' | 'weekly' | 'monthly')}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>{scheduleFrequency === 'weekly' ? <select aria-label="Schedule day" value={scheduleDay} onChange={(event) => setScheduleDay(Number(event.target.value))}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</select> : null}{scheduleFrequency === 'monthly' ? <select aria-label="Schedule day" value={scheduleDay} onChange={(event) => setScheduleDay(Number(event.target.value))}>{Array.from({ length: 31 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{ordinalDay(day)}</option>)}</select> : null}</div> : null}</div>
+    {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
+    <div className="flex gap-3"><button type="button" onClick={() => { void save(); }} disabled={saving || hasBroadWarning && !broadAcknowledged} className="rounded bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? 'Saving…' : currentBatch ? 'Save batch' : 'Create batch'}</button><button type="button" onClick={onCancel} className="text-sm underline">Cancel</button></div>
+    <Modal isOpen={confirmAutoRemove} onClose={() => setConfirmAutoRemove(false)}><div className="rounded bg-white p-6 dark:bg-gray-800"><h3 className="text-lg font-medium">Enable automatic removal for this batch?</h3><p className="mt-2 text-sm">This can remove people from the gathering when they no longer match the batch.</p><div className="mt-4 flex gap-3"><button type="button" onClick={() => { setGatheringAutoRemoveEnabled(true); setConfirmAutoRemove(false); }}>Enable automatic removal</button><button type="button" onClick={() => setConfirmAutoRemove(false)}>Cancel</button></div></div></Modal>
+  </div>;
 }

@@ -461,19 +461,23 @@ async function updateBatch(churchId, batchId, input) {
   if (!current) return null;
   const filterConfig = buildFilterConfigInput(input);
 
-  await batchRepository.updateBatch({
+  const genericUpdate = {
     churchId,
     provider: 'planning_center',
     batchId,
     name: input.name,
-    filterConfig,
     defaultPeopleType: input.defaultPeopleType,
     gatheringTypeId: input.gatheringTypeId || null,
     gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,
     scheduleEnabled: !!input.scheduleEnabled,
     scheduleFrequency: input.scheduleFrequency,
     scheduleDay: input.scheduleDay,
-  });
+  };
+  // Schema-2 criteria are immutable outside the reviewed draft/promotion
+  // flow. Retain the legacy v1 mapping for stale clients, but do not let a
+  // non-filter settings update overwrite an active v2 filter or its draft.
+  if (current.filterSchemaVersion !== 2) genericUpdate.filterConfig = filterConfig;
+  await batchRepository.updateBatch(genericUpdate);
 
   if (current.legacyProviderBatchId) {
     await Database.query(

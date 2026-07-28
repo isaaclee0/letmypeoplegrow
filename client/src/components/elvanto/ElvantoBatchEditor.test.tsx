@@ -2,135 +2,87 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElvantoBatchEditor from './ElvantoBatchEditor';
-import type { ElvantoMetadata, PeopleSyncBatch } from '../peopleSync/types';
-import { elvantoSyncAPI, gatheringsAPI } from '../../services/api';
+import type { BooleanFilterConfigV2, ElvantoMetadata, FilterMetadata, PeopleSyncBatch } from '../peopleSync/types';
+import { elvantoSyncAPI, gatheringsAPI, peopleSyncAPI } from '../../services/api';
 
 vi.mock('../../services/api', () => ({
-  elvantoSyncAPI: { createBatch: vi.fn(), updateBatch: vi.fn(), refreshMetadata: vi.fn() },
+  elvantoSyncAPI: { createBatch: vi.fn(), updateBatch: vi.fn() },
   gatheringsAPI: { create: vi.fn() },
+  peopleSyncAPI: { getFilterMetadata: vi.fn(), previewFilter: vi.fn(), refreshFilterSnapshot: vi.fn(), saveFilterDraft: vi.fn(), discardFilterDraft: vi.fn() },
 }));
 
-const metadata: ElvantoMetadata = {
-  fetchedAt: '2026-07-25T10:00:00.000Z',
-  categories: [],
-  groups: [{ id: 'group-youth', name: 'Youth', status: null, memberCount: 12 }],
-  demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [],
+const legacyMetadata: ElvantoMetadata = { fetchedAt: '2026-07-28T00:00:00.000Z', categories: [], groups: [], demographics: [], departments: [], serviceTypes: [], locations: [], customFields: [] };
+const filter: BooleanFilterConfigV2 = {
+  branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music'] }] }],
+  exclusions: [{ dimensionId: 'status', values: ['archived'] }],
 };
-
-const savedBatch = {
-  id: 11, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 1,
-  filterConfig: { statuses: ['active', 'contact'], categoryIds: [], groups: { ids: [], operator: 'any' }, demographics: { values: [], operator: 'any' }, departments: { values: [], operator: 'any' }, serviceTypes: { ids: [], operator: 'any' }, locations: { ids: [], operator: 'any' }, customFields: [] },
+const metadata: FilterMetadata = { dimensions: [
+  { id: 'groups', label: 'Groups', cardinality: 'multi', category: 'People', values: [{ id: 'youth', label: 'Youth', count: 12 }, { id: 'music', label: 'Music', count: 8 }] },
+  { id: 'status', label: 'Status', cardinality: 'single', category: 'People', values: [{ id: 'active', label: 'Active', count: 18 }, { id: 'archived', label: 'Archived', count: 2 }] },
+] };
+const batch: PeopleSyncBatch<BooleanFilterConfigV2> = {
+  id: 11, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 2,
+  filterConfig: filter, filterRevision: 1, draftFilterSchemaVersion: 2, draftFilterConfig: filter,
+  draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T00:00:00.000Z', needsFilterReview: true,
   defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   legacyProviderBatchId: null, lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
-} satisfies PeopleSyncBatch;
-
-function renderEditor(batch: PeopleSyncBatch | null = null, props: Partial<React.ComponentProps<typeof ElvantoBatchEditor>> = {}) {
-  return render(<ElvantoBatchEditor batch={batch} metadata={metadata} gatherings={[{ id: 3, name: 'Sunday gathering' }]} onSaved={vi.fn()} onCancel={vi.fn()} {...props} />);
-}
+};
+function preview() { return { data: { success: true, matchCount: 12, snapshot: { id: 'snapshot', capturedAt: '2026-07-28T00:00:00.000Z', fresh: true, expiresAt: null, coveredDimensionIds: ['groups', 'status'] }, overlaps: [{ batchId: 7, batchName: 'Youth', count: 3 }], uniqueEnabledPopulationCount: 20, missingDimensionIds: [], warnings: [] } }; }
+function renderEditor(current: PeopleSyncBatch<BooleanFilterConfigV2> | null = batch, onSaved = vi.fn()) { return render(<ElvantoBatchEditor batch={current} metadata={legacyMetadata} gatherings={[{ id: 3, name: 'Sunday gathering' }]} onSaved={onSaved} onCancel={vi.fn()} />); }
 
 describe('ElvantoBatchEditor', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(peopleSyncAPI.getFilterMetadata).mockResolvedValue({ data: { success: true, metadata, snapshot: preview().data.snapshot } });
+    vi.mocked(peopleSyncAPI.previewFilter).mockResolvedValue(preview());
+  });
 
-  it('creates the documented default batch payload', async () => {
+  it('renders the same provider-neutral qualification subtree and retains Elvanto controls', async () => {
+    renderEditor();
+
+    expect(await screen.findByText('Who qualifies?')).toBeInTheDocument();
+    expect(screen.getByText('Qualification rules')).toBeInTheDocument();
+    expect(screen.getByText('Match all')).toBeInTheDocument();
+    expect(screen.getByLabelText('Always exclude')).toBeInTheDocument();
+    expect(await screen.findByText('12 people match')).toBeInTheDocument();
+    expect(screen.getByText('3 also match Youth')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh people data' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Gathering assignment')).toBeInTheDocument();
+    expect(screen.getByText('Schedule')).toBeInTheDocument();
+  });
+
+  it('creates exactly one v2 batch carrying the draft and review state', async () => {
+    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch } });
     const onSaved = vi.fn();
-    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: savedBatch } });
-    renderEditor(null, { onSaved });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
-    await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'Elvanto people', enabled: true, filterSchemaVersion: 1, defaultPeopleType: 'regular',
-      gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: false,
-      scheduleFrequency: 'weekly', scheduleDay: 1,
-      filterConfig: expect.objectContaining({ statuses: ['active', 'contact'] }),
-    })));
-    expect(onSaved).toHaveBeenCalledWith(savedBatch);
-  });
-
-  it('edits an existing batch through the update boundary', async () => {
-    vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch: { ...savedBatch, name: 'Youth' } } });
-    renderEditor({ ...savedBatch, name: 'Members' });
-
-    fireEvent.change(screen.getByLabelText('Batch name'), { target: { value: 'Youth' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
-    await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(11, expect.objectContaining({ name: 'Youth' })));
-  });
-
-  it('rejects an empty name before calling the API', () => {
-    renderEditor({ ...savedBatch, name: ' ' });
-    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
-
-    expect(screen.getByRole('alert')).toHaveTextContent('Enter a batch name.');
-    expect(elvantoSyncAPI.updateBatch).not.toHaveBeenCalled();
-  });
-
-  it('rejects an invalid saved schedule day before calling the API', () => {
-    renderEditor({ ...savedBatch, name: 'Monthly', scheduleEnabled: true, scheduleFrequency: 'monthly', scheduleDay: 32 });
-    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
-
-    expect(screen.getByRole('alert')).toHaveTextContent('Choose a valid schedule day.');
-    expect(elvantoSyncAPI.updateBatch).not.toHaveBeenCalled();
-  });
-
-  it('creates a gathering before saving the batch', async () => {
-    vi.mocked(gatheringsAPI.create).mockResolvedValue({ data: { id: 17 } });
-    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: savedBatch } });
-    renderEditor();
-
-    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'new' } });
-    fireEvent.change(screen.getByLabelText('New gathering name'), { target: { value: 'Youth night' } });
+    renderEditor(null, onSaved);
+    await screen.findByText('Who qualifies?');
     fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
 
-    await waitFor(() => expect(gatheringsAPI.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Youth night', attendanceType: 'standard' })));
-    expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ gatheringTypeId: 17 }));
+    await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledTimes(1));
+    expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ filterSchemaVersion: 2, draftFilterConfig: expect.objectContaining({ branches: [], exclusions: [] }) }));
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ needsFilterReview: true }));
   });
 
-  it('requires an existing gathering before saving', () => {
+  it('does not mutate active filter criteria through the non-filter update', async () => {
+    vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch } });
+    vi.mocked(peopleSyncAPI.saveFilterDraft).mockResolvedValue({ data: { success: true, batch } });
     renderEditor();
-
-    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
-
-    expect(screen.getByRole('switch', { name: 'Automatically remove people from this gathering' })).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Choose a gathering.');
-    expect(elvantoSyncAPI.createBatch).not.toHaveBeenCalled();
-  });
-
-  it('does not preserve automatic removal when an edited batch has no gathering', async () => {
-    vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch: savedBatch } });
-    renderEditor({ ...savedBatch, gatheringAutoRemoveEnabled: true, gatheringTypeId: null });
-
+    await screen.findByText('Who qualifies?');
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
 
-    await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(11, expect.objectContaining({
-      gatheringTypeId: null,
-      gatheringAutoRemoveEnabled: false,
-    })));
+    await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(11, expect.not.objectContaining({ filterConfig: expect.anything(), filterSchemaVersion: expect.anything() })));
+    expect(peopleSyncAPI.saveFilterDraft).toHaveBeenCalledWith('elvanto', 11, expect.objectContaining({ filterConfig: filter }));
   });
 
-  it('asks for confirmation before enabling automatic gathering removal on a selected gathering', async () => {
-    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: savedBatch } });
+  it('keeps the editor open with a specific settings error', async () => {
+    vi.mocked(elvantoSyncAPI.updateBatch).mockRejectedValue({ response: { data: { error: 'Settings could not be saved.' } } });
     renderEditor();
+    await screen.findByText('Who qualifies?');
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
 
-    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'existing' } });
-    fireEvent.change(screen.getByLabelText('Existing gathering'), { target: { value: '3' } });
-    fireEvent.click(screen.getByRole('switch', { name: 'Automatically remove people from this gathering' }));
-    expect(screen.getByText('Enable automatic removal for this batch?')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Enable automatic removal' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
-
-    await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({ gatheringTypeId: 3, gatheringAutoRemoveEnabled: true })));
-  });
-
-  it('refreshes metadata and previews qualification separately for every status', async () => {
-    vi.mocked(elvantoSyncAPI.refreshMetadata).mockResolvedValue({ data: { metadata: { ...metadata, groups: [{ id: 'group-new', name: 'New group', status: null, memberCount: 1 }] } } });
-    renderEditor();
-
-    expect(screen.getByText('Active — included')).toBeInTheDocument();
-    expect(screen.getByText('Contact — included')).toBeInTheDocument();
-    expect(screen.getByText('Archived — excluded')).toBeInTheDocument();
-    expect(screen.getByText('Deceased — excluded')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh metadata' }));
-    expect(await screen.findByLabelText('New group')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Settings could not be saved.');
+    expect(peopleSyncAPI.saveFilterDraft).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save batch' })).toBeInTheDocument();
   });
 });

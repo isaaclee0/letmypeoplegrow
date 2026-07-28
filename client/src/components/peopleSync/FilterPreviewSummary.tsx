@@ -10,6 +10,7 @@ export interface FilterPreviewSummaryProps {
   defaultPeopleType: PeopleType;
   gatheringTypeId: number | null;
   onMetadata: (metadata: FilterMetadata) => void;
+  onPreview?: (result: FilterPreviewResult | null) => void;
 }
 
 function relativeTime(iso: string): string {
@@ -25,7 +26,7 @@ function warningText(warning: FilterPreviewResult['warnings'][number]): string {
   return 'Overlapping batches use a different default people type.';
 }
 
-export default function FilterPreviewSummary({ provider, batchId, value, enabled, defaultPeopleType, gatheringTypeId, onMetadata }: FilterPreviewSummaryProps) {
+export default function FilterPreviewSummary({ provider, batchId, value, enabled, defaultPeopleType, gatheringTypeId, onMetadata, onPreview }: FilterPreviewSummaryProps) {
   const [result, setResult] = useState<FilterPreviewResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -39,12 +40,14 @@ export default function FilterPreviewSummary({ provider, batchId, value, enabled
       const response = await peopleSyncAPI.previewFilter(provider, { batchId, filterConfig: value, enabled, defaultPeopleType, gatheringTypeId });
       if (!mounted.current || current !== sequence.current) return;
       setResult(response.data);
+      onPreview?.(response.data);
     } catch {
       if (!mounted.current || current !== sequence.current) return;
       setResult(null);
+      onPreview?.(null);
       setError('Count unavailable');
     }
-  }, [batchId, defaultPeopleType, enabled, gatheringTypeId, provider, value]);
+  }, [batchId, defaultPeopleType, enabled, gatheringTypeId, onPreview, provider, value]);
 
   useEffect(() => {
     mounted.current = true;
