@@ -127,6 +127,21 @@ test('PCO schema-2 PUT rejects malformed and smuggled active filter input', asyn
   });
 });
 
+test('PCO PUT rejects malformed batch identifiers before database lookup', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const app = await startApp(churchId);
+    try {
+      for (const id of ['nope', '0', '-1', '1.5', '9007199254740992', '1e309']) {
+        const response = await app.request(`/api/integrations/planning-center/sync-batches/${id}`, { method: 'PUT', body: {} });
+        assert.equal(response.status, 400, id);
+        assert.deepEqual(response.body, { error: 'Invalid sync batch id.' }, id);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test('PCO schema-1 PUT retains legacy body support and scopes missing batches to the church', async () => {
   await withRouteChurchDb(async (churchId) => {
     const legacy = await pcoSync.createBatch(churchId, {

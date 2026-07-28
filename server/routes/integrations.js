@@ -1446,6 +1446,9 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
   try {
     const churchId = req.user.church_id;
     const batchId = Number(req.params.id);
+    if (!Number.isSafeInteger(batchId) || batchId <= 0) {
+      return res.status(400).json({ error: 'Invalid sync batch id.' });
+    }
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
     const isSchema2 = existing.filterSchemaVersion === 2;
