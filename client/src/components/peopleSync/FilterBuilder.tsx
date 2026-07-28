@@ -31,19 +31,21 @@ function selectedWarnings(config: BooleanFilterConfigV2, metadata: FilterMetadat
   }))];
 }
 
-function ValueStateControl({ label, state, disabled, onChange, notRef }: {
+function ValueStateControl({ label, state, disabled, disableNot = false, notDescriptionId, onChange, notRef }: {
   label: string;
   state: FilterValueState;
   disabled: boolean;
+  disableNot?: boolean;
+  notDescriptionId?: string;
   onChange: (state: FilterValueState) => void;
   notRef: React.Ref<HTMLButtonElement>;
 }) {
   const options: Array<[FilterValueState, string]> = [['off', 'Off'], ['include', 'Include'], ['not', 'NOT']];
   const activate = (next: FilterValueState) => onChange(next);
   return <div role="group" aria-label={`State for ${label}`} className="inline-flex shrink-0 overflow-hidden rounded-md border border-gray-300 dark:border-gray-600">
-    {options.map(([next, text], index) => <button key={next} ref={next === 'not' ? notRef : undefined} type="button" disabled={disabled}
-      onClick={() => activate(next)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(next); } }}
-      aria-pressed={state === next} aria-label={`${text} ${label}`} className={`px-2 py-1 text-xs font-medium ${index ? 'border-l border-gray-300 dark:border-gray-600' : ''} ${state === next ? next === 'not' ? 'bg-red-700 text-white' : 'bg-green-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'} disabled:cursor-not-allowed disabled:opacity-50`}>{text}</button>)}
+    {options.map(([next, text], index) => { const optionDisabled = disabled || (next === 'not' && disableNot); return <button key={next} ref={next === 'not' ? notRef : undefined} type="button" disabled={optionDisabled}
+      onClick={() => { if (!optionDisabled) activate(next); }} onKeyDown={(event) => { if (!optionDisabled && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); activate(next); } }}
+      aria-describedby={next === 'not' ? notDescriptionId : undefined} aria-pressed={state === next} aria-label={`${text} ${label}`} className={`px-2 py-1 text-xs font-medium ${index ? 'border-l border-gray-300 dark:border-gray-600' : ''} ${state === next ? next === 'not' ? 'bg-red-700 text-white' : 'bg-green-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'} disabled:cursor-not-allowed disabled:opacity-50`}>{text}</button>; })}
   </div>;
 }
 
@@ -97,7 +99,9 @@ function PendingPicker({ pending, metadata, config, disabled, onCancel, onInclud
   const label = pending.kind === 'branch' ? `Branch ${config.branches.length + 1}` : `Branch ${pending.branchIndex + 1}`;
   if (!dimension) return <div className="rounded-md border border-dashed border-green-500 bg-green-50 p-3 dark:bg-green-950/20"><p className="text-sm font-medium text-green-900 dark:text-green-100">Choose a filter type for {label}</p><div className="mt-2 flex flex-wrap gap-2">{metadata.dimensions.map((candidate) => <button key={candidate.id} type="button" disabled={disabled} onClick={() => setDimensionId(candidate.id)} aria-label={`Choose ${candidate.label} for ${label}`} className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">{candidate.label}</button>)}</div><button type="button" disabled={disabled} onClick={onCancel} className="mt-3 text-sm underline">Cancel</button></div>;
   const values = dimension.values.filter((candidate) => candidate.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <div className="rounded-md border border-dashed border-green-500 bg-green-50 p-3 dark:bg-green-950/20"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-green-900 dark:text-green-100">Choose a value for {dimension.label}</p><button type="button" disabled={disabled} onClick={() => setDimensionId(null)} className="text-sm underline">Back</button></div><label className="mt-2 block text-xs">Search {dimension.label} values<input aria-label={`Search pending ${dimension.label} values`} type="search" value={query} onChange={(event) => setQuery(event.target.value)} className="mt-1 block w-full rounded-md border-gray-300 text-sm" /></label><div className="mt-3 space-y-2">{values.map((candidate) => { const valueLabel = labelFor(candidate.id, dimension.values); const state = config.exclusions.some((group) => group.dimensionId === dimension.id && group.values.includes(candidate.id)) ? 'not' : 'off'; return <div key={candidate.id} className="flex items-center justify-between gap-3"><span className="text-sm">{valueLabel} <span className="text-xs text-gray-500">({candidate.count})</span></span><ValueStateControl label={valueLabel} state={state} disabled={disabled} notRef={() => undefined} onChange={(next) => { if (next === 'include') onInclude(dimension, candidate.id); if (next === 'not') onNot(dimension, candidate.id); if (next === 'off') onOff(dimension, candidate.id); }} /></div>; })}</div><button type="button" disabled={disabled} onClick={onCancel} className="mt-3 text-sm underline">Cancel</button></div>;
+  const disableNot = pending.kind === 'group';
+  const notHelpId = disableNot ? 'pending-and-not-help' : undefined;
+  return <div className="rounded-md border border-dashed border-green-500 bg-green-50 p-3 dark:bg-green-950/20"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium text-green-900 dark:text-green-100">Choose a value for {dimension.label}</p><button type="button" disabled={disabled} onClick={() => setDimensionId(null)} className="text-sm underline">Back</button></div>{disableNot ? <p id={notHelpId} className="mt-2 text-xs text-gray-700 dark:text-gray-200">Finish or cancel this AND filter before changing Always exclude.</p> : null}<label className="mt-2 block text-xs">Search {dimension.label} values<input aria-label={`Search pending ${dimension.label} values`} type="search" value={query} onChange={(event) => setQuery(event.target.value)} className="mt-1 block w-full rounded-md border-gray-300 text-sm" /></label><div className="mt-3 space-y-2">{values.map((candidate) => { const valueLabel = labelFor(candidate.id, dimension.values); const state = config.exclusions.some((group) => group.dimensionId === dimension.id && group.values.includes(candidate.id)) ? 'not' : 'off'; return <div key={candidate.id} className="flex items-center justify-between gap-3"><span className="text-sm">{valueLabel} <span className="text-xs text-gray-500">({candidate.count})</span></span><ValueStateControl label={valueLabel} state={state} disabled={disabled} disableNot={disableNot} notDescriptionId={notHelpId} notRef={() => undefined} onChange={(next) => { if (next === 'include') onInclude(dimension, candidate.id); if (next === 'not') onNot(dimension, candidate.id); if (next === 'off') onOff(dimension, candidate.id); }} /></div>; })}</div><button type="button" disabled={disabled} onClick={onCancel} className="mt-3 text-sm underline">Cancel</button></div>;
 }
 
 export default function FilterBuilder({ metadata, value, onChange, disabled = false }: FilterBuilderProps) {

@@ -128,6 +128,36 @@ describe('FilterBuilder', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('does not allow staged AND to globally exclude and remove its origin value', () => {
+    const initial: BooleanFilterConfigV2 = { branches: [
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth'] }] },
+      { groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] },
+    ], exclusions: [] };
+    render(<Controlled initial={initial} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Groups for Branch 2' }));
+    const notYouth = screen.getByRole('button', { name: 'NOT Youth' });
+    expect(notYouth).toBeDisabled();
+    expect(notYouth).toHaveAttribute('aria-describedby', 'pending-and-not-help');
+    expect(screen.getByText('Finish or cancel this AND filter before changing Always exclude.')).toBeInTheDocument();
+    fireEvent.keyDown(notYouth, { key: 'Enter' });
+    expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}')).toEqual(initial);
+    expect(screen.getByRole('searchbox', { name: 'Search pending Groups values' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Groups for Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Include Youth' }));
+    const statusBranch = JSON.parse(screen.getByLabelText('Filter value').textContent || '{}').branches
+      .find((branch: BooleanFilterConfigV2['branches'][number]) => branch.groups.some((group) => group.dimensionId === 'status'));
+    expect(statusBranch).toEqual({ groups: [
+      { dimensionId: 'groups', mode: 'all', values: ['youth'] },
+      { dimensionId: 'status', mode: 'any', values: ['active'] },
+    ] });
+  });
+
   it('defaults multi brackets to Match all, hides it for single values, and supports removal', () => {
     render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music'] }, { dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] }} />);
     expect(screen.getByRole('button', { name: 'Match all for Groups' })).toHaveAttribute('aria-pressed', 'true');
