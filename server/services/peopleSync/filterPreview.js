@@ -6,6 +6,8 @@
 // unavailable rather than an excuse to make a best-effort count.
 
 const { evaluateFilterV2, selectedDimensionIds } = require('./filterEngine');
+const { validatePcoFilter } = require('./pcoAdapter');
+const { validateElvantoFilter } = require('../elvanto/filter');
 
 function compareBatchIds(left, right) {
   const leftNumber = Number(left);
@@ -43,9 +45,9 @@ function selection(values, dimensionId) {
 }
 
 function elvantoV1SelectedDimensionIds(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config) ||
-      !Array.isArray(config.statuses) || config.statuses.length === 0 ||
-      !Array.isArray(config.categoryIds) || !Array.isArray(config.customFields)) return null;
+  const validation = validateElvantoFilter(config);
+  if (!validation.ok) return null;
+  const valid = validation.value;
   const selections = [
     ['groups', 'ids', 'groups'],
     ['demographics', 'values', 'demographics'],
@@ -53,27 +55,24 @@ function elvantoV1SelectedDimensionIds(config) {
     ['serviceTypes', 'ids', 'service_types'],
     ['locations', 'ids', 'locations'],
   ];
-  const dimensions = ['status', ...selection(config.categoryIds, 'category')];
+  const dimensions = ['status', ...selection(valid.categoryIds, 'category')];
   for (const [property, valuesProperty, dimensionId] of selections) {
-    const selected = config[property];
-    if (!selected || typeof selected !== 'object' || Array.isArray(selected) || !Array.isArray(selected[valuesProperty])) return null;
+    const selected = valid[property];
     dimensions.push(...selection(selected[valuesProperty], dimensionId));
   }
-  for (const field of config.customFields) {
-    if (!field || typeof field !== 'object' || Array.isArray(field) ||
-        typeof field.fieldId !== 'string' || !field.fieldId || !Array.isArray(field.values)) return null;
+  for (const field of valid.customFields) {
     dimensions.push(...selection(field.values, `custom_field:${field.fieldId}`));
   }
   return dimensions;
 }
 
 function planningCenterV1SelectedDimensionIds(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config) ||
-      typeof config.membershipFilterEnabled !== 'boolean' || !Array.isArray(config.membershipAllowlist) ||
-      typeof config.fieldFilterEnabled !== 'boolean' || !Array.isArray(config.fieldFilters)) return null;
-  const dimensions = config.membershipFilterEnabled ? selection(config.membershipAllowlist, 'membership') : [];
-  if (!config.fieldFilterEnabled) return dimensions;
-  for (const field of config.fieldFilters) {
+  const validation = validatePcoFilter(config);
+  if (!validation.ok) return null;
+  const valid = validation.value;
+  const dimensions = valid.membershipFilterEnabled ? selection(valid.membershipAllowlist, 'membership') : [];
+  if (!valid.fieldFilterEnabled) return dimensions;
+  for (const field of valid.fieldFilters) {
     if (!field || typeof field !== 'object' || Array.isArray(field) ||
         typeof field.fieldDefinitionId !== 'string' || !field.fieldDefinitionId || !Array.isArray(field.values)) return null;
     dimensions.push(...selection(field.values, `custom_field:${field.fieldDefinitionId}`));

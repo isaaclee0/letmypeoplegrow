@@ -149,6 +149,60 @@ test('an uncovered legacy v1 dimension makes the enabled union unavailable witho
   assert.deepEqual(preview.missingDimensionIds, ['groups']);
 });
 
+test('a malformed Elvanto v1 filter is unavailable and is never sent to the legacy evaluator', () => {
+  let evaluated = 0;
+  const preview = previewFilter({
+    churchId: 'churcha1', provider: 'elvanto', batchId: null,
+    proposed: {
+      enabled: true, filterSchemaVersion: 1,
+      filterConfig: { ...batches[1].filterConfig, statuses: [null] },
+    },
+    cacheEntry, batches: [], metadata, populationGateDigest: 'gate-1',
+    evaluateLegacy: () => { evaluated += 1; return true; },
+  });
+
+  assert.equal(preview.matchCount, null);
+  assert.equal(preview.uniqueEnabledPopulationCount, null);
+  assert.equal(evaluated, 0);
+});
+
+test('PCO v1 validation rejects malformed values and preserves valid membership coverage', () => {
+  const pcoCache = {
+    ...cacheEntry,
+    provider: 'planning_center',
+    coveredDimensionIds: ['membership'],
+    facts: [
+      { externalPersonId: 'p1', dimensions: { membership: ['member'] } },
+      { externalPersonId: 'p2', dimensions: {} },
+    ],
+  };
+  const valid = {
+    membershipFilterEnabled: true, membershipAllowlist: ['member'],
+    fieldFilterEnabled: false, fieldFilters: [],
+  };
+  const validPreview = previewFilter({
+    churchId: 'churcha1', provider: 'planning_center', batchId: null,
+    proposed: { enabled: true, filterSchemaVersion: 1, filterConfig: valid },
+    cacheEntry: pcoCache, batches: [], metadata, populationGateDigest: 'gate-1',
+    evaluateLegacy: (_provider, facts) => facts.dimensions.membership?.includes('member'),
+  });
+  assert.equal(validPreview.matchCount, 1);
+
+  let evaluated = 0;
+  const malformedPreview = previewFilter({
+    churchId: 'churcha1', provider: 'planning_center', batchId: null,
+    proposed: {
+      enabled: true, filterSchemaVersion: 1,
+      filterConfig: { ...valid, membershipAllowlist: [1] },
+    },
+    cacheEntry: pcoCache, batches: [], metadata, populationGateDigest: 'gate-1',
+    evaluateLegacy: () => { evaluated += 1; return true; },
+  });
+  assert.equal(malformedPreview.matchCount, null);
+  assert.equal(malformedPreview.uniqueEnabledPopulationCount, null);
+  assert.equal(evaluated, 0);
+});
+
 test('preview never fabricates counts for absent, expired, gate-mismatched, or insufficient cache coverage', () => {
   const input = {
     churchId: 'churcha1', provider: 'elvanto', batchId: null,
