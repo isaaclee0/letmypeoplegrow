@@ -38,28 +38,69 @@ function snapshotFor(cacheEntry) {
   };
 }
 
-function legacySelectedDimensionIds(batch, adapter) {
-  if (Array.isArray(batch.selectedDimensionIds)) return batch.selectedDimensionIds;
-  if (adapter && typeof adapter.selectedDimensionIdsForFilter === 'function') {
-    return adapter.selectedDimensionIdsForFilter(batch.filterConfig, batch.filterSchemaVersion) || [];
-  }
-  if (adapter && typeof adapter.selectedDimensionIds === 'function') {
-    return adapter.selectedDimensionIds(batch.filterConfig, batch.filterSchemaVersion) || [];
-  }
-  return [];
+function selection(values, dimensionId) {
+  return Array.isArray(values) && values.length > 0 ? [dimensionId] : [];
 }
 
-function selectedDimensionsForBatch(batch, adapter) {
-  const dimensions = Number(batch && batch.filterSchemaVersion) === 2
-    ? selectedDimensionIds(batch && batch.filterConfig)
-    : legacySelectedDimensionIds(batch || {}, adapter);
-  return [...new Set(dimensions.filter((dimensionId) => typeof dimensionId === 'string' && dimensionId))].sort();
+function elvantoV1SelectedDimensionIds(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) ||
+      !Array.isArray(config.statuses) || config.statuses.length === 0 ||
+      !Array.isArray(config.categoryIds) || !Array.isArray(config.customFields)) return null;
+  const selections = [
+    ['groups', 'ids', 'groups'],
+    ['demographics', 'values', 'demographics'],
+    ['departments', 'values', 'departments'],
+    ['serviceTypes', 'ids', 'service_types'],
+    ['locations', 'ids', 'locations'],
+  ];
+  const dimensions = ['status', ...selection(config.categoryIds, 'category')];
+  for (const [property, valuesProperty, dimensionId] of selections) {
+    const selected = config[property];
+    if (!selected || typeof selected !== 'object' || Array.isArray(selected) || !Array.isArray(selected[valuesProperty])) return null;
+    dimensions.push(...selection(selected[valuesProperty], dimensionId));
+  }
+  for (const field of config.customFields) {
+    if (!field || typeof field !== 'object' || Array.isArray(field) ||
+        typeof field.fieldId !== 'string' || !field.fieldId || !Array.isArray(field.values)) return null;
+    dimensions.push(...selection(field.values, `custom_field:${field.fieldId}`));
+  }
+  return dimensions;
 }
 
-function missingDimensions(batches, cacheEntry, adapter) {
+function planningCenterV1SelectedDimensionIds(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) ||
+      typeof config.membershipFilterEnabled !== 'boolean' || !Array.isArray(config.membershipAllowlist) ||
+      typeof config.fieldFilterEnabled !== 'boolean' || !Array.isArray(config.fieldFilters)) return null;
+  const dimensions = config.membershipFilterEnabled ? selection(config.membershipAllowlist, 'membership') : [];
+  if (!config.fieldFilterEnabled) return dimensions;
+  for (const field of config.fieldFilters) {
+    if (!field || typeof field !== 'object' || Array.isArray(field) ||
+        typeof field.fieldDefinitionId !== 'string' || !field.fieldDefinitionId || !Array.isArray(field.values)) return null;
+    dimensions.push(...selection(field.values, `custom_field:${field.fieldDefinitionId}`));
+  }
+  return dimensions;
+}
+
+function coverageForBatch(batch) {
+  const schemaVersion = Number(batch && batch.filterSchemaVersion);
+  if (schemaVersion === 2) return { known: true, dimensionIds: selectedDimensionIds(batch && batch.filterConfig) };
+  if (schemaVersion !== 1) return { known: false, dimensionIds: [] };
+  const dimensionIds = batch.provider === 'elvanto'
+    ? elvantoV1SelectedDimensionIds(batch.filterConfig)
+    : batch.provider === 'planning_center'
+      ? planningCenterV1SelectedDimensionIds(batch.filterConfig)
+      : null;
+  return dimensionIds === null ? { known: false, dimensionIds: [] } : { known: true, dimensionIds };
+}
+
+function coverageForBatches(batches, cacheEntry) {
   const covered = new Set(Array.isArray(cacheEntry && cacheEntry.coveredDimensionIds) ? cacheEntry.coveredDimensionIds : []);
-  return [...new Set(batches.flatMap((batch) => selectedDimensionsForBatch(batch, adapter))
-    .filter((dimensionId) => !covered.has(dimensionId)))].sort();
+  const coverage = batches.map(coverageForBatch);
+  return {
+    known: coverage.every((item) => item.known),
+    missingDimensionIds: [...new Set(coverage.flatMap((item) => item.dimensionIds)
+      .filter((dimensionId) => !covered.has(dimensionId)))].sort(),
+  };
 }
 
 function eligibleIdsForBatch(batch, cacheEntry, adapter, { evaluateLegacy } = {}) {
@@ -106,22 +147,31 @@ function previewFilter({
   // share one provider-neutral DTO. Count evaluation uses cache facts only.
   void metadata;
   const scopedBatches = (Array.isArray(batches) ? batches : [])
-    .filter((batch) => withinScope(batch, churchId, provider));
-  const active = batchId === null || batchId === undefined
+    .filter((batch) => withinScope(batch, churchId, provider))
+    .map((batch) => ({ ...batch, provider: batch.provider || provider }));
+  const editing = batchId !== null && batchId !== undefined;
+  const active = !editing
     ? null
     : scopedBatches.find((batch) => sameBatchId(batch.id, batchId)) || null;
-  const target = { ...active, ...proposed, id: proposed.id ?? active?.id ?? batchId, provider };
-  const targetId = target.id;
-  const otherBatches = scopedBatches.filter((batch) => !sameBatchId(batch.id, targetId));
+  const { id: ignoredProposedId, ...proposedFields } = proposed;
+  void ignoredProposedId;
+  const targetId = editing ? active?.id ?? batchId : Symbol('new-filter-preview');
+  const target = { ...active, ...proposedFields, id: targetId, provider };
+  const otherBatches = editing
+    ? scopedBatches.filter((batch) => !sameBatchId(batch.id, targetId))
+    : scopedBatches;
   const unionBatches = [
     ...otherBatches.filter((batch) => batch.enabled),
     ...(target.enabled ? [target] : []),
   ];
   const cacheUsable = validCacheEntry(cacheEntry, churchId, provider)
     && cacheEntry.populationGateDigest === populationGateDigest;
-  const targetMissingDimensionIds = missingDimensions([target], cacheEntry, adapter);
-  const unionMissingDimensionIds = missingDimensions(unionBatches, cacheEntry, adapter);
-  const missingDimensionIds = [...new Set([...targetMissingDimensionIds, ...unionMissingDimensionIds])].sort();
+  const targetCoverage = coverageForBatches([target], cacheEntry);
+  const unionCoverage = coverageForBatches(unionBatches, cacheEntry);
+  const missingDimensionIds = [...new Set([
+    ...targetCoverage.missingDimensionIds,
+    ...unionCoverage.missingDimensionIds,
+  ])].sort();
   const result = {
     matchCount: null,
     snapshot: cacheUsable ? snapshotFor(cacheEntry) : null,
@@ -131,7 +181,7 @@ function previewFilter({
     warnings: [],
   };
 
-  if (!cacheUsable || targetMissingDimensionIds.length > 0) {
+  if (!cacheUsable || !targetCoverage.known || targetCoverage.missingDimensionIds.length > 0) {
     if (isNotOnlyFilter(target)) result.warnings.push('BROAD_FILTER');
     result.warnings.sort();
     return result;
@@ -140,7 +190,7 @@ function previewFilter({
   const targetIds = eligibleIdsForBatch(target, cacheEntry, adapter, { evaluateLegacy });
   result.matchCount = targetIds.size;
   const otherEnabled = otherBatches.filter((batch) => batch.enabled);
-  if (unionMissingDimensionIds.length === 0) {
+  if (unionCoverage.known && unionCoverage.missingDimensionIds.length === 0) {
     const union = new Set();
     for (const batch of unionBatches) {
       for (const externalPersonId of eligibleIdsForBatch(batch, cacheEntry, adapter, { evaluateLegacy })) union.add(externalPersonId);
@@ -149,8 +199,8 @@ function previewFilter({
   }
 
   for (const batch of otherEnabled) {
-    const overlapMissing = missingDimensions([batch], cacheEntry, adapter);
-    if (overlapMissing.length > 0) continue;
+    const overlapCoverage = coverageForBatches([batch], cacheEntry);
+    if (!overlapCoverage.known || overlapCoverage.missingDimensionIds.length > 0) continue;
     const count = intersectionCount(targetIds, eligibleIdsForBatch(batch, cacheEntry, adapter, { evaluateLegacy }));
     result.overlaps.push({ batchId: batch.id, batchName: batch.name, count });
     if (count > 0 && target.gatheringTypeId !== batch.gatheringTypeId) result.warnings.push('OVERLAP_GATHERING_TYPE');

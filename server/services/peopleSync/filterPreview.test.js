@@ -8,7 +8,7 @@ const { previewFilter, eligibleIdsForBatch } = require('./filterPreview');
 const metadata = {
   dimensions: [
     { id: 'status', cardinality: 'single', values: [{ id: 'active' }, { id: 'inactive' }] },
-    { id: 'group', cardinality: 'multi', values: [{ id: 'music' }, { id: 'youth' }] },
+    { id: 'groups', cardinality: 'multi', values: [{ id: 'music' }, { id: 'youth' }] },
   ],
 };
 
@@ -24,12 +24,12 @@ const cacheEntry = {
   capturedAt: '2026-07-28T00:00:00.000Z',
   expiresAt: '2099-07-29T00:00:00.000Z',
   fresh: false,
-  coveredDimensionIds: ['group', 'status'],
+  coveredDimensionIds: ['groups', 'status'],
   populationGateDigest: 'gate-1',
   facts: [
-    { externalPersonId: 'p1', dimensions: { status: ['active'], group: ['music'] } },
-    { externalPersonId: 'p2', dimensions: { status: ['active'], group: ['youth'] } },
-    { externalPersonId: 'p3', dimensions: { status: ['inactive'], group: ['music'] } },
+    { externalPersonId: 'p1', dimensions: { status: ['active'], groups: ['music'] } },
+    { externalPersonId: 'p2', dimensions: { status: ['active'], groups: ['youth'] } },
+    { externalPersonId: 'p3', dimensions: { status: ['inactive'], groups: ['music'] } },
     { externalPersonId: 'p4', dimensions: { status: ['active'] } },
     { externalPersonId: 'p5', dimensions: { status: ['inactive'] } },
   ],
@@ -37,13 +37,20 @@ const cacheEntry = {
 
 const batches = [
   { id: 3, name: 'Active people', enabled: true, filterSchemaVersion: 2, filterConfig: active('status', ['active']), gatheringTypeId: 10, defaultPeopleType: 'regular' },
-  { id: 7, name: 'Legacy music', enabled: true, filterSchemaVersion: 1, filterConfig: { legacy: 'music' }, gatheringTypeId: 20, defaultPeopleType: 'local_visitor' },
-  { id: 8, name: 'Disabled youth', enabled: false, filterSchemaVersion: 2, filterConfig: active('group', ['youth']), gatheringTypeId: 10, defaultPeopleType: 'regular' },
+  {
+    id: 7, name: 'Legacy music', enabled: true, filterSchemaVersion: 1, gatheringTypeId: 20, defaultPeopleType: 'local_visitor',
+    filterConfig: {
+      statuses: ['active'], categoryIds: [], groups: { ids: ['music'], operator: 'any' },
+      demographics: { values: [], operator: 'any' }, departments: { values: [], operator: 'any' },
+      serviceTypes: { ids: [], operator: 'any' }, locations: { ids: [], operator: 'any' }, customFields: [],
+    },
+  },
+  { id: 8, name: 'Disabled youth', enabled: false, filterSchemaVersion: 2, filterConfig: active('groups', ['youth']), gatheringTypeId: 10, defaultPeopleType: 'regular' },
 ];
 
 function evaluateLegacy(provider, facts, config) {
   assert.equal(provider, 'elvanto');
-  return config.legacy === 'music' && facts.dimensions.group?.includes('music');
+  return config.groups.ids.includes('music') && facts.dimensions.groups?.includes('music');
 }
 
 test('preview uses cached facts for proposed counts, mixed-schema overlaps, and enabled-union replacement', () => {
@@ -62,7 +69,7 @@ test('preview uses cached facts for proposed counts, mixed-schema overlaps, and 
   assert.deepEqual(existingEdit.warnings, []);
   assert.deepEqual(existingEdit.snapshot, {
     id: 'snapshot-1', capturedAt: cacheEntry.capturedAt, fresh: false,
-    expiresAt: cacheEntry.expiresAt, coveredDimensionIds: ['group', 'status'],
+    expiresAt: cacheEntry.expiresAt, coveredDimensionIds: ['groups', 'status'],
   });
 
   const newEnabledProposal = previewFilter({
@@ -104,17 +111,55 @@ test('legacy eligibility requires an injected evaluator while schema 2 uses the 
   assert.deepEqual([...eligibleIdsForBatch(batches[0], cacheEntry, null, {})], ['p1', 'p2', 'p4']);
 });
 
+test('an edit uses the authoritative numeric-or-string batchId instead of proposed.id', () => {
+  const preview = previewFilter({
+    churchId: 'churcha1', provider: 'elvanto', batchId: '3',
+    proposed: { id: 7, enabled: true, filterSchemaVersion: 2, filterConfig: active('status', ['inactive']) },
+    cacheEntry, batches, metadata, populationGateDigest: 'gate-1', evaluateLegacy,
+  });
+
+  assert.deepEqual(preview.overlaps, [{ batchId: 7, batchName: 'Legacy music', count: 1 }]);
+  assert.equal(preview.uniqueEnabledPopulationCount, 3);
+});
+
+test('a creation ignores proposed.id and never replaces an existing batch', () => {
+  const preview = previewFilter({
+    churchId: 'churcha1', provider: 'elvanto', batchId: null,
+    proposed: { id: 3, enabled: true, filterSchemaVersion: 2, filterConfig: active('status', ['inactive']) },
+    cacheEntry, batches, metadata, populationGateDigest: 'gate-1', evaluateLegacy,
+  });
+
+  assert.equal(preview.uniqueEnabledPopulationCount, 5);
+  assert.deepEqual(preview.overlaps, [
+    { batchId: 3, batchName: 'Active people', count: 0 },
+    { batchId: 7, batchName: 'Legacy music', count: 1 },
+  ]);
+});
+
+test('an uncovered legacy v1 dimension makes the enabled union unavailable without fabricating a count', () => {
+  const preview = previewFilter({
+    churchId: 'churcha1', provider: 'elvanto', batchId: null,
+    proposed: { enabled: true, filterSchemaVersion: 2, filterConfig: active('status', ['active']) },
+    cacheEntry: { ...cacheEntry, coveredDimensionIds: ['status'] }, batches, metadata,
+    populationGateDigest: 'gate-1', evaluateLegacy,
+  });
+
+  assert.equal(preview.matchCount, 3);
+  assert.equal(preview.uniqueEnabledPopulationCount, null);
+  assert.deepEqual(preview.missingDimensionIds, ['groups']);
+});
+
 test('preview never fabricates counts for absent, expired, gate-mismatched, or insufficient cache coverage', () => {
   const input = {
     churchId: 'churcha1', provider: 'elvanto', batchId: null,
-    proposed: { id: 9, enabled: true, filterSchemaVersion: 2, filterConfig: active('group', ['music']) },
+    proposed: { id: 9, enabled: true, filterSchemaVersion: 2, filterConfig: active('groups', ['music']) },
     batches, metadata, populationGateDigest: 'gate-1', evaluateLegacy,
   };
   for (const [entry, expectedMissing] of [
-    [null, ['group', 'status']],
+    [null, ['groups', 'status']],
     [{ ...cacheEntry, expiresAt: '2000-01-01T00:00:00.000Z' }, []],
     [{ ...cacheEntry, populationGateDigest: 'different-gate' }, []],
-    [{ ...cacheEntry, coveredDimensionIds: ['status'] }, ['group']],
+    [{ ...cacheEntry, coveredDimensionIds: ['status'] }, ['groups']],
   ]) {
     const preview = previewFilter({ ...input, cacheEntry: entry });
     assert.equal(preview.matchCount, null);
@@ -126,7 +171,7 @@ test('preview never fabricates counts for absent, expired, gate-mismatched, or i
 test('preview marks NOT-only and whole-population filters as broad', () => {
   const notOnly = previewFilter({
     churchId: 'churcha1', provider: 'elvanto', batchId: null,
-    proposed: { enabled: true, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [{ dimensionId: 'group', values: ['music'] }] } },
+    proposed: { enabled: true, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [{ dimensionId: 'groups', values: ['music'] }] } },
     cacheEntry, batches: [], metadata, populationGateDigest: 'gate-1', evaluateLegacy,
   });
   assert.deepEqual(notOnly.warnings, ['BROAD_FILTER']);
