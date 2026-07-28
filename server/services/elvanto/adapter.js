@@ -76,7 +76,6 @@ const { createElvantoClient } = require('./httpClient');
 const { normalizeSnapshot } = require('./normalizer');
 const { DEFINITION_ENDPOINTS, fetchElvantoMetadata, asArray } = require('./metadata');
 const { validateElvantoFilter, isElvantoEligible } = require('./filter');
-const { evaluateFilterV2 } = require('../peopleSync/filterEngine');
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const NOT_SET = '$not_set';
@@ -629,15 +628,7 @@ function createElvantoAdapter({ clientFactory = createElvantoClient, now = () =>
     },
 
     validateFilter: validateElvantoFilter,
-    isEligible(person, filterConfig, filterSchemaVersion = 1) {
-      if (filterSchemaVersion !== 2) return isElvantoEligible(person, filterConfig, filterSchemaVersion);
-      const attributes = person?.attributes || {};
-      const covered = new Set([
-        'status', 'category', 'groups', 'demographics', 'departments', 'service_types', 'locations',
-        ...Object.keys(attributes.customFields || {}).map((fieldId) => `custom_field:${fieldId}`),
-      ]);
-      return evaluateFilterV2(toElvantoFilterFacts(person, covered), filterConfig);
-    },
+    isEligible: isElvantoEligible,
     toFilterFacts: toElvantoFilterFacts,
     buildFilterDimensions: buildElvantoFilterDimensions,
     isInFilterPopulation(person, settings) {
