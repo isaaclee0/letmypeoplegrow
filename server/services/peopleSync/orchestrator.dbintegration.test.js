@@ -47,6 +47,15 @@ providerRegistry.registerProvider('elvanto', {
   },
   validateFilter: () => ({ ok: true, value: {}, errors: [] }),
   isEligible: () => true,
+  toFilterFacts(person) {
+    return { externalPersonId: String(person.id), dimensions: {} };
+  },
+  buildFilterDimensions() {
+    return [];
+  },
+  isInFilterPopulation() {
+    return true;
+  },
 });
 
 // Requiring orchestrator.js AFTER registerProvider is not required (getProvider

@@ -112,7 +112,7 @@ test('validateElvantoFilter rejects an unknown top-level key', () => {
 });
 
 test('validateElvantoFilter rejects an unsupported schema version', () => {
-  const result = validateElvantoFilter(validConfig(), 2);
+  const result = validateElvantoFilter(validConfig(), 99);
   assert.equal(result.ok, false);
   assert.equal(result.value, null);
   assert.ok(result.errors.some((e) => /schema version/.test(e)));
@@ -179,6 +179,13 @@ test('isElvantoEligible: statuses gate — person state must be in config.status
   assert.equal(isElvantoEligible(person({ state: 'active' }), config), true);
   assert.equal(isElvantoEligible(person({ state: 'contact' }), config), true);
   assert.equal(isElvantoEligible(person({ state: 'archived' }), config), false);
+});
+
+test('schema-2 eligibility delegates equivalent Elvanto facts to the shared Boolean evaluator', () => {
+  const filter = { branches: [{ groups: [{ dimensionId: 'custom_field:choir', mode: 'any', values: ['Soprano'] }] }], exclusions: [] };
+  assert.equal(isElvantoEligible(person({ attributes: { customFields: { choir: ['Soprano'] } } }), filter, 2), true);
+  assert.equal(isElvantoEligible(person({ attributes: { customFields: { choir: ['Alto'] } } }), filter, 2), false);
+  assert.equal(validateElvantoFilter(filter, 2).ok, true);
 });
 
 test('isElvantoEligible: empty categoryIds is ignored; non-empty must include the person categoryId', () => {

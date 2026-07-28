@@ -74,6 +74,7 @@
 // evaluated over.
 
 const FILTER_SCHEMA_VERSION = 1;
+const { evaluateFilterV2, validateFilterV2 } = require('../peopleSync/filterEngine');
 
 const VALID_STATUSES = new Set(['active', 'contact', 'archived', 'deceased']);
 const VALID_OPERATORS = new Set(['any', 'all']);
@@ -144,6 +145,20 @@ function validateCustomFieldRules(raw, errors) {
 // (not just the first) — mirrors pcoAdapter.js#validatePcoFilter's
 // contract shape exactly.
 function validateElvantoFilter(config, schemaVersion = FILTER_SCHEMA_VERSION) {
+  if (schemaVersion === 2) {
+    const dimensions = new Map();
+    for (const branch of Array.isArray(config && config.branches) ? config.branches : []) {
+      for (const group of Array.isArray(branch && branch.groups) ? branch.groups : []) {
+        if (typeof group?.dimensionId === 'string') dimensions.set(group.dimensionId, new Set(group.values || []));
+      }
+    }
+    for (const group of Array.isArray(config && config.exclusions) ? config.exclusions : []) {
+      if (typeof group?.dimensionId === 'string') dimensions.set(group.dimensionId, new Set(group.values || []));
+    }
+    return validateFilterV2(config, {
+      dimensions: [...dimensions].map(([id, values]) => ({ id, cardinality: 'multi', values: [...values].map((value) => ({ id: value })) })),
+    });
+  }
   if (schemaVersion !== FILTER_SCHEMA_VERSION) {
     return { ok: false, value: null, errors: [`Unsupported elvanto filter schema version: ${schemaVersion}`] };
   }
@@ -222,7 +237,23 @@ function demographicValues(list) {
 // any-source-matches-wins semantics here (unlike PCO's eligibility.js),
 // because Elvanto's filter is a single richly-dimensioned allow-list, not a
 // set of alternative sources.
-function isElvantoEligible(person, config) {
+function isElvantoEligible(person, config, schemaVersion = FILTER_SCHEMA_VERSION) {
+  if (schemaVersion === 2) {
+    const attributes = (person && person.attributes) || {};
+    const dimensions = {
+      status: person?.state ? [String(person.state)] : [],
+      category: person?.categoryId == null ? [] : [String(person.categoryId)],
+      groups: (attributes.groups || []).map(String),
+      demographics: demographicValues(attributes.demographics).map(String),
+      departments: (attributes.departments || []).map(String),
+      service_types: (attributes.serviceTypes || []).map(String),
+      locations: (attributes.locations || []).map(String),
+    };
+    for (const [fieldId, values] of Object.entries(attributes.customFields || {})) {
+      dimensions[`custom_field:${fieldId}`] = (Array.isArray(values) ? values : [values]).filter((value) => value != null).map(String);
+    }
+    return evaluateFilterV2({ externalPersonId: String(person?.id || ''), dimensions }, config);
+  }
   const attributes = (person && person.attributes) || {};
 
   if (!Array.isArray(config.statuses) || !config.statuses.includes(person && person.state)) return false;

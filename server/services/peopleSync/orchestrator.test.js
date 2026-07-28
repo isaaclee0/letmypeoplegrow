@@ -129,6 +129,70 @@ test('buildReview never applies anything and never increments missing counters, 
   assert.equal(calls.filter((c) => c === 'recordFullFetchPresence').length, 0);
 });
 
+test('buildReview evaluates a schema-2 draft only for the requested batch and gates the population first', async () => {
+  const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+  const active = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['member'] }] }], exclusions: [] };
+  const other = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['other'] }] }], exclusions: [] };
+  const seen = [];
+  const adapter = fakeAdapter({
+    isInFilterPopulation: (person) => person.id !== 'excluded',
+    isEligible: (person, config, schemaVersion) => {
+      seen.push([person.id, config, schemaVersion]);
+      return true;
+    },
+    fetchSnapshot: async () => ({
+      provider: 'elvanto', mode: 'full', complete: true, fetchedAt: '2026-01-01T00:00:00.000Z', watermark: null,
+      people: [fakeExternalPerson({ id: 'included' }), fakeExternalPerson({ id: 'excluded' })], families: [],
+    }),
+  });
+  const batches = [
+    fakeBatch({ id: 1, filterSchemaVersion: 2, filterConfig: active, draftFilterSchemaVersion: 2, draftFilterConfig: draft }),
+    fakeBatch({ id: 2, filterSchemaVersion: 2, filterConfig: other }),
+  ];
+  const { deps } = makeDeps({ batches, adapter });
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+
+  assert.deepEqual(seen, [
+    ['included', draft, 2],
+    ['included', other, 2],
+  ]);
+});
+
+test('a full review captures filter facts and binds the review digest to its filter context', async () => {
+  const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+  const captured = [];
+  let digestedPlan;
+  const adapter = fakeAdapter({
+    isInFilterPopulation: () => true,
+    toFilterFacts: (person) => ({ externalPersonId: person.id, dimensions: { status: [person.state] } }),
+    buildFilterDimensions: () => [{ id: 'status', cardinality: 'single', values: [{ id: 'active' }] }],
+    fetchMetadata: async ({ snapshot }) => ({ snapshot }),
+  });
+  const { deps } = makeDeps({
+    batches: [fakeBatch({ filterSchemaVersion: 2, filterRevision: 7, draftFilterSchemaVersion: 2, draftFilterConfig: draft })],
+    adapter,
+  });
+  deps.captureFilterSnapshotInput = (input) => {
+    captured.push(input);
+    return { facts: [{ externalPersonId: 'ext-1', dimensions: { status: ['active'] } }], dimensions: [], coverage: ['status'], populationGateDigest: 'gate' };
+  };
+  deps.filterFactsCache = { putComplete: (entry) => ({ ...entry, snapshotId: 'snapshot-1' }) };
+  deps.digestPlan = (plan) => {
+    digestedPlan = structuredClone(plan);
+    return 'a'.repeat(64);
+  };
+
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].snapshot.people[0].id, 'ext-1');
+  assert.deepEqual(digestedPlan.filterContext, {
+    activeRevision: 7,
+    draftDigest: require('./planDigest').digestFilterConfig(draft),
+    snapshotId: 'snapshot-1',
+  });
+});
+
 test('buildReview rejects an unsupported trigger before touching any collaborator', async () => {
   const { deps, calls } = makeDeps();
   await assert.rejects(
@@ -217,6 +281,22 @@ test('runUnattended rejects interactive run_now before any collaborator can muta
     (err) => err instanceof OrchestratorError && err.code === 'SYNC_TRIGGER_INVALID'
   );
   assert.deepEqual(calls, []);
+});
+
+test('runUnattended blocks an authoritative schema-2 draft before starting a run or fetching', async () => {
+  const { deps, calls } = makeDeps({
+    batches: [fakeBatch({
+      filterSchemaVersion: 2,
+      draftFilterSchemaVersion: 2,
+      draftFilterConfig: { branches: [], exclusions: [] },
+    })],
+  });
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps),
+    (err) => err instanceof OrchestratorError && err.code === 'SYNC_FILTER_REVIEW_REQUIRED'
+  );
+  assert.equal(calls.includes('startRun'), false);
+  assert.equal(calls.includes('fetchSnapshot'), false);
 });
 
 test('runUnattended (clean, no held items) follows the full 10-step order and classifies applied', async () => {

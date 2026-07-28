@@ -59,8 +59,11 @@ const providerRegistry = require('./providerRegistry');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
 const { applyPeopleSyncPlan, validateSelections } = require('./apply');
-const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
+const { digestPlan, createReviewToken, verifyReviewToken, digestFilterConfig } = require('./planDigest');
 const { notifyReviewRequired } = require('./reviewNotification');
+const filterFactsCache = require('./filterFactsCache');
+const { captureFilterSnapshotInput } = require('./filterSnapshot');
+const { requiredDimensionIdsForBatch } = require('./filterPreview');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
@@ -182,6 +185,9 @@ const defaultDeps = {
   createReviewToken,
   verifyReviewToken,
   notifyReviewRequired,
+  filterFactsCache,
+  captureFilterSnapshotInput,
+  requiredDimensionIdsForBatch,
 };
 
 function mergeDeps(overrides) {
@@ -193,6 +199,11 @@ function mergeDeps(overrides) {
 function collectCustomFieldIds(batches) {
   const ids = new Set();
   for (const batch of batches) {
+    if (Number(batch.filterSchemaVersion) === 2) {
+      for (const dimensionId of requiredDimensionIdsForBatch(batch) || []) {
+        if (dimensionId.startsWith('custom_field:')) ids.add(dimensionId.slice('custom_field:'.length));
+      }
+    }
     const customFields = batch.filterConfig && Array.isArray(batch.filterConfig.customFields)
       ? batch.filterConfig.customFields : [];
     for (const rule of customFields) {
@@ -207,11 +218,30 @@ function buildEligibleByBatch(batches, people, adapter) {
   for (const batch of batches) {
     const eligible = new Set();
     for (const person of people) {
-      if (adapter.isEligible(person, batch.filterConfig)) eligible.add(String(person.id));
+      if (typeof adapter.isInFilterPopulation === 'function' && !adapter.isInFilterPopulation(person)) continue;
+      if (adapter.isEligible(person, batch.filterConfig, batch.filterSchemaVersion)) eligible.add(String(person.id));
     }
     eligibleByBatch.set(batch.id, eligible);
   }
   return eligibleByBatch;
+}
+
+function effectiveReviewBatches(batches, batchId) {
+  if (batchId === null || batchId === undefined) return batches;
+  return batches.map((batch) => String(batch.id) === String(batchId) && batch.draftFilterConfig
+    ? { ...batch, filterSchemaVersion: batch.draftFilterSchemaVersion, filterConfig: batch.draftFilterConfig }
+    : batch);
+}
+
+function reviewedFilterContext(batches, batchId, snapshotId) {
+  if (batchId === null || batchId === undefined) return null;
+  const batch = batches.find((candidate) => String(candidate.id) === String(batchId));
+  if (!batch) return null;
+  return {
+    activeRevision: batch.filterRevision,
+    draftDigest: batch.draftFilterConfig ? digestFilterConfig(batch.draftFilterConfig) : null,
+    snapshotId: snapshotId || null,
+  };
 }
 
 function groupMembersByFamily(people) {
@@ -415,17 +445,21 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const batches = providerBatches.filter((batch) => batch.enabled);
   if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);
 
+  validateBatchFilters(batches, adapter, provider);
+
+  const settings = await deps.getSyncSettings(churchId);
+  const authorityState = await deps.getAuthority(churchId);
+
+  return { connection, credentials, adapter, batches, settings, authorityState };
+}
+
+function validateBatchFilters(batches, adapter, provider) {
   for (const batch of batches) {
     const validation = adapter.validateFilter(batch.filterConfig, batch.filterSchemaVersion);
     if (!validation || validation.ok !== true) {
       throw new OrchestratorError('SYNC_BATCH_FILTER_INVALID', `Batch ${batch.id} has an invalid ${provider} filter`, 400);
     }
   }
-
-  const settings = await deps.getSyncSettings(churchId);
-  const authorityState = await deps.getAuthority(churchId);
-
-  return { connection, credentials, adapter, batches, settings, authorityState };
 }
 
 // ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
@@ -439,6 +473,20 @@ async function runPipelineBody({
   const snapshot = await adapter.fetchSnapshot({ churchId, credentials, mode, watermark, customFieldIds });
   if (!snapshot || snapshot.complete !== true) {
     throw new OrchestratorError('SYNC_FETCH_INCOMPLETE', `${provider} fetch did not return a complete snapshot`, 502);
+  }
+
+  let filterSnapshotId = null;
+  if (isCompleteFullSnapshot(snapshot) && typeof adapter.fetchMetadata === 'function' &&
+      typeof adapter.toFilterFacts === 'function' && typeof adapter.buildFilterDimensions === 'function' &&
+      typeof adapter.isInFilterPopulation === 'function') {
+    const coveredDimensionIds = [...new Set(batches.flatMap((batch) => deps.requiredDimensionIdsForBatch(batch) || []))].sort();
+    const providerMetadata = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
+    const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
+    const entry = deps.filterFactsCache.putComplete({
+      churchId, provider, mode: 'full', complete: true, coveredDimensionIds,
+      facts: captured.facts, dimensions: captured.dimensions, populationGateDigest: captured.populationGateDigest,
+    });
+    filterSnapshotId = entry.snapshotId;
   }
 
   // 5. load local state/links and existing missing counters
@@ -482,7 +530,7 @@ async function runPipelineBody({
     gatheringMemberships,
   });
 
-  return { snapshot, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
+  return { snapshot, filterSnapshotId, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
 }
 
 // ─── buildReview ─────────────────────────────────────────────────────────────
@@ -501,6 +549,8 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
+  validateBatchFilters(reviewBatches, pre.adapter, provider);
   const authoritative = pre.authorityState.active === provider;
   const activeAuthority = pre.authorityState.active;
 
@@ -508,10 +558,11 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
   try {
     const body = await runPipelineBody({
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      authoritative, activeAuthority, batches: pre.batches, settings: pre.settings,
+      authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
+    body.plan.filterContext = reviewedFilterContext(pre.batches, batchId, body.filterSnapshotId);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -569,6 +620,7 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
+    body.plan.filterContext = reviewedFilterContext(pre.batches, null, body.filterSnapshotId);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -630,6 +682,8 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
+  validateBatchFilters(reviewBatches, pre.adapter, provider);
   const isAuthoritySwitch = pre.authorityState.pending === provider;
   const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
   const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
@@ -648,10 +702,11 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   try {
     body = await runPipelineBody({
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      authoritative, activeAuthority, batches: pre.batches, settings: pre.settings,
+      authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
+    body.plan.filterContext = reviewedFilterContext(pre.batches, batchId, body.filterSnapshotId);
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
     if (!verification.ok) {
@@ -666,9 +721,15 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
     // 8. apply — the last step that may still cause this run to be
     // recorded as failed.
+    const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
       activateAuthority: isAuthoritySwitch,
+      filterPromotion: reviewedBatch?.draftFilterConfig ? {
+        batchId: reviewedBatch.id,
+        expectedBaseRevision: reviewedBatch.draftFilterBaseRevision,
+        expectedDraftDigest: digestFilterConfig(reviewedBatch.draftFilterConfig),
+      } : null,
     });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
@@ -736,8 +797,11 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     );
   }
 
-  const batch = pre.batches[0];
-  const mode = (forceFull || !batch.lastExternalWatermark) ? 'full' : 'incremental';
+  const requestedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  if (requestedBatch?.filterSchemaVersion === 2 && requestedBatch.draftFilterConfig) {
+    throw new OrchestratorError('SYNC_FILTER_REVIEW_REQUIRED', 'A schema-2 filter draft must be reviewed before unattended sync can run', 409);
+  }
+  const mode = (forceFull || !requestedBatch.lastExternalWatermark) ? 'full' : 'incremental';
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
 
@@ -749,7 +813,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   let applyResult;
   try {
     body = await runPipelineBody({
-      churchId, provider, trigger, mode, watermark: batch.lastExternalWatermark || undefined,
+      churchId, provider, trigger, mode, watermark: requestedBatch.lastExternalWatermark || undefined,
       authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });

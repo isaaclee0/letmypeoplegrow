@@ -176,8 +176,14 @@ async function promoteFilterDraftWithConnection(conn, {
   churchId, provider, batchId, expectedBaseRevision, expectedDraftDigest,
 }) {
   assertProvider(provider);
-  const row = conn.prepare(`SELECT * FROM people_sync_batches
-    WHERE id = ? AND church_id = ? AND provider = ?`).get(batchId, churchId, provider);
+  const readOne = async (sql, params) => typeof conn.query === 'function'
+    ? (await conn.query(sql, params))[0]
+    : conn.prepare(sql).get(...params);
+  const write = async (sql, params) => typeof conn.query === 'function'
+    ? await conn.query(sql, params)
+    : conn.prepare(sql).run(...params);
+  const row = await readOne(`SELECT * FROM people_sync_batches
+    WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
   const draftConfig = parseDraftFilterConfig(row?.draft_filter_config);
   if (!row || draftConfig === null || row.filter_revision !== expectedBaseRevision ||
       row.draft_filter_base_revision !== expectedBaseRevision ||
@@ -186,7 +192,7 @@ async function promoteFilterDraftWithConnection(conn, {
     error.code = 'SYNC_FILTER_DRAFT_STALE';
     throw error;
   }
-  const result = conn.prepare(`UPDATE people_sync_batches
+  const result = await write(`UPDATE people_sync_batches
     SET filter_schema_version = draft_filter_schema_version,
         filter_config = draft_filter_config,
         filter_revision = filter_revision + 1,
@@ -195,16 +201,17 @@ async function promoteFilterDraftWithConnection(conn, {
         draft_filter_base_revision = NULL,
         draft_filter_updated_at = NULL,
         updated_at = datetime('now')
-    WHERE id = ? AND church_id = ? AND provider = ? AND filter_revision = ?`).run(
-    batchId, churchId, provider, expectedBaseRevision
-  );
-  if (result.changes !== 1) {
+    WHERE id = ? AND church_id = ? AND provider = ? AND filter_revision = ?`, [
+    batchId, churchId, provider, expectedBaseRevision,
+  ]);
+  if ((result.affectedRows ?? result.changes) !== 1) {
     const error = new Error('Sync filter draft is stale');
     error.code = 'SYNC_FILTER_DRAFT_STALE';
     throw error;
   }
-  return toBatch(conn.prepare(`SELECT * FROM people_sync_batches
-    WHERE id = ? AND church_id = ? AND provider = ?`).get(batchId, churchId, provider));
+  const promoted = await readOne(`SELECT * FROM people_sync_batches
+    WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
+  return toBatch(promoted);
 }
 
 // Used only after a reviewed, exact-compatible v1 upgrade has verified every

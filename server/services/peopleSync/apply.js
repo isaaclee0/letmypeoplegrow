@@ -1,6 +1,7 @@
 const Database = require('../../config/database');
 const linkRepository = require('./linkRepository');
 const authority = require('./authority');
+const batchRepository = require('./batchRepository');
 const { BUCKETS } = require('./plan');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
@@ -220,7 +221,7 @@ async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveInd
  * projection) are NOT this function's concern — they belong outside/after
  * the critical transaction, in whichever caller wires up that provider.
  */
-async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false }) {
+async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false, filterPromotion = null }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
   if (!plan || typeof plan !== 'object') throw new Error('A plan is required to apply');
@@ -484,6 +485,15 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       );
       result.removeFromGathering++;
       if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
+    }
+
+    if (filterPromotion) {
+      await batchRepository.promoteFilterDraftWithConnection(conn, {
+        churchId, provider,
+        batchId: filterPromotion.batchId,
+        expectedBaseRevision: filterPromotion.expectedBaseRevision,
+        expectedDraftDigest: filterPromotion.expectedDraftDigest,
+      });
     }
 
     // Authority activation is part of this same critical transaction. If

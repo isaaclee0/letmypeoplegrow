@@ -18,6 +18,7 @@ const { toNormalizedPcoPerson, projectPcoHouseholds } = require('../planningCent
 const { getCachedPcoPeople, validatePlanningCenterToken } = require('../planningCenterSync');
 const { fetchFieldDefinitions } = require('../planningCenter/fieldDefinitions');
 const { tallyMembership } = require('../planningCenter/summary');
+const { evaluateFilterV2, validateFilterV2 } = require('./filterEngine');
 
 // PCO's batch filter shape ({ membershipFilterEnabled, membershipAllowlist,
 // fieldFilterEnabled, fieldFilters }) has had exactly one shape since it shipped, so
@@ -26,6 +27,21 @@ const { tallyMembership } = require('../planningCenter/summary');
 // server/services/peopleSync/batchRepository.js's filterSchemaVersion column.
 const FILTER_SCHEMA_VERSION = 1;
 const NOT_SET = '$not_set';
+
+function validateV2FilterWithoutProviderMetadata(config) {
+  const dimensions = new Map();
+  for (const branch of Array.isArray(config && config.branches) ? config.branches : []) {
+    for (const group of Array.isArray(branch && branch.groups) ? branch.groups : []) {
+      if (typeof group?.dimensionId === 'string') dimensions.set(group.dimensionId, new Set(group.values || []));
+    }
+  }
+  for (const group of Array.isArray(config && config.exclusions) ? config.exclusions : []) {
+    if (typeof group?.dimensionId === 'string') dimensions.set(group.dimensionId, new Set(group.values || []));
+  }
+  return validateFilterV2(config, {
+    dimensions: [...dimensions].map(([id, values]) => ({ id, cardinality: 'multi', values: [...values].map((value) => ({ id: value })) })),
+  });
+}
 
 function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
@@ -140,6 +156,7 @@ function buildPcoFilterDimensions({ facts = [], providerMetadata = {}, coveredDi
 // so the two don't silently diverge, but lives here so Task 9+ can validate a bare
 // filterConfig against the Task 5 adapter contract without a whole batch body.
 function validatePcoFilter(filterConfig, schemaVersion = FILTER_SCHEMA_VERSION) {
+  if (schemaVersion === 2) return validateV2FilterWithoutProviderMetadata(filterConfig);
   if (schemaVersion !== FILTER_SCHEMA_VERSION) {
     return { ok: false, value: null, errors: [`Unsupported planning_center filter schema version: ${schemaVersion}`] };
   }
@@ -251,7 +268,12 @@ function createPcoAdapter(deps = {}) {
     // eligibility.js's isEligible() remains the single source of truth for PCO
     // filter semantics; fromNormalized() only reshapes the normalized person back
     // into what it already expects, so nothing about eligibility is reinterpreted.
-    isEligible(person, filterConfig) {
+    isEligible(person, filterConfig, schemaVersion = FILTER_SCHEMA_VERSION) {
+      if (schemaVersion === 2) {
+        const fieldValues = (person && person.attributes && person.attributes.fieldValues) || person?.fieldValues || {};
+        const covered = new Set(['membership', ...Object.keys(fieldValues).map((id) => `custom_field:${id}`)]);
+        return evaluateFilterV2(toPcoFilterFacts(person, covered), filterConfig);
+      }
       return isEligible(fromNormalized(person), filterConfig);
     },
 
