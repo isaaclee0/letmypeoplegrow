@@ -83,6 +83,51 @@ describe('FilterBuilder', () => {
     expect(screen.getByRole('button', { name: 'Add OR alternative branch' })).toHaveFocus();
   });
 
+  it('locks existing branches during staged AND construction, then commits to and restores the original branch', () => {
+    render(<Controlled initial={{ branches: [
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] },
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth'] }] },
+    ], exclusions: [] }} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
+    expect(screen.getByText('Finish or cancel the staged filter before editing existing rules.')).toBeInTheDocument();
+    const removeTarget = screen.getByRole('button', { name: 'Remove Branch 2' });
+    expect(removeTarget).toBeDisabled();
+    fireEvent.click(removeTarget);
+    expect(screen.getByRole('button', { name: 'Choose Status for Branch 2' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Status for Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Include Active' }));
+    expect(JSON.parse(screen.getByLabelText('Filter value').textContent || '{}').branches).toEqual([
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] },
+      { groups: [
+        { dimensionId: 'groups', mode: 'all', values: ['youth'] },
+        { dimensionId: 'status', mode: 'any', values: ['active'] },
+      ] },
+    ]);
+  });
+
+  it('cancels staged AND construction if an external value update removes its branch', () => {
+    const initial: BooleanFilterConfigV2 = { branches: [
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['music'] }] },
+      { groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth'] }] },
+    ], exclusions: [] };
+    function ExternalControlled() {
+      const [value, setValue] = useState(initial);
+      return <><FilterBuilder metadata={metadata} value={value} onChange={setValue} /><button type="button" onClick={() => setValue({ branches: [initial.branches[0]], exclusions: [] })}>External update</button></>;
+    }
+
+    render(<ExternalControlled />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add AND filter type to Branch 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'External update' }));
+    expect(screen.queryByText('Choose a filter type for Branch 2')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('defaults multi brackets to Match all, hides it for single values, and supports removal', () => {
     render(<Controlled initial={{ branches: [{ groups: [{ dimensionId: 'groups', mode: 'all', values: ['youth', 'music'] }, { dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] }} />);
     expect(screen.getByRole('button', { name: 'Match all for Groups' })).toHaveAttribute('aria-pressed', 'true');
