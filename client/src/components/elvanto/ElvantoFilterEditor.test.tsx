@@ -91,4 +91,39 @@ describe('ElvantoFilterEditor', () => {
     expect(screen.getByTestId('filter-value')).toHaveTextContent('field-ministry');
     expect(screen.getByTestId('filter-value')).toHaveTextContent('value-welcome');
   });
+
+  it('stacks long custom-field option labels in one column and keeps checkboxes from shrinking', () => {
+    const longConsent = 'I consent to photos of me and my family being used for promotional purposes (e.g. appearing on the church website)';
+    const longShare = "I'm happy for these details to be shared with other members of the church community (e.g. in the church directory)";
+    const longPrivate = "Please don't share these details with other members of the church community";
+    const consentMetadata: ElvantoMetadata = {
+      ...metadata,
+      categories: [],
+      groups: [],
+      demographics: [],
+      departments: [],
+      serviceTypes: [],
+      locations: [],
+      customFields: [
+        { id: 'media', name: 'Media Consent', type: 'select', values: [{ id: 'consent', name: longConsent }] },
+        {
+          id: 'privacy',
+          name: 'Privacy of Information',
+          type: 'select',
+          values: [
+            { id: 'share', name: longShare },
+            { id: 'private', name: longPrivate },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<ControlledFilter source={consentMetadata} />);
+
+    const mediaLabel = screen.getByLabelText(longConsent).closest('label');
+    const privacyGrid = screen.getByText('Privacy of Information').closest('div')?.parentElement?.querySelector('.grid');
+    expect(mediaLabel?.className).toMatch(/items-start/);
+    expect(screen.getByLabelText(longConsent).className).toMatch(/shrink-0/);
+    expect(privacyGrid?.className).not.toMatch(/sm:grid-cols-2/);
+    expect(container.querySelectorAll('input[type="checkbox"].shrink-0').length).toBeGreaterThan(0);
+  });
 });

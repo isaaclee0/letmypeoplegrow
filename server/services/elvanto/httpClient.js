@@ -71,21 +71,30 @@ class ElvantoError extends Error {
   }
 }
 
+function serializeQueryParams(params) {
+  const searchParams = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params || {})) {
+    const values = Array.isArray(value) ? value : [value];
+    for (const item of values) {
+      if (item !== undefined && item !== null) {
+        searchParams.append(key, String(item));
+      }
+    }
+  }
+
+  return searchParams.toString();
+}
+
 // Default production transport, used when no `request` override is supplied.
-// Tests always inject their own `request`, so this path isn't exercised by
-// httpClient.test.js — kept minimal and consistent with the existing
-// https.request() helpers already used elsewhere in this codebase
-// (server/routes/integrations.js `makeHttpsRequest`, planningCenterSync.js).
+// Kept minimal and consistent with the existing https.request() helpers already
+// used elsewhere in this codebase (server/routes/integrations.js
+// `makeHttpsRequest`, planningCenterSync.js).
 function defaultRequest({ path, params, method, headers, body, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const url = new URL(DEFAULT_BASE_URL + path);
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value !== undefined && value !== null) {
-          url.searchParams.set(key, String(value));
-        }
-      }
-    }
+    const query = serializeQueryParams(params);
+    if (query) url.search = query;
 
     const payload = body !== undefined ? JSON.stringify(body) : null;
     const reqHeaders = Object.assign({ Accept: 'application/json' }, headers);
@@ -293,6 +302,7 @@ function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEF
 
 module.exports = {
   createElvantoClient,
+  serializeQueryParams,
   ElvantoError,
   ELVANTO_AUTH,
   ELVANTO_UNAVAILABLE,

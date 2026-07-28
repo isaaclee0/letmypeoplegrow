@@ -244,7 +244,7 @@ function respondWithError(res, err, { context, logLabel } = {}) {
 }
 
 // Bounded as ONE aggregate operation (not per-call) — a full-roster
-// snapshot fetch followed by six more paginated metadata-definition calls
+// snapshot fetch followed by three paginated metadata-definition calls
 // is exactly the "several sequential network calls in one request" case
 // the route-timeout wrapper exists for (see its own header note above
 // defaultDeps).

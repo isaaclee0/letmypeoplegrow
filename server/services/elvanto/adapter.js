@@ -20,77 +20,21 @@
 //
 // ─── THE SINGLE MOST IMPORTANT RULE IN THIS FILE ───────────────────────────
 //
-// normalizer.js's header note (Task 12, amended after Task 13's review) and
-// filter.js's header note (Task 13) both spell this out, and it bears
-// repeating here because THIS file is the one that actually populates the
-// bundle they depend on: every group/serviceType/location entry threaded
-// into a person's `memberships` bundle below, and every KEY in the
-// `custom_fields` map attached to a raw person before normalization, MUST
-// be Elvanto's stable ID — never a display name. `departments` is the one
-// exception and stays name-based (Elvanto's departments endpoint has no
-// separate ID). Getting this wrong produces no error anywhere: filter.js's
-// isElvantoEligible() compares attributes.groups/serviceTypes/locations
-// against metadata.js's id-bearing definition lists, so a name-keyed bundle
-// just silently matches nobody. See the explicit "ID, not name" comments
-// inline at fetchMembershipDimension() and attachCustomFieldMap() below —
-// those are the exact two places this rule has to be honoured.
+// Groups, service types, locations and custom-field keys/selected options use
+// stable Elvanto IDs. Departments remain name-based. Getting this wrong
+// produces no error: filter.js would simply match nobody, so the adapter,
+// metadata and filter conventions must remain aligned.
 //
-// ─── Wire-format assumptions NOT independently confirmed against Elvanto's
-// own API docs (documented here, per this task's own brief, rather than
-// blocking on them) ──────────────────────────────────────────────────────
+// ─── Live-verified wire format ─────────────────────────────────────────────
 //
-//   - `fields[]` is the request param key for asking Elvanto's
-//     `people/getAll.json` / `groups/getAll.json` / etc. to include
-//     optional fields beyond their default response shape. This matches
-//     this task's own spec text verbatim ("fully paginated groups with
-//     `fields[]=people`"). The existing legacy one-shot importer
-//     (server/routes/integrations.js) instead sends a single comma-joined
-//     `fields=family,demographics` param for the same purpose; since
-//     httpClient.js's params are a plain JS object (one value per key) and
-//     this task's file list does not include modifying httpClient.js, this
-//     adapter sends one `'fields[]'` key whose value is an array of field
-//     names — httpClient.js's real transport (`String(array)`) serializes
-//     that as a single comma-joined value on the wire, which is consistent
-//     with the legacy importer's own confirmed comma-joined convention even
-//     though the key name differs. Tests in this file assert against the
-//     `'fields[]'` array we hand to the client, not the final query string.
-//   - Base fields already confirmed returned WITHOUT an explicit `fields[]`
-//     request (per the legacy importer's `/elvanto/families` route, which
-//     fetches `people/getAll.json` with NO fields param and still reads
-//     `firstname`/`lastname`/`preferred_name`/`family_id`/
-//     `family_relationship`/`archived` straight off each result): those six
-//     are NOT added to this adapter's `fields[]` list. Everything else
-//     normalizer.js reads (`family` details beyond the default family_id/
-//     family_relationship pairing, `contact`, `deceased`, `category`,
-//     `date_modified`, `demographics`) is requested explicitly, since the
-//     legacy debug-dump route already shows at least `demographics` is NOT
-//     part of the default response shape.
-//   - Custom field values are requested as individual `custom_<id>` entries
-//     inside that same `fields[]` list (per this task's own spec text) and
-//     are assumed to come back as top-level `custom_<id>` properties on
-//     each raw person object (not nested under a single object) — this
-//     adapter reads them back out under that same convention in
-//     attachCustomFieldMap() below, which is also where the request-side ID
-//     convention becomes the response-side ID convention (see the "ID, not
-//     name" rule above). The field is confirmed keyed by ID this way; the
-//     VALUE at that key is a separate, still-unconfirmed assumption — see
-//     attachCustomFieldMap()'s own inline note for why a value-side
-//     label-vs-ID ambiguity is not resolved here.
-//   - Per-container membership lookup: this task's own spec text confirms
-//     `fields[]=people` for the GROUPS endpoint only. normalizer.js's
-//     header note (Task 12) already established that ALL FOUR membership
-//     dimensions (groups, departments, serviceTypes, locations) need
-//     caller-assembled membership data, by the same reasoning ("Elvanto's
-//     real API doesn't return group/department/service-type/location
-//     membership on the person record itself"). This adapter extends the
-//     confirmed groups convention to all four analogous "container"
-//     endpoints (metadata.js's DEFINITION_ENDPOINTS), assuming they expose
-//     their own membership list the same way when `fields[]=people` is
-//     requested, and reads it back as `container.people.person` — mirroring
-//     the one other place in this repo requesting a specific group's
-//     people (`groups/getInfo.json?id=X&fields=people`) and the general
-//     "collection wrapping a plural itemKey" envelope httpClient.js/
-//     metadata.js already rely on everywhere else.
+//   - array query values are repeated `fields[]` parameters;
+//   - base identity/status fields arrive without fields[], while family,
+//     demographics, departments, service_types and locations are requested;
+//   - groups/getAll.json with fields[]=people supplies group membership;
+//   - service types, locations and departments are embedded in person data;
+//   - custom_<id> person fields contain selected option IDs in nested
+//     custom_field entries; and
+//   - custom-field definitions use people/customFields/getAll.json.
 //   - Elvanto's `date_modified` wire format is assumed to be a bare, already
 //     UTC `"YYYY-MM-DD HH:MM:SS"` string with no timezone marker (matching
 //     fixtures/people.js's fixture values), consistent with this task's own
@@ -125,12 +69,8 @@
 // the project's global missing-person-archival constraint). This adapter's
 // job is narrower but related: fetchIncrementalSnapshot() must never reuse
 // a stale membership index for whatever (possibly small) set of changed
-// people it does return. There is no cross-call cache anywhere in this
-// module (every fetchSnapshot() call builds a brand-new client and refetches
-// every membership dimension from scratch), so this is true by
-// construction rather than by a special-cased flag — fetchFullSnapshot()
-// and fetchIncrementalSnapshot() both call the exact same
-// fetchMembershipIndex() helper.
+// people it does return. There is no cross-call cache: both snapshot modes
+// build a fresh client and group membership index.
 
 const { createElvantoClient } = require('./httpClient');
 const { normalizeSnapshot } = require('./normalizer');
@@ -143,17 +83,22 @@ const PEOPLE_PATH = '/people/getAll.json';
 const PEOPLE_COLLECTION_KEY = 'people';
 const PEOPLE_ITEM_KEY = 'person';
 
-// Optional fields normalizer.js reads that are NOT part of Elvanto's
-// default people/getAll.json response shape (see the header note above for
-// which fields ARE already confirmed default and therefore excluded here).
-const BASE_OPTIONAL_PEOPLE_FIELDS = ['family', 'contact', 'deceased', 'category', 'date_modified', 'demographics'];
+// Verified optional people fields (live API). Default identity/status/family_id/
+// contact/archived/deceased/category/date_modified fields arrive without
+// fields[]; `groups` is not a people field.
+const BASE_OPTIONAL_PEOPLE_FIELDS = [
+  'family',
+  'demographics',
+  'departments',
+  'service_types',
+  'locations',
+];
 
-// The four "container" endpoints whose per-item people list this adapter
-// must reverse-index into a per-person membership bundle. Reuses
-// metadata.js's own DEFINITION_ENDPOINTS so the path/collectionKey/itemKey
-// for each never drifts out of sync between metadata discovery and
-// membership indexing.
-const MEMBERSHIP_DIMENSIONS = ['groups', 'serviceTypes', 'locations', 'departments'];
+const GROUPS_ENDPOINT = DEFINITION_ENDPOINTS.groups || {
+  path: '/groups/getAll.json',
+  collectionKey: 'groups',
+  itemKey: 'group',
+};
 
 function stableId(value) {
   if (value === null || value === undefined) return '';
@@ -167,6 +112,28 @@ function trimmedOrNull(value) {
   return trimmed ? trimmed : null;
 }
 
+function sortByLabelThenId(items) {
+  return [...items].sort((a, b) => {
+    const labelA = String(a.name ?? '').toLowerCase();
+    const labelB = String(b.name ?? '').toLowerCase();
+    if (labelA !== labelB) return labelA < labelB ? -1 : 1;
+    const idA = String(a.id ?? '');
+    const idB = String(b.id ?? '');
+    if (idA === idB) return 0;
+    return idA < idB ? -1 : 1;
+  });
+}
+
+function sortNames(names) {
+  return [...names].sort((a, b) => {
+    const lowerA = String(a).toLowerCase();
+    const lowerB = String(b).toLowerCase();
+    if (lowerA !== lowerB) return lowerA < lowerB ? -1 : 1;
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+  });
+}
+
 // ─── Optional people fields ─────────────────────────────────────────────────
 
 function buildPeopleFields(customFieldIds) {
@@ -175,40 +142,65 @@ function buildPeopleFields(customFieldIds) {
   return [...BASE_OPTIONAL_PEOPLE_FIELDS, ...customFields];
 }
 
-// Reads back the `custom_<id>` top-level properties this adapter asked
-// Elvanto for (see buildPeopleFields above) and assembles them into the
-// `custom_fields` map normalizer.js expects — keyed by the custom field's
-// stable ID, exactly matching the request-side `custom_<id>` convention.
-//
-// *** ID, not name: `key` below is the raw customFieldIds entry (a stable
-// Elvanto custom-field ID), never a field label — this is the exact
-// convention filter.js's isElvantoEligible()/config.customFields[].fieldId
-// and metadata.js's customFields[].id require. ***
-//
-// Any pre-existing `raw.custom_fields` value is deliberately NOT merged in:
-// its shape/keying is unconfirmed (see normalizer.js's own header note), so
-// merging it in could silently reintroduce name-keyed entries alongside
-// the ID-keyed ones this adapter builds.
-//
-// *** UNCONFIRMED WIRE-FORMAT ASSUMPTION — flag for Task 22 verification
-// against a live account: the VALUE at `raw[custom_<id>]` is passed through
-// verbatim below, on the assumption that for a select/multi-select-style
-// custom field Elvanto returns the selected OPTION'S STABLE ID (matching
-// metadata.js's customFields[].values[].id and this file's config.
-// customFields[].values), not that option's display label. Nothing in this
-// repo exercises a real custom-field response, so this is genuinely
-// unconfirmed — only the KEY (the field ID itself) is independently
-// confirmed by this task's own spec text ("custom field names are
-// requested using custom_<id>"). If Elvanto actually returns the label
-// instead of the ID, filter.js's isElvantoEligible() customFields rule
-// would silently match nobody (comparing a label against metadata.js's ID
-// list) — the exact silent-zero-match failure mode the groups/
-// serviceTypes/locations ID convention exists to prevent. This adapter
-// deliberately does NOT attempt to build a label-to-ID mapping layer here:
-// doing so without confirmed real data risks introducing an incorrect
-// "fix" for an unconfirmed assumption, and a free-text (non-select) custom
-// field has no option ID to map to in the first place, so passthrough is
-// the only sound default absent live confirmation either way. ***
+function idsFrom(value) {
+  return asArray(value)
+    .map((item) => {
+      if (item && typeof item === 'object') return stableId(item.id);
+      return stableId(item);
+    })
+    .filter(Boolean);
+}
+
+function departmentNamesFrom(departments) {
+  const names = [];
+  for (const dept of asArray(departments)) {
+    if (!dept || typeof dept !== 'object') {
+      const name = trimmedOrNull(dept);
+      if (name) names.push(name);
+      continue;
+    }
+    const name = trimmedOrNull(dept.name);
+    if (name) names.push(name);
+    const subs = dept.sub_departments && dept.sub_departments.sub_department !== undefined
+      ? dept.sub_departments.sub_department
+      : dept.sub_departments;
+    for (const sub of asArray(subs)) {
+      const subName = trimmedOrNull(sub && typeof sub === 'object' ? sub.name : sub);
+      if (subName) names.push(subName);
+    }
+  }
+  return names;
+}
+
+function directMemberships(raw) {
+  return {
+    serviceTypes: idsFrom(raw && raw.service_types && raw.service_types.service_type !== undefined
+      ? raw.service_types.service_type
+      : raw && raw.service_types),
+    locations: idsFrom(raw && raw.locations && raw.locations.location !== undefined
+      ? raw.locations.location
+      : raw && raw.locations),
+    departments: departmentNamesFrom(raw && raw.departments && raw.departments.department !== undefined
+      ? raw.departments.department
+      : raw && raw.departments),
+  };
+}
+
+// Selected select/multi-select options arrive as nested custom_field entries
+// with stable option IDs. Scalars pass through for free-text fields.
+function projectCustomValue(rawValue) {
+  if (rawValue === null || rawValue === undefined) return rawValue;
+  if (typeof rawValue === 'object') {
+    if (rawValue.custom_field !== undefined) {
+      return idsFrom(rawValue.custom_field);
+    }
+    if (Array.isArray(rawValue)) {
+      return idsFrom(rawValue);
+    }
+  }
+  return rawValue;
+}
+
 function attachCustomFieldMap(raw, customFieldIds) {
   const custom_fields = {};
   for (const rawId of customFieldIds || []) {
@@ -216,13 +208,49 @@ function attachCustomFieldMap(raw, customFieldIds) {
     if (!key) continue;
     const wireKey = `custom_${key}`;
     if (raw && Object.prototype.hasOwnProperty.call(raw, wireKey)) {
-      custom_fields[key] = raw[wireKey];
+      custom_fields[key] = projectCustomValue(raw[wireKey]);
     }
   }
   return { ...raw, custom_fields };
 }
 
-// ─── Group/serviceType/location/department membership index ────────────────
+function buildSnapshotDefinitions(rawPeople) {
+  const serviceTypes = new Map();
+  const locations = new Map();
+  const departments = new Set();
+
+  for (const raw of rawPeople || []) {
+    for (const item of asArray(raw && raw.service_types && raw.service_types.service_type !== undefined
+      ? raw.service_types.service_type
+      : raw && raw.service_types)) {
+      if (!item || typeof item !== 'object') continue;
+      const id = stableId(item.id);
+      if (!id) continue;
+      serviceTypes.set(id, { id, name: trimmedOrNull(item.name) || '' });
+    }
+    for (const item of asArray(raw && raw.locations && raw.locations.location !== undefined
+      ? raw.locations.location
+      : raw && raw.locations)) {
+      if (!item || typeof item !== 'object') continue;
+      const id = stableId(item.id);
+      if (!id) continue;
+      locations.set(id, { id, name: trimmedOrNull(item.name) || '' });
+    }
+    for (const name of departmentNamesFrom(raw && raw.departments && raw.departments.department !== undefined
+      ? raw.departments.department
+      : raw && raw.departments)) {
+      departments.add(name);
+    }
+  }
+
+  return {
+    serviceTypes: sortByLabelThenId([...serviceTypes.values()]),
+    locations: sortByLabelThenId([...locations.values()]),
+    departments: sortNames([...departments]),
+  };
+}
+
+// ─── Group membership index (groups/getAll only) ───────────────────────────
 
 function ensureMembershipEntry(index, rawPersonId) {
   const id = stableId(rawPersonId);
@@ -231,39 +259,37 @@ function ensureMembershipEntry(index, rawPersonId) {
   return index.get(id);
 }
 
-async function fetchMembershipDimension(client, dimensionKey, index) {
-  const endpoint = DEFINITION_ENDPOINTS[dimensionKey];
-  const result = await client.getAll(endpoint.path, { 'fields[]': ['people'] }, endpoint.collectionKey, endpoint.itemKey);
+async function fetchGroupMembershipIndex(client) {
+  const index = new Map();
+  const result = await client.getAll(
+    GROUPS_ENDPOINT.path,
+    { 'fields[]': ['people'] },
+    GROUPS_ENDPOINT.collectionKey,
+    GROUPS_ENDPOINT.itemKey
+  );
 
   for (const container of result.items || []) {
-    // *** ID, not name: groups/serviceTypes/locations key their membership
-    // entry by the container's stable `id` — departments are the one
-    // documented exception and key by `name` instead, because Elvanto's
-    // departments endpoint has no separate ID (see metadata.js's header
-    // note). This mirrors metadata.js's own buildGroups()/buildDepartments()
-    // split exactly. ***
-    const value = dimensionKey === 'departments'
-      ? trimmedOrNull(container && container.name)
-      : stableId(container && container.id);
+    const value = stableId(container && container.id);
     if (!value) continue;
-
     const members = asArray(container && container.people && container.people.person);
     for (const member of members) {
       const personId = member && typeof member === 'object' ? member.id : member;
       const entry = ensureMembershipEntry(index, personId);
-      if (entry) entry[dimensionKey].push(value);
+      if (entry) entry.groups.push(value);
     }
   }
+  return index;
 }
 
-// Returns a Map<personId, { groups, departments, serviceTypes, locations }>
-// — exactly the `groupMemberships` shape normalizer.js's normalizeSnapshot()
-// looks up per person by raw ID. Always refetches every dimension from
-// scratch (see the header note on why incremental mode must not reuse a
-// stale index).
-async function fetchMembershipIndex(client) {
-  const index = new Map();
-  await Promise.all(MEMBERSHIP_DIMENSIONS.map((dimension) => fetchMembershipDimension(client, dimension, index)));
+function mergeDirectMemberships(index, rawPeople) {
+  for (const raw of rawPeople || []) {
+    const entry = ensureMembershipEntry(index, raw && raw.id);
+    if (!entry) continue;
+    const direct = directMemberships(raw);
+    entry.serviceTypes.push(...direct.serviceTypes);
+    entry.locations.push(...direct.locations);
+    entry.departments.push(...direct.departments);
+  }
   return index;
 }
 
@@ -354,23 +380,27 @@ function computeIncrementalSearchCutoff(watermark) {
 // ─── People fetch + normalization ───────────────────────────────────────────
 
 async function fetchNormalizedPeople(client, params, customFieldIds) {
-  const [peopleResult, membershipIndex] = await Promise.all([
+  const [peopleResult, groupIndex] = await Promise.all([
     client.getAll(PEOPLE_PATH, params, PEOPLE_COLLECTION_KEY, PEOPLE_ITEM_KEY),
-    fetchMembershipIndex(client),
+    fetchGroupMembershipIndex(client),
   ]);
 
   const rawPeople = dedupeByIdKeepingNewest(peopleResult.items)
     .map((raw) => attachCustomFieldMap(raw, customFieldIds));
 
+  const membershipIndex = mergeDirectMemberships(groupIndex, rawPeople);
   const { people, families, skipped } = normalizeSnapshot(rawPeople, membershipIndex);
   const watermark = computeWatermark(rawPeople);
+  // Definitions come from raw people before custom-field map attachment is
+  // required; membership fields live on the original raw objects.
+  const definitions = buildSnapshotDefinitions(peopleResult.items);
 
-  return { people, families, skipped, watermark };
+  return { people, families, skipped, watermark, definitions };
 }
 
 // Full paginated fetch — every status (Active/Contact/Archived/Deceased),
 // no date_modified filter. `complete: true` is unconditional here because
-// client.getAll()/fetchMembershipIndex() never resolve on a partial
+// client.getAll()/fetchGroupMembershipIndex() never resolve on a partial
 // failure: httpClient.js's getAll() explicitly does not catch a failed page
 // and never returns accumulated partial items (see its own header note) —
 // it throws instead, which propagates straight out of this function. There
@@ -379,7 +409,7 @@ async function fetchNormalizedPeople(client, params, customFieldIds) {
 // fetch must throw, never silently report itself as complete or partial.
 async function fetchFullSnapshot(client, customFieldIds, now) {
   const params = { 'fields[]': buildPeopleFields(customFieldIds) };
-  const { people, families, skipped, watermark } = await fetchNormalizedPeople(client, params, customFieldIds);
+  const { people, families, skipped, watermark, definitions } = await fetchNormalizedPeople(client, params, customFieldIds);
 
   return {
     provider: 'elvanto',
@@ -390,19 +420,19 @@ async function fetchFullSnapshot(client, customFieldIds, now) {
     people,
     families,
     skipped,
+    definitions,
   };
 }
 
 // Incremental fetch — Elvanto `search[date_modified]` five minutes before
 // the stored watermark (UTC, see computeIncrementalSearchCutoff above).
-// Still refreshes the full group/serviceType/location/department membership
-// index from scratch (see the header note on why) rather than reusing
-// anything from a prior call. Same unconditional `complete: true` reasoning
-// as fetchFullSnapshot above.
+// Still refreshes group membership from scratch (see the header note on why)
+// rather than reusing anything from a prior call. Same unconditional
+// `complete: true` reasoning as fetchFullSnapshot above.
 async function fetchIncrementalSnapshot(client, watermark, customFieldIds, now) {
   const searchCutoff = computeIncrementalSearchCutoff(watermark);
   const params = { 'fields[]': buildPeopleFields(customFieldIds), 'search[date_modified]': searchCutoff };
-  const { people, families, skipped, watermark: newWatermark } = await fetchNormalizedPeople(client, params, customFieldIds);
+  const { people, families, skipped, watermark: newWatermark, definitions } = await fetchNormalizedPeople(client, params, customFieldIds);
 
   return {
     provider: 'elvanto',
@@ -417,6 +447,7 @@ async function fetchIncrementalSnapshot(client, watermark, customFieldIds, now) 
     people,
     families,
     skipped,
+    definitions,
   };
 }
 
@@ -488,7 +519,9 @@ module.exports = {
   // in addition to the end-to-end adapter-level tests in adapter.test.js.
   buildPeopleFields,
   attachCustomFieldMap,
-  fetchMembershipIndex,
+  fetchGroupMembershipIndex,
+  directMemberships,
+  buildSnapshotDefinitions,
   dedupeByIdKeepingNewest,
   computeWatermark,
   computeIncrementalSearchCutoff,

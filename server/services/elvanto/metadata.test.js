@@ -6,19 +6,16 @@ const { DEFINITION_ENDPOINTS, fetchElvantoMetadata } = require('./metadata');
 const FIXED_NOW = new Date('2026-07-25T00:00:00.000Z').getTime();
 const fixedClock = () => FIXED_NOW;
 
-// ─── Fake client ────────────────────────────────────────────────────────────
-//
-// Keyed by DEFINITION_ENDPOINTS[...].path rather than a hardcoded string, so
-// this test exercises metadata.js's own internal contract (shape, sorting,
-// counting, caching) without hardcoding a second guess at Elvanto's real
-// endpoint paths alongside metadata.js's own documented guess.
 function fakeClient(responsesByKey) {
   const responsesByPath = {};
+  const calls = [];
   for (const [key, endpoint] of Object.entries(DEFINITION_ENDPOINTS)) {
     responsesByPath[endpoint.path] = responsesByKey[key] ?? { items: [], complete: true, pages: 1, total: 0 };
   }
   return {
-    async getAll(path) {
+    calls,
+    async getAll(path, params, collectionKey, itemKey) {
+      calls.push({ path, params, collectionKey, itemKey });
       const response = responsesByPath[path];
       if (response instanceof Error) throw response;
       if (!response) throw new Error(`Unexpected getAll call: ${path}`);
@@ -31,8 +28,6 @@ function items(list) {
   return { items: list, complete: true, pages: 1, total: list.length };
 }
 
-// A normalized person exactly as Task 12's normalizeSnapshot() would
-// produce (only the fields metadata.js actually reads are populated).
 function makePerson(id, { groups = [], demographics = [], departments = [] } = {}) {
   return {
     provider: 'elvanto', id, firstName: 'Person', lastName: String(id), state: 'active',
@@ -40,11 +35,6 @@ function makePerson(id, { groups = [], demographics = [], departments = [] } = {
   };
 }
 
-// Snapshot engineered so tallies land on the task spec's exact example
-// numbers: group-1 has 12 members, 'Young Adults' appears on 8 people,
-// 'Worship Team' appears on 5 people (a person can carry more than one of
-// these at once — the three counts are independent, not sequential
-// subsets).
 function exampleSnapshot() {
   const people = [];
   for (let i = 1; i <= 12; i += 1) {
@@ -54,21 +44,39 @@ function exampleSnapshot() {
       departments: i <= 5 ? ['Worship Team'] : [],
     }));
   }
-  return { people, families: [], skipped: [] };
+  return {
+    people,
+    families: [],
+    skipped: [],
+    definitions: {
+      serviceTypes: [{ id: 'service-1', name: 'Sunday AM' }],
+      locations: [{ id: 'loc-1', name: 'North Campus' }],
+      departments: ['Worship Team'],
+    },
+  };
 }
 
 function exampleResponses() {
   return {
     categories: items([{ id: 'cat-1', name: 'Members' }]),
     groups: items([{ id: 'group-1', name: 'Youth', status: 'Active' }]),
-    serviceTypes: items([{ id: 'service-1', name: 'Sunday AM' }]),
-    locations: items([{ id: 'loc-1', name: 'North Campus' }]),
-    departments: items([{ name: 'Worship Team' }]),
-    customFields: items([{ id: 'field-1', name: 'Ministries', type: 'select_multi', values: [{ id: 'v1', name: 'Golf Guys' }] }]),
+    customFields: items([{
+      id: 'field-1',
+      name: 'Ministries',
+      type: 'select_multi',
+      values: { value: [{ id: 'v1', name: 'Golf Guys' }] },
+    }]),
   };
 }
 
-// ─── Step 1: exact normalized shape ─────────────────────────────────────────
+test('DEFINITION_ENDPOINTS only includes the three verified live endpoints', () => {
+  assert.deepEqual(Object.keys(DEFINITION_ENDPOINTS).sort(), ['categories', 'customFields', 'groups']);
+  assert.equal(DEFINITION_ENDPOINTS.categories.path, '/people/categories/getAll.json');
+  assert.equal(DEFINITION_ENDPOINTS.groups.path, '/groups/getAll.json');
+  assert.equal(DEFINITION_ENDPOINTS.customFields.path, '/people/customFields/getAll.json');
+  assert.equal(DEFINITION_ENDPOINTS.customFields.collectionKey, 'custom_fields');
+  assert.equal(DEFINITION_ENDPOINTS.customFields.itemKey, 'custom_field');
+});
 
 test('fetchElvantoMetadata returns the exact normalized metadata shape from the task spec', async () => {
   const client = fakeClient(exampleResponses());
@@ -86,11 +94,31 @@ test('fetchElvantoMetadata returns the exact normalized metadata shape from the 
   });
 });
 
+test('fetchElvantoMetadata calls only categories/groups/customFields endpoints', async () => {
+  const client = fakeClient(exampleResponses());
+  await fetchElvantoMetadata(client, exampleSnapshot(), { now: fixedClock });
+
+  const paths = client.calls.map((c) => c.path).sort();
+  assert.deepEqual(paths, [
+    '/groups/getAll.json',
+    '/people/categories/getAll.json',
+    '/people/customFields/getAll.json',
+  ].sort());
+  for (const path of paths) {
+    assert.equal(path.includes('/locations/getAll'), false);
+    assert.equal(path.includes('/departments/getAll'), false);
+    assert.equal(path.includes('/services/types/getAll'), false);
+  }
+});
+
 test('fetchElvantoMetadata accepts a bare array of normalized people as the snapshot', async () => {
   const client = fakeClient(exampleResponses());
   const metadata = await fetchElvantoMetadata(client, exampleSnapshot().people, { now: fixedClock });
   assert.equal(metadata.groups[0].memberCount, 12);
   assert.equal(metadata.demographics[0].count, 8);
+  assert.deepEqual(metadata.serviceTypes, []);
+  assert.deepEqual(metadata.locations, []);
+  assert.deepEqual(metadata.departments, []);
 });
 
 test('fetchElvantoMetadata returns empty lists when every definition endpoint is empty and there are no people', async () => {
@@ -102,26 +130,22 @@ test('fetchElvantoMetadata returns empty lists when every definition endpoint is
   });
 });
 
-// ─── asArray-handled object-vs-array response fields ────────────────────────
-
 test('a custom field with a single value arriving as a bare object is normalized the same as a one-element array', async () => {
   const responses = exampleResponses();
   responses.customFields = items([
-    { id: 'field-2', name: 'Shirt Size', type: 'select_single', values: { id: 'v9', name: 'Large' } },
+    { id: 'field-2', name: 'Shirt Size', type: 'select_single', values: { value: { id: 'v9', name: 'Large' } } },
   ]);
   const client = fakeClient(responses);
   const metadata = await fetchElvantoMetadata(client, exampleSnapshot(), { now: fixedClock });
   assert.deepEqual(metadata.customFields.find((f) => f.id === 'field-2').values, [{ id: 'v9', name: 'Large' }]);
 });
 
-// ─── Sorting ────────────────────────────────────────────────────────────────
-
 test('every option list is sorted by case-insensitive label then ID', async () => {
   const responses = exampleResponses();
   responses.categories = items([
     { id: 'cat-2', name: 'zebras' },
     { id: 'cat-3', name: 'Apples' },
-    { id: 'cat-1', name: 'apples' }, // same label, lower id -> sorts first among the two "apples"
+    { id: 'cat-1', name: 'apples' },
   ]);
   const client = fakeClient(responses);
   const metadata = await fetchElvantoMetadata(client, exampleSnapshot(), { now: fixedClock });
@@ -134,14 +158,14 @@ test('demographics/departments (no ID) sort by their own value', async () => {
       makePerson('p1', { demographics: [{ field: 'f', value: 'Zebras' }] }),
       makePerson('p2', { demographics: [{ field: 'f', value: 'apples' }] }),
     ],
-    families: [], skipped: [],
+    families: [],
+    skipped: [],
+    definitions: { serviceTypes: [], locations: [], departments: [] },
   };
   const client = fakeClient(exampleResponses());
   const metadata = await fetchElvantoMetadata(client, snapshot, { now: fixedClock });
   assert.deepEqual(metadata.demographics.map((d) => d.value), ['apples', 'Zebras']);
 });
-
-// ─── Caching through connectionStore ────────────────────────────────────────
 
 function fakeStore(overrides = {}) {
   const calls = { getConnection: [], updateMetadataCache: [] };
@@ -168,7 +192,6 @@ test('fetchElvantoMetadata persists a successful fetch through connectionStore.u
   assert.equal(churchId, 'church-1');
   assert.equal(provider, 'elvanto');
   assert.deepEqual(cached, metadata);
-  // Never caches raw people or credential-shaped data.
   assert.equal(JSON.stringify(cached).includes('firstName'), false);
   assert.equal(JSON.stringify(cached).includes('apiKey'), false);
 });

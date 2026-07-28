@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -49,16 +49,20 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
   const [peopleLinked, setPeopleLinked] = useState(true);
+  const batchLoadGeneration = useRef(0);
 
   const loadBatches = useCallback(async () => {
+    const generation = ++batchLoadGeneration.current;
     setBatchesLoading(true); setBatchesError(null);
     try {
       const res = await integrationsAPI.getPlanningCenterSyncBatches();
+      if (generation !== batchLoadGeneration.current) return;
       setBatches(res.data.batches || []);
     } catch (e: any) {
+      if (generation !== batchLoadGeneration.current) return;
       setBatchesError(e.response?.data?.error || 'Failed to load sync batches.');
     } finally {
-      setBatchesLoading(false);
+      if (generation === batchLoadGeneration.current) setBatchesLoading(false);
     }
   }, []);
 
@@ -71,6 +75,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       setSyncStats(null);
     }
   }, []);
+
+  const reloadAfterBatchMutation = useCallback(async () => {
+    setBatches([]);
+    await loadBatches();
+    await loadSyncStats();
+  }, [loadBatches, loadSyncStats]);
 
   const toggleMasterSync = async (value: boolean) => {
     setPcSyncEnabled(value);
@@ -95,8 +105,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const deleteBatch = async (batchId: number) => {
     try {
       await integrationsAPI.deletePlanningCenterSyncBatch(batchId);
-      await loadBatches();
-      await loadSyncStats();
+      await reloadAfterBatchMutation();
     } catch (e: any) {
       setPlanningCenterError(e.response?.data?.error || 'Failed to delete sync batch.');
     }
@@ -131,23 +140,48 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
   // Load batches, sync indicator, and master switch when connected
   useEffect(() => {
-    if (status.connected) {
-      loadBatches();
-      loadSyncStats();
-      settingsAPI.getIntegrationSettings().then(r => {
-        setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
-        setPcTrackBackgroundChecks(!!r.data.planningCenterTrackBackgroundChecks);
-      }).catch(() => {});
-      // Cheap probe: nudge to import check-ins only if data exists and none has
-      // been imported yet.
-      integrationsAPI.getCheckinAvailability()
-        .then(r => {
-          setCheckinAvailable(!!r.data.available && !r.data.hasImported);
-          setPeopleLinked(r.data.peopleLinked !== false);
-        })
-        .catch(() => setCheckinAvailable(false));
+    if (!status.connected) {
+      batchLoadGeneration.current += 1;
+      setBatches([]);
+      setBatchesLoading(false);
+      setBatchesError(null);
+      return;
     }
+
+    setBatches([]);
+    loadBatches();
+    loadSyncStats();
+    settingsAPI.getIntegrationSettings().then(r => {
+      setPcSyncEnabled(!!r.data.planningCenterSyncEnabled);
+      setPcTrackBackgroundChecks(!!r.data.planningCenterTrackBackgroundChecks);
+    }).catch(() => {});
+    // Cheap probe: nudge to import check-ins only if data exists and none has
+    // been imported yet.
+    integrationsAPI.getCheckinAvailability()
+      .then(r => {
+        setCheckinAvailable(!!r.data.available && !r.data.hasImported);
+        setPeopleLinked(r.data.peopleLinked !== false);
+      })
+      .catch(() => setCheckinAvailable(false));
+    return () => {
+      batchLoadGeneration.current += 1;
+    };
   }, [status.connected, loadBatches, loadSyncStats]);
+
+  const peopleSourceControl = peopleSyncStatus === 'known' ? (
+    <PeopleSourceControl
+      provider="planning_center"
+      hasEnabledBatch={status.connected && !batchesLoading && batches.length > 0}
+      settings={peopleSyncSettings}
+      connections={providerConnections}
+      onRefresh={refreshPeopleSync}
+    />
+  ) : (
+    <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
+      {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
+    </section>
+  );
 
   return (
     <div>
@@ -282,6 +316,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
             </div>
           </div>
 
+          {!status.connected && <div className="mt-4">{peopleSourceControl}</div>}
+
           {status.connected && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4 space-y-4">
               {/* Sync batches */}
@@ -339,7 +375,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   <div className="mt-3">
                     <PlanningCenterBatchEditor
                       batch={editingBatch === 'new' ? null : editingBatch}
-                      onSaved={() => { setEditingBatch(null); loadBatches(); loadSyncStats(); }}
+                      onSaved={() => { setEditingBatch(null); void reloadAfterBatchMutation(); }}
                       onCancel={() => setEditingBatch(null)}
                     />
                   </div>
@@ -393,14 +429,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 </ul>
               </div>
 
-              {peopleSyncStatus === 'known' ? <PeopleSourceControl
-                  settings={peopleSyncSettings}
-                  connections={providerConnections}
-                  onRefresh={refreshPeopleSync}
-                /> : <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                  <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
-                  {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
-                </section>}
+              {peopleSourceControl}
 
               {/* PCO-specific background-check tracking remains independent of people authority. */}
               <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">

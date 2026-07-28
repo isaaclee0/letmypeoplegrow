@@ -25,29 +25,19 @@
 //   deceased, contact (same '1'/'0'-style flags as archived) — status
 //   precedence deceased > archived > contact > active.
 //
-// Inferred, NOT independently confirmed against Elvanto's API docs (the repo
-// has no code path exercising these): category/category_id, date_modified,
-// custom_fields, demographics. Handled defensively below (accepting more than
-// one plausible wire shape) rather than blocking Task 12 on confirming them —
-// flagged clearly in this task's report for Task 13/14 to revisit once real
-// Elvanto responses are available.
+// category/category_id, date_modified, custom_fields and demographics accept
+// more than one plausible wire shape so normalization remains defensive.
 //
-// Elvanto's real API doesn't return group/department/service-type/location
-// membership on the person record itself (confirmed by the legacy importer's
-// separate groups/getAll.json, services/getAll.json, departments/getAll.json,
-// locations/getAll.json calls) — a person's own memberships have to be
-// assembled by the CALLER from those separate endpoints. normalizePerson's
-// second argument, `memberships`, is that already-assembled per-person bundle
+// The adapter assembles group membership from groups/getAll.json and reads
+// department/service-type/location membership directly from requested person
+// fields. normalizePerson's second argument, `memberships`, is that assembled
+// per-person bundle
 // (`{ groups, departments, serviceTypes, locations }`, each a plain array of
 // strings); normalizeSnapshot's second argument, `groupMemberships`, is the
 // same bundle keyed by raw person ID (a Map or plain object) for every person
-// in the snapshot, looked up per record. This is a structural design decision
-// for this task to make explicit for Task 13/14: neither the exact shape
-// Elvanto's group-membership endpoints return, nor how Task 14's adapter will
-// assemble this map, is specified anywhere upstream of this task.
+// in the snapshot, looked up per record.
 //
-// Task 13 (server/services/elvanto/filter.js, metadata.js) resolves that open
-// question and requires it be followed here: every group/serviceType/location
+// filter.js and metadata.js require every group/serviceType/location
 // entry in the `memberships` bundle above, and every key AND value in
 // `raw.custom_fields`, MUST be Elvanto's stable ID — never a display name or
 // label — even though the fixtures/tests in *this* file use plain names
@@ -62,8 +52,7 @@
 // `groupMemberships` bundle (Task 14's adapter) must key/populate it with
 // those same stable IDs, or eligibility and member counts will silently
 // compute to zero with no error anywhere. attributes.departments is the one
-// exception — Elvanto's departments endpoint has no separate ID, so it stays
-// a flat array of department NAME strings (see metadata.js's header note).
+// exception and stays a flat array of department name strings.
 //
 // Per this project's global constraint, LMPG individuals do not store email
 // or mobile, so neither field is read here even if present on a raw record —

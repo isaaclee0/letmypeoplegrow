@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   createElvantoClient,
+  serializeQueryParams,
   ElvantoError,
   ELVANTO_AUTH,
   ELVANTO_UNAVAILABLE,
@@ -17,6 +18,25 @@ function basicAuthFor(apiKey) {
 function okPeoplePage({ page = 1, perPage = 1000, total = 1, person = { id: 'p1' } } = {}) {
   return { status: 200, data: { status: 'ok', people: { page, per_page: perPage, total, person } } };
 }
+
+// ─── Production transport serialization ─────────────────────────────────────
+
+test('production transport serializes array params as repeated fields in insertion order', () => {
+  const query = serializeQueryParams({
+    'fields[]': ['firstname', 'lastname', 'email'],
+    page: 2,
+    page_size: 100,
+    search: 'Ada Lovelace',
+    omittedNull: null,
+    omittedUndefined: undefined,
+    omittedEmptyArray: [],
+  });
+
+  assert.equal(
+    query,
+    'fields%5B%5D=firstname&fields%5B%5D=lastname&fields%5B%5D=email&page=2&page_size=100&search=Ada+Lovelace'
+  );
+});
 
 // ─── Auth header ────────────────────────────────────────────────────────────
 

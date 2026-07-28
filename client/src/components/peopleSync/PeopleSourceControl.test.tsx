@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { peopleSyncAPI } from '../../services/api';
 import PeopleSourceControl from './PeopleSourceControl';
-import type { PeopleSyncPlan, PeopleSyncReview, PeopleSyncSettings } from './types';
+import type { PeopleSyncPlan, PeopleSyncReview, PeopleSyncSettings, SyncProvider } from './types';
 
 vi.mock('../../services/api', () => ({
   peopleSyncAPI: {
@@ -66,18 +66,31 @@ const initialSettings: PeopleSyncSettings = {
   fullReconciliationDay: 1,
 };
 
-function Harness({ connections = { planning_center: true, elvanto: true } }: {
-  connections?: { planning_center: boolean; elvanto: boolean };
+function Harness({
+  provider = 'elvanto',
+  hasEnabledBatch = true,
+  connections = { planning_center: true, elvanto: true },
+  initialAuthority = 'planning_center',
+}: {
+  provider?: SyncProvider;
+  hasEnabledBatch?: boolean;
+  connections?: Record<SyncProvider, boolean>;
+  initialAuthority?: PeopleSyncSettings['authorityProvider'];
 }) {
-  const [settings, setSettings] = useState(initialSettings);
+  const [settings, setSettings] = useState<PeopleSyncSettings>({
+    ...initialSettings,
+    authorityProvider: initialAuthority,
+  });
   return (
     <PeopleSourceControl
+      provider={provider}
+      hasEnabledBatch={hasEnabledBatch}
       settings={settings}
       connections={connections}
       onRefresh={async () => {
         setSettings((current) => ({
           ...current,
-          authorityProvider: vi.mocked(peopleSyncAPI.disableAuthority).mock.calls.length > 0 ? 'none' : 'elvanto',
+          authorityProvider: vi.mocked(peopleSyncAPI.disableAuthority).mock.calls.length > 0 ? 'none' : provider,
           pendingAuthorityProvider: null,
         }));
       }}
@@ -88,72 +101,418 @@ function Harness({ connections = { planning_center: true, elvanto: true } }: {
 describe('PeopleSourceControl', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('offers None and both connected providers without directly updating settings', async () => {
-    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
-    render(<Harness />);
+  it('reflects only the persisted authority in its checked state', () => {
+    render(<Harness provider="elvanto" initialAuthority="elvanto" />);
 
-    expect(screen.getByRole('radio', { name: 'None' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
-    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
-
-    await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledWith('elvanto'));
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeChecked();
   });
 
-  it('renders preview coverage and change counts, then changes authority only after reviewed apply succeeds', async () => {
+  it('previews directly from no authority without optimistically checking the switch', async () => {
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
-    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
-      data: { success: true, runId: 10, status: 'applied', applied: {} as never, summary: review.summary },
-    });
+    render(<Harness initialAuthority="none" />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledWith('elvanto'));
+    expect(toggle).not.toBeChecked();
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+  });
+
+  it('cancels a provider-switch warning without making an API call', () => {
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+
+    expect(screen.getByText('Switch source of truth from Planning Center to Elvanto?')).toBeInTheDocument();
+    expect(screen.getByText(/new provider controls linked names, child status, family membership, people type, archive\/reactivation, and scheduled people reconciliation/i)).toBeInTheDocument();
+    expect(screen.getByText(/Planning Center stays connected/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
+    expect(screen.queryByText('Switch source of truth from Planning Center to Elvanto?')).not.toBeInTheDocument();
+  });
+
+  it('moves focus into the switch warning, traps Tab, and restores focus after Escape', async () => {
+    render(<Harness />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+    const dialog = screen.getByRole('dialog', { name: 'Switch source of truth from Planning Center to Elvanto?' });
+    const continueButton = screen.getByRole('button', { name: 'Continue to review' });
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+
+    await waitFor(() => expect(continueButton).toHaveFocus());
+    cancelButton.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(continueButton).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    await waitFor(() => expect(toggle).toHaveFocus());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
+  });
+
+  it('continues from a provider-switch warning to review without checking the switch', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    render(<Harness />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+
+    await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledWith('elvanto'));
     expect(await screen.findByText('Coverage: 1 linked')).toBeInTheDocument();
     expect(screen.getByText('5 locked after apply')).toBeInTheDocument();
     expect(screen.getByText('2 adds')).toBeInTheDocument();
     expect(screen.getByText('3 updates')).toBeInTheDocument();
     expect(screen.getByText('1 restore')).toBeInTheDocument();
     expect(screen.getByText('0 archives')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
-    await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', expect.any(Object)));
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Elvanto' })).toBeChecked());
+    expect(toggle).not.toBeChecked();
   });
 
-  it('cancels a preview without changing the active authority', async () => {
-    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+  it('moves focus from Continue to review progress and then the completed review', async () => {
+    let resolvePreview: ((value: { data: { success: true } & PeopleSyncReview }) => void) | undefined;
+    vi.mocked(peopleSyncAPI.previewAuthority).mockImplementation(() => new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+
+    const progress = await screen.findByRole('status');
+    await waitFor(() => expect(progress).toHaveFocus());
+    expect(toggle).not.toHaveFocus();
+    resolvePreview?.({ data: { success: true, ...review } });
+
+    const reviewRegion = await screen.findByRole('region', { name: 'Elvanto authority review' });
+    await waitFor(() => expect(reviewRegion).toHaveFocus());
+  });
+
+  it('checks the switch only after the reviewed authority change applies and refreshes', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: { success: true, runId: 10, status: 'applied', applied: {} as never, summary: review.summary },
+    });
+    render(<Harness />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', expect.any(Object)));
+    await waitFor(() => expect(toggle).toBeChecked());
+  });
+
+  it('prevents duplicate apply after success, safely retries only status refresh, and closes the review', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: { success: true, runId: 10, status: 'applied', applied: {} as never, summary: review.summary },
+    });
+    const onRefresh = vi.fn()
+      .mockRejectedValueOnce({
+        response: { data: { error: 'Authority status could not be refreshed.' } },
+        message: 'Request failed',
+      })
+      .mockResolvedValueOnce(undefined);
+    render(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The authority change was applied, but its status could not be refreshed: Authority status could not be refreshed.',
+    );
+    expect(screen.queryByRole('button', { name: 'Apply sync' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole('region', { name: 'Elvanto authority review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status refresh' }));
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+    expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument());
+  });
+
+  it('clears stale post-apply refresh state when persisted authority catches up externally', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: { success: true, runId: 10, status: 'applied', applied: {} as never, summary: review.summary },
+    });
+    const onRefresh = vi.fn().mockRejectedValue({
+      response: { data: { error: 'Authority status could not be refreshed.' } },
+    });
+    const { rerender } = render(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    expect(await screen.findByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
+
+    rerender(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={{ ...initialSettings, authorityProvider: 'elvanto' }}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry status refresh' })).not.toBeInTheDocument());
+    expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeChecked();
+  });
+
+  it('shows the curated server error when applying the authority review fails', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockRejectedValue({
+      response: { data: { error: 'The review expired; refresh the plan.' } },
+      message: 'Request failed with status code 409',
+    });
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The review expired; refresh the plan.');
+    expect(screen.queryByText(/Request failed with status code 409/i)).not.toBeInTheDocument();
+  });
+
+  it('preserves the stale-review code so the failed apply offers plan refresh', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockRejectedValue({
+      response: { data: { code: 'STALE_REVIEW', error: 'The review expired; refresh the plan.' } },
+      message: 'Request failed with status code 409',
+    });
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+
+    const applyError = await screen.findByRole('alert');
+    expect(within(applyError).getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
+  });
+
+  it('reverses provider names when switching from Elvanto to Planning Center', () => {
+    render(<Harness provider="planning_center" initialAuthority="elvanto" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
+
+    expect(screen.getByText('Switch source of truth from Elvanto to Planning Center?')).toBeInTheDocument();
+    expect(screen.getByText(/Elvanto stays connected/i)).toBeInTheDocument();
+  });
+
+  it('cancels an authority review without changing persisted state', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     await screen.findByText('Elvanto sync review');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
 
     expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).not.toBeChecked();
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
   });
 
-  it('requires confirmation before disabling authority', async () => {
+  it('confirms before disabling the active provider and refreshes persisted state', async () => {
     vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
       data: { success: true, authority: { active: 'none', pending: null } },
     });
-    render(<Harness />);
+    render(<Harness provider="planning_center" />);
 
-    fireEvent.click(screen.getByRole('radio', { name: 'None' }));
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    fireEvent.click(toggle);
     expect(screen.getByText('Stop using a people source of truth?')).toBeInTheDocument();
     expect(peopleSyncAPI.disableAuthority).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
 
     await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'None' })).toBeChecked());
+    await waitFor(() => expect(toggle).not.toBeChecked());
   });
 
-  it('disables disconnected providers and explains why', () => {
+  it('moves focus into the disable dialog and restores it after Escape', async () => {
+    render(<Harness provider="planning_center" />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    fireEvent.click(toggle);
+    const dialog = screen.getByRole('dialog', { name: 'Stop using a people source of truth?' });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Use no people source' })).toHaveFocus());
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    await waitFor(() => expect(toggle).toHaveFocus());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(peopleSyncAPI.disableAuthority).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat a successful disable when status refresh fails and can retry refresh safely', async () => {
+    vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    });
+    const onRefresh = vi.fn()
+      .mockRejectedValueOnce({
+        response: { data: { error: 'Authority status is temporarily unavailable.' } },
+        message: 'Request failed',
+      })
+      .mockResolvedValueOnce(undefined);
+    render(
+      <PeopleSourceControl
+        provider="planning_center"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Stop using a people source of truth?' });
+    expect(dialog).toHaveTextContent(
+      'The people source was disabled, but its status could not be refreshed: Authority status is temporarily unavailable.',
+    );
+    expect(toggle).toBeChecked();
+    expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status refresh' }));
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
+    expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('resets stale disable retry state after persisted authority moves away and later returns', async () => {
+    vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    });
+    const onRefresh = vi.fn().mockRejectedValue({
+      response: { data: { error: 'Authority status is temporarily unavailable.' } },
+    });
+    const activeSettings = { ...initialSettings, authorityProvider: 'planning_center' as const };
+    const { rerender } = render(
+      <PeopleSourceControl
+        provider="planning_center"
+        hasEnabledBatch
+        settings={activeSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+    expect(await screen.findByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    rerender(
+      <PeopleSourceControl
+        provider="planning_center"
+        hasEnabledBatch
+        settings={{ ...initialSettings, authorityProvider: 'none' }}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+    rerender(
+      <PeopleSourceControl
+        provider="planning_center"
+        hasEnabledBatch
+        settings={activeSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+
+    await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(2));
+  });
+
+  it('disables a disconnected provider and explains the prerequisite', () => {
     render(<Harness connections={{ planning_center: true, elvanto: false }} />);
 
-    expect(screen.getByRole('radio', { name: 'Elvanto' })).toBeDisabled();
-    expect(screen.getByText('Connect Elvanto before selecting it as your people source.')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
+    expect(screen.getByText('Connect Elvanto before using it as your people source.')).toBeInTheDocument();
+  });
+
+  it('disables a provider without an enabled batch and explains the prerequisite', () => {
+    render(<Harness hasEnabledBatch={false} />);
+
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
+    expect(screen.getByText('Create and enable an Elvanto sync batch first.')).toBeInTheDocument();
+  });
+
+  it('keeps Planning Center batch guidance grammatical', () => {
+    render(<Harness provider="planning_center" initialAuthority="none" hasEnabledBatch={false} />);
+
+    expect(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' })).toBeDisabled();
+    expect(screen.getByText('Create a Planning Center sync batch first.')).toBeInTheDocument();
+  });
+
+  it('keeps an active disconnected provider enabled so authority can be turned off', () => {
+    render(
+      <Harness
+        provider="planning_center"
+        initialAuthority="planning_center"
+        connections={{ planning_center: false, elvanto: true }}
+      />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    expect(toggle).toBeEnabled();
+    expect(screen.queryByText('Connect Planning Center before using it as your people source.')).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('dialog', { name: 'Stop using a people source of truth?' })).toBeInTheDocument();
+  });
+
+  it('keeps an active provider without batches enabled so authority can be turned off', () => {
+    render(<Harness provider="planning_center" initialAuthority="planning_center" hasEnabledBatch={false} />);
+
+    const toggle = screen.getByRole('switch', { name: 'Use Planning Center as source of truth' });
+    expect(toggle).toBeEnabled();
+    expect(screen.queryByText('Create a Planning Center sync batch first.')).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('dialog', { name: 'Stop using a people source of truth?' })).toBeInTheDocument();
+  });
+
+  it('shows the server error returned by a failed preview', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockRejectedValue({
+      response: { data: { error: 'Elvanto credentials need reconnecting.' } },
+      message: 'Request failed',
+    });
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Elvanto credentials need reconnecting.');
   });
 
   it('keeps a partial-success authority commit failure visible and does not claim the provider changed', async () => {
@@ -169,18 +528,27 @@ describe('PeopleSourceControl', () => {
       },
     });
     const onRefresh = vi.fn();
-    render(<PeopleSourceControl settings={initialSettings} connections={{ planning_center: true, elvanto: true }} onRefresh={onRefresh} />);
+    render(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('people changes were applied');
     expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).not.toBeChecked();
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves the partial-success warning when refreshing authority status also fails', async () => {
+  it('preserves the partial-success warning and server detail when refreshing authority status fails', async () => {
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
     vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
       data: {
@@ -192,16 +560,61 @@ describe('PeopleSourceControl', () => {
         authorityCommitError: 'The plan applied, but the authority commit failed.',
       },
     });
-    const onRefresh = vi.fn().mockRejectedValue(new Error('settings offline'));
-    render(<PeopleSourceControl settings={initialSettings} connections={{ planning_center: true, elvanto: true }} onRefresh={onRefresh} />);
+    const onRefresh = vi.fn().mockRejectedValue({
+      response: { data: { error: 'Settings service is offline.' } },
+      message: 'Request failed',
+    });
+    render(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={onRefresh}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Elvanto' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
 
     expect(await screen.findByText('The plan applied, but the authority commit failed.')).toBeInTheDocument();
-    expect(screen.getByText(/Could not refresh authoritative source status.*settings offline/i)).toBeInTheDocument();
+    expect(screen.getByText(/Could not refresh authoritative source status.*Settings service is offline/i)).toBeInTheDocument();
     expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Planning Center' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).not.toBeChecked();
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a partial-success warning after the review preview refresh succeeds', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockResolvedValue({
+      data: {
+        success: true,
+        runId: 10,
+        status: 'applied',
+        applied: {} as never,
+        summary: review.summary,
+        authorityCommitError: 'The plan applied, but the authority commit failed.',
+      },
+    });
+    render(
+      <PeopleSourceControl
+        provider="elvanto"
+        hasEnabledBatch
+        settings={initialSettings}
+        connections={{ planning_center: true, elvanto: true }}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    expect(await screen.findByText('The plan applied, but the authority commit failed.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
+
+    await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('The plan applied, but the authority commit failed.')).not.toBeInTheDocument());
   });
 });

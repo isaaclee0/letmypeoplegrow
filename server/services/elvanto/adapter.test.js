@@ -173,7 +173,7 @@ test('validateConnection never lets the submitted API key leak into a thrown err
 
 // ─── Step 2: full snapshot ───────────────────────────────────────────────────
 
-test('fetchSnapshot(full) requests every optional field normalization needs, plus custom_<id> for each configured custom field', async () => {
+test('fetchSnapshot(full) requests only verified optional people fields, plus custom_<id> for each configured custom field', async () => {
   const client = fakeClient({ people: [fixtures.activePerson] });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
 
@@ -182,43 +182,66 @@ test('fetchSnapshot(full) requests every optional field normalization needs, plu
   const peopleCall = client.calls.getAll.find((c) => c.path === PEOPLE_PATH);
   assert.ok(peopleCall, 'expected a people/getAll.json call');
   const fields = peopleCall.params['fields[]'];
-  for (const expected of ['family', 'contact', 'deceased', 'category', 'date_modified', 'demographics']) {
-    assert.ok(fields.includes(expected), `expected fields[] to include "${expected}", got ${JSON.stringify(fields)}`);
+  assert.deepEqual(fields, [
+    'family',
+    'demographics',
+    'departments',
+    'service_types',
+    'locations',
+    'custom_501',
+    'custom_502',
+  ]);
+  for (const forbidden of ['contact', 'deceased', 'category', 'date_modified', 'groups']) {
+    assert.equal(fields.includes(forbidden), false, `must not request default/invalid field "${forbidden}"`);
   }
-  assert.ok(fields.includes('custom_501'));
-  assert.ok(fields.includes('custom_502'));
 });
 
-test('buildPeopleFields deduplicates custom field IDs and coerces numeric IDs to strings', () => {
-  const fields = buildPeopleFields(['501', 501, 502]);
-  assert.deepEqual(
-    fields.filter((f) => f.startsWith('custom_')),
-    ['custom_501', 'custom_502']
-  );
+test('buildPeopleFields returns verified optional fields and deduplicates custom field IDs', () => {
+  assert.deepEqual(buildPeopleFields(['501', 501, 502]), [
+    'family',
+    'demographics',
+    'departments',
+    'service_types',
+    'locations',
+    'custom_501',
+    'custom_502',
+  ]);
 });
 
-test('fetchSnapshot(full) indexes group/serviceType/location membership by stable container ID, and departments by name (the one exception)', async () => {
-  const person = fixtures.activePerson;
+test('fetchSnapshot(full) projects group IDs from groups/getAll and service/location/department memberships from the person record', async () => {
+  const person = {
+    ...fixtures.activePerson,
+    departments: {
+      department: [{
+        id: 'dep-1',
+        name: 'Worship',
+        sub_departments: { sub_department: [{ id: 'sub-1', name: 'Music' }] },
+      }],
+    },
+    service_types: { service_type: [{ id: 'svc-1', name: 'Sunday AM' }] },
+    locations: { location: [{ id: 'loc-1', name: 'North Campus' }] },
+  };
   const client = fakeClient({
     people: [person],
     groups: [{ id: 'grp-1', name: 'Choir', people: { person: [{ id: person.id }] } }],
-    serviceTypes: [{ id: 'svc-1', name: 'Sunday AM', people: { person: [{ id: person.id }] } }],
-    locations: [{ id: 'loc-1', name: 'Main Campus', people: { person: [{ id: person.id }] } }],
-    departments: [{ name: 'Worship Team', people: { person: [{ id: person.id }] } }],
   });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
 
   const snapshot = await adapter.fetchSnapshot({ credentials: { apiKey: 'k' }, mode: 'full' });
   const alice = snapshot.people.find((p) => p.id === person.id);
 
-  // *** Explicit self-check: groups/serviceTypes/locations carry the raw
-  // container ID ('grp-1'/'svc-1'/'loc-1'), never the display name
-  // ('Choir'/'Sunday AM'/'Main Campus'). departments is the one exception
-  // and stays name-based ('Worship Team'). ***
   assert.deepEqual(alice.attributes.groups, ['grp-1']);
   assert.deepEqual(alice.attributes.serviceTypes, ['svc-1']);
   assert.deepEqual(alice.attributes.locations, ['loc-1']);
-  assert.deepEqual(alice.attributes.departments, ['Worship Team']);
+  assert.deepEqual(alice.attributes.departments, ['Music', 'Worship']);
+  assert.deepEqual(snapshot.definitions, {
+    serviceTypes: [{ id: 'svc-1', name: 'Sunday AM' }],
+    locations: [{ id: 'loc-1', name: 'North Campus' }],
+    departments: ['Music', 'Worship'],
+  });
+  const serialized = JSON.stringify(snapshot.definitions);
+  assert.equal(serialized.includes(person.id), false);
+  assert.equal(serialized.includes(person.firstname), false);
 });
 
 test('fetchSnapshot(full) handles a single-member people list arriving as a bare object instead of a one-element array', async () => {
@@ -233,22 +256,39 @@ test('fetchSnapshot(full) handles a single-member people list arriving as a bare
   assert.deepEqual(snapshot.people.find((p) => p.id === person.id).attributes.groups, ['grp-solo']);
 });
 
-test('custom field values come back keyed by the custom field ID, not its name', async () => {
-  // The value 'v1' is deliberately ID-shaped (matching filter.test.js's/
-  // metadata.test.js's own option-ID convention), NOT a display label like
-  // 'Blue' — this pins attachCustomFieldMap()'s documented, unconfirmed
-  // assumption that Elvanto returns a select-style custom field's value as
-  // the selected option's stable ID, not its label (see that function's own
-  // header note for why this can't be confirmed from this repo, and why no
-  // label-to-ID mapping layer is built on top of an unconfirmed guess).
-  const rawPerson = { ...fixtures.person(), id: '3001', firstname: 'Cara', lastname: 'Custom', custom_501: 'v1' };
+test('custom field values come back keyed by the custom field ID, projecting nested selected option IDs', async () => {
+  const rawPerson = {
+    ...fixtures.person(),
+    id: '3001',
+    firstname: 'Cara',
+    lastname: 'Custom',
+    custom_501: { custom_field: [{ id: 'option-1', name: 'Golf Guys' }] },
+    custom_502: 'Large',
+  };
   const client = fakeClient({ people: [rawPerson] });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
 
-  const snapshot = await adapter.fetchSnapshot({ credentials: { apiKey: 'k' }, mode: 'full', customFieldIds: ['501'] });
+  const snapshot = await adapter.fetchSnapshot({
+    credentials: { apiKey: 'k' },
+    mode: 'full',
+    customFieldIds: ['501', '502'],
+  });
 
   const person = snapshot.people.find((p) => p.id === '3001');
-  assert.deepEqual(person.attributes.customFields, { 501: 'v1' });
+  assert.deepEqual(person.attributes.customFields, { 501: ['option-1'], 502: 'Large' });
+});
+
+test('fetchSnapshot(full) never calls nonexistent location/department/service-type definition endpoints', async () => {
+  const client = fakeClient({ people: [fixtures.activePerson] });
+  const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
+
+  await adapter.fetchSnapshot({ credentials: { apiKey: 'k' }, mode: 'full' });
+
+  const paths = client.calls.getAll.map((c) => c.path);
+  assert.equal(paths.includes('/locations/getAll.json'), false);
+  assert.equal(paths.includes('/departments/getAll.json'), false);
+  assert.equal(paths.includes('/services/types/getAll.json'), false);
+  assert.ok(paths.includes('/groups/getAll.json'));
 });
 
 test('fetchSnapshot(full) includes Active, Contact, Archived, and Deceased people — none filtered out', async () => {
@@ -373,16 +413,16 @@ test('fetchSnapshot(incremental) always refreshes group membership from scratch,
   assert.deepEqual(snapshot.people.find((p) => p.id === person.id).attributes.groups, ['g-new']);
 });
 
-test('fetchSnapshot(incremental) throws when a membership dimension page fails, same as full mode', async () => {
+test('fetchSnapshot(incremental) throws when the groups membership page fails, same as full mode', async () => {
   const client = fakeClient({
     people: [],
-    errors: { [DEFINITION_ENDPOINTS.locations.path]: new Error('Elvanto locations outage') },
+    errors: { [DEFINITION_ENDPOINTS.groups.path]: new Error('Elvanto groups outage') },
   });
   const adapter = createElvantoAdapter({ clientFactory: () => client, now: () => new Date() });
 
   await assert.rejects(
     () => adapter.fetchSnapshot({ credentials: { apiKey: 'k' }, mode: 'incremental', watermark: '2024-06-01 12:00:00' }),
-    /locations outage/
+    /groups outage/
   );
 });
 

@@ -32,12 +32,28 @@ function MatchOperator({ value, selectedCount, onChange }: { value: Operator; se
 }
 
 function Checkboxes({ options, selected, onChange }: { options: Array<{ id: string; name: string; detail?: string }>; selected: string[]; onChange: (next: string[]) => void }) {
-  return <div className="grid gap-1 sm:grid-cols-2">
-    {options.map((option) => <label key={option.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-      <input aria-label={option.name} type="checkbox" checked={selected.includes(option.id)} onChange={() => onChange(toggle(selected, option.id))} />
-      <span>{option.name}{option.detail ? <span className="ml-1 text-xs text-gray-500">{option.detail}</span> : null}</span>
-    </label>)}
-  </div>;
+  // Long consent-style labels (common on custom fields) break in a 2-column
+  // grid; keep short picker options compact in two columns on sm+.
+  const useTwoColumns = options.length > 1 && options.every((option) => option.name.length <= 40);
+  return (
+    <div className={useTwoColumns ? 'grid gap-2 sm:grid-cols-2' : 'grid gap-2'}>
+      {options.map((option) => (
+        <label key={option.id} className="flex min-w-0 items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
+          <input
+            aria-label={option.name}
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 shrink-0"
+            checked={selected.includes(option.id)}
+            onChange={() => onChange(toggle(selected, option.id))}
+          />
+          <span className="min-w-0 break-words">
+            {option.name}
+            {option.detail ? <span className="ml-1 text-xs text-gray-500">{option.detail}</span> : null}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
 }
 
 function FilterDimension({ title, options, selected, operator, onSelectedChange, onOperatorChange }: {

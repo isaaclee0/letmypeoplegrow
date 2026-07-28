@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoIntegrationPanel from './ElvantoIntegrationPanel';
@@ -162,6 +162,113 @@ describe('ElvantoIntegrationPanel', () => {
     expect(screen.queryByRole('checkbox', { name: 'Old remote group' })).not.toBeInTheDocument();
   });
 
+  it('ignores an older connected-data response after a replacement-key reload completes', async () => {
+    let resolveStaleBatches!: (value: { data: { success: true; batches: PeopleSyncBatch[] } }) => void;
+    const staleBatchesResponse = new Promise<{ data: { success: true; batches: PeopleSyncBatch[] } }>((resolve) => {
+      resolveStaleBatches = resolve;
+    });
+    const staleBatch = { ...batch, id: 6, name: 'Stale Members' };
+    const currentBatch = { ...batch, id: 7, name: 'Current Members' };
+    const staleRun = { ...run, id: 10, counts: { addPeople: 1 } };
+    const currentRun = { ...run, id: 11, counts: { addPeople: 7 } };
+
+    vi.mocked(elvantoSyncAPI.listBatches)
+      .mockImplementationOnce(() => staleBatchesResponse as ReturnType<typeof elvantoSyncAPI.listBatches>)
+      .mockResolvedValueOnce({ data: { success: true, batches: [currentBatch] } });
+    vi.mocked(peopleSyncAPI.getRuns)
+      .mockResolvedValueOnce({ data: { success: true, runs: [staleRun] } })
+      .mockResolvedValueOnce({ data: { success: true, runs: [currentRun] } });
+    vi.mocked(integrationsAPI.connectElvanto).mockResolvedValue({ data: { success: true, status: {} as never } });
+    setupConnected({ refreshStatus: vi.fn() });
+
+    fireEvent.change(screen.getByLabelText('Elvanto API key'), { target: { value: 'replacement-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Replace API key' }));
+
+    expect(await screen.findByText('Current Members')).toBeInTheDocument();
+    expect(screen.getByText(/7 added/)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStaleBatches({ data: { success: true, batches: [staleBatch] } });
+    });
+
+    await waitFor(() => expect(screen.queryByText('Stale Members')).not.toBeInTheDocument());
+    expect(screen.getByText('Current Members')).toBeInTheDocument();
+    expect(screen.getByText(/7 added/)).toBeInTheDocument();
+  });
+
+  it('enables the provider-local source switch after an enabled batch loads', async () => {
+    setupConnected();
+
+    const sourceSwitch = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    expect(sourceSwitch).toBeDisabled();
+    await waitFor(() => expect(sourceSwitch).toBeEnabled());
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+  });
+
+  it('disables the provider-local source switch when no batches exist', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({ data: { success: true, batches: [] } });
+    setupConnected();
+
+    expect(await screen.findByText('Create and enable an Elvanto sync batch first.')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
+  });
+
+  it('disables the provider-local source switch when all batches are disabled', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({
+      data: { success: true, batches: [{ ...batch, enabled: false }] },
+    });
+    setupConnected();
+
+    await screen.findByText('Members');
+    expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).toBeDisabled();
+    expect(screen.getByText('Create and enable an Elvanto sync batch first.')).toBeInTheDocument();
+  });
+
+  it('disables authority while deleting the last enabled batch reloads', async () => {
+    let resolveReloadedBatches!: (value: { data: { success: true; batches: PeopleSyncBatch[] } }) => void;
+    const reloadedBatchesResponse = new Promise<{ data: { success: true; batches: PeopleSyncBatch[] } }>((resolve) => {
+      resolveReloadedBatches = resolve;
+    });
+    vi.mocked(elvantoSyncAPI.listBatches)
+      .mockResolvedValueOnce({ data: { success: true, batches: [batch] } })
+      .mockImplementationOnce(() => reloadedBatchesResponse as ReturnType<typeof elvantoSyncAPI.listBatches>);
+    vi.mocked(elvantoSyncAPI.deleteBatch).mockResolvedValue({ data: { success: true } });
+    setupConnected();
+
+    await screen.findByText('Members');
+    const sourceSwitch = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    expect(sourceSwitch).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
+    expect(sourceSwitch).toBeDisabled();
+    fireEvent.click(sourceSwitch);
+    expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveReloadedBatches({ data: { success: true, batches: [] } });
+    });
+    expect(await screen.findByText('Create and enable an Elvanto sync batch first.')).toBeInTheDocument();
+  });
+
+  it('keeps authority disabled when the post-delete batch reload fails', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches)
+      .mockResolvedValueOnce({ data: { success: true, batches: [batch] } })
+      .mockRejectedValueOnce({ response: { data: { error: 'Elvanto batches could not be reloaded.' } } });
+    vi.mocked(elvantoSyncAPI.deleteBatch).mockResolvedValue({ data: { success: true } });
+    setupConnected();
+
+    await screen.findByText('Members');
+    const sourceSwitch = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    expect(sourceSwitch).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('Elvanto batches could not be reloaded.')).toBeInTheDocument();
+    expect(sourceSwitch).toBeDisabled();
+    fireEvent.click(sourceSwitch);
+    expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
+  });
+
   it('reviews and applies a batch through the shared SyncReview', async () => {
     vi.mocked(elvantoSyncAPI.getBatchPlan).mockResolvedValue({ data: { success: true, ...review } });
     vi.mocked(elvantoSyncAPI.applyBatch).mockResolvedValue({
@@ -208,6 +315,32 @@ describe('ElvantoIntegrationPanel', () => {
 
     expect(screen.getByText(/Elvanto is your authoritative people source/)).toBeInTheDocument();
     expect(integrationsAPI.disconnectElvanto).not.toHaveBeenCalled();
+  });
+
+  it('allows an authoritative Elvanto source to be turned off while disconnected', async () => {
+    vi.mocked(peopleSyncAPI.disableAuthority).mockResolvedValue({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    });
+    render(
+      <ElvantoIntegrationPanel
+        status={{ connected: false, loading: false, elvantoAccount: null }}
+        refreshStatus={vi.fn()}
+        onBack={vi.fn()}
+        peopleSyncSettings={{ ...settings, authorityProvider: 'elvanto' }}
+        peopleSyncStatus="known"
+        providerConnections={{ planning_center: true, elvanto: false }}
+        refreshPeopleSync={vi.fn()}
+        retryPeopleSync={vi.fn()}
+      />,
+    );
+
+    const sourceSwitch = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
+    expect(sourceSwitch).toBeChecked();
+    expect(sourceSwitch).toBeEnabled();
+    fireEvent.click(sourceSwitch);
+    fireEvent.click(screen.getByRole('button', { name: 'Use no people source' }));
+
+    await waitFor(() => expect(peopleSyncAPI.disableAuthority).toHaveBeenCalledTimes(1));
   });
 
   it('does not render a disconnect confirmation action while authority is unknown', async () => {

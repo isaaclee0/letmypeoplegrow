@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from '../elvanto/ElvantoBatchEditor';
@@ -233,12 +233,19 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
+  const connectedRef = useRef(status.connected);
+  const connectedDataGeneration = useRef(0);
+  connectedRef.current = status.connected;
 
   const loadConnectedData = useCallback(async () => {
-    if (!status.connected) {
+    const generation = ++connectedDataGeneration.current;
+    if (!connectedRef.current) {
       setMetadata(null);
       setBatches([]);
+      setGatherings([]);
       setRuns([]);
+      setLoading(false);
+      setError(null);
       return;
     }
     setLoading(true);
@@ -250,16 +257,18 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
         gatheringsAPI.getAll(),
         peopleSyncAPI.getRuns(10),
       ]);
+      if (generation !== connectedDataGeneration.current) return;
       setMetadata(metadataResponse.data.metadata);
       setBatches(batchesResponse.data.batches);
       setGatherings((gatheringsResponse.data.gatherings || []).map((item: { id: number; name: string }) => ({ id: item.id, name: item.name })));
       setRuns(runsResponse.data.runs);
     } catch (cause) {
+      if (generation !== connectedDataGeneration.current) return;
       setError(errorMessage(cause, 'Failed to load Elvanto sync data.'));
     } finally {
-      setLoading(false);
+      if (generation === connectedDataGeneration.current) setLoading(false);
     }
-  }, [status.connected]);
+  }, []);
 
   const reloadConnectionData = useCallback(async () => {
     setConnectionRevision((current) => current + 1);
@@ -272,9 +281,17 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     await loadConnectedData();
   }, [loadConnectedData]);
 
+  const reloadAfterBatchMutation = useCallback(async () => {
+    setBatches([]);
+    await loadConnectedData();
+  }, [loadConnectedData]);
+
   useEffect(() => {
     void loadConnectedData();
-  }, [loadConnectedData]);
+    return () => {
+      connectedDataGeneration.current += 1;
+    };
+  }, [loadConnectedData, status.connected]);
 
   const openReview = async (batch: PeopleSyncBatch) => {
     setError(null);
@@ -312,11 +329,26 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const deleteBatch = async (batch: PeopleSyncBatch) => {
     try {
       await elvantoSyncAPI.deleteBatch(batch.id);
-      await loadConnectedData();
+      await reloadAfterBatchMutation();
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to delete this batch.'));
     }
   };
+
+  const peopleSourceControl = peopleSyncStatus === 'known' ? (
+    <PeopleSourceControl
+      provider="elvanto"
+      hasEnabledBatch={status.connected && !loading && batches.some((batch) => batch.enabled)}
+      settings={peopleSyncSettings}
+      connections={providerConnections}
+      onRefresh={refreshPeopleSync}
+    />
+  ) : (
+    <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
+      {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
+    </section>
+  );
 
   return (
     <div className="space-y-5">
@@ -332,17 +364,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
         onConnectionChanged={status.connected ? reloadConnectionData : undefined}
         initialAction={initialAction}
       />
+      {peopleSourceControl}
 
       {status.connected && (
         <>
-          {peopleSyncStatus === 'known' ? (
-            <PeopleSourceControl settings={peopleSyncSettings} connections={providerConnections} onRefresh={refreshPeopleSync} />
-          ) : (
-            <section role={peopleSyncStatus === 'error' ? 'alert' : undefined} className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <p>{peopleSyncStatus === 'loading' ? 'Checking authoritative people source…' : 'Could not load the authoritative people source. Source controls are blocked.'}</p>
-              {peopleSyncStatus === 'error' && <button type="button" onClick={() => void retryPeopleSync()} className="mt-2 underline">Retry people source status</button>}
-            </section>
-          )}
           {peopleSyncStatus === 'known' && <ElvantoOptions settings={peopleSyncSettings} onChanged={refreshPeopleSync} />}
 
           <section className="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
@@ -359,7 +384,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                 batch={editingBatch === 'new' ? null : editingBatch}
                 metadata={metadata}
                 gatherings={gatherings}
-                onSaved={() => { setEditingBatch(null); void loadConnectedData(); }}
+                onSaved={() => { setEditingBatch(null); void reloadAfterBatchMutation(); }}
                 onCancel={() => setEditingBatch(null)}
               />
             )}
