@@ -60,6 +60,20 @@ describe('BatchSourceControls', () => {
     expect(screen.getByRole('option', { name: 'Youth (8 members)' })).toBeInTheDocument();
   });
 
+  it('resyncs the Elvanto source type when its controlled selection changes from Category to Group', async () => {
+    vi.mocked(peopleSyncAPI.listSources).mockResolvedValue({ data: { success: true, sources: [
+      source({ kind: 'elvanto_category', externalId: 'category-1', name: 'Members', memberCount: null, providerRefreshedAt: null }),
+      source({ kind: 'elvanto_group', externalId: 'group-1', name: 'Youth', memberCount: 8, providerRefreshedAt: null }),
+    ] } });
+    const { rerender } = render(<BatchSourceControls provider="elvanto" batch={null} value={{ sourceKind: 'elvanto_category', sourceExternalId: 'category-1' }} onChange={vi.fn()} onDiscarded={vi.fn()} />);
+
+    await screen.findByRole('option', { name: 'Members' });
+    rerender(<BatchSourceControls provider="elvanto" batch={null} value={{ sourceKind: 'elvanto_group', sourceExternalId: 'group-1' }} onChange={vi.fn()} onDiscarded={vi.fn()} />);
+
+    expect(screen.getByLabelText('Group')).toBeChecked();
+    expect(screen.getByRole('option', { name: 'Youth (8 members)' })).toBeInTheDocument();
+  });
+
   it('shows active and pending source names, and discards only a non-initial draft', async () => {
     vi.mocked(peopleSyncAPI.listSources).mockResolvedValue({ data: { success: true, sources: [source()] } });
     vi.mocked(peopleSyncAPI.discardSourceDraft).mockResolvedValue({ data: { success: true, batch: {

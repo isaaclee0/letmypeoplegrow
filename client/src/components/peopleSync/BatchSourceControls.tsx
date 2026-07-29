@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { peopleSyncAPI } from '../../services/api';
 import { sourceFreshness } from '../../utils/sourceFreshness';
 import type { PeopleSyncBatch, PeopleSyncSourceState, ProviderSource, SourceKind, SourceSelection, SyncProvider } from './types';
@@ -37,6 +37,8 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
   const [loading, setLoading] = useState(true);
   const [kind, setKind] = useState<SourceKind>(() => sourceKindFor(provider, value));
   const [discarding, setDiscarding] = useState(false);
+  const previousProvider = useRef(provider);
+  const locallyClearedKind = useRef<SourceKind | null>(null);
 
   const loadSources = async () => {
     setLoading(true);
@@ -52,7 +54,14 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
   };
 
   useEffect(() => { void loadSources(); }, [provider]);
-  useEffect(() => { setKind(sourceKindFor(provider, value)); }, [provider]);
+  useEffect(() => {
+    const providerChanged = previousProvider.current !== provider;
+    previousProvider.current = provider;
+    if (providerChanged || provider === 'planning_center' || value !== null || locallyClearedKind.current === null) {
+      setKind(sourceKindFor(provider, value));
+      if (value !== null) locallyClearedKind.current = null;
+    }
+  }, [provider, value?.sourceKind]);
 
   const visibleSources = useMemo(
     () => (sources ?? []).filter((source) => source.kind === kind),
@@ -75,6 +84,7 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
 
   const changeElvantoKind = (nextKind: 'elvanto_category' | 'elvanto_group') => {
     setKind(nextKind);
+    locallyClearedKind.current = nextKind;
     onChange(null);
   };
 
