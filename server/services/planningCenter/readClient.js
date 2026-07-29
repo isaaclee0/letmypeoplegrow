@@ -47,8 +47,21 @@ function defaultRequest({ url, method, headers }) {
   });
 }
 
+function pcoUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url, PCO_API_ORIGIN);
+  } catch (_) {
+    throw new PcoSourceError('Planning Center source URL is malformed', 'SYNC_SOURCE_INCOMPLETE', {});
+  }
+  if (parsed.origin !== PCO_API_ORIGIN) {
+    throw new PcoSourceError('Planning Center source URL is outside the PCO API origin', 'SYNC_SOURCE_INCOMPLETE', {});
+  }
+  return parsed;
+}
+
 function withPerPage(url) {
-  const parsed = new URL(url, PCO_API_ORIGIN);
+  const parsed = pcoUrl(url);
   if (!parsed.searchParams.has('per_page')) parsed.searchParams.set('per_page', '100');
   return parsed.toString();
 }
@@ -66,7 +79,7 @@ function isEnvelope(data) {
     (Array.isArray(data.data) || (data.data && typeof data.data === 'object'));
 }
 
-function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)), maxRetries = MAX_RETRIES, connectionValidated = false } = {}) {
+function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)), maxRetries = MAX_RETRIES, requestScope = 'account' } = {}) {
   const token = typeof accessToken === 'string' ? accessToken : '';
   const authHeader = `Bearer ${token}`;
   const boundedRetries = Math.max(0, Math.min(MAX_RETRIES, Number.isInteger(maxRetries) ? maxRetries : MAX_RETRIES));
@@ -89,7 +102,7 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
   }
 
   async function getJson(url) {
-    const safeUrl = String(url);
+    const safeUrl = pcoUrl(url).toString();
     for (let retry = 0; ; retry += 1) {
       let response;
       try {
@@ -107,10 +120,10 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
         await sleep(retryAfterMilliseconds(headers['retry-after']));
         continue;
       }
-      if (status === 401 || (status === 403 && !connectionValidated)) {
+      if (status === 401 || (status === 403 && requestScope !== 'source')) {
         throw new PcoSourceError(`Planning Center source credentials were rejected (status ${status})`, 'SYNC_SOURCE_AUTH', { status });
       }
-      if (status === 404 || (status === 403 && connectionValidated)) {
+      if (status === 404 || (status === 403 && requestScope === 'source')) {
         throw new PcoSourceError(`Planning Center source is unavailable (status ${status})`, 'SYNC_SOURCE_UNAVAILABLE', { status });
       }
       if (typeof status !== 'number' || status < 200 || status >= 300) {
@@ -145,7 +158,7 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
       if (candidate !== null && candidate !== undefined && typeof candidate !== 'string') {
         throw new PcoSourceError('Planning Center source pagination link is malformed', 'SYNC_SOURCE_INCOMPLETE', { pages });
       }
-      next = candidate || null;
+      next = candidate ? pcoUrl(candidate).toString() : null;
     }
     return { items, pages, complete: true };
   }

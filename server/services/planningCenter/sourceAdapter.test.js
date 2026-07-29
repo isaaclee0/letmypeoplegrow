@@ -55,9 +55,9 @@ test('fetches every List member page while keeping household-only context separa
         person('p2', { firstName: 'Grace', lastName: 'Hopper', fieldDataIds: ['fd2'] }),
         { type: 'FieldDatum', id: 'fd2', attributes: { value: 'Context value' }, relationships: { field_definition: { data: { id: 'context-field' } } } },
       ],
-      links: { next: 'https://next.example/list-42-members' },
+      links: { next: 'https://api.planningcenteronline.com/people/v2/lists/42/people?page=2' },
     })],
-    ['https://next.example/list-42-members', response(200, {
+    ['https://api.planningcenteronline.com/people/v2/lists/42/people?page=2', response(200, {
       data: [person('p3', { firstName: 'Lin', lastName: 'Q', householdId: 'h2' })],
       included: [{ type: 'Household', id: 'h2', attributes: { primary_contact_id: 'p3' } }],
       links: { next: null },
@@ -91,11 +91,11 @@ test('fetches every List member page while keeping household-only context separa
   assert.deepEqual(calls.map((call) => call.url), [
     `${API}/lists/42`,
     `${API}/lists/42/people?per_page=100&include=households,field_data`,
-    'https://next.example/list-42-members',
+    'https://api.planningcenteronline.com/people/v2/lists/42/people?page=2',
   ]);
 });
 
-test('fails closed when List resolution is absent, archived, inaccessible, or not a List', async () => {
+test('fails closed when List resolution is absent, archived, or not a List', async () => {
   for (const resolution of [
     response(404, { data: null }),
     response(200, { data: { type: 'List', id: '42', attributes: { name: 'Old', archived: true } } }),
@@ -110,11 +110,45 @@ test('fails closed when List resolution is absent, archived, inaccessible, or no
       (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
     );
   }
+});
+
+test('distinguishes account-wide List-enumeration 403s from source-specific membership 403s', async () => {
+  await assert.rejects(
+    () => listPlanningCenterSources({
+      accessToken: 'secret', request: async () => response(403, { data: null }),
+    }),
+    (err) => err.code === 'SYNC_SOURCE_AUTH'
+  );
+
+  const sourceUrl = `${API}/lists/42`;
+  const membersUrl = `${API}/lists/42/people?per_page=100&include=households,field_data`;
   await assert.rejects(
     () => fetchPlanningCenterSourceSnapshot({
       accessToken: 'secret', sourceKind: 'planning_center_list', sourceExternalId: '42',
-      request: async () => response(403, { data: null }),
+      request: async ({ url }) => url === sourceUrl
+        ? response(200, { data: { type: 'List', id: '42', attributes: { name: 'Sunday' } } })
+        : url === membersUrl ? response(403, { data: null }) : undefined,
     }),
     (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
   );
+});
+
+test('fails closed when a List-membership page contains a non-Person or ID-less resource', async () => {
+  const sourceUrl = `${API}/lists/42`;
+  const membersUrl = `${API}/lists/42/people?per_page=100&include=households,field_data`;
+  for (const member of [
+    { type: 'Household', id: 'h1', attributes: {} },
+    { type: 'Person', attributes: {} },
+    { type: 'Person', id: '   ', attributes: {} },
+  ]) {
+    await assert.rejects(
+      () => fetchPlanningCenterSourceSnapshot({
+        accessToken: 'secret', sourceKind: 'planning_center_list', sourceExternalId: '42',
+        request: async ({ url }) => url === sourceUrl
+          ? response(200, { data: { type: 'List', id: '42', attributes: { name: 'Sunday' } } })
+          : url === membersUrl ? response(200, { data: [member], links: { next: null } }) : undefined,
+      }),
+      (err) => err.code === 'SYNC_SOURCE_INCOMPLETE'
+    );
+  }
 });

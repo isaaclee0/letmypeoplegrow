@@ -38,9 +38,9 @@ test('getAll starts at per_page 100 and follows next links strictly sequentially
   let maxInFlight = 0;
   const pages = new Map([
     ['https://api.planningcenteronline.com/people/v2/lists?per_page=100', response(200, {
-      data: [{ id: '1' }], links: { next: 'https://next.example/page-2' },
+      data: [{ id: '1' }], links: { next: 'https://api.planningcenteronline.com/people/v2/lists?page=2' },
     })],
-    ['https://next.example/page-2', response(200, { data: [{ id: '2' }], links: { next: null } })],
+    ['https://api.planningcenteronline.com/people/v2/lists?page=2', response(200, { data: [{ id: '2' }], links: { next: null } })],
   ]);
   const client = createPcoReadClient({
     accessToken: 'token',
@@ -60,7 +60,7 @@ test('getAll starts at per_page 100 and follows next links strictly sequentially
   assert.equal(maxInFlight, 1);
   assert.deepEqual(calls.map((call) => call.url), [
     'https://api.planningcenteronline.com/people/v2/lists?per_page=100',
-    'https://next.example/page-2',
+    'https://api.planningcenteronline.com/people/v2/lists?page=2',
   ]);
   assert.ok(calls.every((call) => call.method === 'GET'));
 });
@@ -80,7 +80,7 @@ test('getAll rejects repeated or excessive next links as an incomplete source', 
     accessToken: 'token',
     request: async () => {
       page += 1;
-      return response(200, { data: [], links: { next: `https://next.example/${page}` } });
+      return response(200, { data: [], links: { next: `https://api.planningcenteronline.com/people/v2/lists?page=${page}` } });
     },
   });
   await assert.rejects(
@@ -155,7 +155,7 @@ test('classifies auth, source unavailability, malformed envelopes, and later-pag
     await assert.rejects(() => client.getJson('https://api.planningcenteronline.com/people/v2/lists'), (err) => err.code === 'SYNC_SOURCE_AUTH');
   }
   const unavailable = createPcoReadClient({
-    accessToken: 'token', connectionValidated: true,
+    accessToken: 'token', requestScope: 'source',
     request: async () => response(403, { data: [] }),
   });
   await assert.rejects(() => unavailable.getJson('https://api.planningcenteronline.com/people/v2/lists/42'), (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE');
@@ -172,7 +172,7 @@ test('classifies auth, source unavailability, malformed envelopes, and later-pag
     request: async () => {
       calls += 1;
       return calls === 1
-        ? response(200, { data: [{ id: 'first' }], links: { next: 'https://next.example/fails' } })
+        ? response(200, { data: [{ id: 'first' }], links: { next: 'https://api.planningcenteronline.com/people/v2/lists?page=fails' } })
         : response(500, { data: [] });
     },
   });
@@ -180,4 +180,33 @@ test('classifies auth, source unavailability, malformed envelopes, and later-pag
     () => laterFailure.getAll('https://api.planningcenteronline.com/people/v2/lists'),
     (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
   );
+});
+
+test('rejects hostile absolute URLs and next links before a bearer token can leave the PCO origin', async () => {
+  const token = 'secret-token';
+  const directCalls = [];
+  const direct = createPcoReadClient({
+    accessToken: token,
+    request: async (request) => { directCalls.push(request); return response(200, { data: [] }); },
+  });
+  await assert.rejects(
+    () => direct.getJson('https://attacker.example/exfiltrate'),
+    (err) => err.code === 'SYNC_SOURCE_INCOMPLETE'
+  );
+  assert.deepEqual(directCalls, []);
+
+  const pagedCalls = [];
+  const paged = createPcoReadClient({
+    accessToken: token,
+    request: async (request) => {
+      pagedCalls.push(request);
+      return response(200, { data: [{ id: 'safe-first-page' }], links: { next: 'https://attacker.example/exfiltrate' } });
+    },
+  });
+  await assert.rejects(
+    () => paged.getAll('https://api.planningcenteronline.com/people/v2/lists'),
+    (err) => err.code === 'SYNC_SOURCE_INCOMPLETE'
+  );
+  assert.deepEqual(pagedCalls.map((call) => call.url), ['https://api.planningcenteronline.com/people/v2/lists?per_page=100']);
+  assert.ok(pagedCalls.every((call) => call.headers.Authorization === `Bearer ${token}`));
 });

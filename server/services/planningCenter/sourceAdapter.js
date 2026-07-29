@@ -32,21 +32,21 @@ function listDto(resource) {
   };
 }
 
-function createClient(options) {
+function createClient(options, requestScope = 'account') {
   return options.client || createPcoReadClient({
     accessToken: options.accessToken,
     request: options.request,
     sleep: options.sleep,
     maxRetries: options.maxRetries,
-    // Source operations are invoked against an established church connection.
-    // A resource-specific 403 therefore means the List is no longer visible,
-    // not that this source should retry or impersonate an empty List.
-    connectionValidated: true,
+    // Account-wide calls must surface invalid/revoked credentials, while a
+    // membership call after a successful stable-ID List resolution can safely
+    // treat a 403 as a source-specific visibility failure.
+    requestScope,
   });
 }
 
 async function listPlanningCenterSources(options = {}) {
-  const client = createClient(options);
+  const client = createClient(options, 'account');
   const result = await client.getAll(`${API}/lists?per_page=100`);
   return result.items.map(listDto).filter(Boolean).sort((left, right) =>
     left.name.localeCompare(right.name) || left.externalId.localeCompare(right.externalId)
@@ -86,9 +86,10 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
     ? '' : String(options.sourceExternalId).trim();
   if (sourceKind !== 'planning_center_list' || !sourceExternalId) throw unavailable('Planning Center List source is unavailable');
 
-  const client = createClient(options);
-  const resolved = await client.getJson(`${API}/lists/${encodeURIComponent(sourceExternalId)}`);
+  const resolvingClient = createClient(options, 'account');
+  const resolved = await resolvingClient.getJson(`${API}/lists/${encodeURIComponent(sourceExternalId)}`);
   const source = assertResolvableList(resolved.data, sourceExternalId);
+  const client = createClient(options, 'source');
 
   const membersById = new Map();
   const contextById = new Map();
@@ -100,12 +101,15 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
     const fieldDataById = new Map();
     const pageMembers = Array.isArray(envelope.data) ? envelope.data : [];
     for (const resource of pageMembers) {
-      if (resource && resource.type === 'Person' && resource.id !== null && resource.id !== undefined) memberIds.add(String(resource.id));
+      const id = resource && resource.id !== null && resource.id !== undefined ? String(resource.id).trim() : '';
+      if (!resource || resource.type !== 'Person' || !id) {
+        throw new PcoSourceError('Planning Center List membership contains a malformed Person resource', 'SYNC_SOURCE_INCOMPLETE', {});
+      }
+      memberIds.add(id);
     }
     mapIncluded(envelope.included, fieldDataById, primaryContacts, contextById, memberIds);
     for (const resource of pageMembers) {
-      if (!resource || resource.type !== 'Person' || resource.id === null || resource.id === undefined) continue;
-      const id = String(resource.id);
+      const id = String(resource.id).trim();
       membersById.set(id, projectPerson(resource, fieldDataById));
       contextById.delete(id);
     }
