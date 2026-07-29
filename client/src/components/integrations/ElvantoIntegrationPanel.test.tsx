@@ -13,7 +13,7 @@ vi.mock('../../services/api', () => ({
   },
   peopleSyncAPI: {
     getSettings: vi.fn(), updateSettings: vi.fn(), previewAuthority: vi.fn(),
-    applyAuthority: vi.fn(), disableAuthority: vi.fn(), getRuns: vi.fn(),
+    applyAuthority: vi.fn(), disableAuthority: vi.fn(), getRuns: vi.fn(), discardSourceDraft: vi.fn(),
   },
   elvantoSyncAPI: {
     getMetadata: vi.fn(), refreshMetadata: vi.fn(), listBatches: vi.fn(),
@@ -33,6 +33,9 @@ const metadata = {
 };
 const batch: PeopleSyncBatch = {
   id: 5, provider: 'elvanto', name: 'Members', enabled: true, filterSchemaVersion: 1,
+  source: { kind: 'elvanto_category', externalId: 'category-1', name: 'Members', memberCount: 12, providerRefreshedAt: null }, sourceRevision: 2,
+  draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false, initialSourceReviewPending: false,
+  sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null,
   filterConfig: {}, initialFilterReviewPending: false,
   defaultPeopleType: 'regular', gatheringTypeId: null,
   gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly',
@@ -286,7 +289,7 @@ describe('ElvantoIntegrationPanel', () => {
     }));
   });
 
-  it('opens Run now as a shared review and only applies after explicit approval', async () => {
+  it('does not expose an unchecked Run now path', async () => {
     vi.mocked(elvantoSyncAPI.runBatchNow).mockResolvedValue({
       data: { success: true, ...review },
     });
@@ -299,14 +302,7 @@ describe('ElvantoIntegrationPanel', () => {
     expect(within(recentRuns).getByText(/2 added/)).toBeInTheDocument();
     expect(screen.getByText(/1 updated/)).toBeInTheDocument();
     expect(within(recentRuns).queryByText(/raw|api.?key|watermark/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Run Members now' }));
-
-    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
-    expect(elvantoSyncAPI.applyBatch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
-    await waitFor(() => expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledWith(5, {
-      reviewToken: 'batch-review', selections: expect.any(Object),
-    }));
+    expect(screen.queryByRole('button', { name: 'Run Members now' })).not.toBeInTheDocument();
   });
 
   it('warns before disconnecting while Elvanto is authoritative', async () => {
@@ -375,16 +371,13 @@ describe('ElvantoIntegrationPanel', () => {
   it('does not offer to discard the unpromoted initial Elvanto draft', async () => {
     vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({
       data: { success: true, batches: [{
-        ...batch, filterSchemaVersion: 2, filterRevision: 1,
-        filterConfig: { branches: [], exclusions: [] },
-        draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [], exclusions: [] },
-        draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z',
-        needsFilterReview: true, initialFilterReviewPending: true,
+        ...batch, sourceRevision: 1, draftSource: { kind: 'elvanto_category', externalId: 'category-2', name: 'Visitors', memberCount: 2, providerRefreshedAt: null },
+        draftSourceBaseRevision: 1, draftSourceUpdatedAt: '2026-07-29T00:00:00.000Z', needsSourceReview: true, initialSourceReviewPending: true,
       }] },
     });
     setupConnected();
 
     expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Discard draft' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard source draft' })).not.toBeInTheDocument();
   });
 });

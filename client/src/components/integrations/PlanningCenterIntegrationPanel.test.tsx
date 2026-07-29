@@ -25,7 +25,7 @@ vi.mock('../../services/api', () => ({
     previewAuthority: vi.fn(),
     applyAuthority: vi.fn(),
     disableAuthority: vi.fn(),
-    discardFilterDraft: vi.fn(),
+    discardSourceDraft: vi.fn(),
   },
 }));
 
@@ -47,6 +47,9 @@ const settings: PeopleSyncSettings = {
 
 const batch: PeopleSyncBatch = {
   id: 12, provider: 'planning_center', name: 'Members', enabled: true,
+  source: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members', memberCount: 12, providerRefreshedAt: null }, sourceRevision: 2,
+  draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false, initialSourceReviewPending: false,
+  sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null,
   filterSchemaVersion: 1, filterConfig: {}, filterRevision: 1,
   draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null,
   draftFilterUpdatedAt: null, needsFilterReview: false, initialFilterReviewPending: false,
@@ -61,13 +64,11 @@ const batch: PeopleSyncBatch = {
 };
 
 const draftBatch: PeopleSyncBatch = {
-  ...batch, filterSchemaVersion: 2, filterConfig: { branches: [], exclusions: [] }, filterRevision: 2,
-  draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] },
-  draftFilterBaseRevision: 2, draftFilterUpdatedAt: '2026-07-29T00:00:00.000Z', needsFilterReview: true,
+  ...batch, draftSource: { kind: 'planning_center_list', externalId: 'list-2', name: 'New members', memberCount: 8, providerRefreshedAt: null },
+  draftSourceBaseRevision: 2, draftSourceUpdatedAt: '2026-07-29T00:00:00.000Z', needsSourceReview: true,
 };
 const promotedBatch: PeopleSyncBatch = {
-  ...draftBatch, filterRevision: 3, filterConfig: draftBatch.draftFilterConfig!,
-  draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false,
+  ...draftBatch, sourceRevision: 3, source: draftBatch.draftSource!, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false,
 };
 const review = {
   success: true, runId: 7, reviewToken: 'pco-review',
@@ -251,7 +252,7 @@ describe('PlanningCenterIntegrationPanel', () => {
     expect(peopleSyncAPI.previewAuthority).not.toHaveBeenCalled();
   });
 
-  it('uses the real review, then reloads the promoted active filter after apply', async () => {
+  it('uses the real review, then reloads the promoted active source after apply', async () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockReset();
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
       .mockResolvedValueOnce({ data: { batches: [draftBatch] } })
@@ -259,7 +260,7 @@ describe('PlanningCenterIntegrationPanel', () => {
     renderPanel();
 
     expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
-    expect(screen.getByText(/Draft criteria will not run until reviewed/)).toBeInTheDocument();
+    expect(screen.getByText(/selected people source will not run until reviewed/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Review & sync' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
 
@@ -271,18 +272,18 @@ describe('PlanningCenterIntegrationPanel', () => {
   });
 
   it('discards only a Planning Center draft and retains the active schedule', async () => {
-    const discarded = { ...draftBatch, draftFilterSchemaVersion: null, draftFilterConfig: null, draftFilterBaseRevision: null, draftFilterUpdatedAt: null, needsFilterReview: false };
+    const discarded = { ...draftBatch, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null, needsSourceReview: false };
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockReset();
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches)
       .mockResolvedValueOnce({ data: { batches: [draftBatch] } })
       .mockResolvedValueOnce({ data: { batches: [discarded] } });
-    vi.mocked(peopleSyncAPI.discardFilterDraft).mockResolvedValue({ data: { success: true, batch: {} as never } });
+    vi.mocked(peopleSyncAPI.discardSourceDraft).mockResolvedValue({ data: { success: true, batch: {} as never } });
     renderPanel();
 
     expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
     expect(screen.getByText('Runs weekly')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
-    await waitFor(() => expect(peopleSyncAPI.discardFilterDraft).toHaveBeenCalledWith('planning_center', 12));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard source draft' }));
+    await waitFor(() => expect(peopleSyncAPI.discardSourceDraft).toHaveBeenCalledWith('planning_center', 12));
     await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Runs weekly')).toBeInTheDocument();
     expect(screen.queryByText(/Needs full review/)).not.toBeInTheDocument();
@@ -290,12 +291,12 @@ describe('PlanningCenterIntegrationPanel', () => {
 
   it('does not offer to discard the unpromoted initial Planning Center draft', async () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
-      data: { batches: [{ ...draftBatch, filterRevision: 1, initialFilterReviewPending: true }] },
+      data: { batches: [{ ...draftBatch, sourceRevision: 1, initialSourceReviewPending: true }] },
     });
     renderPanel();
 
     expect(await screen.findByText(/Needs full review/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Discard draft' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Discard source draft' })).not.toBeInTheDocument();
   });
 
   it('explains the automatic-sync master switch and marks scheduled batches paused while off', async () => {

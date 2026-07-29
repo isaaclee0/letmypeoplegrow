@@ -14,6 +14,13 @@ vi.mock('../../services/api', () => ({
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
   peopleSyncAPI: { previewAuthority: vi.fn(), applyAuthority: vi.fn() },
 }));
+vi.mock('../peopleSync/BatchSourceControls', () => ({
+  default: ({ onChange }: { onChange: (selection: { sourceKind: 'elvanto_category'; sourceExternalId: string }) => void }) => {
+    const [ready, setReady] = React.useState(false);
+    React.useEffect(() => { onChange({ sourceKind: 'elvanto_category', sourceExternalId: 'category-1' }); setReady(true); }, [onChange]);
+    return <p>{ready ? 'People source selected' : 'People source'}</p>;
+  },
+}));
 
 const metadata = {
   fetchedAt: '2026-07-25T10:00:00.000Z', categories: [], groups: [], demographics: [],
@@ -22,6 +29,9 @@ const metadata = {
 
 const batch: PeopleSyncBatch = {
   id: 12, provider: 'elvanto', name: 'Elvanto people', enabled: true, filterSchemaVersion: 2,
+  source: { kind: 'elvanto_category', externalId: 'category-1', name: 'Members', memberCount: 12, providerRefreshedAt: null }, sourceRevision: 1,
+  draftSource: { kind: 'elvanto_category', externalId: 'category-1', name: 'Members', memberCount: 12, providerRefreshedAt: null }, draftSourceBaseRevision: 1, draftSourceUpdatedAt: '2026-07-28T08:00:00.000Z', needsSourceReview: true,
+  initialSourceReviewPending: true, sourceStatus: 'available', sourceStatusCheckedAt: null, sourceStatusErrorCode: null,
   filterConfig: { branches: [], exclusions: [] }, filterRevision: 1,
   draftFilterSchemaVersion: 2, draftFilterConfig: { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] },
   draftFilterBaseRevision: 1, draftFilterUpdatedAt: '2026-07-28T08:00:00.000Z', needsFilterReview: true,
@@ -92,6 +102,7 @@ describe('ElvantoOnboarding', () => {
     expect(screen.queryByText('secret-key')).not.toBeInTheDocument();
     expect(elvantoSyncAPI.getMetadata).toHaveBeenCalledTimes(1);
 
+    await screen.findByText('People source selected');
     fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
     expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
@@ -153,6 +164,7 @@ describe('ElvantoOnboarding', () => {
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('Elvanto API key'), { target: { value: 'valid-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
+    await screen.findByText('People source selected');
     fireEvent.click(await screen.findByRole('button', { name: 'Create batch' }));
     await screen.findByText('Elvanto sync review');
     expect(screen.queryByRole('button', { name: 'Continue without importing' })).not.toBeInTheDocument();
@@ -168,6 +180,7 @@ describe('ElvantoOnboarding', () => {
     render(<Harness onContinue={onContinue} />);
     fireEvent.change(screen.getByLabelText('Elvanto API key'), { target: { value: 'valid-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Connect Elvanto' }));
+    await screen.findByText('People source selected');
     fireEvent.click(await screen.findByRole('button', { name: 'Create batch' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Not now' }));

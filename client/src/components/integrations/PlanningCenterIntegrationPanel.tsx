@@ -18,7 +18,6 @@ import PCOCheckinImport from '../PCOCheckinImport';
 import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
-import FilterUpgradePanel from '../peopleSync/FilterUpgradePanel';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 import type { PeopleSyncBatch } from '../peopleSync/types';
 
@@ -163,10 +162,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
   const discardDraft = async (batchId: number) => {
     try {
-      await peopleSyncAPI.discardFilterDraft('planning_center', batchId);
+      await peopleSyncAPI.discardSourceDraft('planning_center', batchId);
       await reloadAfterBatchMutation();
     } catch (e: any) {
-      setBatchesError(e.response?.data?.error || 'Failed to discard the filter draft.');
+      setBatchesError(e.response?.data?.error || 'Failed to discard the people source draft.');
     }
   };
 
@@ -485,7 +484,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                               Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${batch.lastSyncResult.replaceAll('_', ' ')}` : ''}.
                             </p>
                           )}
-                          {batch.needsFilterReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · {batch.filterSchemaVersion === 1 ? 'Active criteria still running' : 'Draft criteria will not run until reviewed.'}</p>}
+                          {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'planning_center_list' ? 'Planning Center List' : batch.source.kind}: {batch.source.name}</p>}
+                          {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
+                          {batch.needsSourceReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
@@ -499,7 +500,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             className="text-sm underline text-gray-600 dark:text-gray-300">
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
                           </button>
-                          {batch.needsFilterReview && !batch.initialFilterReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard draft</button>}
+                          {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
                       </div>
@@ -511,9 +512,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     </li>
                   ))}
                 </ul>
-                <div className="mt-3">
-                  <FilterUpgradePanel provider="planning_center" batches={batches} onChanged={reloadAfterBatchMutation} />
-                </div>
               </div>
 
               {peopleSourceControl}

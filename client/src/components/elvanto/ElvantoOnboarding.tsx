@@ -150,7 +150,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
             />
           </label>
           <p className="text-xs text-gray-500">The key is encrypted after validation and is never displayed again.</p>
-        </> : <p className="text-sm text-green-700">Elvanto connected. Loading available filters…</p>}
+        </> : <p className="text-sm text-green-700">Elvanto connected. Loading available people sources…</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <div className="flex flex-wrap gap-3">
           {!connected ? (
@@ -171,16 +171,16 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   if (step === 'elvanto-batch') {
     return metadata ? (
       <section className="space-y-4">
-        <p className="text-sm text-gray-700">Choose which Elvanto people to import and optionally assign them to a gathering.</p>
+        <p className="text-sm text-gray-700">Choose one Elvanto Category or Group, then optionally assign those people to a gathering.</p>
         <ElvantoBatchEditor batch={null} metadata={metadata} gatherings={gatherings} onSaved={saveBatch} onCancel={onContinueToGatherings} />
       </section>
-    ) : <p className="text-sm text-gray-500">Loading Elvanto filters…</p>;
+    ) : <p className="text-sm text-gray-500">Loading Elvanto people sources…</p>;
   }
 
   if (step === 'elvanto-review') {
     return (
       <section className="space-y-4">
-        <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the proposed filter before you continue.</p>
+        <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the selected people source before you continue.</p>
         {busy && <p className="text-sm text-gray-500">Preparing review…</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         {batchReview && <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />}
