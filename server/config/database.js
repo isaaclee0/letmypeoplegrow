@@ -106,6 +106,11 @@ function ensureProviderNeutralSyncSchema(db) {
     }
   }
 
+  const runColumns = db.prepare('PRAGMA table_info(people_sync_runs)').all();
+  if (!runColumns.some((column) => column.name === 'source_provenance')) {
+    db.exec('ALTER TABLE people_sync_runs ADD COLUMN source_provenance TEXT');
+  }
+
   const gatheringListColumns = db.prepare('PRAGMA table_info(gathering_lists)').all();
   if (!gatheringListColumns.some((column) => column.name === 'added_by_sync_batch_id')) {
     db.exec('ALTER TABLE gathering_lists ADD COLUMN added_by_sync_batch_id INTEGER REFERENCES people_sync_batches(id) ON DELETE SET NULL');

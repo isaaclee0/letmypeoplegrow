@@ -140,6 +140,29 @@ test('presence projection is bound into the plan digest', () => {
   assert.notEqual(digestPlan(baseline), digestPlan(changed));
 });
 
+test('source context snapshots are digested in numeric batch order and bind source review inputs', () => {
+  const sourceContext = {
+    activeRevision: 7,
+    draftDigest: 'd'.repeat(64),
+    snapshots: [
+      { batchId: 20, sourceKind: 'elvanto_group', sourceExternalId: 'twenty', snapshotDigest: '2'.repeat(64) },
+      { batchId: 3, sourceKind: 'elvanto_group', sourceExternalId: 'three', snapshotDigest: '3'.repeat(64) },
+    ],
+  };
+  const baseline = digestPlan(plan({ sourceContext }));
+  const reordered = digestPlan(plan({ sourceContext: { ...sourceContext, snapshots: [...sourceContext.snapshots].reverse() } }));
+  assert.equal(reordered, baseline);
+
+  for (const changed of [
+    { ...sourceContext, activeRevision: 8 },
+    { ...sourceContext, draftDigest: 'e'.repeat(64) },
+    { ...sourceContext, snapshots: [{ ...sourceContext.snapshots[0], sourceExternalId: 'changed' }, sourceContext.snapshots[1]] },
+    { ...sourceContext, snapshots: [{ ...sourceContext.snapshots[0], snapshotDigest: '4'.repeat(64) }, sourceContext.snapshots[1]] },
+  ]) {
+    assert.notEqual(digestPlan(plan({ sourceContext: changed })), baseline);
+  }
+});
+
 test('canonical JSON rejects non-finite numbers instead of collapsing them to null', () => {
   assert.throws(() => digestPlan(plan({ updateManagedFields: [{ id: 'bad', localValue: NaN }] })),
     /finite number/i);

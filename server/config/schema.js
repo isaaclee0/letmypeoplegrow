@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS people_sync_runs (
   error_code TEXT,
   error_message TEXT,
   external_watermark TEXT,
+  source_provenance TEXT,
   started_at TEXT DEFAULT (datetime('now')),
   completed_at TEXT,
   FOREIGN KEY (batch_id) REFERENCES people_sync_batches(id) ON DELETE SET NULL

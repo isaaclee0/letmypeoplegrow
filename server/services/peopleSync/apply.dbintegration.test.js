@@ -5,7 +5,7 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { applyPeopleSyncPlan } = require('./apply');
 const { BUCKETS } = require('./plan');
 const batchRepository = require('./batchRepository');
-const { digestFilterConfig } = require('./planDigest');
+const { digestSourceIdentity } = require('./sourceModel');
 
 // Minimal, self-documenting empty plan shape — every bucket applyPeopleSyncPlan
 // reads, so tests only need to override the buckets that matter for that
@@ -136,44 +136,44 @@ test('person, family, and link creation commit together', async () => {
   });
 });
 
-test('reviewed people mutations and filter-draft promotion commit atomically', async () => {
+test('reviewed people mutations and source-draft promotion commit atomically', async () => {
   await withTestChurchDb(async (churchId) => {
-    const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+    const draft = { kind: 'elvanto_group', externalId: 'group-1', name: 'Members' };
     const batch = await batchRepository.createBatch({
-      churchId, provider: 'elvanto', name: 'Reviewed', filterSchemaVersion: 2, initialDraftFilterConfig: draft,
+      churchId, provider: 'elvanto', name: 'Reviewed', initialDraftSource: draft,
     });
 
     await applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({ addPeople: [{ id: 'add:one', externalPersonId: 'one', firstName: 'Ada', lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular' }] }),
-      filterPromotion: { batchId: batch.id, expectedBaseRevision: batch.draftFilterBaseRevision, expectedDraftDigest: digestFilterConfig(draft) },
+      sourcePromotion: { batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: digestSourceIdentity(draft) },
     });
 
     assert.equal((await counts(churchId)).individuals, 1);
     const promoted = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
-    assert.deepEqual(promoted.filterConfig, draft);
-    assert.equal(promoted.draftFilterConfig, null);
-    assert.equal(promoted.filterRevision, 2);
+    assert.deepEqual(promoted.source, draft);
+    assert.equal(promoted.draftSource, null);
+    assert.equal(promoted.sourceRevision, 2);
   });
 });
 
-test('a stale filter promotion rolls back preceding people mutations and retains the draft', async () => {
+test('a stale source promotion rolls back preceding people mutations and retains the draft', async () => {
   await withTestChurchDb(async (churchId) => {
-    const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
+    const draft = { kind: 'elvanto_group', externalId: 'group-1', name: 'Members' };
     const batch = await batchRepository.createBatch({
-      churchId, provider: 'elvanto', name: 'Reviewed', filterSchemaVersion: 2, initialDraftFilterConfig: draft,
+      churchId, provider: 'elvanto', name: 'Reviewed', initialDraftSource: draft,
     });
 
     await assert.rejects(() => applyPeopleSyncPlan({
       churchId, provider: 'elvanto',
       plan: emptyPlan({ addPeople: [{ id: 'add:one', externalPersonId: 'one', firstName: 'Ada', lastName: 'Lovelace', isChild: false, familyId: null, peopleType: 'regular' }] }),
-      filterPromotion: { batchId: batch.id, expectedBaseRevision: batch.draftFilterBaseRevision, expectedDraftDigest: '0'.repeat(64) },
-    }), (error) => error.code === 'SYNC_FILTER_DRAFT_STALE');
+      sourcePromotion: { batchId: batch.id, expectedBaseRevision: batch.draftSourceBaseRevision, expectedDraftDigest: '0'.repeat(64) },
+    }), (error) => error.code === 'SYNC_SOURCE_DRAFT_STALE');
 
     assert.equal((await counts(churchId)).individuals, 0);
     const retained = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
-    assert.deepEqual(retained.draftFilterConfig, draft);
-    assert.equal(retained.filterRevision, 1);
+    assert.deepEqual(retained.draftSource, draft);
+    assert.equal(retained.sourceRevision, 1);
   });
 });
 

@@ -11,6 +11,16 @@ const COUNT_KEYS = new Set([
   'familyNamesUpdated', 'gatheringAssigned', 'gatheringRemoved',
 ]);
 const CREDENTIAL_KEYS = new Set(['apikey', 'accesstoken', 'refreshtoken', 'credential', 'authorization', 'password', 'secret', 'token']);
+const SOURCE_PROVENANCE_KEYS = Object.freeze([
+  'batchId', 'sourceKind', 'sourceExternalId', 'sourceName', 'memberCount',
+  'providerRefreshedAt', 'fetchedAt', 'snapshotDigest',
+]);
+const MAX_SOURCE_PROVENANCE_ENTRIES = 100;
+const MAX_SOURCE_PROVENANCE_BYTES = 32 * 1024;
+const SOURCE_KINDS = Object.freeze({
+  planning_center: new Set(['planning_center_list']),
+  elvanto: new Set(['elvanto_category', 'elvanto_group']),
+});
 
 function assertProvider(provider) {
   if (!PROVIDERS.has(provider)) throw new Error(`Unsupported people-sync provider: ${provider}`);
@@ -93,12 +103,74 @@ function parseCounts(value) {
   }
 }
 
+function isoTimestamp(value, label, { allowNull = false } = {}) {
+  if (value === null && allowNull) return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value) || Number.isNaN(Date.parse(value))) {
+    throw new Error(`${label} must be an ISO timestamp${allowNull ? ' or null' : ''}`);
+  }
+  return value;
+}
+
+function sanitiseSourceProvenance(value, provider, { allowNull = true } = {}) {
+  if (value === null || value === undefined) {
+    if (allowNull) return null;
+    throw new Error('Source provenance must be an array');
+  }
+  if (!Array.isArray(value) || value.length > MAX_SOURCE_PROVENANCE_ENTRIES) {
+    throw new Error('Source provenance must be a size-bounded array');
+  }
+  assertNoCredentialShape(value);
+  const allowedKinds = SOURCE_KINDS[provider] || new Set();
+  const safe = value.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== [...SOURCE_PROVENANCE_KEYS].sort().join(',')) {
+      throw new Error('Source provenance entry fields are not allowlisted');
+    }
+    if (!Number.isSafeInteger(entry.batchId) || entry.batchId <= 0 ||
+        typeof entry.sourceKind !== 'string' || !allowedKinds.has(entry.sourceKind) ||
+        !Number.isSafeInteger(entry.memberCount) || entry.memberCount < 0 ||
+        typeof entry.snapshotDigest !== 'string' || !/^[a-f0-9]{64}$/.test(entry.snapshotDigest)) {
+      throw new Error('Source provenance entry is invalid');
+    }
+    return {
+      batchId: entry.batchId,
+      sourceKind: entry.sourceKind,
+      sourceExternalId: normaliseSafeAuditText(entry.sourceExternalId, 'Source provenance external ID', { allowNull: false }),
+      sourceName: normaliseSafeAuditText(entry.sourceName, 'Source provenance name', { allowNull: false }),
+      memberCount: entry.memberCount,
+      providerRefreshedAt: isoTimestamp(entry.providerRefreshedAt, 'Source provenance provider refresh time', { allowNull: true }),
+      fetchedAt: isoTimestamp(entry.fetchedAt, 'Source provenance fetch time'),
+      snapshotDigest: entry.snapshotDigest,
+    };
+  });
+  if (Buffer.byteLength(JSON.stringify(safe), 'utf8') > MAX_SOURCE_PROVENANCE_BYTES) {
+    throw new Error('Source provenance is too large');
+  }
+  return safe;
+}
+
+function parseSourceProvenance(value, provider) {
+  try {
+    if (value === null || value === undefined) return [];
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return sanitiseSourceProvenance(parsed, provider, { allowNull: false });
+  } catch (_) {
+    return [];
+  }
+}
+
+function validateSourceProvenance(value, provider) {
+  assertProvider(provider);
+  return sanitiseSourceProvenance(value, provider, { allowNull: false });
+}
+
 function toRun(row) {
   if (!row) return null;
   return {
     id: row.id, provider: row.provider, batchId: row.batch_id, trigger: row.trigger, fetchMode: row.fetch_mode,
     status: row.status, counts: parseCounts(row.counts), reviewNotificationFingerprint: row.review_notification_fingerprint,
     errorCode: row.error_code, errorMessage: row.error_message, externalWatermark: row.external_watermark,
+    sourceProvenance: parseSourceProvenance(row.source_provenance, row.provider),
     startedAt: row.started_at, completedAt: row.completed_at,
   };
 }
@@ -135,18 +207,20 @@ async function startRun(input) {
 }
 
 async function finishRun(input) {
-  const allowed = new Set(['churchId', 'provider', 'runId', 'status', 'counts', 'externalWatermark']);
+  const allowed = new Set(['churchId', 'provider', 'runId', 'status', 'counts', 'externalWatermark', 'sourceProvenance']);
   assertAllowlistedInput(input, allowed, 'Run finish');
-  const { churchId, provider, runId, status, counts, externalWatermark = null } = input;
+  const { churchId, provider, runId, status, counts, externalWatermark = null, sourceProvenance = null } = input;
   assertProvider(provider);
   if (!FINISHED_STATUSES.has(status)) throw new Error('Invalid completed run status');
   const safeCounts = sanitiseCounts(counts);
   const safeWatermark = normaliseSafeAuditText(externalWatermark, 'External watermark');
+  const safeSourceProvenance = sanitiseSourceProvenance(sourceProvenance, provider);
   await getRunningRun(runId, churchId, provider);
-  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = ?, counts = ?, external_watermark = ?,
+  const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = ?, counts = ?, external_watermark = ?, source_provenance = ?,
       error_code = NULL, error_message = NULL, completed_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND status = 'running'`,
-  [status, JSON.stringify(safeCounts), safeWatermark, runId, churchId, provider]);
+  [status, JSON.stringify(safeCounts), safeWatermark,
+    safeSourceProvenance === null ? null : JSON.stringify(safeSourceProvenance), runId, churchId, provider]);
   if (result.affectedRows !== 1) throw new Error('Only running runs can be finalized');
   return toRun(await getRunForChurch(runId, churchId, provider));
 }
@@ -160,7 +234,7 @@ async function failRun(input) {
   const safeErrorMessage = normaliseSafeAuditText(errorMessage, 'Run error message');
   await getRunningRun(runId, churchId, provider);
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_runs SET status = 'failed', error_code = ?, error_message = ?,
-      counts = '{}', external_watermark = NULL, review_notification_fingerprint = NULL, completed_at = datetime('now')
+      counts = '{}', external_watermark = NULL, source_provenance = NULL, review_notification_fingerprint = NULL, completed_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND status = 'running'`,
   [safeErrorCode, safeErrorMessage, runId, churchId, provider]);
   if (result.affectedRows !== 1) throw new Error('Only running runs can be finalized');
@@ -203,5 +277,6 @@ module.exports = {
   setReviewNotificationFingerprint,
   findLatestReviewNotificationFingerprint,
   listRecentRuns,
+  validateSourceProvenance,
   COUNT_KEYS,
 };

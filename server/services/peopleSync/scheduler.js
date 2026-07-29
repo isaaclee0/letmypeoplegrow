@@ -56,12 +56,10 @@ function isDueToday(frequency, day, now = new Date()) {
   return now.getDay() === targetDay;
 }
 
-// Church-wide (not per-batch) setting: how often a scheduled run must force
-// a FULL snapshot regardless of a batch's own incremental watermark — see
-// people_sync_settings.full_reconciliation_frequency/day
-// (server/config/schema.js) and the project's global two-consecutive-
-// full-reconciliations disappearance rule, which an incremental fetch can
-// never satisfy on its own (see plan.js/orchestrator.js).
+// Legacy church-wide reconciliation setting retained for stored-data and
+// dependency-injection compatibility. Provider-owned source membership is
+// always read as a complete source set, so this cadence no longer chooses a
+// fetch mode.
 async function defaultGetFullReconciliationSchedule(churchId) {
   const rows = await Database.queryForChurch(
     churchId,
@@ -106,20 +104,12 @@ async function runChurch(churchId, options = {}) {
       return;
     }
 
-    let reconciliationSchedule;
-    try {
-      reconciliationSchedule = await getFullReconciliationSchedule(churchId);
-    } catch (err) {
-      logger.error(`peopleSync scheduler: failed to load full-reconciliation schedule for church ${churchId}: ${err.message}`);
-      reconciliationSchedule = { frequency: 'weekly', day: 1 };
-    }
-    // Once per the configured cadence (default weekly), force every due
-    // batch's run to fetch a complete full snapshot this cycle — otherwise
-    // an authoritative provider whose batches only ever run incrementally
-    // could never accumulate the two consecutive full reconciliations the
-    // disappearance-archive rule requires.
-    const forceFullToday = skipScheduleCheck ||
-      isDueToday(reconciliationSchedule.frequency, reconciliationSchedule.day, now);
+    // Provider-owned source membership has no provider-neutral incremental
+    // contract. Every due source batch is therefore a complete full read;
+    // the legacy church-wide reconciliation cadence no longer changes fetch
+    // mode (it remains available in settings for backward compatibility).
+    void getFullReconciliationSchedule;
+    const forceFullToday = true;
 
     for (const provider of providers) {
       // Only the current authority may run unattended lifecycle

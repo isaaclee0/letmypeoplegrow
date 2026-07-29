@@ -4,9 +4,9 @@
 // (defaulting to orchestrator.runUnattended in production) that owns its
 // own audit-trail (startRun/finishRun/failRun) and review notification
 // internally — this file only tests what scheduler.js itself still owns:
-// due-batch selection, the authority/connection gates, forcing a full
-// snapshot on the configured full-reconciliation day, per-batch isolation
-// on failure, and persisting each batch's own last-sync bookkeeping via
+// due-batch selection, the authority/connection gates, always requesting a
+// complete source read, per-batch isolation on failure, and persisting each
+// batch's own last-sync bookkeeping via
 // recordBatchResult. The one real piece of infrastructure exercised is
 // Database.setChurchContext itself (a plain AsyncLocalStorage wrapper —
 // see config/database.js), used to verify background work actually runs
@@ -183,14 +183,14 @@ test('an absent connection (never migrated/connected yet) does not block dispatc
   assert.deepEqual(executed, [14]);
 });
 
-test('a batch that throws is not recorded, and does not stop the next batch', async () => {
+test('a missing-source failure is not recorded as applied and does not stop the next due batch', async () => {
   const executedIds = [];
   const recorded = [];
   await runChurch('church-a', baseOptions({
     listBatches: async () => [baseBatch({ id: 30 }), baseBatch({ id: 31 })],
     runUnattended: async ({ batchId }) => {
       executedIds.push(batchId);
-      if (batchId === 30) throw new Error('simulated failure');
+      if (batchId === 30) throw Object.assign(new Error('source missing'), { code: 'SYNC_SOURCE_UNAVAILABLE' });
       return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: 'wm-31' };
     },
     recordBatchResult: async (input) => { recorded.push(input); },
@@ -209,20 +209,20 @@ test('a null result (no summary produced) is not recorded', async () => {
   assert.deepEqual(recorded, []);
 });
 
-test('a successful run records the batch result with trigger "scheduled" and the returned fetch mode/watermark/status', async () => {
+test('a successful source run records full fetch mode with trigger "scheduled"', async () => {
   const recorded = [];
   await runChurch('church-a', baseOptions({
     listBatches: async () => [baseBatch({ id: 50 })],
-    runUnattended: async () => ({ status: 'review_required', fetchMode: 'incremental', complete: true, externalWatermark: 'wm-50' }),
+    runUnattended: async () => ({ status: 'review_required', fetchMode: 'full', complete: true, externalWatermark: null }),
     recordBatchResult: async (input) => { recorded.push(input); },
   }));
   assert.deepEqual(recorded, [{
     churchId: 'church-a', provider: 'planning_center', batchId: 50, trigger: 'scheduled',
-    fetchMode: 'incremental', complete: true, status: 'review_required', externalWatermark: 'wm-50',
+    fetchMode: 'full', complete: true, status: 'review_required', externalWatermark: null,
   }]);
 });
 
-test('forceFull is true on the configured full-reconciliation day and threaded into runUnattended', async () => {
+test('source schedules thread forceFull into runUnattended', async () => {
   const seen = [];
   await runChurch('church-a', baseOptions({
     listBatches: async () => [baseBatch({ id: 60 })],
@@ -232,14 +232,14 @@ test('forceFull is true on the configured full-reconciliation day and threaded i
   assert.deepEqual(seen, [true]);
 });
 
-test('forceFull is false on a day that does not match the full-reconciliation schedule', async () => {
+test('provider source schedules always request a full read even off the legacy reconciliation cadence', async () => {
   const seen = [];
   await runChurch('church-a', baseOptions({
     listBatches: async () => [baseBatch({ id: 61 })],
     getFullReconciliationSchedule: async () => ({ frequency: 'weekly', day: 3 }), // Wednesday, not MONDAY
     runUnattended: async ({ forceFull }) => { seen.push(forceFull); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
   }));
-  assert.deepEqual(seen, [false]);
+  assert.deepEqual(seen, [true]);
 });
 
 test('skipScheduleCheck forces forceFull true regardless of the reconciliation schedule', async () => {
@@ -253,11 +253,11 @@ test('skipScheduleCheck forces forceFull true regardless of the reconciliation s
   assert.deepEqual(seen, [true]);
 });
 
-test('a failure loading the full-reconciliation schedule falls back to weekly/day-1 rather than aborting the church', async () => {
+test('legacy full-reconciliation cadence is not consulted for provider-owned source runs', async () => {
   const executed = [];
   await runChurch('church-a', baseOptions({
     listBatches: async () => [baseBatch({ id: 70 })],
-    getFullReconciliationSchedule: async () => { throw new Error('boom'); },
+    getFullReconciliationSchedule: async () => { throw new Error('legacy cadence should not be read'); },
     runUnattended: async ({ batchId }) => { executed.push(batchId); return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null }; },
   }));
   assert.deepEqual(executed, [70]);

@@ -221,7 +221,7 @@ async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveInd
  * projection) are NOT this function's concern — they belong outside/after
  * the critical transaction, in whichever caller wires up that provider.
  */
-async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false, filterPromotion = null }) {
+async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false, sourcePromotion = null }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
   if (!plan || typeof plan !== 'object') throw new Error('A plan is required to apply');
@@ -487,12 +487,12 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
     }
 
-    if (filterPromotion) {
-      await batchRepository.promoteFilterDraftWithConnection(conn, {
+    if (sourcePromotion) {
+      await batchRepository.promoteSourceDraftWithConnection(conn, {
         churchId, provider,
-        batchId: filterPromotion.batchId,
-        expectedBaseRevision: filterPromotion.expectedBaseRevision,
-        expectedDraftDigest: filterPromotion.expectedDraftDigest,
+        batchId: sourcePromotion.batchId,
+        expectedBaseRevision: sourcePromotion.expectedBaseRevision,
+        expectedDraftDigest: sourcePromotion.expectedDraftDigest,
       });
     }
 

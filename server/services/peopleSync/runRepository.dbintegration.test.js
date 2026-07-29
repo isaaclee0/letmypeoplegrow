@@ -140,3 +140,63 @@ test('malformed stored run counts are returned as an empty safe projection', asy
     assert.deepEqual((await listRecentRuns(churchId, 'elvanto'))[0].counts, {});
   });
 });
+
+function provenance(overrides = {}) {
+  return {
+    batchId: 1,
+    sourceKind: 'elvanto_group',
+    sourceExternalId: 'group-1',
+    sourceName: 'Members',
+    memberCount: 2,
+    providerRefreshedAt: null,
+    fetchedAt: '2026-07-29T01:00:00.000Z',
+    snapshotDigest: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+test('finished runs persist and return only validated source provenance fields', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members',
+      initialDraftSource: { kind: 'elvanto_group', externalId: 'group-1', name: 'Members' },
+    });
+    const entry = provenance({ batchId: batch.id });
+    const run = await startRun({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual', fetchMode: 'full' });
+    const finished = await finishRun({
+      churchId, provider: 'elvanto', runId: run.id, status: 'applied', counts: {}, sourceProvenance: [entry],
+    });
+    assert.deepEqual(finished.sourceProvenance, [entry]);
+    assert.deepEqual((await listRecentRuns(churchId, 'elvanto'))[0].sourceProvenance, [entry]);
+    const columns = await Database.query('PRAGMA table_info(people_sync_runs)');
+    assert.equal(columns.some((column) => column.name === 'source_provenance'), true);
+  });
+});
+
+test('source provenance rejects extra keys, raw people, credentials, and oversized values', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const invalidPayloads = [
+      [provenance({ unexpected: true })],
+      [provenance({ people: [{ id: 'person-1' }] })],
+      [provenance({ credentials: { apiKey: 'secret' } })],
+      [provenance({ sourceName: 'x'.repeat(40_000) })],
+      Array.from({ length: 101 }, (_, index) => provenance({ batchId: index + 1 })),
+      Array.from({ length: 100 }, (_, index) => provenance({ batchId: index + 1, sourceName: 'x'.repeat(400) })),
+    ];
+    for (const sourceProvenance of invalidPayloads) {
+      const run = await startRun({ churchId, provider: 'elvanto', batchId: null, trigger: 'manual', fetchMode: 'full' });
+      await assert.rejects(
+        finishRun({ churchId, provider: 'elvanto', runId: run.id, status: 'applied', counts: {}, sourceProvenance }),
+        /provenance|allowlisted|credential|size-bounded|too (?:long|large)/i
+      );
+    }
+  });
+});
+
+test('malformed stored source provenance is returned as an empty safe projection', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const run = await startRun({ churchId, provider: 'elvanto', batchId: null, trigger: 'manual', fetchMode: 'full' });
+    await Database.query('UPDATE people_sync_runs SET source_provenance = ? WHERE id = ? AND church_id = ?', ['{malformed', run.id, churchId]);
+    assert.deepEqual((await listRecentRuns(churchId, 'elvanto'))[0].sourceProvenance, []);
+  });
+});

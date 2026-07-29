@@ -45,7 +45,7 @@
 //     after a successful apply, and only once per successful call.
 //   - runUnattended: calls it exactly once per completed classification
 //     (whether the run ends 'applied' or 'review_required') for a
-//     COMPLETE FULL snapshot only — never for an incremental snapshot.
+//     COMPLETE FULL source set only.
 'use strict';
 
 const logger = require('../../config/logger');
@@ -60,11 +60,10 @@ const providerRegistry = require('./providerRegistry');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
 const { applyPeopleSyncPlan, validateSelections } = require('./apply');
-const { digestPlan, createReviewToken, verifyReviewToken, digestFilterConfig } = require('./planDigest');
+const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
+const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
+const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
-const filterFactsCache = require('./filterFactsCache');
-const { captureFilterSnapshotInput, normalizeProviderMetadata } = require('./filterSnapshot');
-const { requiredDimensionIdsForBatch } = require('./filterPreview');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
@@ -171,6 +170,7 @@ const defaultDeps = {
   startRun: runRepository.startRun,
   finishRun: runRepository.finishRun,
   failRun: runRepository.failRun,
+  validateSourceProvenance: runRepository.validateSourceProvenance,
   getProvider: providerRegistry.getProvider,
   listPersonLinks: linkRepository.listPersonLinks,
   listFamilyLinks: linkRepository.listFamilyLinks,
@@ -186,10 +186,8 @@ const defaultDeps = {
   createReviewToken,
   verifyReviewToken,
   notifyReviewRequired,
-  filterFactsCache,
-  captureFilterSnapshotInput,
-  normalizeProviderMetadata,
-  requiredDimensionIdsForBatch,
+  recordActiveSourceAvailable,
+  recordActiveSourceFailure,
   getUnattendedProviderEnabled: unattendedPolicy.isProviderUnattendedEnabled,
 };
 
@@ -199,52 +197,23 @@ function mergeDeps(overrides) {
 
 // ─── Small pure helpers ──────────────────────────────────────────────────────
 
-function collectCustomFieldIds(batches) {
-  const ids = new Set();
-  for (const batch of batches) {
-    if (Number(batch.filterSchemaVersion) === 2) {
-      for (const dimensionId of requiredDimensionIdsForBatch(batch) || []) {
-        if (dimensionId.startsWith('custom_field:')) ids.add(dimensionId.slice('custom_field:'.length));
-      }
-    }
-    const customFields = batch.filterConfig && Array.isArray(batch.filterConfig.customFields)
-      ? batch.filterConfig.customFields : [];
-    for (const rule of customFields) {
-      if (rule && rule.fieldId !== undefined && rule.fieldId !== null) ids.add(String(rule.fieldId));
-    }
-  }
-  return [...ids];
-}
-
-function buildEligibleByBatch(batches, people, adapter, settings) {
-  const eligibleByBatch = new Map();
-  for (const batch of batches) {
-    const eligible = new Set();
-    for (const person of people) {
-      if (Number(batch.filterSchemaVersion) === 2 && typeof adapter.isInFilterPopulation === 'function' &&
-          !adapter.isInFilterPopulation(person, settings)) continue;
-      if (adapter.isEligible(person, batch.filterConfig, batch.filterSchemaVersion)) eligible.add(String(person.id));
-    }
-    eligibleByBatch.set(batch.id, eligible);
-  }
-  return eligibleByBatch;
-}
-
 function effectiveReviewBatches(batches, batchId) {
-  if (batchId === null || batchId === undefined) return batches;
-  return batches.map((batch) => String(batch.id) === String(batchId) && batch.draftFilterConfig
-    ? { ...batch, filterSchemaVersion: batch.draftFilterSchemaVersion, filterConfig: batch.draftFilterConfig }
-    : batch);
+  return batches.map((batch) => {
+    const useDraft = batchId !== null && batchId !== undefined &&
+      String(batch.id) === String(batchId) && !!batch.draftSource;
+    return { ...batch, effectiveSource: useDraft ? batch.draftSource : batch.source, effectiveSourceIsDraft: useDraft };
+  });
 }
 
-function reviewedFilterContext(batches, batchId, snapshotId) {
-  if (batchId === null || batchId === undefined) return null;
-  const batch = batches.find((candidate) => String(candidate.id) === String(batchId));
-  if (!batch) return null;
+function reviewedSourceContext(batches, batchId, sourceProvenance) {
+  const batch = batchId === null || batchId === undefined ? null
+    : batches.find((candidate) => String(candidate.id) === String(batchId));
   return {
-    activeRevision: batch.filterRevision,
-    draftDigest: batch.draftFilterConfig ? digestFilterConfig(batch.draftFilterConfig) : null,
-    snapshotId: snapshotId || null,
+    activeRevision: batch ? batch.sourceRevision : null,
+    draftDigest: batch?.draftSource ? digestSourceIdentity(batch.draftSource) : null,
+    snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => ({
+      batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest,
+    })).sort((left, right) => Number(left.batchId) - Number(right.batchId)),
   };
 }
 
@@ -304,14 +273,6 @@ function heldCountsFromPlan(plan) {
 
 function hasHeldItems(plan) {
   return HELD_REVIEW_BUCKETS.some((bucket) => plan[bucket].length > 0);
-}
-
-function isCompleteFullSnapshot(snapshot) {
-  return !!snapshot && snapshot.mode === 'full' && snapshot.complete === true;
-}
-
-function seenExternalIdsFrom(snapshot) {
-  return new Set((snapshot.people || []).map((person) => String(person.id)));
 }
 
 function stripRawFields(action) {
@@ -380,12 +341,15 @@ async function safeFailRun(deps, { churchId, provider, runId, error }) {
 // 'running' with no diagnostic trail at all).
 //
 // finishRun itself mirrors safeFailRun's own two-attempt pattern: on
-// failure, retry once with a minimal payload (empty counts, no watermark)
-// so the row still reaches a terminal status; only falls through to
-// log-only (leaving the row 'running') if that retry also fails. Nothing
-// here may ever route through safeFailRun/failRun — a run that already
-// mutated real data must never be recorded 'failed'.
-async function finishAppliedRun(deps, { churchId, provider, runId, plan, applyResult, externalWatermark, reviewRequiredWhenHeld }) {
+// failure, retry once with a minimal payload (empty counts, no watermark,
+// but retaining the already-validated source provenance) so the row still
+// reaches a terminal status; only falls through to log-only (leaving the
+// row 'running') if that retry also fails. Nothing here may ever route
+// through safeFailRun/failRun — a run that already mutated real data must
+// never be recorded 'failed'.
+async function finishAppliedRun(deps, {
+  churchId, provider, runId, plan, applyResult, externalWatermark, sourceProvenance, reviewRequiredWhenHeld,
+}) {
   let status = 'applied';
   let counts = {};
   try {
@@ -396,13 +360,13 @@ async function finishAppliedRun(deps, { churchId, provider, runId, plan, applyRe
   }
 
   try {
-    await deps.finishRun({ churchId, provider, runId, status, counts, externalWatermark });
+    await deps.finishRun({ churchId, provider, runId, status, counts, externalWatermark, sourceProvenance });
   } catch (finishErr) {
     logger.error(
       `peopleSync orchestrator: failed to finish an already-applied run for church ${churchId} run ${runId}: ${finishErr.message}`
     );
     try {
-      await deps.finishRun({ churchId, provider, runId, status, counts: {}, externalWatermark: null });
+      await deps.finishRun({ churchId, provider, runId, status, counts: {}, externalWatermark: null, sourceProvenance });
     } catch (fallbackErr) {
       logger.error(
         `peopleSync orchestrator: failed to finish an already-applied run (fallback) for church ${churchId} run ${runId}: ${fallbackErr.message}`
@@ -449,50 +413,193 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const batches = providerBatches.filter((batch) => batch.enabled);
   if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);
 
-  validateBatchFilters(batches, adapter, provider);
-
   const settings = await deps.getSyncSettings(churchId);
   const authorityState = await deps.getAuthority(churchId);
 
   return { connection, credentials, adapter, batches, settings, authorityState };
 }
 
-function validateBatchFilters(batches, adapter, provider) {
-  for (const batch of batches) {
-    const validation = adapter.validateFilter(batch.filterConfig, batch.filterSchemaVersion);
-    if (!validation || validation.ok !== true) {
-      throw new OrchestratorError('SYNC_BATCH_FILTER_INVALID', `Batch ${batch.id} has an invalid ${provider} filter`, 400);
-    }
+// ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
+
+function sameSourceIdentity(left, right) {
+  return !!left && !!right && left.kind === right.kind && String(left.externalId) === String(right.externalId);
+}
+
+function sourceIncomplete(provider) {
+  return new OrchestratorError('SYNC_SOURCE_INCOMPLETE', `${provider} source did not return a complete snapshot`, 502);
+}
+
+function personId(person) {
+  const id = person?.id === null || person?.id === undefined ? '' : String(person.id);
+  return id || null;
+}
+
+function isIsoTimestamp(value, { allowNull = false } = {}) {
+  if (value === null && allowNull) return true;
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function snapshotDigestInput(snapshot) {
+  const normalizePerson = (person) => ({
+    ...person,
+    name: `${person?.firstName ?? ''}\u0000${person?.lastName ?? ''}`,
+  });
+  return {
+    ...snapshot,
+    providerRefreshedAt: snapshot.providerRefreshedAt ?? snapshot.source?.providerRefreshedAt ?? null,
+    people: (snapshot.people || []).map(normalizePerson),
+    context: (snapshot.contextPeople || []).map(normalizePerson),
+    families: (snapshot.families || []).map((family) => ({
+      ...family,
+      primaryContactId: family?.primaryContactId ?? family?.primaryContactExternalId ?? null,
+    })),
+  };
+}
+
+async function recordSourceFailureSafely(deps, input) {
+  try {
+    await deps.recordActiveSourceFailure(input);
+  } catch (healthError) {
+    logger.error(`peopleSync orchestrator: failed to record source health for church ${input.churchId} batch ${input.batchId}: ${healthError.message}`);
   }
 }
 
-// ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
+async function acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps }) {
+  const eligibleByBatch = new Map();
+  const seenMemberExternalIds = new Set();
+  const memberPeopleById = new Map();
+  const matchingPeopleById = new Map();
+  const familiesById = new Map();
+  const sourceProvenance = [];
+
+  for (const batch of batches) {
+    const selectedSource = batch.effectiveSource ?? batch.source;
+    if (!selectedSource) {
+      throw new OrchestratorError('SYNC_SOURCE_SELECTION_REQUIRED', `Batch ${batch.id} needs a sync source selection`, 409);
+    }
+    const activeRead = !batch.effectiveSourceIsDraft && sameSourceIdentity(selectedSource, batch.source);
+    let sourceSnapshot;
+    try {
+      sourceSnapshot = await adapter.fetchSourceSnapshot({
+        churchId,
+        credentials,
+        sourceKind: selectedSource.kind,
+        sourceExternalId: selectedSource.externalId,
+      });
+      const providerRefreshedAt = sourceSnapshot?.providerRefreshedAt ?? sourceSnapshot?.source?.providerRefreshedAt ?? null;
+      if (!sourceSnapshot || sourceSnapshot.complete !== true || sourceSnapshot.provider !== provider ||
+          !sameSourceIdentity(sourceSnapshot.source, selectedSource) ||
+          typeof sourceSnapshot.source?.name !== 'string' || !sourceSnapshot.source.name.trim() ||
+          !isIsoTimestamp(sourceSnapshot.fetchedAt) || !isIsoTimestamp(providerRefreshedAt, { allowNull: true }) ||
+          !Array.isArray(sourceSnapshot.memberExternalIds) || !Array.isArray(sourceSnapshot.people) ||
+          !Array.isArray(sourceSnapshot.contextPeople) || !Array.isArray(sourceSnapshot.families)) {
+        throw sourceIncomplete(provider);
+      }
+
+      const sourcePeopleById = new Map();
+      for (const candidate of [...sourceSnapshot.people, ...sourceSnapshot.contextPeople]) {
+        const id = personId(candidate);
+        if (!id) throw sourceIncomplete(provider);
+        if (!sourcePeopleById.has(id)) sourcePeopleById.set(id, candidate);
+      }
+      const memberIds = new Set();
+      for (const rawId of sourceSnapshot.memberExternalIds) {
+        const id = rawId === null || rawId === undefined ? '' : String(rawId);
+        const member = sourcePeopleById.get(id);
+        if (!id || !member) throw sourceIncomplete(provider);
+        memberIds.add(id);
+        seenMemberExternalIds.add(id);
+        if (!memberPeopleById.has(id)) {
+          memberPeopleById.set(id, member);
+          matchingPeopleById.set(id, member);
+        }
+      }
+      for (const contextPerson of sourceSnapshot.contextPeople) {
+        const id = personId(contextPerson);
+        if (!matchingPeopleById.has(id)) matchingPeopleById.set(id, contextPerson);
+      }
+      for (const family of sourceSnapshot.families) {
+        const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
+        if (!id) throw sourceIncomplete(provider);
+        if (!familiesById.has(id)) familiesById.set(id, family);
+      }
+
+      const eligible = new Set();
+      for (const id of memberIds) {
+        const member = sourcePeopleById.get(id);
+        if (adapter.isLifecycleEligible(member, settings)) eligible.add(id);
+      }
+      eligibleByBatch.set(batch.id, eligible);
+
+      const provenanceEntry = {
+        batchId: batch.id,
+        sourceKind: selectedSource.kind,
+        sourceExternalId: String(selectedSource.externalId),
+        sourceName: sourceSnapshot.source.name,
+        memberCount: memberIds.size,
+        providerRefreshedAt,
+        fetchedAt: sourceSnapshot.fetchedAt,
+        snapshotDigest: digestSourceSnapshot(snapshotDigestInput(sourceSnapshot)),
+      };
+      deps.validateSourceProvenance([...sourceProvenance, provenanceEntry], provider);
+      sourceProvenance.push(provenanceEntry);
+
+      if (activeRead) {
+        await deps.recordActiveSourceAvailable({
+          churchId, provider, batchId: batch.id, expectedSource: batch.source,
+          observedSource: sourceSnapshot.source, checkedAt: sourceSnapshot.fetchedAt,
+        });
+      }
+    } catch (error) {
+      const failure = error?.code ? error : sourceIncomplete(provider);
+      if (activeRead) {
+        await recordSourceFailureSafely(deps, {
+          churchId, provider, batchId: batch.id, expectedSource: batch.source,
+          code: failure.code, checkedAt: new Date().toISOString(),
+        });
+      }
+      throw failure;
+    }
+  }
+
+  const fetchedAt = sourceProvenance.map((entry) => entry.fetchedAt).sort().at(-1) || new Date().toISOString();
+  return {
+    snapshot: {
+      provider,
+      mode: 'full',
+      complete: true,
+      fetchedAt,
+      watermark: null,
+      people: [...memberPeopleById.values()],
+      families: [...familiesById.values()],
+    },
+    matchingPeople: [...matchingPeopleById.values()],
+    eligibleByBatch,
+    seenMemberExternalIds,
+    sourceProvenance,
+  };
+}
+
+function memberOnlyMatcherResult(result, memberIds) {
+  const member = (value) => memberIds.has(String(value?.externalPersonId));
+  return {
+    ...result,
+    linked: (result.linked || []).filter(member),
+    matches: (result.matches || []).filter(member),
+    ambiguous: (result.ambiguous || []).filter(member),
+    visitorMatches: (result.visitorMatches || []).filter(member),
+    archivedMatches: (result.archivedMatches || []).filter(member),
+    unmatchedExternalIds: (result.unmatchedExternalIds || []).filter((id) => memberIds.has(String(id))),
+  };
+}
 
 async function runPipelineBody({
-  churchId, provider, trigger, mode, watermark, authoritative, activeAuthority,
+  churchId, provider, trigger, authoritative, activeAuthority,
   batches, settings, credentials, adapter, deps,
 }) {
-  // 4. fetch snapshot
-  const customFieldIds = collectCustomFieldIds(batches);
-  const snapshot = await adapter.fetchSnapshot({ churchId, credentials, mode, watermark, customFieldIds });
-  if (!snapshot || snapshot.complete !== true) {
-    throw new OrchestratorError('SYNC_FETCH_INCOMPLETE', `${provider} fetch did not return a complete snapshot`, 502);
-  }
-
-  let filterSnapshotId = null;
-  if (isCompleteFullSnapshot(snapshot) && typeof adapter.fetchMetadata === 'function' &&
-      typeof adapter.toFilterFacts === 'function' && typeof adapter.buildFilterDimensions === 'function' &&
-      typeof adapter.isInFilterPopulation === 'function') {
-    const coveredDimensionIds = [...new Set(batches.flatMap((batch) => deps.requiredDimensionIdsForBatch(batch) || []))].sort();
-    const metadataResult = await adapter.fetchMetadata({ churchId, credentials, snapshot, force: false });
-    const providerMetadata = deps.normalizeProviderMetadata(provider, metadataResult);
-    const captured = deps.captureFilterSnapshotInput({ provider, snapshot, providerMetadata, settings, coveredDimensionIds, adapter });
-    const entry = deps.filterFactsCache.putComplete({
-      churchId, provider, mode: 'full', complete: true, coveredDimensionIds,
-      facts: captured.facts, dimensions: captured.dimensions, populationGateDigest: captured.populationGateDigest,
-    });
-    filterSnapshotId = entry.snapshotId;
-  }
+  // 4. Fetch every provider-owned source sequentially and build one member union.
+  const acquired = await acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps });
+  const { snapshot } = acquired;
 
   // 5. load local state/links and existing missing counters
   const [individuals, families, personLinks, familyLinks, gatheringMemberships] = await Promise.all([
@@ -504,25 +611,24 @@ async function runPipelineBody({
   ]);
 
   // 6. match
-  const matcherResult = deps.matchPeople({
-    externalPeople: snapshot.people,
+  const matcherResult = memberOnlyMatcherResult(deps.matchPeople({
+    externalPeople: acquired.matchingPeople,
     localPeople: individuals,
     existingLinks: personLinks.map((link) => ({ externalPersonId: link.externalPersonId, individualId: link.individualId })),
-    externalFamilyMembers: groupMembersByFamily(snapshot.people),
+    externalFamilyMembers: groupMembersByFamily(acquired.matchingPeople),
     localFamilyMembers: groupMembersByFamily(individuals),
-  });
+  }), acquired.seenMemberExternalIds);
 
   // 7. compute the plan (plan.js's own presenceProjection computes the
   // projected next missing count for a complete full snapshot from the
   // personLinks passed in here — this module never re-derives that logic).
-  const eligibleByBatch = buildEligibleByBatch(batches, snapshot.people, adapter, settings);
   const plan = deps.computePeopleSyncPlan({
     provider,
     externalPeople: snapshot.people,
     localPeople: individuals,
     matcher: matcherResult,
     batches,
-    eligibleByBatch,
+    eligibleByBatch: acquired.eligibleByBatch,
     settings,
     authoritative,
     activeAuthority,
@@ -535,7 +641,7 @@ async function runPipelineBody({
     gatheringMemberships,
   });
 
-  return { snapshot, filterSnapshotId, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
+  return { ...acquired, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
 }
 
 // ─── buildReview ─────────────────────────────────────────────────────────────
@@ -555,7 +661,6 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
-  validateBatchFilters(reviewBatches, pre.adapter, provider);
   const authoritative = pre.authorityState.active === provider;
   const activeAuthority = pre.authorityState.active;
 
@@ -567,7 +672,7 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
-    body.plan.filterContext = reviewedFilterContext(pre.batches, batchId, body.filterSnapshotId);
+    body.plan.sourceContext = reviewedSourceContext(pre.batches, batchId, body.sourceProvenance);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -575,7 +680,7 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
 
     await deps.finishRun({
       churchId, provider, runId: run.id, status: 'review_required',
-      counts: countsFromPlan(body.plan), externalWatermark: body.snapshot.watermark,
+      counts: countsFromPlan(body.plan), externalWatermark: null, sourceProvenance: body.sourceProvenance,
     });
 
     return {
@@ -625,7 +730,7 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
-    body.plan.filterContext = reviewedFilterContext(pre.batches, null, body.filterSnapshotId);
+    body.plan.sourceContext = reviewedSourceContext(pre.batches, null, body.sourceProvenance);
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -633,7 +738,7 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
 
     await deps.finishRun({
       churchId, provider, runId: run.id, status: 'review_required',
-      counts: countsFromPlan(body.plan), externalWatermark: body.snapshot.watermark,
+      counts: countsFromPlan(body.plan), externalWatermark: null, sourceProvenance: body.sourceProvenance,
     });
 
     return {
@@ -688,7 +793,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
-  validateBatchFilters(reviewBatches, pre.adapter, provider);
   const isAuthoritySwitch = pre.authorityState.pending === provider;
   const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
   const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
@@ -711,7 +815,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
-    body.plan.filterContext = reviewedFilterContext(pre.batches, batchId, body.filterSnapshotId);
+    body.plan.sourceContext = reviewedSourceContext(pre.batches, batchId, body.sourceProvenance);
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
     if (!verification.ok) {
@@ -730,10 +834,10 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
       activateAuthority: isAuthoritySwitch,
-      filterPromotion: reviewedBatch?.draftFilterConfig ? {
+      sourcePromotion: reviewedBatch?.draftSource ? {
         batchId: reviewedBatch.id,
-        expectedBaseRevision: reviewedBatch.draftFilterBaseRevision,
-        expectedDraftDigest: digestFilterConfig(reviewedBatch.draftFilterConfig),
+        expectedBaseRevision: reviewedBatch.draftSourceBaseRevision,
+        expectedDraftDigest: digestSourceIdentity(reviewedBatch.draftSource),
       } : null,
     });
   } catch (err) {
@@ -742,14 +846,12 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   }
 
   // 9. persist full-fetch presence at most once. applyReviewed always
-  // re-fetched a full snapshot above, so this is unconditional here
-  // (unlike runUnattended, which may see an incremental snapshot).
-  if (isCompleteFullSnapshot(body.snapshot)) {
-    try {
-      await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
-    } catch (presenceErr) {
-      logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-    }
+  // re-fetched the complete provider-owned source set above, so this is
+  // unconditional here.
+  try {
+    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, { complete: true });
+  } catch (presenceErr) {
+    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
   }
 
   // 10. classify and finish the audit run — see finishAppliedRun's own
@@ -757,7 +859,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   // mergeAppliedCounts()/finishRun() pair.
   const { status } = await finishAppliedRun(deps, {
     churchId, provider, runId: run.id, plan: body.plan, applyResult,
-    externalWatermark: body.snapshot.watermark, reviewRequiredWhenHeld: false,
+    externalWatermark: null, sourceProvenance: body.sourceProvenance, reviewRequiredWhenHeld: false,
   });
 
   return {
@@ -783,6 +885,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 // watching in real time — unlike buildReview/applyReviewed, which are
 // always interactive, so they never call notifyReviewRequired themselves).
 async function runUnattended({ churchId, provider, batchId, forceFull = false, trigger = 'scheduled' } = {}, overrides = {}) {
+  void forceFull; // Provider-owned sources have only a complete full-snapshot contract.
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
   assertProvider(provider);
@@ -809,14 +912,13 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     );
   }
 
-  const requestedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-  if (pre.batches.some((batch) => batchRepository.isInitialFilterReviewPending(batch))) {
-    throw new OrchestratorError('SYNC_FILTER_INITIAL_REVIEW_REQUIRED', 'The initial filter must be reviewed before unattended sync can run', 409);
+  if (pre.batches.some((batch) => batch.draftSource)) {
+    throw new OrchestratorError('SYNC_SOURCE_REVIEW_REQUIRED', 'A source selection draft must be reviewed before unattended sync can run', 409);
   }
-  if (pre.batches.some((batch) => batch.filterSchemaVersion === 2 && batch.draftFilterConfig)) {
-    throw new OrchestratorError('SYNC_FILTER_REVIEW_REQUIRED', 'A schema-2 filter draft must be reviewed before unattended sync can run', 409);
+  if (pre.batches.some((batch) => !batch.source)) {
+    throw new OrchestratorError('SYNC_SOURCE_SELECTION_REQUIRED', 'Every enabled batch needs a sync source before unattended sync can run', 409);
   }
-  const mode = (forceFull || !requestedBatch.lastExternalWatermark) ? 'full' : 'incremental';
+  const mode = 'full';
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
 
@@ -828,8 +930,8 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   let applyResult;
   try {
     body = await runPipelineBody({
-      churchId, provider, trigger, mode, watermark: requestedBatch.lastExternalWatermark || undefined,
-      authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
+      churchId, provider, trigger,
+      authoritative: true, activeAuthority: provider, batches: effectiveReviewBatches(pre.batches, null), settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
@@ -842,14 +944,11 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     throw err;
   }
 
-  // 9. persist full-fetch presence at most once, only for a complete full
-  // snapshot. Best-effort: a failure here is logged and never retried.
-  if (isCompleteFullSnapshot(body.snapshot)) {
-    try {
-      await deps.recordFullFetchPresence(churchId, provider, seenExternalIdsFrom(body.snapshot), { complete: true });
-    } catch (presenceErr) {
-      logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-    }
+  // 9. persist member-only full-fetch presence exactly once after apply.
+  try {
+    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, { complete: true });
+  } catch (presenceErr) {
+    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
   }
 
   // 10. classify and finish the audit run — see finishAppliedRun's own
@@ -857,7 +956,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   // hasHeldItems()/mergeAppliedCounts()/finishRun() sequence.
   const { status, counts } = await finishAppliedRun(deps, {
     churchId, provider, runId: run.id, plan: body.plan, applyResult,
-    externalWatermark: body.snapshot.watermark, reviewRequiredWhenHeld: true,
+    externalWatermark: null, sourceProvenance: body.sourceProvenance, reviewRequiredWhenHeld: true,
   });
 
   if (status === 'review_required') {

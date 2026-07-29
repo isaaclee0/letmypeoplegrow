@@ -281,6 +281,33 @@ test('GET /runs gives SYNC_RUN_FAILED, SYNC_REVIEW_SECRET, and ELVANTO_RECONNECT
   });
 });
 
+test('GET /runs maps source-selection, review, availability, completeness, auth, and rate-limit failures to safe messages', async () => {
+  const codes = [
+    'SYNC_SOURCE_SELECTION_REQUIRED',
+    'SYNC_SOURCE_REVIEW_REQUIRED',
+    'SYNC_SOURCE_UNAVAILABLE',
+    'SYNC_SOURCE_INCOMPLETE',
+    'SYNC_SOURCE_AUTH',
+    'SYNC_SOURCE_RATE_LIMIT',
+  ];
+  await withServer({
+    listAllRecentRuns: async () => codes.map((errorCode, index) => ({
+      id: index + 1,
+      provider: 'elvanto',
+      status: 'failed',
+      errorCode,
+      errorMessage: `raw provider detail ${index} apiKey=super-secret`,
+    })),
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/runs`);
+    assert.equal(status, 200);
+    const fallback = 'This sync run failed for an unrecognized reason. See server logs for details.';
+    assert.deepEqual(body.runs.map((run) => run.errorCode), codes);
+    assert.equal(body.runs.every((run) => run.errorMessage && run.errorMessage !== fallback), true);
+    assert.equal(/raw provider detail|super-secret|apiKey/.test(JSON.stringify(body)), false);
+  });
+});
+
 // ─── Request validation ──────────────────────────────────────────────────────
 
 test('PUT /settings rejects an empty body', async () => {

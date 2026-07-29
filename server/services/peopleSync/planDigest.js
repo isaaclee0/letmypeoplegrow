@@ -35,7 +35,14 @@ function canonicalize(value, path = []) {
   if (typeof value === 'number' && !Number.isFinite(value)) {
     throw new TypeError('Canonical JSON values must contain only finite numbers');
   }
-  if (Array.isArray(value)) return value.map((item, index) => canonicalize(item, [...path, String(index)]));
+  if (Array.isArray(value)) {
+    const normalized = value.map((item, index) => canonicalize(item, [...path, String(index)]));
+    if (path.join('.') === 'sourceContext.snapshots') {
+      normalized.sort((left, right) => Number(left?.batchId) - Number(right?.batchId) ||
+        JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    }
+    return normalized;
+  }
   if (!isPlainObject(value)) return value;
   const normalized = {};
   for (const key of Object.keys(value).sort()) {
