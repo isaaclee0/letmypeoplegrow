@@ -341,8 +341,8 @@ app.use(cors({
 // This narrow parser must precede the general 10 MiB parser. It enforces the
 // filter builder's 64 KiB raw-byte boundary for both Content-Length and
 // chunked requests without changing unrelated API upload limits.
-const { createFilterBuilderJsonParser } = require('./routes/integrations/filterBuilder');
-app.use('/api/integrations/people-sync/providers', createFilterBuilderJsonParser());
+const { createSourceBuilderJsonParser } = require('./routes/integrations/sourceBuilder');
+app.use('/api/integrations/people-sync/providers', createSourceBuilderJsonParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

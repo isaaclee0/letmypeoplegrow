@@ -8,7 +8,6 @@ const pcoSync = require('../services/planningCenterSync');
 const { tallyField } = require('../services/planningCenter/summary');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const metadataCache = require('../services/planningCenter/metadataCache');
-const { isEligible } = require('../services/planningCenter/eligibility');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
@@ -1463,65 +1462,11 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     };
     const batch = await pcoSync.updateBatch(churchId, batchId, settings);
 
-    // Backfill: the moment this toggle flips off -> on for a batch with a
-    // gathering assigned, claim ownership of existing gathering_lists rows this
-    // batch would itself currently add — so stale members already on the roster
-    // before this feature (or before this toggle) existed get caught on the very
-    // next sync, not just future drift. Rows that don't qualify (unlinked,
-    // inactive, or linked-but-non-matching) are left permanently unowned — never
-    // a candidate for auto-removal, same protection manual additions get.
-    if (!existing.gatheringAutoRemoveEnabled && batch.gatheringAutoRemoveEnabled && batch.gatheringTypeId) {
-      try {
-        const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-        if (accessToken) {
-          const { people: pcoPeople } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
-          const pcoById = new Map(pcoPeople.map((p) => [p.id, p]));
-          const filterConfig = pcoSync.batchFilterConfig(batch);
-          const candidates = await Database.query(
-            `SELECT gl.id, i.planning_center_id AS pcoId
-               FROM gathering_lists gl
-               JOIN individuals i ON i.id = gl.individual_id AND i.church_id = gl.church_id
-              WHERE gl.gathering_type_id = ? AND gl.added_by_pco_batch_id IS NULL
-                AND gl.church_id = ? AND i.planning_center_id IS NOT NULL AND i.is_active = 1`,
-            [batch.gatheringTypeId, churchId]
-          );
-          let claimed = 0;
-          const backfillErrors = [];
-          for (const row of candidates) {
-            const person = pcoById.get(row.pcoId);
-            if (person && person.status === 'active' && isEligible(person, filterConfig)) {
-              try {
-                // batch.id is the canonical people_sync_batches id
-                // (added_by_sync_batch_id); batch.legacyProviderBatchId is the
-                // dual-written planning_center_sync_batches id
-                // (added_by_pco_batch_id, the column the candidates query above
-                // and the auto-remove ownership query further up this file
-                // still filter by) — see toLegacyPcoBatchDto in planningCenterSync.js.
-                await Database.query(
-                  `UPDATE gathering_lists SET added_by_pco_batch_id = ?, added_by_sync_batch_id = ? WHERE id = ? AND church_id = ?`,
-                  [batch.legacyProviderBatchId, batch.id, row.id, churchId]
-                );
-                claimed++;
-              } catch (e) {
-                backfillErrors.push({ id: row.id, error: e.message });
-              }
-            }
-          }
-          if (backfillErrors.length > 0) {
-            logger.warn('PCO gathering-ownership backfill had per-row failures', {
-              churchId, batchId: batch.id, candidateCount: candidates.length, claimed, errors: backfillErrors,
-            });
-          }
-        }
-      } catch (e) {
-        // Best-effort: a PCO token/fetch failure here must never block saving the
-        // batch's own settings (the UPDATE above already committed). Surface it in
-        // logs only — the backfill will simply be incomplete until the next attempt.
-        logger.warn('PCO gathering-ownership backfill failed to run', {
-          churchId, batchId: batch.id, error: e.message,
-        });
-      }
-    }
+    // Existing gathering membership stays unowned when a source-era batch
+    // enables auto-removal. Its provider-owned source must be reviewed and
+    // applied before the batch can establish ownership; recreating the old
+    // client-side filter eligibility check here would be both unsafe and
+    // semantically wrong.
 
     res.json({ success: true, batch });
   } catch (error) {

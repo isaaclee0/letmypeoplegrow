@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
-const { createSourceBuilderRouter } = require('./sourceBuilder');
+const { createSourceBuilderRouter, createSourceBuilderJsonParser } = require('./sourceBuilder');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 const NON_ADMIN = { id: 2, church_id: 'churcha1', role: 'attendance_taker' };
@@ -114,4 +114,24 @@ test('DELETE source draft refuses an initial review and discards a normal draft'
     assert.equal(response.body.code, 'SYNC_SOURCE_INITIAL_REVIEW_REQUIRED');
     assert.equal(JSON.stringify(response.body).includes('secret'), false);
   });
+});
+
+test('the source parser wins over a broader app parser and returns the source-specific body-limit response', async () => {
+  const app = express();
+  app.use('/providers', createSourceBuilderJsonParser());
+  app.use(express.json({ limit: '10mb' }));
+  app.use((req, res, next) => { req.user = ADMIN; next(); });
+  app.use('/providers', createSourceBuilderRouter(deps()));
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/providers/planning_center/sync-batches/8/source-draft`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceKind: 'planning_center_list', sourceExternalId: 'x'.repeat(20 * 1024) }),
+    });
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), { error: 'Invalid sync source request.', code: 'SYNC_SOURCE_INVALID' });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

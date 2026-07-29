@@ -146,4 +146,4 @@ function createSourceBuilderRouter(overrides = {}) {
   return router;
 }
 
-module.exports = { createSourceBuilderRouter, safeSource, safeBatch, defaultDeps, MAX_BODY_BYTES };
+module.exports = { createSourceBuilderRouter, createSourceBuilderJsonParser: createJsonParser, safeSource, safeBatch, defaultDeps, MAX_BODY_BYTES };
