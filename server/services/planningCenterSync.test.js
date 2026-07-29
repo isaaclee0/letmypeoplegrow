@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('./planningCenterSync');
+const { PcoSourceError } = require('./planningCenter/readClient');
 
 test('isDueToday retains daily, weekly, and monthly scheduling semantics', () => {
   assert.equal(pcoSync.isDueToday('daily', 1, new Date('2026-07-06T02:00:00')), true);
@@ -27,4 +28,32 @@ test('Planning Center batches persist only a provider-owned source draft', async
     assert.equal(row.source_kind, null);
     assert.equal(row.draft_source_kind, 'planning_center_list');
   });
+});
+
+test('withPlanningCenterSourceToken force-refreshes once after a source 401', async () => {
+  const originalGetAccessTokenForChurch = pcoSync.getAccessTokenForChurch;
+  const tokenCalls = [];
+  let sourceReadAttempts = 0;
+  pcoSync.getAccessTokenForChurch = async (_churchId, options) => {
+    tokenCalls.push(options || {});
+    return tokenCalls.length === 1 ? 'old-access' : 'new-access';
+  };
+
+  try {
+    const result = await pcoSync.withPlanningCenterSourceToken('church-a', async (accessToken) => {
+      sourceReadAttempts++;
+      if (sourceReadAttempts === 1) {
+        assert.equal(accessToken, 'old-access');
+        throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+      }
+      assert.equal(accessToken, 'new-access');
+      return 'snapshot';
+    });
+
+    assert.equal(result, 'snapshot');
+    assert.equal(sourceReadAttempts, 2);
+    assert.deepEqual(tokenCalls, [{}, { forceRefresh: true }]);
+  } finally {
+    pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
+  }
 });

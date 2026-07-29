@@ -2,6 +2,7 @@ const https = require('https');
 const Database = require('../config/database');
 const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
+const { PcoSourceError } = require('./planningCenter/readClient');
 const batchRepository = require('./peopleSync/batchRepository');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
@@ -180,16 +181,16 @@ async function requestPcoTokenRefresh(refreshTokenValue) {
 // call-site compatibility with every existing caller (makePlanningCenterRequest,
 // fetchAllCheckinsUncached, getAccessTokenForChurch below) — PCO connections
 // are church-scoped, so it is otherwise unused.
-async function ensureValidPlanningCenterTokens(userId, churchId, tokens) {
+async function ensureValidPlanningCenterTokens(userId, churchId, tokens, { forceRefresh = false } = {}) {
   if (!tokens) return null;
   const fresh = await pcoCredentialMigration.ensureFreshCredentials(
-    churchId, toStoredCredentials(tokens), requestPcoTokenRefresh
+    churchId, toStoredCredentials(tokens), requestPcoTokenRefresh, { forceRefresh }
   );
   return toLegacyTokenShape(fresh);
 }
 
-async function getValidAccessToken(churchId, userId, tokens) {
-  const fresh = await ensureValidPlanningCenterTokens(userId, churchId, tokens);
+async function getValidAccessToken(churchId, userId, tokens, { forceRefresh = false } = {}) {
+  const fresh = await ensureValidPlanningCenterTokens(userId, churchId, tokens, { forceRefresh });
   return fresh ? fresh.access_token : null;
 }
 
@@ -211,10 +212,35 @@ async function validatePlanningCenterToken(accessToken) {
 // ─── Sync pipeline helpers ───────────────────────────────────────────────────
 
 // Token accessor for endpoints/cron (wraps existing helpers).
-async function getAccessTokenForChurch(churchId) {
+async function getAccessTokenForChurch(churchId, { forceRefresh = false } = {}) {
   const tokenData = await getTokensForChurch(churchId);
   if (!tokenData) return null;
-  return getValidAccessToken(churchId, tokenData.userId, tokenData.tokens);
+  return getValidAccessToken(churchId, tokenData.userId, tokenData.tokens, { forceRefresh });
+}
+
+function sourceAuthenticationError() {
+  return new PcoSourceError('Planning Center source credentials are unavailable', 'SYNC_SOURCE_AUTH', {});
+}
+
+async function withPlanningCenterSourceToken(churchId, operation) {
+  const initialToken = await module.exports.getAccessTokenForChurch(churchId);
+  if (!initialToken) throw sourceAuthenticationError();
+
+  try {
+    return await operation(initialToken);
+  } catch (error) {
+    if (!error || !error.details || error.details.status !== 401) throw error;
+  }
+
+  const refreshedToken = await module.exports.getAccessTokenForChurch(churchId, { forceRefresh: true });
+  if (!refreshedToken) throw sourceAuthenticationError();
+
+  try {
+    return await operation(refreshedToken);
+  } catch (error) {
+    if (error && error.details && error.details.status === 401) throw sourceAuthenticationError();
+    throw error;
+  }
 }
 
 // Memory-efficient: project each page, discard raw JSON + included resources.
@@ -408,7 +434,7 @@ function runNow() { return scheduler.runNow(); }
 
 module.exports = {
   start, stop, runNow, isDueToday,
-  getAccessTokenForChurch, fetchAllPcoPeople,
+  getAccessTokenForChurch, withPlanningCenterSourceToken, fetchAllPcoPeople,
   getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, createBatch, updateBatch, deleteBatch,
   recordBatchSyncResult, toLegacyPcoBatchDto,

@@ -4,10 +4,19 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createPcoAdapter } = require('./pcoAdapter');
+const { PcoSourceError } = require('../planningCenter/readClient');
 
 function adapter(deps = {}) {
+  const getAccessTokenForChurch = deps.getAccessTokenForChurch || (async () => 'fresh-token');
   return createPcoAdapter({
-    getAccessTokenForChurch: async () => 'fresh-token',
+    getAccessTokenForChurch,
+    withPlanningCenterSourceToken: async (churchId, operation) => {
+      const accessToken = await getAccessTokenForChurch(churchId);
+      if (!accessToken) {
+        throw new PcoSourceError('Planning Center source credentials are unavailable', 'SYNC_SOURCE_AUTH', {});
+      }
+      return operation(accessToken);
+    },
     validateToken: async () => ({ connected: true, accountName: 'Test Church' }),
     listSources: async () => [],
     fetchSourceSnapshot: async () => ({ complete: true, people: [] }),
@@ -59,6 +68,86 @@ test('source reads fail as authentication errors when the shared refresh manager
     () => value.listSources({ churchId: 'church-a', credentials: { accessToken: 'stale-token' } }),
     (error) => error.code === 'SYNC_SOURCE_AUTH' && !error.message.includes('stale-token')
   );
+});
+
+test('fetchSourceSnapshot uses the source-token wrapper to retry one rejected token with a refreshed token', async () => {
+  let sourceReadAttempts = 0;
+  let forceRefreshCalls = 0;
+  const value = adapter({
+    withPlanningCenterSourceToken: async (_churchId, operation) => {
+      try {
+        return await operation('old-token');
+      } catch (error) {
+        if (error.details && error.details.status !== 401) throw error;
+        forceRefreshCalls++;
+        return operation('new-token');
+      }
+    },
+    fetchSourceSnapshot: async ({ accessToken }) => {
+      sourceReadAttempts++;
+      if (accessToken === 'old-token') {
+        throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+      }
+      return { complete: true, people: [] };
+    },
+  });
+
+  const snapshot = await value.fetchSourceSnapshot({
+    churchId: 'c1', sourceKind: 'planning_center_list', sourceExternalId: 'l1',
+  });
+
+  assert.equal(snapshot.complete, true);
+  assert.equal(sourceReadAttempts, 2);
+  assert.equal(forceRefreshCalls, 1);
+});
+
+test('fetchSourceSnapshot exposes a failed forced refresh as a source authentication error', async () => {
+  let sourceReadAttempts = 0;
+  let forceRefreshCalls = 0;
+  const value = adapter({
+    withPlanningCenterSourceToken: async (_churchId, operation) => {
+      await operation('old-token').catch(() => {});
+      forceRefreshCalls++;
+      throw new PcoSourceError('Planning Center source credentials are unavailable', 'SYNC_SOURCE_AUTH', {});
+    },
+    fetchSourceSnapshot: async () => {
+      sourceReadAttempts++;
+      throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+    },
+  });
+
+  await assert.rejects(
+    () => value.fetchSourceSnapshot({ churchId: 'c1', sourceKind: 'planning_center_list', sourceExternalId: 'l1' }),
+    (error) => error.code === 'SYNC_SOURCE_AUTH'
+  );
+  assert.equal(sourceReadAttempts, 1);
+  assert.equal(forceRefreshCalls, 1);
+});
+
+test('fetchSourceSnapshot exposes a second source 401 without a third source read', async () => {
+  let sourceReadAttempts = 0;
+  let forceRefreshCalls = 0;
+  const value = adapter({
+    withPlanningCenterSourceToken: async (_churchId, operation) => {
+      try {
+        await operation('old-token');
+      } catch (_) {
+        forceRefreshCalls++;
+      }
+      return operation('new-token');
+    },
+    fetchSourceSnapshot: async () => {
+      sourceReadAttempts++;
+      throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+    },
+  });
+
+  await assert.rejects(
+    () => value.fetchSourceSnapshot({ churchId: 'c1', sourceKind: 'planning_center_list', sourceExternalId: 'l1' }),
+    (error) => error.code === 'SYNC_SOURCE_AUTH'
+  );
+  assert.equal(sourceReadAttempts, 2);
+  assert.equal(forceRefreshCalls, 1);
 });
 
 test('isLifecycleEligible excludes non-active Planning Center people without a configurable local filter', () => {

@@ -217,6 +217,75 @@ test('concurrent refresh callers for the same church share one in-flight refresh
   }));
 });
 
+test('getValidCredentials returns a non-expiring connection without refreshing by default', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: { accessToken: 'current-access', refreshToken: 'current-refresh', expiresAt: Date.now() + 7200_000 },
+    });
+
+    let refreshCalls = 0;
+    const credentials = await getValidCredentials(churchId, async () => {
+      refreshCalls++;
+      return { accessToken: 'unexpected-access', refreshToken: 'unexpected-refresh', expiresAt: Date.now() + 7200_000 };
+    });
+
+    assert.equal(refreshCalls, 0);
+    assert.equal(credentials.accessToken, 'current-access');
+    assert.equal(credentials.refreshToken, 'current-refresh');
+  }));
+});
+
+test('forced getValidCredentials refreshes and persists a non-expiring church connection', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: Date.now() + 7200_000 },
+    });
+
+    let refreshCalls = 0;
+    const refreshed = await getValidCredentials(churchId, async (refreshToken) => {
+      refreshCalls++;
+      assert.equal(refreshToken, 'old-refresh');
+      return { accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: Date.now() + 7200_000 };
+    }, { forceRefresh: true });
+
+    assert.equal(refreshCalls, 1);
+    assert.equal(refreshed.accessToken, 'new-access');
+    assert.equal((await connectionStore.getCredentials(churchId, 'planning_center')).refreshToken, 'new-refresh');
+  }));
+});
+
+test('concurrent forced getValidCredentials calls share one refresh for a church', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: Date.now() + 7200_000 },
+    });
+
+    let refreshCalls = 0;
+    const requestRefresh = async () => {
+      refreshCalls++;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: Date.now() + 7200_000 };
+    };
+    const [first, second] = await Promise.all([
+      getValidCredentials(churchId, requestRefresh, { forceRefresh: true }),
+      getValidCredentials(churchId, requestRefresh, { forceRefresh: true }),
+    ]);
+
+    assert.equal(refreshCalls, 1);
+    assert.equal(first.accessToken, 'new-access');
+    assert.equal(second.accessToken, 'new-access');
+  }));
+});
+
 test('getOrMigrateCredentials returns null when there is no connection and no legacy tokens', async () => {
   await withCredentialKey(() => withTestChurchDb(async (churchId) => {
     assert.equal(await getOrMigrateCredentials(churchId), null);

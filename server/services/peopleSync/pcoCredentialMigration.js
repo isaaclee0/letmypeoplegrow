@@ -169,9 +169,9 @@ const refreshInFlight = new Map();
 // `{ accessToken, refreshToken, expiresAt }` or a falsy value on failure —
 // callers (planningCenterSync.js) inject the real PCO HTTP call; tests inject
 // a fake so this module never makes a network call itself.
-async function ensureFreshCredentials(churchId, credentials, requestRefresh) {
+async function ensureFreshCredentials(churchId, credentials, requestRefresh, { forceRefresh = false } = {}) {
   if (!credentials || !credentials.refreshToken) return credentials || null;
-  if (!isExpiringSoon(credentials)) return credentials;
+  if (!forceRefresh && !isExpiringSoon(credentials)) return credentials;
   if (typeof requestRefresh !== 'function') {
     throw new Error('ensureFreshCredentials requires a requestRefresh(refreshToken) function');
   }
@@ -215,10 +215,10 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh) {
 
 // Convenience: read-or-migrate, then ensure freshness. The one call most
 // callers actually want.
-async function getValidCredentials(churchId, requestRefresh) {
+async function getValidCredentials(churchId, requestRefresh, { forceRefresh = false } = {}) {
   const stored = await getOrMigrateCredentials(churchId);
   if (!stored) return null;
-  return ensureFreshCredentials(churchId, stored, requestRefresh);
+  return ensureFreshCredentials(churchId, stored, requestRefresh, { forceRefresh });
 }
 
 module.exports = {
