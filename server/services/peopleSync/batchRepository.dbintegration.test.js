@@ -117,6 +117,48 @@ test('source draft promotion is compare-and-swap guarded and clears the reviewed
   });
 });
 
+test('source promotion rejects a draft replaced after its read and before its compare-and-swap update', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE });
+    const db = Database.getChurchDb(churchId);
+    await promoteSourceDraftWithConnection(db, {
+      churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
+    });
+    const reviewedDraft = { kind: 'elvanto_category', externalId: 'members', name: 'Reviewed members' };
+    const replacementDraft = { kind: 'elvanto_group', externalId: 'youth', name: 'Youth' };
+    const draft = await saveSourceDraft({ churchId, provider: 'elvanto', batchId: batch.id, source: reviewedDraft });
+    let replaced = false;
+    const raceConnection = {
+      query(sql, params) {
+        if (/^UPDATE people_sync_batches/.test(sql) && !replaced) {
+          replaced = true;
+          db.prepare(`UPDATE people_sync_batches
+            SET draft_source_kind = ?, draft_source_external_id = ?, draft_source_name = ?
+            WHERE id = ? AND church_id = ? AND provider = ?`).run(
+            replacementDraft.kind, replacementDraft.externalId, replacementDraft.name,
+            batch.id, churchId, 'elvanto',
+          );
+        }
+        if (/^SELECT/.test(sql)) return [db.prepare(sql).get(...params)];
+        return db.prepare(sql).run(...params);
+      },
+    };
+
+    await assert.rejects(
+      promoteSourceDraftWithConnection(raceConnection, {
+        churchId, provider: 'elvanto', batchId: batch.id,
+        expectedBaseRevision: draft.draftSourceBaseRevision,
+        expectedDraftDigest: digestSourceIdentity(reviewedDraft),
+      }),
+      (error) => error?.code === 'SYNC_SOURCE_DRAFT_STALE',
+    );
+    const unchanged = await getBatch(churchId, 'elvanto', batch.id);
+    assert.deepEqual(unchanged.source, ELVANTO_SOURCE);
+    assert.deepEqual(unchanged.draftSource, replacementDraft);
+  });
+});
+
 test('listEnabledBatches and delete remain scoped to church and provider', async () => {
   await withTestChurchDb(async (churchId) => {
     const otherChurchId = `${churchId}_other`;

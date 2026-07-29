@@ -158,8 +158,9 @@ async function promoteSourceDraftWithConnection(conn, {
         draft_source_name = NULL, draft_source_base_revision = NULL, draft_source_updated_at = NULL,
         source_status = 'unknown', source_status_checked_at = NULL, source_status_error_code = NULL,
         updated_at = datetime('now')
-    WHERE id = ? AND church_id = ? AND provider = ? AND source_revision = ? AND draft_source_base_revision = ?`, [
-    batchId, churchId, provider, expectedBaseRevision, expectedBaseRevision,
+    WHERE id = ? AND church_id = ? AND provider = ? AND source_revision = ? AND draft_source_base_revision = ?
+      AND draft_source_kind = ? AND draft_source_external_id = ?`, [
+    batchId, churchId, provider, expectedBaseRevision, expectedBaseRevision, draft.kind, draft.externalId,
   ]);
   if ((result.affectedRows ?? result.changes) !== 1) {
     const error = new Error('Sync source draft is stale');
