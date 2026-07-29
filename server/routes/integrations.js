@@ -726,43 +726,92 @@ router.get('/planning-center/status', async (req, res) => {
     // getAccessTokenForChurch is the single church-scoped credential owner.
     // It performs the normal refresh and persists a rotated refresh token;
     // status intentionally does not implement another refresh path.
+    let accessToken;
     try {
-      const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-      if (!accessToken) throw new Error('Planning Center credentials are unavailable');
-      const validation = await pcoSync.validatePlanningCenterToken(accessToken);
-
-      if (validation.connected) {
-        const accountName = validation.accountName || 'Connected';
-        let lastSyncResult = null;
-        try {
-          const rows = await Database.query(
-            `SELECT planning_center_last_sync_result AS r FROM church_settings WHERE church_id = ? LIMIT 1`,
-            [req.user.church_id]
-          );
-          if (rows.length && rows[0].r) lastSyncResult = JSON.parse(rows[0].r);
-        } catch (_) { lastSyncResult = null; }
+      accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+    } catch (error) {
+      if (error?.code !== 'SYNC_SOURCE_AUTH') {
         return res.json({
           enabled: true,
           configured: true,
-          connected: true,
-          planningCenterAccount: accountName,
+          connected: false,
+          planningCenterAccount: null,
           reconnectRequired: false,
           connectionErrorCode: null,
-          lastSyncResult
+          error: 'Failed to verify connection',
         });
       }
-    } catch (error) {
-      // Credential availability and a rejected /me request are recoverable
-      // through the normal OAuth authorization flow. Deliberately expose no
-      // provider or credential detail from the status probe.
     }
+
+    // An unavailable token means the normal refresh path could not provide
+    // usable credentials. This and a rejected /me request are the only
+    // cases that should ask an admin to replace the OAuth connection.
+    if (!accessToken) {
+      return res.json({
+        enabled: true,
+        configured: true,
+        connected: false,
+        planningCenterAccount: null,
+        reconnectRequired: true,
+        connectionErrorCode: 'SYNC_SOURCE_AUTH',
+      });
+    }
+
+    let validation;
+    try {
+      validation = await pcoSync.validatePlanningCenterToken(accessToken);
+    } catch (_) {
+      return res.json({
+        enabled: true,
+        configured: true,
+        connected: false,
+        planningCenterAccount: null,
+        reconnectRequired: false,
+        connectionErrorCode: null,
+        error: 'Failed to verify connection',
+      });
+    }
+
+    if (validation.connected) {
+      const accountName = validation.accountName || 'Connected';
+      let lastSyncResult = null;
+      try {
+        const rows = await Database.query(
+          `SELECT planning_center_last_sync_result AS r FROM church_settings WHERE church_id = ? LIMIT 1`,
+          [req.user.church_id]
+        );
+        if (rows.length && rows[0].r) lastSyncResult = JSON.parse(rows[0].r);
+      } catch (_) { lastSyncResult = null; }
+      return res.json({
+        enabled: true,
+        configured: true,
+        connected: true,
+        planningCenterAccount: accountName,
+        reconnectRequired: false,
+        connectionErrorCode: null,
+        lastSyncResult
+      });
+    }
+
+    if (validation.status === 401) {
+      return res.json({
+        enabled: true,
+        configured: true,
+        connected: false,
+        planningCenterAccount: null,
+        reconnectRequired: true,
+        connectionErrorCode: 'SYNC_SOURCE_AUTH',
+      });
+    }
+
     return res.json({
       enabled: true,
       configured: true,
       connected: false,
       planningCenterAccount: null,
-      reconnectRequired: true,
-      connectionErrorCode: 'SYNC_SOURCE_AUTH',
+      reconnectRequired: false,
+      connectionErrorCode: null,
+      error: 'Failed to verify connection',
     });
   } catch (error) {
     console.error('Get Planning Center status error:', error);

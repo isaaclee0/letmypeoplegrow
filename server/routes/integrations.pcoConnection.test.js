@@ -155,6 +155,57 @@ test('PCO status distinguishes a first-time connection from reconnect recovery',
   }
 });
 
+test('PCO status keeps a transient validation failure separate from credential recovery', async () => {
+  // Catches a PCO rate limit or outage incorrectly prompting an admin to replace valid credentials.
+  const previousEnabled = process.env.PLANNING_CENTER_ENABLED;
+  process.env.PLANNING_CENTER_ENABLED = 'true';
+  try {
+    await withRouteChurchDb(async ({ churchId, app }) => {
+      await seedPcoConnection(churchId);
+      await withPcoStatusStubs({
+        getAccessTokenForChurch: async () => 'current-access-token',
+        getTokensForChurch: async () => null,
+        validatePlanningCenterToken: async () => ({ connected: false, accountName: null, status: 503 }),
+      }, async () => {
+        const response = await app.request('/api/integrations/planning-center/status');
+        assert.equal(response.status, 200);
+        assert.equal(response.body.connected, false);
+        assert.equal(response.body.reconnectRequired, false);
+        assert.equal(response.body.connectionErrorCode, null);
+        assert.equal(response.body.error, 'Failed to verify connection');
+      });
+    });
+  } finally {
+    if (previousEnabled === undefined) delete process.env.PLANNING_CENTER_ENABLED;
+    else process.env.PLANNING_CENTER_ENABLED = previousEnabled;
+  }
+});
+
+test('PCO status reports reconnect required when validation rejects the access token', async () => {
+  // Catches a rejected /me response being flattened into the transient connection-error state.
+  const previousEnabled = process.env.PLANNING_CENTER_ENABLED;
+  process.env.PLANNING_CENTER_ENABLED = 'true';
+  try {
+    await withRouteChurchDb(async ({ churchId, app }) => {
+      await seedPcoConnection(churchId);
+      await withPcoStatusStubs({
+        getAccessTokenForChurch: async () => 'rejected-access-token',
+        getTokensForChurch: async () => null,
+        validatePlanningCenterToken: async () => ({ connected: false, accountName: null, status: 401 }),
+      }, async () => {
+        const response = await app.request('/api/integrations/planning-center/status');
+        assert.equal(response.status, 200);
+        assert.equal(response.body.connected, false);
+        assert.equal(response.body.reconnectRequired, true);
+        assert.equal(response.body.connectionErrorCode, 'SYNC_SOURCE_AUTH');
+      });
+    });
+  } finally {
+    if (previousEnabled === undefined) delete process.env.PLANNING_CENTER_ENABLED;
+    else process.env.PLANNING_CENTER_ENABLED = previousEnabled;
+  }
+});
+
 test('PCO disconnect is blocked while Planning Center is the authority provider', async () => {
   // Catches a direct API request bypassing the panel's guarded Disconnect flow.
   await withRouteChurchDb(async ({ churchId, app }) => {
