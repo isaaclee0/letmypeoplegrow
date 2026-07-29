@@ -5,16 +5,15 @@ const { projectPerson } = require('./planningCenter/projection');
 const batchRepository = require('./peopleSync/batchRepository');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
-// Fetching every person from Planning Center is the slow part of a sync — several
-// seconds of paginated HTTPS. That data only changes when PCO itself changes, so we
-// cache the projected people per church for a short TTL. Plan computation and the
-// membership summary both reuse it. Callers pass { force: true } to bypass the cache
-// (the "Refresh from Planning Center" button and the scheduled daily sync).
+// Fetching every person from Planning Center is slow, so the legacy manual people
+// lookup endpoints share a short-lived projected snapshot per church. Provider-owned
+// batch sources use sourceAdapter.js instead: they fetch only the selected List and
+// must never treat this broad cache as a source-membership snapshot.
 //
 // We deliberately do NOT invalidate after an apply: applying mutates local LMPG data,
 // not PCO, so recomputing the plan against the same snapshot is both cheaper and more
-// correct (you diff against exactly what was reviewed). Local state is always read
-// fresh from the DB in computePlanForChurch.
+// correct for the manual lookup flow. Local LMPG state is always read fresh by the
+// caller that needs it.
 const PCO_PEOPLE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const pcoPeopleCache = new Map(); // churchId -> { people, fetchedAt }
 

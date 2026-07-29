@@ -4,10 +4,6 @@ const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('./planningCenterSync');
 
-test('peekCachedPcoPeople returns null for a cold church without fetching', () => {
-  assert.equal(pcoSync.peekCachedPcoPeople('church-without-a-warm-cache'), null);
-});
-
 test('isDueToday retains daily, weekly, and monthly scheduling semantics', () => {
   assert.equal(pcoSync.isDueToday('daily', 1, new Date('2026-07-06T02:00:00')), true);
   assert.equal(pcoSync.isDueToday('weekly', 1, new Date('2026-07-06T02:00:00')), true);

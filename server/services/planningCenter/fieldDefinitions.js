@@ -1,14 +1,13 @@
 const { httpsGet } = require('../planningCenterSync');
 
-// Fetch PCO custom Tab field definitions, restricted to bounded-value types
-// (select/checkboxes) — the only types the sync filter UI offers, since free-text and
-// date fields have unbounded value sets. Per PCO's own API docs, the multi-select
-// checkbox data type is "checkboxes" (plural) — a single checkbox toggle isn't one of
-// the field_definition data types.
+// Fetch PCO custom Tab field definitions restricted to bounded-value types
+// (select/checkboxes). Per PCO's own API docs, the multi-select checkbox data
+// type is "checkboxes" (plural) — a single checkbox toggle isn't one of the
+// field_definition data types.
 //
 // Also resolves each field's admin-defined option list (via include=field_options),
-// so the filter UI can offer every value a church has configured — not just values
-// some currently-synced person happens to have selected.
+// so callers can display every value a church has configured — not just values
+// some currently projected person happens to have selected.
 async function fetchFieldDefinitions(accessToken) {
   const results = [];
   let next = 'https://api.planningcenteronline.com/people/v2/field_definitions?per_page=100&include=tab,field_options';

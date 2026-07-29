@@ -178,7 +178,7 @@ function ElvantoOptions({
       </label>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" checked={values.elvantoAlignPeopleType} onChange={(event) => void update('elvantoAlignPeopleType', event.target.checked)} />
-        <span><span className="font-medium">Keep people type aligned</span><span className="block text-xs text-gray-500">Keep regular and visitor lifecycle aligned with Elvanto eligibility.</span></span>
+        <span><span className="font-medium">Keep people type aligned</span><span className="block text-xs text-gray-500">Keep regular and visitor lifecycle aligned with Elvanto person status.</span></span>
       </label>
       {notice && <p className="text-xs text-amber-700">The next review may propose people type or lifecycle changes.</p>}
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}

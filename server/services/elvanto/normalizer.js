@@ -37,22 +37,11 @@
 // same bundle keyed by raw person ID (a Map or plain object) for every person
 // in the snapshot, looked up per record.
 //
-// filter.js and metadata.js require every group/serviceType/location
-// entry in the `memberships` bundle above, and every key AND value in
-// `raw.custom_fields`, MUST be Elvanto's stable ID — never a display name or
-// label — even though the fixtures/tests in *this* file use plain names
-// ('Choir', 'Sunday AM', 'Main Campus') as opaque strings to exercise
-// dedupe/sort only. filter.js's isElvantoEligible() matches
-// attributes.groups/serviceTypes/locations against config.{groups,
-// serviceTypes,locations}.ids, and attributes.customFields is looked up by
-// config.customFields[].fieldId with values compared against
-// config.customFields[].values — both sides of every comparison are IDs
-// sourced from metadata.js's definition lists (groups[].id, customFields[].id,
-// customFields[].values[].id, etc). Whoever assembles the real `memberships`/
-// `groupMemberships` bundle (Task 14's adapter) must key/populate it with
-// those same stable IDs, or eligibility and member counts will silently
-// compute to zero with no error anywhere. attributes.departments is the one
-// exception and stays a flat array of department name strings.
+// Source selection is now provider-owned: sourceAdapter.js resolves exactly one
+// Category or Group by its stable Elvanto ID and reads that source's membership.
+// For a Group source it supplies the selected group ID in `groupMemberships`.
+// The remaining membership/custom-field attributes are retained only as faithful
+// normalized provider data; they do not participate in local batch filtering.
 //
 // Per this project's global constraint, LMPG individuals do not store email
 // or mobile, so neither field is read here even if present on a raw record —

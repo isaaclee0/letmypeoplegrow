@@ -405,7 +405,7 @@ const OnboardingPage: React.FC = () => {
           ) : step === 'pco-review' ? (
             <div className="space-y-4">
               <p className="text-sm text-gray-700">
-                Review what Planning Center found before continuing. Applying this review promotes the proposed filter and starts the first sync safely.
+                Review Planning Center's selected List before continuing. Applying this review promotes the proposed people source and starts the first sync safely.
               </p>
               {firstBatchId !== null && (
                 <PlanningCenterSyncReview connected={true} batchId={firstBatchId} onApplied={() => setStep('pco-gatherings')} />

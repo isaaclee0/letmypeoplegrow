@@ -18,9 +18,8 @@ function tallyMembership(people) {
 // { total, values: [{value, count}] } sorted by count desc.
 //
 // canonicalOptions (optional): the field's admin-defined option list in PCO (from
-// FieldOption resources). Seeded into the tally at count 0 so options nobody has
-// selected yet still show up as choices in the filter UI, instead of being invisible
-// just because no currently-synced person has picked them.
+// FieldOption resources). Seeded into the tally at count 0 so callers can display
+// options nobody has selected yet.
 function tallyField(people, fieldDefinitionId, canonicalOptions = []) {
   const counts = new Map();
   for (const opt of canonicalOptions) counts.set(opt, 0);

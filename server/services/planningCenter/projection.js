@@ -25,9 +25,8 @@ function projectPerson(p, fieldDataById) {
       const value = datum.attributes && datum.attributes.value;
       // A FieldDatum row can exist with a blank/null value (e.g. an answer that was
       // cleared rather than removed). Treat that exactly like "no row at all" so it
-      // falls through to the '(none)' sentinel downstream — otherwise it leaks a
-      // literal null into the values array, which bypasses the empty-array '(none)'
-      // check entirely and shows up as an invisible, unlabeled option in the filter UI.
+      // falls through as an absent value downstream — otherwise it leaks a literal
+      // null into the normalized provider attributes.
       if (value === null || value === undefined || value === '') continue;
       if (!fieldValues[fieldDefinitionId]) fieldValues[fieldDefinitionId] = [];
       fieldValues[fieldDefinitionId].push(value);
@@ -56,15 +55,12 @@ function projectPerson(p, fieldDataById) {
 // normalized shapes the provider-neutral matcher/plan engine (Task 5/6)
 // expects: { provider, id, firstName, lastName, child, state, familyId,
 // attributes }. This is purely an additive projection on top of the existing
-// data — it does not change projectPerson or anything that currently
-// consumes its output (diffEngine.js, apply.js, etc).
+// data — it does not change projectPerson or the source adapter that consumes
+// its output.
 //
-// PCO's Person.attributes.status is a plain 'active' | 'inactive' — see
-// diffEngine.js, which only ever compares against those two literal strings.
+// PCO's Person.attributes.status is a plain 'active' | 'inactive'.
 // There is no separate PCO "contact"/"deceased" person state to preserve, so
-// 'inactive' maps to the generic engine's 'archived' terminal state (the
-// generic engine's archive/no-longer-eligible handling for a terminal state
-// mirrors exactly what diffEngine.js already does for status === 'inactive').
+// 'inactive' maps to the generic engine's 'archived' terminal state.
 function toNormalizedPcoPerson(pcoPerson) {
   return {
     provider: 'planning_center',

@@ -1436,7 +1436,7 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
 });
 
 // Delete a saved sync batch. Does not unlink or archive anyone already imported
-// through it — it only stops future runs of that filter.
+// through it — it only stops future runs for that provider-owned source.
 router.delete('/planning-center/sync-batches/:id', async (req, res) => {
   try {
     const churchId = req.user.church_id;
