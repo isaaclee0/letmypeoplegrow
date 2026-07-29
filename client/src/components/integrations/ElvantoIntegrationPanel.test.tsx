@@ -57,4 +57,14 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     await waitFor(() => expect(peopleSyncAPI.discardSourceDraft).toHaveBeenCalledWith('elvanto', 5));
     await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
   });
+
+  it('shows source check errors with their safe code instead of calling the source missing', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, sourceStatus: 'error', sourceStatusErrorCode: 'SYNC_SOURCE_RATE_LIMIT' }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Source check failed · SYNC_SOURCE_RATE_LIMIT')).toBeInTheDocument();
+    expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
+  });
 });

@@ -486,6 +486,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           )}
                           {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'planning_center_list' ? 'Planning Center List' : batch.source.kind}: {batch.source.name}</p>}
                           {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
+                          {batch.sourceStatus === 'error' && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p>}
                           {batch.needsSourceReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
                         </div>
                         <div className="flex items-center gap-2">

@@ -22,13 +22,14 @@ function listDto(resource) {
   const id = resource && resource.id;
   const externalId = id === null || id === undefined ? '' : String(id).trim();
   const name = String(resource && resource.attributes && resource.attributes.name || '').trim();
-  if (!resource || resource.type !== 'List' || !externalId || !name) return null;
+  const attributes = resource && resource.attributes || {};
+  if (!resource || resource.type !== 'List' || !externalId || !name || attributes.invalid === true) return null;
   return {
     kind: 'planning_center_list',
     externalId,
     name,
-    memberCount: finiteIntegerOrNull(resource.attributes && resource.attributes.result_count),
-    providerRefreshedAt: validIsoOrNull(resource.attributes && resource.attributes.refreshed_at),
+    memberCount: finiteIntegerOrNull(attributes.total_people),
+    providerRefreshedAt: validIsoOrNull(attributes.refreshed_at),
   };
 }
 
@@ -95,7 +96,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
   const contextById = new Map();
   const memberIds = new Set();
   const primaryContacts = new Map();
-  const memberUrl = `${API}/lists/${encodeURIComponent(sourceExternalId)}/people?per_page=100&include=households,field_data`;
+  const memberUrl = `${API}/lists/${encodeURIComponent(sourceExternalId)}/people?per_page=100&include=households.people,field_data`;
 
   await client.getAll(memberUrl, async (envelope) => {
     const fieldDataById = new Map();

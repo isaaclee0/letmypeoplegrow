@@ -61,4 +61,14 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     await waitFor(() => expect(peopleSyncAPI.discardSourceDraft).toHaveBeenCalledWith('planning_center', 12));
     await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
   });
+
+  it('shows source check errors with their safe code instead of calling the source missing', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, sourceStatus: 'error', sourceStatusErrorCode: 'SYNC_SOURCE_CHECK_FAILED' }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Source check failed · SYNC_SOURCE_CHECK_FAILED')).toBeInTheDocument();
+    expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
+  });
 });

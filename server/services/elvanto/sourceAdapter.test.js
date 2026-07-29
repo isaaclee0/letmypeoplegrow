@@ -169,6 +169,68 @@ test('accepts an empty complete Elvanto source and never returns a partial snaps
   };
   await assert.rejects(
     () => fetchElvantoSourceSnapshot({ client: failed, sourceKind: 'elvanto_category', sourceExternalId: 'cat-1' }),
-    (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
+    (err) => err.code === 'SYNC_SOURCE_CHECK_FAILED'
   );
+});
+
+test('fails closed when any source member is skipped or has a duplicate stable ID during normalization', async () => {
+  for (const people of [
+    [{ id: 'p1', firstname: '', lastname: '' }],
+    [{ firstname: 'No', lastname: 'Identifier' }],
+    [
+      { id: 'p1', firstname: 'Ada', lastname: 'Lovelace' },
+      { id: 'p1', firstname: 'Duplicate', lastname: 'Record' },
+    ],
+  ]) {
+    await assert.rejects(
+      () => fetchElvantoSourceSnapshot({
+        client: client({ categories: [{ id: 'cat-1', name: 'Members' }], people }),
+        sourceKind: 'elvanto_category', sourceExternalId: 'cat-1',
+      }),
+      (error) => error.code === 'SYNC_SOURCE_INCOMPLETE'
+    );
+  }
+
+  const malformedCollection = client({ categories: [{ id: 'cat-1', name: 'Members' }] });
+  const originalGetAll = malformedCollection.getAll;
+  malformedCollection.getAll = async (...args) => args[0] === PEOPLE
+    ? { items: null, complete: true, pages: 1, total: 1 }
+    : originalGetAll(...args);
+  await assert.rejects(
+    () => fetchElvantoSourceSnapshot({
+      client: malformedCollection, sourceKind: 'elvanto_category', sourceExternalId: 'cat-1',
+    }),
+    (error) => error.code === 'SYNC_SOURCE_INCOMPLETE'
+  );
+});
+
+test('classifies exhausted transport, rate-limit, and server failures as health errors rather than missing sources', async () => {
+  const cases = [
+    {
+      name: 'transport', expected: 'SYNC_SOURCE_CHECK_FAILED',
+      membershipResponse: async () => { throw new Error('socket reset'); },
+    },
+    {
+      name: 'rate limit', expected: 'SYNC_SOURCE_RATE_LIMIT',
+      membershipResponse: async () => ({ status: 429, headers: { 'retry-after': '0' }, data: { status: 'error' } }),
+    },
+    {
+      name: 'server failure', expected: 'SYNC_SOURCE_CHECK_FAILED',
+      membershipResponse: async () => ({ status: 503, data: { status: 'error' } }),
+    },
+  ];
+
+  for (const item of cases) {
+    await assert.rejects(
+      () => fetchElvantoSourceSnapshot({
+        apiKey: 'key', maxRetries: 0, sleep: async () => {},
+        sourceKind: 'elvanto_category', sourceExternalId: 'cat-1',
+        request: async ({ path }) => path === CATEGORIES
+          ? { status: 200, data: { status: 'ok', categories: { total: 1, category: { id: 'cat-1', name: 'Members' } } } }
+          : item.membershipResponse(),
+      }),
+      (error) => error.code === item.expected,
+      item.name
+    );
+  }
 });

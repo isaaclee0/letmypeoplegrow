@@ -108,7 +108,7 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
       try {
         response = await request({ url: safeUrl, method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' } });
       } catch (err) {
-        throw new PcoSourceError(`Planning Center source request failed: ${redact(err && err.message)}`, 'SYNC_SOURCE_UNAVAILABLE', {});
+        throw new PcoSourceError(`Planning Center source request failed: ${redact(err && err.message)}`, 'SYNC_SOURCE_CHECK_FAILED', {});
       }
 
       const status = response && response.status;
@@ -127,7 +127,7 @@ function createPcoReadClient({ accessToken, request = defaultRequest, sleep = (m
         throw new PcoSourceError(`Planning Center source is unavailable (status ${status})`, 'SYNC_SOURCE_UNAVAILABLE', { status });
       }
       if (typeof status !== 'number' || status < 200 || status >= 300) {
-        throw new PcoSourceError(`Planning Center source request returned status ${status}`, 'SYNC_SOURCE_UNAVAILABLE', { status });
+        throw new PcoSourceError(`Planning Center source request returned status ${status}`, 'SYNC_SOURCE_CHECK_FAILED', { status });
       }
       if (!isEnvelope(response && response.data)) {
         throw new PcoSourceError('Planning Center source returned a malformed response envelope', 'SYNC_SOURCE_INCOMPLETE', { status });

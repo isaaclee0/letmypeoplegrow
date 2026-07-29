@@ -389,6 +389,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                       <p className="text-xs text-gray-500">{batch.scheduleEnabled ? `Runs ${batch.scheduleFrequency}` : 'Manual only'}{batch.lastSyncAt ? ` · Last run ${new Date(batch.lastSyncAt).toLocaleString()}` : ''}</p>
                       {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'elvanto_group' ? 'Elvanto Group' : 'Elvanto Category'}: {batch.source.name}</p>}
                       {batch.sourceStatus === 'missing' && <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">Source missing</p>}
+                      {batch.sourceStatus === 'error' && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p>}
                       {batch.needsSourceReview && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Needs full review · the selected people source will not run until reviewed.</p>}
                     </div>
                     <div className="flex flex-wrap gap-3 text-sm">

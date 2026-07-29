@@ -297,6 +297,35 @@ test('a missing active source records health and every later run attempts the st
   });
 });
 
+test('transient source transport and rate-limit failures record error health without missing-source notifications', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    await Database.query(
+      `INSERT INTO users (church_id, email, role, first_name, last_name, is_active)
+       VALUES (?, ?, 'admin', 'Source', 'Admin', 1)`,
+      [churchId, `transient-source-${Math.random().toString(36).slice(2)}@example.com`]
+    );
+
+    for (const code of ['SYNC_SOURCE_CHECK_FAILED', 'SYNC_SOURCE_RATE_LIMIT']) {
+      scenarios = new Map([['members', Object.assign(new Error('temporary provider failure'), { code })]]);
+      await assert.rejects(
+        orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual' }),
+        (error) => error.code === code
+      );
+      const updated = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
+      assert.equal(updated.sourceStatus, 'error');
+      assert.equal(updated.sourceStatusErrorCode, code);
+    }
+
+    const notices = await Database.query(
+      `SELECT id FROM notifications WHERE church_id = ? AND notification_type = 'system'`, [churchId]
+    );
+    assert.equal(notices.length, 0);
+  });
+});
+
 test('a mismatched returned stable source is unavailable, marks active health missing, and notifies admins', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);

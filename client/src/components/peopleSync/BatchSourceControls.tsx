@@ -113,6 +113,7 @@ export default function BatchSourceControls({ provider, batch, value, onChange, 
       </div>
       {batch?.draftSource && !batch.initialSourceReviewPending ? <button type="button" onClick={() => { void discard(); }} disabled={discarding} className="text-sm font-medium text-gray-700 underline disabled:opacity-50 dark:text-gray-200">{discarding ? 'Discarding source draft…' : 'Discard source draft'}</button> : null}
     </div>
+    {batch?.sourceStatus === 'error' ? <p role="status" className="text-sm font-medium text-amber-700 dark:text-amber-300">Source check failed{batch.sourceStatusErrorCode ? ` · ${batch.sourceStatusErrorCode}` : ''}</p> : null}
 
     {error ? <div role="alert" className="text-sm text-red-700 dark:text-red-300"><p>{error}</p><button type="button" onClick={() => { void loadSources(); }} className="mt-1 underline">Retry source list</button></div> : null}
     {loading ? <p className="text-sm text-gray-600 dark:text-gray-300">Loading people sources…</p> : null}

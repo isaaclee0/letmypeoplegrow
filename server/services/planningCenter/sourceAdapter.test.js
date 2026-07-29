@@ -26,9 +26,10 @@ test('enumerates visible Planning Center Lists by stable ID with defensive sorte
     request: async (request) => {
       calls.push(request);
       return response(200, { data: [
-        { type: 'List', id: '20', attributes: { name: '  Zebra  ', result_count: 8.4, refreshed_at: 'not-a-date' } },
-        { type: 'List', id: '10', attributes: { name: ' Alpha ', result_count: 3, refreshed_at: '2026-07-29T00:00:00.000Z' } },
-        { type: 'Person', id: '30', attributes: { name: 'Ignored', result_count: 1 } },
+        { type: 'List', id: '20', attributes: { name: '  Zebra  ', total_people: 8.4, refreshed_at: 'not-a-date', invalid: false } },
+        { type: 'List', id: '10', attributes: { name: ' Alpha ', total_people: 3, refreshed_at: '2026-07-29T00:00:00.000Z', invalid: false } },
+        { type: 'List', id: '11', attributes: { name: 'Broken rules', total_people: 99, invalid: true } },
+        { type: 'Person', id: '30', attributes: { name: 'Ignored', total_people: 1 } },
       ], links: { next: null } });
     },
   });
@@ -45,9 +46,9 @@ test('fetches every List member page while keeping household-only context separa
   const calls = [];
   const pages = new Map([
     [`${API}/lists/42`, response(200, { data: {
-      type: 'List', id: '42', attributes: { name: ' Sunday Team ', result_count: 2, refreshed_at: '2026-07-29T01:02:03.000Z' },
+      type: 'List', id: '42', attributes: { name: ' Sunday Team ', total_people: 2, refreshed_at: '2026-07-29T01:02:03.000Z', invalid: false },
     } })],
-    [`${API}/lists/42/people?per_page=100&include=households,field_data`, response(200, {
+    [`${API}/lists/42/people?per_page=100&include=households.people,field_data`, response(200, {
       data: [person('p1', { fieldDataIds: ['fd1'] })],
       included: [
         { type: 'FieldDatum', id: 'fd1', attributes: { value: 'Soprano' }, relationships: { field_definition: { data: { id: 'choir' } } } },
@@ -90,14 +91,15 @@ test('fetches every List member page while keeping household-only context separa
   assert.ok(calls.every((call) => !call.url.includes('/run')));
   assert.deepEqual(calls.map((call) => call.url), [
     `${API}/lists/42`,
-    `${API}/lists/42/people?per_page=100&include=households,field_data`,
+    `${API}/lists/42/people?per_page=100&include=households.people,field_data`,
     'https://api.planningcenteronline.com/people/v2/lists/42/people?page=2',
   ]);
 });
 
-test('fails closed when List resolution is absent, archived, or not a List', async () => {
+test('fails closed when List resolution is absent, invalid, archived, or not a List', async () => {
   for (const resolution of [
     response(404, { data: null }),
+    response(200, { data: { type: 'List', id: '42', attributes: { name: 'Invalid rules', invalid: true } } }),
     response(200, { data: { type: 'List', id: '42', attributes: { name: 'Old', archived: true } } }),
     response(200, { data: { type: 'List', id: '42', attributes: { name: 'Archived date', archived_at: '2026-07-01T00:00:00.000Z' } } }),
     response(200, { data: { type: 'Person', id: '42', attributes: { name: 'Wrong' } } }),
@@ -121,7 +123,7 @@ test('distinguishes account-wide List-enumeration 403s from source-specific memb
   );
 
   const sourceUrl = `${API}/lists/42`;
-  const membersUrl = `${API}/lists/42/people?per_page=100&include=households,field_data`;
+  const membersUrl = `${API}/lists/42/people?per_page=100&include=households.people,field_data`;
   await assert.rejects(
     () => fetchPlanningCenterSourceSnapshot({
       accessToken: 'secret', sourceKind: 'planning_center_list', sourceExternalId: '42',
@@ -135,7 +137,7 @@ test('distinguishes account-wide List-enumeration 403s from source-specific memb
 
 test('fails closed when a List-membership page contains a non-Person or ID-less resource', async () => {
   const sourceUrl = `${API}/lists/42`;
-  const membersUrl = `${API}/lists/42/people?per_page=100&include=households,field_data`;
+  const membersUrl = `${API}/lists/42/people?per_page=100&include=households.people,field_data`;
   for (const member of [
     { type: 'Household', id: 'h1', attributes: {} },
     { type: 'Person', attributes: {} },

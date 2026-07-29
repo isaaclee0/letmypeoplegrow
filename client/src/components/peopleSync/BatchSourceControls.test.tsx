@@ -101,6 +101,14 @@ describe('BatchSourceControls', () => {
     expect(screen.getByText('Source missing')).toBeInTheDocument();
   });
 
+  it('shows a source check error and its safe code distinctly from a missing source', async () => {
+    vi.mocked(peopleSyncAPI.listSources).mockResolvedValue({ data: { success: true, sources: [source()] } });
+    render(<Controlled currentBatch={batch({ sourceStatus: 'error', sourceStatusErrorCode: 'SYNC_SOURCE_RATE_LIMIT' })} />);
+
+    expect(await screen.findByText('Source check failed · SYNC_SOURCE_RATE_LIMIT')).toBeInTheDocument();
+    expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['green', '2026-07-29T11:00:00.000Z'],
     ['orange', '2026-07-20T12:00:00.000Z'],

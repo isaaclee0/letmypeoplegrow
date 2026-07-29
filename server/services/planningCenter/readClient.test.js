@@ -9,7 +9,7 @@ function response(status, data, headers = {}) {
   return { status, data, headers };
 }
 
-test('attaches bearer authorization but redacts it from transport failures', async () => {
+test('attaches bearer authorization and classifies redacted transport failures as source-check errors', async () => {
   const token = 'super-secret-token';
   let captured;
   const client = createPcoReadClient({
@@ -22,7 +22,7 @@ test('attaches bearer authorization but redacts it from transport failures', asy
 
   await assert.rejects(
     () => client.getJson('https://api.planningcenteronline.com/people/v2/lists'),
-    (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE' &&
+    (err) => err.code === 'SYNC_SOURCE_CHECK_FAILED' &&
       !err.message.includes(token) &&
       !JSON.stringify(err.details || {}).includes(token)
   );
@@ -163,6 +163,9 @@ test('classifies auth, source unavailability, malformed envelopes, and later-pag
   const missing = createPcoReadClient({ accessToken: 'token', request: async () => response(404, { data: [] }) });
   await assert.rejects(() => missing.getJson('https://api.planningcenteronline.com/people/v2/lists/42'), (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE');
 
+  const transient = createPcoReadClient({ accessToken: 'token', request: async () => response(503, { data: [] }) });
+  await assert.rejects(() => transient.getJson('https://api.planningcenteronline.com/people/v2/lists/42'), (err) => err.code === 'SYNC_SOURCE_CHECK_FAILED');
+
   const malformed = createPcoReadClient({ accessToken: 'token', request: async () => response(200, 'not json') });
   await assert.rejects(() => malformed.getJson('https://api.planningcenteronline.com/people/v2/lists'), (err) => err.code === 'SYNC_SOURCE_INCOMPLETE');
 
@@ -178,7 +181,7 @@ test('classifies auth, source unavailability, malformed envelopes, and later-pag
   });
   await assert.rejects(
     () => laterFailure.getAll('https://api.planningcenteronline.com/people/v2/lists'),
-    (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
+    (err) => err.code === 'SYNC_SOURCE_CHECK_FAILED'
   );
 });
 
