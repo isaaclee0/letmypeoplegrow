@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, peopleSyncAPI } from '../../services/api';
 import BatchSourceControls from '../peopleSync/BatchSourceControls';
-import type { ElvantoMetadata, ElvantoSyncBatchInput, PeopleSyncBatch, PeopleSyncSourceState, PeopleType, SourceSelection } from '../peopleSync/types';
+import type { ElvantoSyncBatchInput, PeopleSyncBatch, PeopleSyncSourceState, PeopleType, SourceSelection } from '../peopleSync/types';
 import Modal from '../Modal';
 import { ordinalDay } from '../../utils/pcoSchedule';
 
 export interface ElvantoGatheringOption { id: number; name: string; }
-export interface ElvantoBatchEditorProps { batch: PeopleSyncBatch | null; /** retained only for panel metadata loading */ metadata: ElvantoMetadata; gatherings: ElvantoGatheringOption[]; onSaved: (batch: PeopleSyncBatch) => void; onCancel: () => void; }
+export interface ElvantoBatchEditorProps { batch: PeopleSyncBatch | null; gatherings: ElvantoGatheringOption[]; onSaved: (batch: PeopleSyncBatch) => void; onCancel: () => void; }
 type CreatePayload = ElvantoSyncBatchInput & SourceSelection;
 function message(error: unknown, fallback: string): string { if (typeof error === 'object' && error !== null && 'response' in error) { const response = error.response; if (typeof response === 'object' && response !== null && 'data' in response) { const data = response.data; if (typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string') return data.error; } } return fallback; }
 
-export default function ElvantoBatchEditor({ batch: initialBatch, metadata: _metadata, gatherings, onSaved, onCancel }: ElvantoBatchEditorProps) {
+export default function ElvantoBatchEditor({ batch: initialBatch, gatherings, onSaved, onCancel }: ElvantoBatchEditorProps) {
   const [currentBatch, setCurrentBatch] = useState<PeopleSyncBatch | null>(initialBatch);
   const [name, setName] = useState(initialBatch?.name ?? 'Elvanto people');
   const [enabled, setEnabled] = useState(initialBatch?.enabled ?? true);

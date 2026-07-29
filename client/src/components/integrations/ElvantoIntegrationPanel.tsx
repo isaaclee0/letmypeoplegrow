@@ -6,7 +6,6 @@ import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import SyncReview from '../peopleSync/SyncReview';
 import type {
-  ElvantoMetadata,
   PeopleSyncBatch,
   PeopleSyncReview,
   PeopleSyncRun,
@@ -223,7 +222,6 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
-  const [metadata, setMetadata] = useState<ElvantoMetadata | null>(null);
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
   const [runs, setRuns] = useState<PeopleSyncRun[]>([]);
@@ -240,7 +238,6 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const loadConnectedData = useCallback(async () => {
     const generation = ++connectedDataGeneration.current;
     if (!connectedRef.current) {
-      setMetadata(null);
       setBatches([]);
       setGatherings([]);
       setRuns([]);
@@ -251,14 +248,12 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     setLoading(true);
     setError(null);
     try {
-      const [metadataResponse, batchesResponse, gatheringsResponse, runsResponse] = await Promise.all([
-        elvantoSyncAPI.getMetadata(),
+      const [batchesResponse, gatheringsResponse, runsResponse] = await Promise.all([
         elvantoSyncAPI.listBatches(),
         gatheringsAPI.getAll(),
         peopleSyncAPI.getRuns(10),
       ]);
       if (generation !== connectedDataGeneration.current) return;
-      setMetadata(metadataResponse.data.metadata);
       setBatches(batchesResponse.data.batches);
       setGatherings((gatheringsResponse.data.gatherings || []).map((item: { id: number; name: string }) => ({ id: item.id, name: item.name })));
       setRuns(runsResponse.data.runs);
@@ -272,7 +267,6 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
 
   const reloadConnectionData = useCallback(async () => {
     setConnectionRevision((current) => current + 1);
-    setMetadata(null);
     setBatches([]);
     setGatherings([]);
     setRuns([]);
@@ -375,13 +369,12 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                 <h5 className="text-sm font-medium">Elvanto sync batches</h5>
                 <p className="text-xs text-gray-500">Review every change before anything is applied.</p>
               </div>
-              {editingBatch === null && <button type="button" onClick={() => setEditingBatch('new')} disabled={!metadata} className="rounded bg-green-600 px-3 py-2 text-sm text-white disabled:opacity-50">New batch</button>}
+              {editingBatch === null && <button type="button" onClick={() => setEditingBatch('new')} className="rounded bg-green-600 px-3 py-2 text-sm text-white">New batch</button>}
             </div>
             {loading && <p className="text-sm text-gray-500">Loading Elvanto sync data…</p>}
-            {editingBatch && metadata && (
+            {editingBatch && (
               <ElvantoBatchEditor
                 batch={editingBatch === 'new' ? null : editingBatch}
-                metadata={metadata}
                 gatherings={gatherings}
                 onSaved={() => { setEditingBatch(null); void reloadAfterBatchMutation(); }}
                 onCancel={() => setEditingBatch(null)}

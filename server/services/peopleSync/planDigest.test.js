@@ -1,14 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { digestPlan, digestFilterConfig, createReviewToken, verifyReviewToken } = require('./planDigest');
-
-test('filter config digests use canonical JSON instead of input object order', () => {
-  assert.equal(
-    digestFilterConfig({ exclusions: [], branches: [{ groups: [{ values: ['a'], mode: 'any', dimensionId: 'status' }] }] }),
-    digestFilterConfig({ branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['a'] }] }], exclusions: [] })
-  );
-});
+const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
 
 function plan(overrides = {}) {
   return {

@@ -26,7 +26,6 @@ const authority = require('../../services/peopleSync/authority');
 const orchestrator = require('../../services/peopleSync/orchestrator');
 const runRepository = require('../../services/peopleSync/runRepository');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
-const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
@@ -269,7 +268,6 @@ const defaultDeps = {
   routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   getSettings: defaultGetSettings,
   updateSettings: defaultUpdateSettings,
-  clearFilterFactsCache: filterFactsCache.clear,
   getAuthority: authority.getAuthority,
   disableAuthority: authority.disableAuthority,
   previewAuthoritySwitch: orchestrator.previewAuthoritySwitch,
@@ -347,9 +345,6 @@ function createPeopleSyncRouter(overrides = {}) {
       const { errors, patch } = validateSettingsPatch(req.body, current);
       if (errors) return res.status(400).json({ error: errors[0], errors });
       const settings = await deps.updateSettings(churchId, patch);
-      if (Object.hasOwn(patch, 'elvantoIncludeContacts') && patch.elvantoIncludeContacts !== current.elvantoIncludeContacts) {
-        deps.clearFilterFactsCache(churchId, 'elvanto');
-      }
       res.json({ success: true, settings });
     } catch (err) {
       respondWithError(res, err, 'people-sync PUT /settings');

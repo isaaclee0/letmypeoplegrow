@@ -5,8 +5,7 @@
 // authority preview/apply/disable, the merged runs feed) live in
 // server/routes/integrations/peopleSync.js instead; this file owns
 // everything that only makes sense for Elvanto: the API-key connection
-// itself, metadata discovery for the batch filter picker, and batch
-// CRUD/plan/apply/run-now. Interactive run-now is a review alias: only the
+// itself and batch CRUD/plan/apply/run-now. Interactive run-now is a review alias: only the
 // scheduler may invoke the unattended orchestrator path.
 //
 // Every dependency this router touches is injected via `deps` (see
@@ -36,8 +35,6 @@ const orchestrator = require('../../services/peopleSync/orchestrator');
 const { createElvantoAdapter } = require('../../services/elvanto/adapter');
 const { ElvantoError } = require('../../services/elvanto/httpClient');
 const legacyCredential = require('../../services/elvanto/legacyCredential');
-const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
-const { validateFilterV2, evaluateFilterV2 } = require('../../services/peopleSync/filterEngine');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
 const { SOURCE_KINDS_BY_PROVIDER } = require('../../services/peopleSync/sourceModel');
@@ -55,14 +52,6 @@ const VALID_SCHEDULE_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasPoisonedDemographicCache(metadata) {
-  if (!metadata || !Array.isArray(metadata.demographics)) return false;
-  return metadata.demographics.some((item) => {
-    const value = item && item.value;
-    return typeof value !== 'string' || value.includes('[object Object]');
-  });
 }
 
 function parseBatchId(raw) {
@@ -189,10 +178,6 @@ const defaultDeps = {
   markValidated: connectionStore.markValidated,
   getOrMigrateCredentials: legacyCredential.getOrMigrateCredentials,
   deleteLegacyPreferences: defaultDeleteLegacyPreferences,
-  clearFilterFactsCache: filterFactsCache.clear,
-  getFilterCache: filterFactsCache.get,
-  validateFilterV2,
-  evaluateFilterV2,
   getAuthority: authority.getAuthority,
   disableAuthority: authority.disableAuthority,
   listBatches: batchRepository.listBatches,
@@ -204,19 +189,6 @@ const defaultDeps = {
   buildReview: orchestrator.buildReview,
   applyReviewed: orchestrator.applyReviewed,
 };
-
-function initialV2Draft(deps, churchId, draftFilterConfig, broadMatchAcknowledged) {
-  const entry = deps.getFilterCache(churchId, PROVIDER);
-  if (!entry) return { error: 'A complete filter snapshot is required.', code: 'SYNC_FILTER_CACHE_UNAVAILABLE', status: 409 };
-  const validation = deps.validateFilterV2(draftFilterConfig, { dimensions: entry.dimensions || [] });
-  if (!validation.ok) return { error: 'Invalid Elvanto filter.', code: 'SYNC_FILTER_INVALID', status: 400 };
-  const notOnly = validation.value.branches.length === 0 && validation.value.exclusions.length > 0;
-  const wholePopulation = Array.isArray(entry.facts) && entry.facts.length > 0 && entry.facts.every((facts) => deps.evaluateFilterV2(facts, validation.value));
-  if ((notOnly || wholePopulation) && !broadMatchAcknowledged) {
-    return { error: 'Broad filters must be acknowledged.', code: 'SYNC_FILTER_BROAD_ACK_REQUIRED', status: 400 };
-  }
-  return { value: validation.value };
-}
 
 // ─── Safe error mapping ──────────────────────────────────────────────────────
 //
@@ -273,18 +245,6 @@ function respondWithError(res, err, { context, logLabel } = {}) {
   }
   logger.error(`${logLabel}: ${err && err.message}`, { stack: err && err.stack });
   return res.status(500).json({ error: 'An unexpected error occurred.' });
-}
-
-// Bounded as ONE aggregate operation (not per-call) — a full-roster
-// snapshot fetch followed by three paginated metadata-definition calls
-// is exactly the "several sequential network calls in one request" case
-// the route-timeout wrapper exists for (see its own header note above
-// defaultDeps).
-async function fetchLiveMetadata(deps, churchId, credentials, force) {
-  return withTimeout((async () => {
-    const snapshot = await deps.adapter.fetchSnapshot({ churchId, credentials, mode: 'full' });
-    return deps.adapter.fetchMetadata({ churchId, credentials, force, snapshot });
-  })(), deps.routeTimeoutMs);
 }
 
 function createElvantoRouter(overrides = {}) {
@@ -389,56 +349,9 @@ function createElvantoRouter(overrides = {}) {
       // migrated/deleted) could have its connection "resurrected" by that
       // stale row the next time getOrMigrateCredentials runs.
       await deps.deleteLegacyPreferences(churchId);
-      deps.clearFilterFactsCache(churchId, PROVIDER);
       res.json({ success: true, disconnected });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /disconnect' });
-    }
-  });
-
-  // ─── Metadata (filter-picker discovery) ───────────────────────────────
-
-  router.get('/metadata', async (req, res) => {
-    const churchId = req.user.church_id;
-    try {
-      const credentials = await deps.getCredentials(churchId, PROVIDER);
-      if (!credentials) return res.status(400).json({ error: 'Elvanto is not connected.' });
-
-      // Cheap path: serve the persisted cache (connectionStore's own
-      // metadata.syncMetadata, written by a prior live fetch) without a
-      // live Elvanto call. A cache produced before nested demographic
-      // collection objects were normalized is also replaced automatically;
-      // otherwise those persisted "[object Object]" labels would survive a
-      // deployment until an administrator manually refreshed metadata.
-      const connection = await deps.getConnection(churchId, PROVIDER);
-      const cached = connection && connection.metadata && connection.metadata.syncMetadata;
-      if (cached && !hasPoisonedDemographicCache(cached)) {
-        return res.json({ success: true, metadata: cached, stale: false, cached: true, metadataCachedAt: connection.metadataCachedAt || null });
-      }
-
-      const result = await fetchLiveMetadata(deps, churchId, credentials, false);
-      if (result && Object.hasOwn(result, 'stale')) {
-        return res.json({ success: true, ...result, cached: false });
-      }
-      return res.json({ success: true, metadata: result, stale: false, cached: false });
-    } catch (err) {
-      respondWithError(res, err, { logLabel: 'elvanto GET /metadata' });
-    }
-  });
-
-  router.post('/metadata/refresh', async (req, res) => {
-    const churchId = req.user.church_id;
-    try {
-      const credentials = await deps.getCredentials(churchId, PROVIDER);
-      if (!credentials) return res.status(400).json({ error: 'Elvanto is not connected.' });
-
-      const result = await fetchLiveMetadata(deps, churchId, credentials, true);
-      if (result && Object.hasOwn(result, 'stale')) {
-        return res.json({ success: true, ...result });
-      }
-      return res.json({ success: true, metadata: result, stale: false });
-    } catch (err) {
-      respondWithError(res, err, { logLabel: 'elvanto POST /metadata/refresh' });
     }
   });
 
@@ -561,6 +474,5 @@ module.exports = {
   defaultDeps,
   respondWithError,
   validateBatchBody,
-  initialV2Draft,
   RouteTimeoutError,
 };

@@ -78,6 +78,14 @@ test('validateAdapter rejects extra keys so test-only APIs cannot enter producti
   );
 });
 
+test('provider adapters expose source reads and lifecycle rules only, never local filter evaluation', () => {
+  const sourceOnly = adapter('planning_center');
+  for (const forbidden of ['validate' + 'Filter', 'evaluate' + 'Filter', 'is' + 'Eligible', 'get' + 'FilterMetadata', 'preview' + 'Filter']) {
+    assert.equal(Object.hasOwn(sourceOnly, forbidden), false);
+  }
+  assert.doesNotThrow(() => validateAdapter(sourceOnly));
+});
+
 test('validateAdapter rejects inherited provider and required methods', () => {
   const inheritedProvider = Object.create(adapter('planning_center'));
   assert.throws(

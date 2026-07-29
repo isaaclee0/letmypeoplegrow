@@ -2,7 +2,7 @@ import React, { useReducer, useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
-import type { ElvantoMetadata, PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
+import type { PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
 
 export type ElvantoOnboardingStep = 'elvanto-connect' | 'elvanto-batch' | 'elvanto-review' | 'elvanto-authority';
 
@@ -30,7 +30,6 @@ function errorMessage(error: unknown, fallback: string): string {
 
 export default function ElvantoOnboarding({ step, onStepChange, onContinueToGatherings }: Props) {
   const [{ apiKey, connected }, dispatchConnection] = useReducer(reduceElvantoConnection, { apiKey: '', connected: false });
-  const [metadata, setMetadata] = useState<ElvantoMetadata | null>(null);
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
   const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
   const [batchReview, setBatchReview] = useState<PeopleSyncReview | null>(null);
@@ -43,11 +42,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     setBusy(true);
     setError(null);
     try {
-      const [metadataResponse, gatheringsResponse] = await Promise.all([
-        elvantoSyncAPI.getMetadata(),
-        gatheringsAPI.getAll(),
-      ]);
-      setMetadata(metadataResponse.data.metadata);
+      const gatheringsResponse = await gatheringsAPI.getAll();
       setGatherings((gatheringsResponse.data.gatherings || []).map((item: { id: number; name: string }) => ({ id: item.id, name: item.name })));
       onStepChange('elvanto-batch');
     } catch {
@@ -169,12 +164,12 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   }
 
   if (step === 'elvanto-batch') {
-    return metadata ? (
+    return (
       <section className="space-y-4">
         <p className="text-sm text-gray-700">Choose one Elvanto Category or Group, then optionally assign those people to a gathering.</p>
-        <ElvantoBatchEditor batch={null} metadata={metadata} gatherings={gatherings} onSaved={saveBatch} onCancel={onContinueToGatherings} />
+        <ElvantoBatchEditor batch={null} gatherings={gatherings} onSaved={saveBatch} onCancel={onContinueToGatherings} />
       </section>
-    ) : <p className="text-sm text-gray-500">Loading Elvanto people sources…</p>;
+    );
   }
 
   if (step === 'elvanto-review') {

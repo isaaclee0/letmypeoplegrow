@@ -74,10 +74,9 @@ function toNormalizedPcoPerson(pcoPerson) {
     child: typeof pcoPerson.child === 'boolean' ? pcoPerson.child : null,
     state: pcoPerson.status === 'active' ? 'active' : 'archived',
     familyId: pcoPerson.householdId ?? null,
-    // Carries whatever eligibility.js's isEligible() needs (membership,
-    // fieldValues) plus passedBackgroundCheck, namespaced so the generic
-    // engine never has to know PCO-specific field names. eligibility.js's
-    // fromNormalized() is the inverse of this projection.
+    // Retains optional PCO details used by unrelated field and background
+    // check features. Provider-owned List membership is resolved separately
+    // by sourceAdapter.js, never from these attributes.
     attributes: {
       membership: pcoPerson.membership ?? null,
       passedBackgroundCheck: typeof pcoPerson.passedBackgroundCheck === 'boolean' ? pcoPerson.passedBackgroundCheck : null,

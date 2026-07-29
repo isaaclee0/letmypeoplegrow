@@ -40,7 +40,7 @@ test('batch repository maps source state and keeps filter values inert during no
     });
     assert.deepEqual(created.source, null);
     assert.deepEqual(created.draftSource, ELVANTO_SOURCE);
-    assert.equal(Object.hasOwn(created, 'filterConfig'), false);
+    assert.equal(Object.hasOwn(created, 'source'), true);
     const updated = await updateBatch({ churchId, provider: 'elvanto', batchId: created.id, name: 'Renamed', enabled: true });
     assert.equal(updated.name, 'Renamed');
     assert.equal(updated.enabled, true);

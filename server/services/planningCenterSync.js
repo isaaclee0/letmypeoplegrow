@@ -2,8 +2,6 @@ const https = require('https');
 const Database = require('../config/database');
 const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
-const { computePlan } = require('./planningCenter/diffEngine');
-const { applyPlan } = require('./planningCenter/apply');
 const batchRepository = require('./peopleSync/batchRepository');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
@@ -34,16 +32,6 @@ async function getCachedPcoPeople(churchId, accessToken, { force = false } = {})
 function invalidatePcoPeopleCache(churchId) {
   if (churchId) pcoPeopleCache.delete(churchId);
   else pcoPeopleCache.clear();
-}
-
-// Read-only cache probe for filter-metadata construction. Unlike
-// getCachedPcoPeople this must never fetch or refresh: preview and metadata
-// requests are allowed to reuse a warm full roster, but only an explicit
-// refresh/reconciliation may make a provider call.
-function peekCachedPcoPeople(churchId) {
-  const cached = pcoPeopleCache.get(churchId);
-  if (!cached || !Array.isArray(cached.people) || (Date.now() - cached.fetchedAt) >= PCO_PEOPLE_TTL_MS) return null;
-  return cached;
 }
 
 // ─── HTTP helper ────────────────────────────────────────────────────────────
@@ -261,25 +249,6 @@ async function fetchAllPcoPeople(accessToken) {
   return { people, householdPrimaryContacts };
 }
 
-// Load the minimal LMPG state for the current church context.
-// Includes archived (is_active = 0) rows so the diff engine can detect "restore"
-// candidates (previously archived individuals whose name now matches a PCO person).
-async function loadChurchState(churchId) {
-  const individuals = await Database.query(
-    `SELECT id, first_name AS firstName, last_name AS lastName, is_child AS isChild,
-            family_id AS familyId, is_active AS isActive, planning_center_id AS planningCenterId,
-            people_type AS peopleType, pco_link_declined AS pcoLinkDeclined
-       FROM individuals WHERE church_id = ?`,
-    [churchId]
-  );
-  const families = await Database.query(
-    `SELECT id, family_name AS familyName, planning_center_id AS planningCenterId FROM families WHERE church_id = ?`,
-    [churchId]
-  );
-  for (const i of individuals) { i.isChild = !!i.isChild; i.isActive = !!i.isActive; }
-  return { individuals, families };
-}
-
 // ─── PCO sync batches ─────────────────────────────────────────────────────────
 //
 // Task 9: people_sync_batches (via batchRepository) is now the canonical store
@@ -303,24 +272,6 @@ function safeJsonParse(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value !== 'string') return value;
   try { return JSON.parse(value); } catch (_) { return fallback; }
-}
-
-// Legacy filterConfig accessor retained only for old historical planning code
-// that has not yet migrated to source snapshots. Batch CRUD below no longer
-// reads or writes filter fields.
-// filterConfig for a saved batch. Accepts either a generic batch object
-// (people_sync_batches shape, via batchRepository, with `.filterConfig`
-// already parsed) or the legacy-shaped object every existing caller in this
-// file and in routes/integrations.js has always passed (membershipFilterEnabled
-// etc. as direct fields) — this must keep resolving the legacy shape exactly
-// as it did before Task 9.
-function batchFilterConfig(batch) {
-  return batch.filterConfig || {
-    membershipFilterEnabled: batch.membershipFilterEnabled,
-    membershipAllowlist: batch.membershipAllowlist,
-    fieldFilterEnabled: batch.fieldFilterEnabled,
-    fieldFilters: batch.fieldFilters,
-  };
 }
 
 // Generic batch -> the source-era PCO DTO. Provider-owned source identity is
@@ -440,71 +391,6 @@ async function recordBatchSyncResult(churchId, batch, summary) {
   );
 }
 
-// Compute a plan for a church against an explicit filterConfig (current church
-// context must be set by caller). filterConfig shape:
-//   { membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters }
-async function computePlanForChurch(churchId, accessToken, filterConfig, { force = false } = {}) {
-  const { people: pcoPeople, householdPrimaryContacts, fetchedAt } = await getCachedPcoPeople(churchId, accessToken, { force });
-  const { individuals, families } = await loadChurchState(churchId);
-  const plan = computePlan({ pcoPeople, individuals, families, filterConfig, householdPrimaryContacts });
-  plan.pcoFetchedAt = new Date(fetchedAt).toISOString();
-  plan.pcoPeople = pcoPeople;
-  return plan;
-}
-
-async function computePlanForBatch(churchId, accessToken, batch, opts) {
-  return computePlanForChurch(churchId, accessToken, batchFilterConfig(batch), opts);
-}
-
-// Apply a plan for a church (current church context must be set by caller).
-async function applyForChurch(churchId, plan, userId, selections, batchConfig = {}) {
-  return applyPlan(churchId, plan, userId, selections, batchConfig);
-}
-
-// ─── Per-church sync ─────────────────────────────────────────────────────────
-
-async function runBatchSync(churchId, accessToken, batch, userId) {
-  try {
-    const plan = await computePlanForBatch(churchId, accessToken, batch, { force: false });
-    // Family name updates are a reviewable, not automatic, step (per design) — scheduled/
-    // unattended runs never have a human to review them, so skip all proposed renames here.
-    // computePlan recomputes this bucket fresh every run, so a skipped proposal simply
-    // reappears next time someone opens the interactive Sync Review screen.
-    const skipFamilyNameUpdateIds = (plan.familyNameUpdates || []).map((f) => f.familyId);
-    const result = await applyForChurch(churchId, plan, userId, { skipFamilyNameUpdateIds }, {
-      // batch.id is the canonical people_sync_batches id (added_by_sync_batch_id);
-      // batch.legacyProviderBatchId is the dual-written planning_center_sync_batches
-      // id (added_by_pco_batch_id) — see toLegacyPcoBatchDto above.
-      batchId: batch.legacyProviderBatchId,
-      syncBatchId: batch.id,
-      defaultPeopleType: batch.defaultPeopleType,
-      gatheringTypeId: batch.gatheringTypeId,
-      gatheringAutoRemoveEnabled: batch.gatheringAutoRemoveEnabled,
-    });
-    const summary = {
-      at: new Date().toISOString(),
-      added: result.added, updated: result.updated, archived: result.archived,
-      reactivated: result.reactivated, linked: result.linked,
-      gatheringAssigned: result.gatheringAssigned,
-      gatheringRemoved: result.gatheringRemoved,
-      familyNamesUpdated: result.familyNamesUpdated,
-      ambiguous: plan.ambiguous.length,
-      visitorMatches: (plan.visitorMatches || []).length,
-      // How many family-name proposals this run *skipped* (as opposed to
-      // familyNamesUpdated above, which is how many were actually applied —
-      // always 0 here, since they're always skipped on an unattended run).
-      familyNameUpdatesPending: skipFamilyNameUpdateIds.length,
-      errors: result.errors.length,
-    };
-    await recordBatchSyncResult(churchId, batch, summary);
-    logger.info(`PCO batch sync: church ${churchId} batch ${batch.id} (${batch.name}) done — ${JSON.stringify(summary)}`);
-    return summary;
-  } catch (err) {
-    logger.error(`PCO batch sync: error for church ${churchId} batch ${batch.id}: ${err.message}`);
-    return null;
-  }
-}
-
 // ─── Scheduling ──────────────────────────────────────────────────────────────
 //
 // Task 10: the actual scheduler (cron wiring, per-church/per-batch iteration,
@@ -512,11 +398,8 @@ async function runBatchSync(churchId, accessToken, batch, userId) {
 // peopleSync/scheduler.js — provider-neutral, and the only cron job that gets
 // started (see server/index.js). start/stop/runNow/isDueToday are kept here,
 // delegating, purely for compatibility with existing callers of this module.
-// As of Task 15, scheduler.js's per-batch execution delegates to
-// orchestrator.runUnattended (provider-neutral) instead of calling
-// runBatchSync (below) — runBatchSync is no longer on the unattended cron
-// path for any provider. It stays exported unchanged since nothing in this
-// task removes it; it is simply unused by the scheduler now.
+// Scheduler execution delegates to orchestrator.runUnattended, which reads
+// each batch's provider-owned source snapshot.
 const scheduler = require('./peopleSync/scheduler');
 
 const isDueToday = scheduler.isDueToday;
@@ -526,11 +409,11 @@ function runNow() { return scheduler.runNow(); }
 
 module.exports = {
   start, stop, runNow, isDueToday,
-  getAccessTokenForChurch, computePlanForChurch, applyForChurch, fetchAllPcoPeople,
-  getCachedPcoPeople, peekCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
+  getAccessTokenForChurch, fetchAllPcoPeople,
+  getCachedPcoPeople, invalidatePcoPeopleCache, httpsGet,
   listBatches, getBatch, createBatch, updateBatch, deleteBatch,
-  batchFilterConfig, computePlanForBatch, recordBatchSyncResult, toLegacyPcoBatchDto,
+  recordBatchSyncResult, toLegacyPcoBatchDto,
   getPlanningCenterTokens, ensureValidPlanningCenterTokens,
   getTokensForChurch, validatePlanningCenterToken,
-  runBatchSync, PCO_RECONNECT_REQUIRED,
+  PCO_RECONNECT_REQUIRED,
 };

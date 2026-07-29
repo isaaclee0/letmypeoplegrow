@@ -74,10 +74,8 @@ test('getPlanningCenterSyncStats returns zeros, not an error, for a church with 
 function validBatchBody(overrides = {}) {
   return {
     name: 'Test Batch',
-    membershipFilterEnabled: false,
-    membershipAllowlist: [],
-    fieldFilterEnabled: false,
-    fieldFilters: [],
+    sourceKind: 'planning_center_list',
+    sourceExternalId: 'list-1',
     defaultPeopleType: 'regular',
     gatheringTypeId: null,
     scheduleEnabled: false,

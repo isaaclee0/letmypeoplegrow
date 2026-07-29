@@ -2,14 +2,12 @@ import axios from 'axios';
 import type {
   SyncProvider,
   PeopleSyncBatch,
-  PeopleSyncFilterState,
   PeopleSyncSourceState,
   ProviderSource,
   SourceSelection,
   PeopleType,
   ElvantoSyncBatchInput,
   ElvantoSyncBatchPatch,
-  ElvantoSyncMetadata,
   PeopleSyncSettings,
   PeopleSyncSettingsPatch,
   PeopleSyncAuthorityState,
@@ -20,12 +18,6 @@ import type {
   ExternalLinks,
   ElvantoStatus,
   ElvantoConnection,
-  BooleanFilterConfigV2,
-  FilterMetadata,
-  FilterPreviewResult,
-  FilterSnapshot,
-  FilterUpgradePreview,
-  FilterUpgradeApplyResult,
 } from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
@@ -867,16 +859,14 @@ export const settingsAPI = {
 
 export interface PlanningCenterSyncBatchInput {
   name: string;
+  sourceKind: 'planning_center_list';
+  sourceExternalId: string;
   defaultPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;
   scheduleEnabled: boolean;
   scheduleFrequency: 'daily' | 'weekly' | 'monthly';
   scheduleDay: number;
-  filterSchemaVersion?: 2;
-  filterConfig?: BooleanFilterConfigV2;
-  draftFilterConfig?: BooleanFilterConfigV2;
-  broadMatchAcknowledged?: boolean;
 }
 
 export type PlanningCenterSyncBatchPatch = Partial<PlanningCenterSyncBatchInput>;
@@ -907,12 +897,6 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
   // People sync (replaces the old browse/import flow)
-  getPlanningCenterMembershipSummary: () =>
-    api.get('/integrations/planning-center/membership-summary', { timeout: 120000 }),
-  getPlanningCenterFieldDefinitions: () =>
-    api.get('/integrations/planning-center/field-definitions', { timeout: 120000 }),
-  getPlanningCenterFieldSummary: (fieldDefinitionId: string) =>
-    api.get('/integrations/planning-center/field-summary', { params: { fieldDefinitionId }, timeout: 120000 }),
   searchPlanningCenterPeople: (q: string) =>
     api.get('/integrations/planning-center/people-search', { params: { q }, timeout: 30000 }),
   getPlanningCenterSyncBatches: () =>
@@ -920,9 +904,6 @@ export const integrationsAPI = {
   createPlanningCenterSyncBatch: (data: PlanningCenterSyncBatchInput) =>
     api.post<{ success: true; batch: PeopleSyncBatch }>('/integrations/planning-center/sync-batches', data, { timeout: 120000 }),
   updatePlanningCenterSyncBatch: (id: number, data: PlanningCenterSyncBatchPatch) =>
-    // Enabling gatheringAutoRemoveEnabled can trigger a live PCO fetch for the
-    // toggle-enable backfill (server/routes/integrations.js), which can take well
-    // over the global 15s default when the PCO people cache is cold.
     api.put(`/integrations/planning-center/sync-batches/${id}`, data, { timeout: 120000 }),
   deletePlanningCenterSyncBatch: (id: number) =>
     api.delete(`/integrations/planning-center/sync-batches/${id}`),
@@ -1030,67 +1011,6 @@ export const peopleSyncAPI = {
     api.delete<{ success: true; batch: PeopleSyncSourceState }>(
       `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/source-draft`,
     ),
-
-  getFilterMetadata: (provider: SyncProvider) =>
-    api.get<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
-      `/integrations/people-sync/providers/${provider}/filter-metadata`,
-    ),
-
-  // This is the only filter-builder route that fetches a complete provider
-  // roster, so it receives the same budget as the existing review endpoints.
-  refreshFilterSnapshot: (provider: SyncProvider, body?: { batchId?: number | null; filterConfig?: BooleanFilterConfigV2 }) =>
-    api.post<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
-      `/integrations/people-sync/providers/${provider}/filter-snapshot/refresh`,
-      body,
-      { timeout: 120000 },
-    ),
-
-  // Preview deliberately reads the cached facts snapshot only; keep the
-  // normal API timeout so an unavailable cache surfaces promptly.
-  previewFilter: (provider: SyncProvider, body: {
-    batchId: number | null;
-    filterConfig: BooleanFilterConfigV2;
-    enabled: boolean;
-    defaultPeopleType: PeopleType;
-    gatheringTypeId: number | null;
-  }) => api.post<{ success: true } & FilterPreviewResult>(
-    `/integrations/people-sync/providers/${provider}/filter-preview`,
-    body,
-  ),
-
-  saveFilterDraft: (provider: SyncProvider, batchId: number, body: {
-    filterConfig: BooleanFilterConfigV2;
-    broadMatchAcknowledged: boolean;
-  }) => api.put<{ success: true; batch: PeopleSyncFilterState<BooleanFilterConfigV2> }>(
-    `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-draft`,
-    body,
-  ),
-
-  discardFilterDraft: (provider: SyncProvider, batchId: number) =>
-    api.delete<{ success: true; batch: PeopleSyncFilterState<BooleanFilterConfigV2> }>(
-      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-draft`,
-    ),
-
-  previewFilterUpgrade: (provider: SyncProvider, batchId: number) =>
-    api.post<{ success: true } & FilterUpgradePreview>(
-      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-upgrade/preview`,
-      undefined,
-      { timeout: 120000 },
-    ),
-
-  applyFilterUpgrade: (provider: SyncProvider, batchId: number, upgradeToken: string) =>
-    api.post<{ success: true; batches: FilterUpgradeApplyResult[] }>(
-      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/filter-upgrade/apply`,
-      { upgradeToken },
-      { timeout: 120000 },
-    ),
-
-  applyCompatibleFilterUpgrades: (provider: SyncProvider, upgrades: Array<{ batchId: number; upgradeToken: string }>) =>
-    api.post<{ success: true; batches: FilterUpgradeApplyResult[] }>(
-      `/integrations/people-sync/providers/${provider}/filter-upgrades/apply-compatible`,
-      { upgrades },
-      { timeout: 120000 },
-    ),
 };
 
 // ─── Elvanto-specific people-sync API (Task 17) ─────────────────────────────
@@ -1101,35 +1021,6 @@ export const peopleSyncAPI = {
 // mounted at /api/integrations/elvanto. ElvantoIntegrationPanel and onboarding
 // both use these reviewed methods.
 export const elvantoSyncAPI = {
-  // Cheap path: serves the persisted metadata cache without a live Elvanto
-  // call when one exists; only falls through to a live fetch (subject to the
-  // same long timeout as refreshMetadata below) the first time nothing has
-  // ever been cached.
-  getMetadata: () =>
-    api.get<{
-      success: true;
-      metadata: ElvantoSyncMetadata;
-      stale: boolean;
-      cached: boolean;
-      // Only present on the stale-cache-fallback path (a live fetch failed
-      // but a cache existed) -- see elvanto.js's GET /metadata handler and
-      // metadata.js's fetchElvantoMetadata, which sets `refreshing: false`
-      // on that same fallback object.
-      refreshing?: boolean;
-      metadataCachedAt?: string | null;
-    }>('/integrations/elvanto/metadata'),
-
-  // Forces a live Elvanto fetch (a full roster snapshot plus six definition
-  // calls), hence the long timeout.
-  refreshMetadata: () =>
-    api.post<{
-      success: true;
-      metadata: ElvantoSyncMetadata;
-      stale: boolean;
-      refreshing?: boolean;
-      metadataCachedAt?: string | null;
-    }>('/integrations/elvanto/metadata/refresh'),
-
   listBatches: () =>
     api.get<{ success: true; batches: PeopleSyncBatch[] }>('/integrations/elvanto/sync-batches'),
 

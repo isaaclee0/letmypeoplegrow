@@ -40,98 +40,6 @@ export type AuthorityProvider = SyncProvider | 'none';
 
 export type PeopleType = 'regular' | 'local_visitor' | 'traveller_visitor';
 
-// ─── Provider-neutral Boolean filters (Task 9) ────────────────────────────
-
-export type FilterValueState = 'off' | 'include' | 'not';
-export type FilterGroupMode = 'any' | 'all';
-export type FilterDimensionCardinality = 'single' | 'multi';
-
-export interface BooleanFilterGroup {
-  dimensionId: string;
-  mode: FilterGroupMode;
-  values: string[];
-}
-
-export interface BooleanFilterBranch {
-  groups: BooleanFilterGroup[];
-}
-
-export interface BooleanFilterExclusion {
-  dimensionId: string;
-  values: string[];
-}
-
-export interface BooleanFilterConfigV2 {
-  branches: BooleanFilterBranch[];
-  exclusions: BooleanFilterExclusion[];
-}
-
-export interface FilterDimensionValue {
-  id: string;
-  label: string;
-  /** null means the dimension was discovered but this snapshot did not capture its per-person facts. */
-  count: number | null;
-  /** True only for a persisted selection that the provider no longer exposes. */
-  unresolved?: boolean;
-}
-
-export interface FilterDimension {
-  id: string;
-  label: string;
-  cardinality: FilterDimensionCardinality;
-  category: string;
-  values: FilterDimensionValue[];
-  /** True only when the complete provider snapshot no longer exposes this saved dimension. */
-  unresolved?: boolean;
-}
-
-export interface FilterMetadata {
-  dimensions: FilterDimension[];
-}
-
-export interface FilterSnapshot {
-  id: string | null;
-  capturedAt: string;
-  fresh: boolean;
-  expiresAt: string | null;
-  coveredDimensionIds: string[];
-}
-
-export interface FilterPreviewOverlap {
-  batchId: number;
-  batchName: string;
-  count: number;
-}
-
-export type FilterPreviewWarning = 'BROAD_FILTER' | 'OVERLAP_GATHERING_TYPE' | 'OVERLAP_DEFAULT_PEOPLE_TYPE';
-
-export interface FilterPreviewResult {
-  matchCount: number | null;
-  snapshot: FilterSnapshot | null;
-  overlaps: FilterPreviewOverlap[];
-  uniqueEnabledPopulationCount: number | null;
-  missingDimensionIds: string[];
-  warnings: FilterPreviewWarning[];
-}
-
-export interface FilterUpgradePreview {
-  compatible: boolean;
-  oldCount: number;
-  newCount: number;
-  upgradeToken: string;
-  /** The server-calculated v2 expression. It is preview-only until reviewed. */
-  convertedFilterConfig: BooleanFilterConfigV2;
-  snapshot: FilterSnapshot;
-}
-
-// `applyCompatibleUpgrades()` deliberately returns only upgrade audit fields,
-// not the complete batch DTO. This mirrors filterUpgrade.js exactly.
-export interface FilterUpgradeApplyResult {
-  id: number;
-  filterSchemaVersion: 2;
-  filterRevision: number;
-}
-
 // server/routes/individuals.js and server/routes/families.js already attach
 // this exact shape to every individual/family DTO (see `externalLinks`
 // construction in both files) -- confirmed against
@@ -150,7 +58,7 @@ export type ExternalLinks = Partial<Record<SyncProvider, string>>;
 // field (it exists for Planning Center's dual-write migration -- see
 // planningCenterSync.js), but it is still present (always null) on every
 // Elvanto batch response, so it is included here for an exact shape match.
-export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
+export interface PeopleSyncBatch {
   id: number;
   provider: SyncProvider;
   name: string;
@@ -183,25 +91,6 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   // still contain a JSON summary written by the retired legacy path, so the
   // shared DTO deliberately remains the broad `string | null` shape.
   lastSyncResult: string | null;
-}
-
-// The filters remain typed while Task 8 migrates the existing editors. They
-// are no longer part of the provider-owned source batch DTO above.
-
-// The filter-draft endpoints deliberately return only this non-PII subset,
-// rather than the complete batch record returned by list/create/update APIs.
-export interface PeopleSyncFilterState<TFilter = Record<string, unknown>> {
-  id: number;
-  provider: SyncProvider;
-  filterSchemaVersion: number;
-  filterConfig: TFilter;
-  filterRevision: number;
-  draftFilterSchemaVersion: number | null;
-  draftFilterConfig: TFilter | null;
-  draftFilterBaseRevision: number | null;
-  draftFilterUpdatedAt: string | null;
-  needsFilterReview: boolean;
-  initialFilterReviewPending: boolean;
 }
 
 export interface PeopleSyncSourceState {
@@ -242,11 +131,11 @@ export function isElvantoLastSyncResult(value: string | null): value is ElvantoL
 // PUT /elvanto/sync-batches/:id (all fields optional -- a partial patch
 // merged over the existing stored batch). Mirrors elvanto.js's own
 // BATCH_BODY_ALLOWED allow-list exactly.
-export interface ElvantoSyncBatchInput<TFilter = Record<string, unknown>> {
+export interface ElvantoSyncBatchInput {
   name: string;
   enabled?: boolean;
-  filterSchemaVersion?: number;
-  filterConfig?: TFilter;
+  sourceKind: 'elvanto_category' | 'elvanto_group';
+  sourceExternalId: string;
   defaultPeopleType?: PeopleType;
   gatheringTypeId?: number | null;
   gatheringAutoRemoveEnabled?: boolean;
@@ -256,59 +145,6 @@ export interface ElvantoSyncBatchInput<TFilter = Record<string, unknown>> {
 }
 
 export type ElvantoSyncBatchPatch = Partial<ElvantoSyncBatchInput>;
-
-// ─── Elvanto metadata (server/services/elvanto/metadata.js's computeMetadata) ──
-
-// Schema version 1 from server/services/elvanto/filter.js. IDs are stable
-// provider IDs for definition-backed dimensions; departments and demographics
-// intentionally use their stable values because Elvanto exposes no IDs there.
-export interface ElvantoFilterConfig {
-  statuses: Array<'active' | 'contact' | 'archived' | 'deceased'>;
-  categoryIds: string[];
-  groups: { ids: string[]; operator: 'any' | 'all' };
-  demographics: { values: string[]; operator: 'any' | 'all' };
-  departments: { values: string[]; operator: 'any' | 'all' };
-  serviceTypes: { ids: string[]; operator: 'any' | 'all' };
-  locations: { ids: string[]; operator: 'any' | 'all' };
-  customFields: Array<{ fieldId: string; values: string[]; operator: 'any' | 'all' }>;
-}
-
-export interface ElvantoMetadataOption {
-  id: string;
-  name: string;
-}
-
-export interface ElvantoMetadataGroup extends ElvantoMetadataOption {
-  status: string | null;
-  memberCount: number;
-}
-
-export interface ElvantoMetadataValueCount {
-  value: string;
-  count: number;
-}
-
-export type ElvantoMetadataCustomFieldValue = ElvantoMetadataOption;
-
-export interface ElvantoMetadataCustomField extends ElvantoMetadataOption {
-  type: string | null;
-  values: ElvantoMetadataCustomFieldValue[];
-}
-
-export interface ElvantoSyncMetadata {
-  fetchedAt: string;
-  categories: ElvantoMetadataOption[];
-  groups: ElvantoMetadataGroup[];
-  demographics: ElvantoMetadataValueCount[];
-  departments: ElvantoMetadataValueCount[];
-  serviceTypes: ElvantoMetadataOption[];
-  locations: ElvantoMetadataOption[];
-  customFields: ElvantoMetadataCustomField[];
-}
-
-// The filter editor's concise name for the exact metadata DTO above. Keep the
-// longer API-facing name for Task 17's documented client route contract.
-export type ElvantoMetadata = ElvantoSyncMetadata;
 
 // ─── people-sync settings (server/routes/integrations/peopleSync.js) ──────
 

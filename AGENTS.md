@@ -196,54 +196,45 @@ Optional, ongoing two-way sync with Planning Center's People and Check-ins APIs.
 
 **Key files:**
 - `server/routes/integrations.js` - OAuth flow + batch CRUD/plan/apply + check-in import routes (shares this file with Elvanto; PCO occupies roughly lines 1600+ of ~3,600). Contains ~670 lines of dead pre-rewrite routes (`/planning-center/people`, `/import-people`, `/link-family`) with no client callers — don't build on these, they're superseded.
-- `server/services/planningCenterSync.js` - HTTPS client, PCO-people cache (10-min TTL), cron scheduler (daily 02:00), batch data access
-- `server/services/planningCenter/` - one module per concern: `matcher.js` (name/household matching), `eligibility.js` (batch filter evaluation), `diffEngine.js` (computes a sync plan), `apply.js` (mutates DB per plan), `projection.js`/`fieldDefinitions.js` (PCO custom field handling), `metadataCache.js` (persisted filter-picker cache), `checkinsImport.js` (attendance-history import), `checkinGate.js` (blocks check-in import until at least one person is linked — the importer matches by `planning_center_id` only, never by name, so importing before any linking would create a duplicate individual per attendee), `mode.js` (source-of-truth lock). Each has a co-located `.test.js`.
+- `server/services/planningCenterSync.js` - HTTPS client, PCO people lookup cache, cron scheduler (daily 02:00), and batch data access
+- `server/services/planningCenter/` - PCO-specific helpers: `sourceAdapter.js` (List discovery and complete reads), `matcher.js` (name/household matching), `projection.js`/`fieldDefinitions.js` (PCO custom field handling), `checkinsImport.js` (attendance-history import), `checkinGate.js` (blocks check-in import until at least one person is linked — the importer matches by `planning_center_id` only, never by name, so importing before any linking would create a duplicate individual per attendee), and `mode.js` (source-of-truth lock). Each has a co-located `.test.js`.
 - `client/src/components/integrations/PlanningCenterIntegrationPanel.tsx` and `client/src/components/planningCenter/*` - admin UI (batch editor, sync review)
 
 **Data model:**
 - `individuals.planning_center_id` / `families.planning_center_id` - link to a PCO Person/Household, unique-indexed per church
-- `planning_center_sync_batches` table - a named, independently schedulable sync unit: its own membership/custom-field filter, default `people_type` for newly-created people, optional gathering auto-assignment, own schedule
-- `church_settings` holds ~19 PCO-prefixed columns, several of which are legacy (single-filter/single-schedule, superseded by the batches table) and unused but left in place per the additive-only migration convention
+- `planning_center_sync_batches` table - a named, independently schedulable sync unit: one provider-owned source, default `people_type` for newly-created people, optional gathering auto-assignment, and its own schedule
+- `church_settings` holds ~19 PCO-prefixed columns, several of which are legacy (single-source/single-schedule, superseded by the batches table) and unused but left in place per the additive-only migration convention
 - OAuth tokens live in `user_preferences` (`preference_key = 'planning_center_tokens'`), scoped to whichever *user* connected PCO — there is no church-level credential row, so `getTokensForChurch` grabs any user in the church with tokens (`LIMIT 1`, no ordering)
 
 **Core concepts:**
-- **Batches**: a church can run multiple named batches (e.g. "Members", "Youth Group") each with its own filter/schedule/target gathering. Matching always runs against PCO's full unfiltered people set; only the *output* buckets (link/restore/ambiguous/visitor-match) are scoped to the batch's own filter.
+- **Batches**: a church can run multiple named batches (e.g. "Members", "Youth Group") each with exactly one provider-owned source and its own schedule/target gathering.
 - **Source-of-truth mode**: when `church_settings.planning_center_sync_indicator = 1` — labeled "Show sync indicator" in the UI, with copy that only mentions a cosmetic badge — any individual with a `planning_center_id` becomes locked: manual name/age edits, archive, reactivate, delete, and merge are all rejected (403 `PCO_MODE_LOCKED`). Enforced in `mode.js`/`individuals.js`, mirrored client-side in `client/src/utils/pcoLock.ts`. The UI does not disclose this behavioral side effect — be aware when touching this toggle or its copy.
 - **Planning Center scheduling master switch**: `church_settings.planning_center_sync_enabled` controls unattended Planning Center batch scheduling only. When off, both the scheduler and unattended orchestrator stop before run creation/provider fetch; manual review/apply and check-in imports remain available. It does not replace the independent `people_sync_settings.authority_provider` source-of-truth gate and does not affect Elvanto.
-- **Initial Boolean-filter review**: a new schema-2 batch starts with an active empty sentinel at revision 1 plus a draft. `initialFilterReviewPending` remains true until reviewed promotion increments the revision. The initial draft cannot be discarded, and unattended sync must reject the sentinel before run creation/provider fetch. A reviewed empty filter at revision 2 is legitimate and may run.
+- **Initial source review**: a new batch has a source draft and no active source. `initialSourceReviewPending` remains true until a reviewed promotion. The initial draft cannot be discarded, and unattended sync must reject it before run creation/provider fetch.
 - **Matching**: name + household corroboration only (`matcher.js`) — PCO email/phone/custom IDs are never consulted. Ambiguous matches are surfaced for manual review, not auto-resolved.
 
-### Provider-neutral Boolean people-sync filters
+### Provider-owned people-sync sources
 
-Planning Center and Elvanto share the schema-v2 Boolean filter contract. Keep
-provider-specific version-1 behavior in `server/services/planningCenter/eligibility.js`
-and `server/services/elvanto/filter.js`; all new schema-v2 filter logic must
-go through `server/services/peopleSync/filterEngine.js`.
+Each batch has exactly one ChMS-owned source: a read-only Planning Center List,
+or one Elvanto Category or Group. LMPG never writes to Planning Center Lists or
+replaces their membership rules. Source adapters must read complete, paginated
+snapshots and respect provider rate limits.
 
-- Use `filterSnapshot.js` and `filterFactsCache.js` for the PII-free,
-  church/provider-scoped complete snapshot and its freshness rules (fresh for
-  10 minutes; retained as stale for up to 24 hours).
-- Use `filterPreview.js` for previews. Previews are cache-only: they must not
-  fetch Planning Center or Elvanto people and must not return facts, external
-  IDs, raw provider records, or credentials. Among filter-builder HTTP
-  endpoints, only the explicit refresh route in
-  `server/routes/integrations/filterBuilder.js` may fetch a complete provider
-  snapshot; cached metadata and preview endpoints never fetch. Reviewed
-  reconciliation and onboarding may fetch complete snapshots as documented.
-- Filter edits are drafts in `batchRepository.js`, never active eligibility.
-  Promote a draft only through reviewed reconciliation and its atomic
-  `apply.js`/`orchestrator.js` transaction. A normal pending schema-v2 draft
-  blocks authoritative unattended scheduling with
-  `SYNC_FILTER_REVIEW_REQUIRED`.
-- Version-1 schedules continue unchanged until an explicit reviewed upgrade.
-  `filterUpgrade.js` compares exact matched external-ID sets; fresh proof and
-  compatibility are required again at apply, and compatible bulk upgrades are
-  all-or-nothing.
+- Source edits are drafts in `batchRepository.js`; only a reviewed reconciliation
+  may atomically promote a draft and apply its plan. A pending source draft blocks
+  unattended scheduling.
+- A missing active source fails closed: leave the roster unchanged, skip that
+  scheduled batch, persist the source health state, and notify active admins once
+  per missing transition. A failed draft must not change active-source health.
+- Planning Center's List refresh timestamp is display-only. Show its age with
+  green (0–7 days), orange (8–30), red (over 30), or grey (missing/invalid), and
+  tell admins to refresh the List inside Planning Center if recent members are
+  missing. Elvanto shows LMPG's read time instead.
 
 **Known rough edges** (from an architecture review; fix opportunistically, don't assume they're intentional):
 - Token-refresh is implemented independently three times (`integrations.js` x2, `planningCenterSync.js`) against the same `user_preferences` row — PCO rotates the refresh token on every use, so concurrent refreshes across these paths can overwrite a fresh token with a stale one.
 - `server/routes/families.js` and `server/routes/settings.js` both return a field called `planningCenterSyncEnabled`, backed by two *different* columns (`planning_center_sync_indicator` vs `planning_center_sync_enabled`) with two different meanings — don't assume they mean the same thing just because the name matches.
-- "Run now" in the batch UI applies with zero review (no ambiguous-match/family-name confirmation); onboarding does the same for its first batch by design. Given matching/eligibility bugs have shipped and been fixed multiple times in this feature's short life, treat blind-apply paths as higher-risk than "Review & sync."
+- "Run now" in the batch UI applies with zero review (no ambiguous-match/family-name confirmation); onboarding does the same for its first batch by design. Given matching and source-selection bugs have shipped and been fixed multiple times in this feature's short life, treat blind-apply paths as higher-risk than "Review & sync."
 
 ### PWA and Service Worker
 

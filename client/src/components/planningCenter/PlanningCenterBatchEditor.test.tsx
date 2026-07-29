@@ -17,7 +17,7 @@ describe('PlanningCenterBatchEditor', () => {
     vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch: created } }); const saved = vi.fn(); renderEditor(null, saved);
     fireEvent.change(screen.getByLabelText('Batch name'), { target: { value: 'New members' } }); fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } }); fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
     await waitFor(() => expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith(expect.objectContaining({ name: 'New members', sourceKind: 'planning_center_list', sourceExternalId: 'list-2' })));
-    expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith(expect.not.objectContaining({ filterConfig: expect.anything(), draftFilterConfig: expect.anything() })); expect(saved).toHaveBeenCalledWith(expect.objectContaining({ needsSourceReview: true }));
+    expect(saved).toHaveBeenCalledWith(expect.objectContaining({ needsSourceReview: true }));
   });
   it('saves settings without a source draft when the source identity is unchanged', async () => {
     vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch } }); const saved = vi.fn(); renderEditor(batch, saved); fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));

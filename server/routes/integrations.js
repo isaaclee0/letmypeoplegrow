@@ -5,13 +5,10 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const logger = require('../config/logger');
 const pcoSync = require('../services/planningCenterSync');
-const { tallyField } = require('../services/planningCenter/summary');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
-const metadataCache = require('../services/planningCenter/metadataCache');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
-const filterFactsCache = require('../services/peopleSync/filterFactsCache');
 const {
   INTEGRATION_CREDENTIALS_KEY_INVALID,
   INTEGRATION_CREDENTIAL_DECRYPT_FAILED,
@@ -986,13 +983,6 @@ router.get('/planning-center/callback', async (req, res) => {
       metadata: { accountName },
     });
 
-    // Warm the membership/field-definitions cache as soon as PCO is connected, so the
-    // batch editor has something to show immediately the first time someone opens it,
-    // instead of blocking on a live fetch. Fire-and-forget — errors are logged, not
-    // surfaced, and must not delay the redirect below.
-    metadataCache.refreshMetadataForChurch(connectChurchId, tokenResponse.access_token)
-      .catch((e) => logger.error('PCO connect-time metadata refresh error:', e));
-
     // Re-validate returnTo on the way out (defense in depth).
     if (returnTo && /^\/app\//.test(returnTo)) {
       const sep = returnTo.includes('?') ? '&' : '?';
@@ -1027,8 +1017,6 @@ router.post('/planning-center/disconnect', async (req, res) => {
       DELETE FROM user_preferences
       WHERE church_id = ? AND preference_key = 'planning_center_tokens'
     `, [churchId]);
-    filterFactsCache.clear(churchId, 'planning_center');
-
     res.json({ success: true, message: 'Planning Center disconnected successfully.' });
   } catch (error) {
     console.error('Disconnect Planning Center error:', error);
@@ -1289,16 +1277,6 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
 
 const PCO_PEOPLE_TYPES = ['regular', 'local_visitor', 'traveller_visitor'];
 const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
-const PCO_V1_CREATE_FIELDS = new Set([
-  'name', 'filterSchemaVersion', 'membershipFilterEnabled', 'membershipAllowlist', 'fieldFilterEnabled', 'fieldFilters',
-  'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
-  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
-]);
-const PCO_V2_CREATE_FIELDS = new Set([
-  'name', 'filterSchemaVersion', 'draftFilterConfig', 'broadMatchAcknowledged',
-  'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
-  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
-]);
 const PCO_SOURCE_CREATE_FIELDS = new Set([
   'name', 'sourceKind', 'sourceExternalId', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
   'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
@@ -1340,26 +1318,19 @@ function validateBatchBody(body) {
   if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
   const gatheringError = validateGatheringTypeId(gatheringTypeId);
   if (gatheringError) return gatheringError;
-  if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
+  if (gatheringAutoRemoveEnabled !== undefined && typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
   return validateBatchSchedule(scheduleFrequency, scheduleDay);
 }
 
-const PCO_SCHEMA2_SETTINGS_FIELDS = new Set([
+const PCO_BATCH_SETTINGS_FIELDS = new Set([
   'name', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
   'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
 ]);
-const PCO_ACTIVE_FILTER_FIELDS = new Set([
-  'filterSchemaVersion', 'filterConfig', 'filterRevision', 'draftFilterSchemaVersion',
-  'draftFilterConfig', 'draftFilterBaseRevision', 'draftFilterUpdatedAt',
-  'needsFilterReview', 'broadMatchAcknowledged',
-]);
-
-function validateSchema2SettingsUpdate(body) {
+function validateBatchSettingsUpdate(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Request body must be an object.';
   for (const key of Object.keys(body)) {
-    if (PCO_ACTIVE_FILTER_FIELDS.has(key)) return 'Schema-2 filter criteria must be saved through the filter draft endpoint.';
-    if (!PCO_SCHEMA2_SETTINGS_FIELDS.has(key)) return 'Schema-2 updates may only change batch settings.';
+    if (!PCO_BATCH_SETTINGS_FIELDS.has(key)) return 'Updates may only change batch settings.';
   }
   const { name, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
@@ -1369,12 +1340,6 @@ function validateSchema2SettingsUpdate(body) {
   if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
   return validateBatchSchedule(scheduleFrequency, scheduleDay);
-}
-
-function hasSmuggledActiveFilterFields(body) {
-  return body && typeof body === 'object' && Object.keys(body).some((key) =>
-    key === 'filterSchemaVersion' ? body[key] !== 1 : PCO_ACTIVE_FILTER_FIELDS.has(key)
-  );
 }
 
 // Old/stale clients (dismissible PWA update banner) may omit gatheringAutoRemoveEnabled
@@ -1450,9 +1415,7 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     }
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
-    const err = hasSmuggledActiveFilterFields(req.body) || Object.keys(req.body || {}).some((key) =>
-      ['membershipFilterEnabled', 'membershipAllowlist', 'fieldFilterEnabled', 'fieldFilters'].includes(key))
-      ? 'Filter criteria must not be saved with a batch update.' : validateSchema2SettingsUpdate(req.body);
+    const err = validateBatchSettingsUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
     const { name, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
@@ -1462,11 +1425,8 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     };
     const batch = await pcoSync.updateBatch(churchId, batchId, settings);
 
-    // Existing gathering membership stays unowned when a source-era batch
-    // enables auto-removal. Its provider-owned source must be reviewed and
-    // applied before the batch can establish ownership; recreating the old
-    // client-side filter eligibility check here would be both unsafe and
-    // semantically wrong.
+    // Existing gathering membership stays unowned until the provider-owned
+    // source has been reviewed and applied.
 
     res.json({ success: true, batch });
   } catch (error) {
@@ -1489,67 +1449,6 @@ router.delete('/planning-center/sync-batches/:id', async (req, res) => {
   } catch (error) {
     logger.error('Delete PCO sync batch error:', error);
     res.status(500).json({ error: 'Failed to delete sync batch.' });
-  }
-});
-
-// Membership distribution for the allow-list editor (person counts only, no check-ins).
-// Serves the persisted cache immediately; if it's missing, blocks on a live fetch (and
-// populates the cache as a side effect); if it's present but stale, serves it as-is and
-// kicks off a background refresh, flagged via `refreshing` so the client can show it's
-// checking Planning Center for updates.
-router.get('/planning-center/membership-summary', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const result = await metadataCache.readMembershipSummary(churchId, accessToken);
-    res.json({ success: true, ...result });
-  } catch (error) {
-    logger.error('PCO membership summary error:', error);
-    res.status(500).json({ error: 'Failed to load membership summary.' });
-  }
-});
-
-// Custom field definitions (select/checkbox only) for the field-filter editor. Same
-// cache-first/background-refresh treatment as membership-summary above.
-router.get('/planning-center/field-definitions', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const result = await metadataCache.readFieldDefinitionsSummary(churchId, accessToken);
-    res.json({ success: true, ...result });
-  } catch (error) {
-    logger.error('PCO field definitions error:', error);
-    res.status(500).json({ error: 'Failed to load custom field definitions.' });
-  }
-});
-
-// Value distribution for one custom field (person counts only, no check-ins). Reuses
-// the same persisted field-definitions cache as the field-definitions route above
-// instead of re-fetching definitions from PCO on every call — this endpoint is only
-// reached after the field-filter dropdown (which already warms that cache) has loaded.
-router.get('/planning-center/field-summary', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const fieldDefinitionId = req.query.fieldDefinitionId;
-    if (!fieldDefinitionId || typeof fieldDefinitionId !== 'string') {
-      return res.status(400).json({ error: 'fieldDefinitionId is required.' });
-    }
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const [{ people }, fieldDefinitionsResult] = await Promise.all([
-      pcoSync.getCachedPcoPeople(churchId, accessToken),
-      metadataCache.readFieldDefinitionsSummary(churchId, accessToken),
-    ]);
-    const definition = fieldDefinitionsResult.definitions.find((d) => d.id === fieldDefinitionId);
-    res.json({ success: true, ...tallyField(people, fieldDefinitionId, definition?.options || []) });
-  } catch (error) {
-    logger.error('PCO field summary error:', error);
-    res.status(500).json({ error: 'Failed to load field summary.' });
   }
 });
 

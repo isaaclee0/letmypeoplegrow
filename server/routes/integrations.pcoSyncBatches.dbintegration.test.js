@@ -93,7 +93,7 @@ test('PCO source-era PUT accepts settings only and never creates legacy compatib
   });
 });
 
-test('PCO source POST rejects invalid schedule ranges, unsafe gathering IDs, unknown fields, wrong field types, and filter fields', async () => {
+test('PCO source POST rejects invalid schedule ranges, unsafe gathering IDs, unknown fields, and wrong field types', async () => {
   await withRouteChurchDb(async (churchId) => {
     const app = await startApp(churchId);
     try {
@@ -106,7 +106,7 @@ test('PCO source POST rejects invalid schedule ranges, unsafe gathering IDs, unk
         sourceCreateBody('Fraction gathering', { gatheringTypeId: 1.5 }),
         sourceCreateBody('Wrong auto remove', { gatheringAutoRemoveEnabled: 'false' }),
         { ...sourceCreateBody('Unknown'), unexpected: true },
-        { ...sourceCreateBody('Smuggled'), filterConfig: { branches: [], exclusions: [] } },
+        { ...sourceCreateBody('Smuggled'), unexpectedNestedRule: { branches: [] } },
       ];
       for (const body of invalidBodies) {
         const response = await app.request('/api/integrations/planning-center/sync-batches', { method: 'POST', body });
@@ -152,7 +152,7 @@ test('PCO DELETE rejects unsafe batch identifiers before repository lookup', asy
   });
 });
 
-test('PCO source-era PUT rejects malformed and smuggled filter input', async () => {
+test('PCO source-era PUT rejects malformed and unknown input', async () => {
   await withRouteChurchDb(async (churchId) => {
     const batch = await createSourceBatch(churchId);
     const app = await startApp(churchId);
@@ -162,10 +162,10 @@ test('PCO source-era PUT rejects malformed and smuggled filter input', async () 
       });
       assert.equal(malformed.status, 400);
       const smuggled = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: { ...settings('Smuggled'), filterConfig: { branches: [], exclusions: [] } },
+        method: 'PUT', body: { ...settings('Smuggled'), unexpectedNestedRule: { branches: [] } },
       });
       assert.equal(smuggled.status, 400);
-      assert.match(smuggled.body.error, /filter criteria must not/i);
+      assert.match(smuggled.body.error, /only change batch settings/i);
       const unchanged = await pcoSync.getBatch(churchId, batch.id);
       assert.equal(unchanged.name, 'Source members');
     } finally {
@@ -189,7 +189,7 @@ test('PCO PUT rejects malformed batch identifiers before database lookup', async
   });
 });
 
-test('PCO source-era PUT rejects filter payloads and scopes missing batches to the church', async () => {
+test('PCO source-era PUT rejects unknown payloads and scopes missing batches to the church', async () => {
   await withRouteChurchDb(async (churchId) => {
     const batch = await pcoSync.createBatch(churchId, {
       name: 'Source members', initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
@@ -213,10 +213,10 @@ test('PCO source-era PUT rejects filter payloads and scopes missing batches to t
     try {
       const updated = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
         method: 'PUT',
-        body: { ...settings('Legacy updated'), filterSchemaVersion: 1, membershipFilterEnabled: true, membershipAllowlist: ['Members'], fieldFilterEnabled: false, fieldFilters: [] },
+        body: { ...settings('Legacy updated'), unexpectedNestedRule: { enabled: true } },
       });
       assert.equal(updated.status, 400);
-      assert.match(updated.body.error, /filter criteria must not/i);
+      assert.match(updated.body.error, /only change batch settings/i);
       const missing = await app.request('/api/integrations/planning-center/sync-batches/999', { method: 'PUT', body: {} });
       assert.equal(missing.status, 404);
       const crossChurch = await app.request(`/api/integrations/planning-center/sync-batches/${otherBatch.id}`, { method: 'PUT', body: {} });

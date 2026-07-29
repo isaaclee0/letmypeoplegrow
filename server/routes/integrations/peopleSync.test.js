@@ -396,7 +396,7 @@ test('PUT /settings accepts a valid partial patch and never switches authority',
   assert.deepEqual(patchSeen, { elvantoIncludeContacts: false, fullReconciliationDay: 3 });
 });
 
-test('PUT /settings clears only this church\'s Elvanto facts after changing the contact population gate', async () => {
+test('PUT /settings does not retain a retired local-facts cache after changing the contact population gate', async () => {
   const cleared = [];
   await withServer({
     getSettings: async () => ({ elvantoIncludeContacts: true, fullReconciliationFrequency: 'weekly', fullReconciliationDay: 1 }),
@@ -406,7 +406,7 @@ test('PUT /settings clears only this church\'s Elvanto facts after changing the 
     const { status } = await requestJson(`${base}/settings`, { method: 'PUT', body: { elvantoIncludeContacts: false } });
     assert.equal(status, 200);
   });
-  assert.deepEqual(cleared, [{ churchId: 'churcha1', provider: 'elvanto' }]);
+  assert.deepEqual(cleared, []);
 });
 
 test('PUT /settings leaves cache entries alone when the contact gate is unchanged or saving fails', async () => {
