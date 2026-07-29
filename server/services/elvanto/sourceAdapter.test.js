@@ -120,16 +120,36 @@ test('fails closed as SYNC_SOURCE_UNAVAILABLE before membership for missing, wro
 });
 
 test('maps a selected source permission loss to SYNC_SOURCE_UNAVAILABLE without attempting membership', async () => {
-  const value = client();
-  value.getAll = async (path, params, collectionKey, itemKey) => {
-    value.calls.push({ method: 'GET', path, params, collectionKey, itemKey });
-    throw Object.assign(new Error('forbidden'), { code: 'SYNC_SOURCE_AUTH', details: { status: 403 } });
-  };
+  const calls = [];
   await assert.rejects(
-    () => fetchElvantoSourceSnapshot({ client: value, sourceKind: 'elvanto_category', sourceExternalId: 'cat-1' }),
+    () => fetchElvantoSourceSnapshot({
+      apiKey: 'key', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', sleep: async () => {},
+      request: async ({ path }) => {
+        calls.push(path);
+        if (path === CATEGORIES) {
+          return { status: 200, data: { status: 'ok', categories: { total: 1, category: { id: 'cat-1', name: 'Members' } } } };
+        }
+        return { status: 403, data: { status: 'error' } };
+      },
+    }),
     (err) => err.code === 'SYNC_SOURCE_UNAVAILABLE'
   );
-  assert.deepEqual(value.calls.map((call) => call.path), [CATEGORIES]);
+  assert.deepEqual(calls, [CATEGORIES, PEOPLE]);
+});
+
+test('keeps a real-client account-wide 403 during selected-source resolution as SYNC_SOURCE_AUTH', async () => {
+  const calls = [];
+  await assert.rejects(
+    () => fetchElvantoSourceSnapshot({
+      apiKey: 'key', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', sleep: async () => {},
+      request: async ({ path }) => {
+        calls.push(path);
+        return { status: 403, data: { status: 'error' } };
+      },
+    }),
+    (err) => err.code === 'SYNC_SOURCE_AUTH'
+  );
+  assert.deepEqual(calls, [CATEGORIES]);
 });
 
 test('accepts an empty complete Elvanto source and never returns a partial snapshot after a membership failure', async () => {

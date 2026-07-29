@@ -88,7 +88,10 @@ async function resolveSource(client, sourceKind, sourceExternalId) {
     if (!selected) throw sourceError('Elvanto source is unavailable');
     return selected;
   } catch (err) {
-    if (err && err.code === ELVANTO_AUTH && err.details && err.details.status !== 403) throw err;
+    // Resolving the category/group is an account-scoped enumeration read, so
+    // a 403 here can be an invalid/revoked account credential. Do not turn it
+    // into a source-specific absence before any source was resolved.
+    if (err && err.code === ELVANTO_AUTH) throw err;
     if (err && err.code === 'SYNC_SOURCE_INCOMPLETE') throw err;
     throw sourceError('Elvanto source is unavailable');
   }
