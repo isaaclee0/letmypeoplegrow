@@ -7,13 +7,9 @@ function adapter(provider = 'planning_center', overrides = {}) {
   return {
     provider,
     validateConnection() {},
-    fetchSnapshot() {},
-    fetchMetadata() {},
-    validateFilter() {},
-    isEligible() {},
-    toFilterFacts() {},
-    buildFilterDimensions() {},
-    isInFilterPopulation() {},
+    listSources() {},
+    fetchSourceSnapshot() {},
+    isLifecycleEligible() {},
     ...overrides,
   };
 }
@@ -42,11 +38,11 @@ test('getProvider rejects unknown providers', () => {
 });
 
 test('validateAdapter rejects every missing required method', () => {
-  const incomplete = adapter('planning_center', { fetchMetadata: null });
+  const incomplete = adapter('planning_center', { listSources: null });
 
   assert.throws(
     () => validateAdapter(incomplete),
-    { message: 'Provider planning_center missing fetchMetadata' }
+    { message: 'Provider planning_center missing listSources' }
   );
 });
 
@@ -57,7 +53,7 @@ test('registerProvider rejects a mismatched adapter provider', () => {
   );
 });
 
-for (const method of ['validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible', 'toFilterFacts', 'buildFilterDimensions', 'isInFilterPopulation']) {
+for (const method of ['validateConnection', 'listSources', 'fetchSourceSnapshot', 'isLifecycleEligible']) {
   test(`validateAdapter rejects a missing ${method} method`, () => {
     const incomplete = adapter('planning_center', { [method]: undefined });
 

@@ -5,8 +5,6 @@ const { projectPerson } = require('./planningCenter/projection');
 const { computePlan } = require('./planningCenter/diffEngine');
 const { applyPlan } = require('./planningCenter/apply');
 const batchRepository = require('./peopleSync/batchRepository');
-const filterFactsCache = require('./peopleSync/filterFactsCache');
-const { validateFilterV2, evaluateFilterV2 } = require('./peopleSync/filterEngine');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
 // Fetching every person from Planning Center is the slow part of a sync — several
@@ -307,6 +305,9 @@ function safeJsonParse(value, fallback) {
   try { return JSON.parse(value); } catch (_) { return fallback; }
 }
 
+// Legacy filterConfig accessor retained only for old historical planning code
+// that has not yet migrated to source snapshots. Batch CRUD below no longer
+// reads or writes filter fields.
 // filterConfig for a saved batch. Accepts either a generic batch object
 // (people_sync_batches shape, via batchRepository, with `.filterConfig`
 // already parsed) or the legacy-shaped object every existing caller in this
@@ -322,17 +323,25 @@ function batchFilterConfig(batch) {
   };
 }
 
-// Generic batch (batchRepository shape) -> the legacy PCO batch DTO shape
-// /planning-center/sync-batches has always returned.
+// Generic batch -> the source-era PCO DTO. Provider-owned source identity is
+// returned explicitly; legacy client-side filter fields are intentionally not
+// flattened or accepted by the CRUD API.
 function toLegacyPcoBatchDto(batch) {
-  const filterConfig = batchFilterConfig(batch);
   return {
     id: batch.id,
+    provider: batch.provider || 'planning_center',
     name: batch.name,
-    membershipFilterEnabled: !!filterConfig.membershipFilterEnabled,
-    membershipAllowlist: filterConfig.membershipAllowlist || [],
-    fieldFilterEnabled: !!filterConfig.fieldFilterEnabled,
-    fieldFilters: filterConfig.fieldFilters || [],
+    enabled: batch.enabled !== false,
+    source: batch.source || null,
+    sourceRevision: batch.sourceRevision,
+    draftSource: batch.draftSource || null,
+    draftSourceBaseRevision: batch.draftSourceBaseRevision ?? null,
+    draftSourceUpdatedAt: batch.draftSourceUpdatedAt ?? null,
+    needsSourceReview: Boolean(batch.needsSourceReview),
+    initialSourceReviewPending: Boolean(batch.initialSourceReviewPending),
+    sourceStatus: batch.sourceStatus || 'unknown',
+    sourceStatusCheckedAt: batch.sourceStatusCheckedAt || null,
+    sourceStatusErrorCode: batch.sourceStatusErrorCode || null,
     defaultPeopleType: batch.defaultPeopleType || 'regular',
     gatheringTypeId: batch.gatheringTypeId ?? null,
     gatheringAutoRemoveEnabled: !!batch.gatheringAutoRemoveEnabled,
@@ -341,27 +350,7 @@ function toLegacyPcoBatchDto(batch) {
     scheduleDay: typeof batch.scheduleDay === 'number' ? batch.scheduleDay : 1,
     lastSyncAt: batch.lastSyncAt || null,
     lastSyncResult: safeJsonParse(batch.lastSyncResult, null),
-    // Additive (not part of the pre-Task-9 contract): the legacy
-    // planning_center_sync_batches id this generic batch is dual-written to,
-    // if any. routes/integrations.js reads this to keep tagging
-    // gathering_lists.added_by_pco_batch_id alongside the now-canonical
-    // added_by_sync_batch_id. Existing clients simply ignore fields they don't
-    // recognize, so this does not change the response shape they depend on.
     legacyProviderBatchId: batch.legacyProviderBatchId ?? null,
-    // Additive generic fields let the shared filter builder consume the PCO
-    // DTO directly while the still-installed v1 editor keeps using the
-    // flattened fields above.
-    provider: batch.provider || 'planning_center',
-    enabled: batch.enabled !== false,
-    filterSchemaVersion: batch.filterSchemaVersion,
-    filterConfig: batch.filterConfig,
-    filterRevision: batch.filterRevision,
-    draftFilterSchemaVersion: batch.draftFilterSchemaVersion ?? null,
-    draftFilterConfig: batch.draftFilterConfig ?? null,
-    draftFilterBaseRevision: batch.draftFilterBaseRevision ?? null,
-    draftFilterUpdatedAt: batch.draftFilterUpdatedAt ?? null,
-    needsFilterReview: Boolean(batch.needsFilterReview),
-    initialFilterReviewPending: Boolean(batch.initialFilterReviewPending),
   };
 }
 
@@ -375,81 +364,23 @@ async function getBatch(churchId, batchId) {
   return batch ? toLegacyPcoBatchDto(batch) : null;
 }
 
-// Legacy-shaped filter fields (as every PCO batch caller has always passed
-// them) -> the filterConfig blob people_sync_batches stores, matching the
-// exact shape backfillProviderNeutralSync produces from the legacy table.
-function buildFilterConfigInput(input) {
-  return {
-    membershipFilterEnabled: !!input.membershipFilterEnabled,
-    membershipAllowlist: input.membershipAllowlist || [],
-    fieldFilterEnabled: !!input.fieldFilterEnabled,
-    fieldFilters: input.fieldFilters || [],
-  };
-}
-
-// Create a new PCO sync batch. Canonical storage is people_sync_batches (via
-// batchRepository); during the compatibility window we also create a matching
-// planning_center_sync_batches row (legacy schema — never dropped, see
-// CLAUDE.md's additive-only migration convention) and record its id back onto
-// the generic row as legacy_provider_batch_id.
+// Create a PCO source draft in the canonical generic batch table. The source
+// is resolved by the route before it reaches this service; no client-provided
+// display name or legacy filter semantics are persisted here.
 async function createBatch(churchId, input) {
-  const filterConfig = buildFilterConfigInput(input);
-  const isV2 = input.filterSchemaVersion === 2;
-  let initialDraftFilterConfig;
-  if (isV2) {
-    const entry = filterFactsCache.get(churchId, 'planning_center');
-    if (!entry) {
-      const error = new Error('A complete filter snapshot is required.');
-      error.code = 'SYNC_FILTER_CACHE_UNAVAILABLE';
-      throw error;
-    }
-    const validation = validateFilterV2(input.draftFilterConfig, { dimensions: entry.dimensions || [] });
-    if (!validation.ok) {
-      const error = new Error('Invalid Planning Center filter.');
-      error.code = 'SYNC_FILTER_INVALID';
-      throw error;
-    }
-    const notOnly = validation.value.branches.length === 0 && validation.value.exclusions.length > 0;
-    const wholePopulation = Array.isArray(entry.facts) && entry.facts.length > 0 && entry.facts.every((facts) => evaluateFilterV2(facts, validation.value));
-    if ((notOnly || wholePopulation) && input.broadMatchAcknowledged !== true) {
-      const error = new Error('Broad filters must be acknowledged.');
-      error.code = 'SYNC_FILTER_BROAD_ACK_REQUIRED';
-      throw error;
-    }
-    initialDraftFilterConfig = validation.value;
-  }
   const generic = await batchRepository.createBatch({
     churchId,
     provider: 'planning_center',
     name: input.name,
     enabled: true,
-    filterSchemaVersion: isV2 ? 2 : 1,
-    filterConfig: isV2 ? { branches: [], exclusions: [] } : filterConfig,
     defaultPeopleType: input.defaultPeopleType,
     gatheringTypeId: input.gatheringTypeId || null,
     gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,
     scheduleEnabled: !!input.scheduleEnabled,
     scheduleFrequency: input.scheduleFrequency,
     scheduleDay: input.scheduleDay,
-    legacyProviderBatchId: null,
-    ...(isV2 ? { initialDraftFilterConfig } : {}),
+    initialDraftSource: input.initialDraftSource,
   });
-
-  const legacyRes = await Database.query(
-    `INSERT INTO planning_center_sync_batches
-       (church_id, name, membership_filter_enabled, membership_allowlist, field_filter_enabled, field_filters,
-        default_people_type, gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [churchId, generic.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
-     filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), generic.defaultPeopleType,
-     generic.gatheringTypeId, generic.gatheringAutoRemoveEnabled ? 1 : 0, generic.scheduleEnabled ? 1 : 0,
-     generic.scheduleFrequency, generic.scheduleDay]
-  );
-
-  await batchRepository.updateBatch({
-    churchId, provider: 'planning_center', batchId: generic.id, legacyProviderBatchId: legacyRes.insertId,
-  });
-
   return getBatch(churchId, generic.id);
 }
 
@@ -460,8 +391,6 @@ async function createBatch(churchId, input) {
 async function updateBatch(churchId, batchId, input) {
   const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
   if (!current) return null;
-  const filterConfig = buildFilterConfigInput(input);
-
   const genericUpdate = {
     churchId,
     provider: 'planning_center',
@@ -474,43 +403,7 @@ async function updateBatch(churchId, batchId, input) {
     scheduleFrequency: input.scheduleFrequency,
     scheduleDay: input.scheduleDay,
   };
-  // Schema-2 criteria are immutable outside the reviewed draft/promotion
-  // flow. Retain the legacy v1 mapping for stale clients, but do not let a
-  // non-filter settings update overwrite an active v2 filter or its draft.
-  if (current.filterSchemaVersion !== 2) genericUpdate.filterConfig = filterConfig;
   await batchRepository.updateBatch(genericUpdate);
-
-  if (current.legacyProviderBatchId) {
-    if (current.filterSchemaVersion === 2) {
-      // The compatibility row remains a provenance record for a reviewed v2
-      // batch. A settings-only save must not replace its original v1 criteria
-      // with missing or UI-defaulted values from a newer editor.
-      await Database.query(
-        `UPDATE planning_center_sync_batches
-            SET name = ?, default_people_type = ?, gathering_type_id = ?,
-                gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
-                updated_at = datetime('now')
-          WHERE id = ? AND church_id = ?`,
-        [input.name, input.defaultPeopleType, input.gatheringTypeId || null,
-         input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
-         input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
-      );
-    } else {
-      await Database.query(
-        `UPDATE planning_center_sync_batches
-            SET name = ?, membership_filter_enabled = ?, membership_allowlist = ?,
-                field_filter_enabled = ?, field_filters = ?, default_people_type = ?,
-                gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
-                updated_at = datetime('now')
-          WHERE id = ? AND church_id = ?`,
-        [input.name, filterConfig.membershipFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.membershipAllowlist),
-         filterConfig.fieldFilterEnabled ? 1 : 0, JSON.stringify(filterConfig.fieldFilters), input.defaultPeopleType,
-         input.gatheringTypeId || null, input.gatheringAutoRemoveEnabled ? 1 : 0, input.scheduleEnabled ? 1 : 0,
-         input.scheduleFrequency, input.scheduleDay, current.legacyProviderBatchId, churchId]
-      );
-    }
-  }
-
   return getBatch(churchId, batchId);
 }
 
@@ -523,12 +416,6 @@ async function deleteBatch(churchId, batchId) {
   const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
   if (!current) return false;
   await batchRepository.deleteBatch(churchId, 'planning_center', batchId);
-  if (current.legacyProviderBatchId) {
-    await Database.query(
-      `DELETE FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`,
-      [current.legacyProviderBatchId, churchId]
-    );
-  }
   return true;
 }
 

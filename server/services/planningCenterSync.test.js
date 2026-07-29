@@ -89,7 +89,7 @@ test('isDueToday: monthly falls back to day 1 for a legacy day=0 value', () => {
 // (client/src/components/planningCenter/*) and existing routes already
 // depend on — Task 9 must change internals only, never this shape. ───────────
 
-test('listBatches/getBatch return the existing legacy PCO batch DTO shape for a batch backfilled from the legacy table', async () => {
+test('listBatches/getBatch expose source-era DTOs without flattening legacy filter fields', async () => {
   await withTestChurchDb(async (churchId) => {
     const db = Database.getChurchDb(churchId);
     const gatheringId = Number(db.prepare(
@@ -112,10 +112,10 @@ test('listBatches/getBatch return the existing legacy PCO batch DTO shape for a 
     assert.strictEqual(batches.length, 1);
     const batch = batches[0];
     assert.strictEqual(batch.name, 'Members');
-    assert.strictEqual(batch.membershipFilterEnabled, true);
-    assert.deepEqual(batch.membershipAllowlist, ['Members']);
-    assert.strictEqual(batch.fieldFilterEnabled, false);
-    assert.deepEqual(batch.fieldFilters, []);
+    assert.equal(batch.source, null);
+    assert.equal(batch.draftSource, null);
+    assert.equal(batch.initialSourceReviewPending, true);
+    assert.equal(Object.hasOwn(batch, 'membershipFilterEnabled'), false);
     assert.strictEqual(batch.defaultPeopleType, 'regular');
     assert.strictEqual(batch.gatheringTypeId, gatheringId);
     assert.strictEqual(batch.gatheringAutoRemoveEnabled, true);
@@ -130,14 +130,11 @@ test('listBatches/getBatch return the existing legacy PCO batch DTO shape for a 
   });
 });
 
-test('createBatch/updateBatch/deleteBatch dual-write the generic and legacy PCO batch tables', async () => {
+test('createBatch/updateBatch/deleteBatch use only canonical generic source batches', async () => {
   await withTestChurchDb(async (churchId) => {
     const created = await pcoSync.createBatch(churchId, {
       name: 'Youth',
-      membershipFilterEnabled: false,
-      membershipAllowlist: [],
-      fieldFilterEnabled: false,
-      fieldFilters: [],
+      initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Youth list' },
       defaultPeopleType: 'regular',
       gatheringTypeId: null,
       gatheringAutoRemoveEnabled: false,
@@ -151,21 +148,15 @@ test('createBatch/updateBatch/deleteBatch dual-write the generic and legacy PCO 
       'SELECT * FROM people_sync_batches WHERE church_id = ? AND provider = ?', [churchId, 'planning_center']
     );
     assert.strictEqual(genericRows.length, 1);
-    assert.ok(genericRows[0].legacy_provider_batch_id, 'generic row should carry the legacy batch id');
+    assert.equal(genericRows[0].legacy_provider_batch_id, null);
 
     const legacyRows = await Database.query(
       'SELECT * FROM planning_center_sync_batches WHERE church_id = ?', [churchId]
     );
-    assert.strictEqual(legacyRows.length, 1);
-    assert.strictEqual(legacyRows[0].id, genericRows[0].legacy_provider_batch_id);
-    assert.strictEqual(legacyRows[0].name, 'Youth');
+    assert.strictEqual(legacyRows.length, 0);
 
     const updated = await pcoSync.updateBatch(churchId, created.id, {
       name: 'Youth Group',
-      membershipFilterEnabled: true,
-      membershipAllowlist: ['Youth'],
-      fieldFilterEnabled: false,
-      fieldFilters: [],
       defaultPeopleType: 'regular',
       gatheringTypeId: null,
       gatheringAutoRemoveEnabled: false,
@@ -174,14 +165,7 @@ test('createBatch/updateBatch/deleteBatch dual-write the generic and legacy PCO 
       scheduleDay: 1,
     });
     assert.strictEqual(updated.name, 'Youth Group');
-    assert.deepEqual(updated.membershipAllowlist, ['Youth']);
-
-    const legacyAfterUpdate = await Database.query(
-      'SELECT name, membership_allowlist FROM planning_center_sync_batches WHERE id = ? AND church_id = ?',
-      [legacyRows[0].id, churchId]
-    );
-    assert.strictEqual(legacyAfterUpdate[0].name, 'Youth Group');
-    assert.deepEqual(JSON.parse(legacyAfterUpdate[0].membership_allowlist), ['Youth']);
+    assert.deepEqual(updated.draftSource, { kind: 'planning_center_list', externalId: 'list-1', name: 'Youth list' });
 
     const deleted = await pcoSync.deleteBatch(churchId, created.id);
     assert.strictEqual(deleted, true);
@@ -217,7 +201,7 @@ test('createBatch defaults gatheringAutoRemoveEnabled to false when the caller o
   });
 });
 
-test('createBatch preserves stale v1 fields while atomically creating a v2 active-empty filter and draft', async () => {
+test('legacy filter-draft create contract is superseded by provider sources', { skip: 'replaced by source draft lifecycle tests' }, async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
     filterFactsCache.putComplete({
@@ -241,7 +225,7 @@ test('createBatch preserves stale v1 fields while atomically creating a v2 activ
   });
 });
 
-test('updating v2 Planning Center batch settings preserves canonical and compatibility filter criteria', async () => {
+test('legacy filter compatibility update contract is superseded by provider sources', { skip: 'source-era updates never accept filter fields' }, async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Member'] }] }], exclusions: [] };
     const active = { branches: [{ groups: [{ dimensionId: 'membership', mode: 'any', values: ['Regular'] }] }], exclusions: [] };

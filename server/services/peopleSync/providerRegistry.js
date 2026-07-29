@@ -1,6 +1,5 @@
 const REQUIRED = [
-  'validateConnection', 'fetchSnapshot', 'fetchMetadata', 'validateFilter', 'isEligible',
-  'toFilterFacts', 'buildFilterDimensions', 'isInFilterPopulation',
+  'validateConnection', 'listSources', 'fetchSourceSnapshot', 'isLifecycleEligible',
 ];
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const ALLOWED_KEYS = new Set(['provider', ...REQUIRED]);

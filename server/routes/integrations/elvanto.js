@@ -39,16 +39,16 @@ const legacyCredential = require('../../services/elvanto/legacyCredential');
 const filterFactsCache = require('../../services/peopleSync/filterFactsCache');
 const { validateFilterV2, evaluateFilterV2 } = require('../../services/peopleSync/filterEngine');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
+const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
+const { SOURCE_KINDS_BY_PROVIDER } = require('../../services/peopleSync/sourceModel');
 
 const { OrchestratorError } = orchestrator;
 
 const PROVIDER = 'elvanto';
 
 const BATCH_BODY_ALLOWED = new Set([
-  'name', 'enabled', 'filterSchemaVersion', 'filterConfig', 'defaultPeopleType',
+  'name', 'enabled', 'sourceKind', 'sourceExternalId', 'defaultPeopleType',
   'gatheringTypeId', 'gatheringAutoRemoveEnabled', 'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
-  'draftFilterConfig',
-  'broadMatchAcknowledged',
 ]);
 const VALID_PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
 const VALID_SCHEDULE_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
@@ -136,15 +136,8 @@ function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAUL
     return 'Invalid scheduleFrequency.';
   }
   if (body.scheduleDay !== undefined && !Number.isInteger(body.scheduleDay)) return 'scheduleDay must be an integer.';
-  if (body.filterSchemaVersion !== undefined && !Number.isInteger(body.filterSchemaVersion)) {
-    return 'filterSchemaVersion must be an integer.';
-  }
-  if (body.filterConfig !== undefined && !isPlainObject(body.filterConfig)) return 'filterConfig must be an object.';
-  if (body.draftFilterConfig !== undefined && !isPlainObject(body.draftFilterConfig)) return 'draftFilterConfig must be an object.';
-  if (body.broadMatchAcknowledged !== undefined && typeof body.broadMatchAcknowledged !== 'boolean') return 'broadMatchAcknowledged must be a boolean.';
-  if (requireName && body.filterSchemaVersion === 2 && !isPlainObject(body.draftFilterConfig)) {
-    return 'draftFilterConfig is required for schema-2 batches.';
-  }
+  if (requireName && (!SOURCE_KINDS_BY_PROVIDER.elvanto.has(body.sourceKind) || typeof body.sourceExternalId !== 'string' || !body.sourceExternalId.trim())) return 'An Elvanto source is required.';
+  if (!requireName && (Object.hasOwn(body, 'sourceKind') || Object.hasOwn(body, 'sourceExternalId'))) return 'Sync sources must be changed through the source draft endpoint.';
 
   const resultingFrequency = body.scheduleFrequency !== undefined ? body.scheduleFrequency : current.scheduleFrequency;
   const resultingDay = body.scheduleDay !== undefined ? body.scheduleDay : current.scheduleDay;
@@ -157,7 +150,7 @@ function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAUL
 function extractBatchFields(body) {
   const fields = {};
   for (const key of BATCH_BODY_ALLOWED) {
-    if (key === 'draftFilterConfig' || key === 'broadMatchAcknowledged') continue;
+    if (key === 'sourceKind' || key === 'sourceExternalId') continue;
     if (Object.hasOwn(body || {}, key)) fields[key] = body[key];
   }
   return fields;
@@ -207,6 +200,7 @@ const defaultDeps = {
   createBatch: batchRepository.createBatch,
   updateBatch: batchRepository.updateBatch,
   deleteBatch: batchRepository.deleteBatch,
+  resolveVisibleSource,
   buildReview: orchestrator.buildReview,
   applyReviewed: orchestrator.applyReviewed,
 };
@@ -248,6 +242,9 @@ const ELVANTO_ERROR_STATUS = {
 };
 
 function respondWithError(res, err, { context, logLabel } = {}) {
+  if (err?.code === 'SYNC_SOURCE_UNAVAILABLE') {
+    return res.status(409).json({ error: 'The requested sync source is unavailable. Reconnect Elvanto and try again.', code: err.code });
+  }
   if (err instanceof RouteTimeoutError) {
     return res.status(503).json({ error: 'The request took too long to complete. Please try again.', code: err.code });
   }
@@ -463,27 +460,11 @@ function createElvantoRouter(overrides = {}) {
       const bodyError = validateBatchBody(body, { requireName: true });
       if (bodyError) return res.status(400).json({ error: bodyError });
 
-      const filterSchemaVersion = body.filterSchemaVersion === undefined ? 1 : body.filterSchemaVersion;
-      const filterConfig = body.filterConfig === undefined ? {} : body.filterConfig;
-      let filterValidation = null;
-      if (filterSchemaVersion !== 2) {
-        filterValidation = deps.adapter.validateFilter(filterConfig, filterSchemaVersion);
-        if (!filterValidation.ok) {
-          return res.status(400).json({ error: 'Invalid Elvanto filter.', errors: filterValidation.errors });
-        }
-      }
-
       const fields = extractBatchFields(body);
-      let initialDraft = null;
-      if (filterSchemaVersion === 2) {
-        initialDraft = initialV2Draft(deps, churchId, body.draftFilterConfig, body.broadMatchAcknowledged === true);
-        if (initialDraft.error) return res.status(initialDraft.status).json({ error: initialDraft.error, code: initialDraft.code });
-      }
+      const source = await deps.resolveVisibleSource({ churchId, provider: PROVIDER, sourceKind: body.sourceKind, sourceExternalId: body.sourceExternalId });
       const batch = await deps.createBatch({
         churchId, provider: PROVIDER, ...fields,
-        filterConfig: filterSchemaVersion === 2 ? { branches: [], exclusions: [] } : filterValidation.value,
-        filterSchemaVersion,
-        ...(filterSchemaVersion === 2 ? { initialDraftFilterConfig: initialDraft.value } : {}),
+        initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
       });
       res.json({ success: true, batch });
     } catch (err) {
@@ -504,30 +485,6 @@ function createElvantoRouter(overrides = {}) {
       if (bodyError) return res.status(400).json({ error: bodyError });
 
       const fields = extractBatchFields(body);
-      // Re-validate whenever EITHER filterConfig OR filterSchemaVersion is
-      // present in the patch — not just filterConfig alone. A body of
-      // `{filterSchemaVersion: 2}` on its own used to skip this entirely
-      // (normaliseBatchInput only checks filterSchemaVersion is a positive
-      // integer; it has no idea validateElvantoFilter hard-rejects anything
-      // != version 1), silently persisting a filterConfig/filterSchemaVersion
-      // pair that would then fail SYNC_BATCH_FILTER_INVALID on every future
-      // plan/apply/run-now AND every scheduled run for this batch forever —
-      // and the scheduled path just logs and skips, so it would fail
-      // silently. Validates the EFFECTIVE resulting pair: whichever of the
-      // two this patch supplies, plus whichever it doesn't (from the
-      // existing stored batch).
-      if (Object.hasOwn(fields, 'filterConfig') || Object.hasOwn(fields, 'filterSchemaVersion')) {
-        const filterConfig = Object.hasOwn(fields, 'filterConfig') ? fields.filterConfig : existing.filterConfig;
-        const filterSchemaVersion = Object.hasOwn(fields, 'filterSchemaVersion')
-          ? fields.filterSchemaVersion : existing.filterSchemaVersion;
-        const filterValidation = deps.adapter.validateFilter(filterConfig, filterSchemaVersion);
-        if (!filterValidation.ok) {
-          return res.status(400).json({ error: 'Invalid Elvanto filter.', errors: filterValidation.errors });
-        }
-        fields.filterConfig = filterValidation.value;
-        fields.filterSchemaVersion = filterSchemaVersion;
-      }
-
       const batch = await deps.updateBatch({ churchId, provider: PROVIDER, batchId, ...fields });
       res.json({ success: true, batch });
     } catch (err) {

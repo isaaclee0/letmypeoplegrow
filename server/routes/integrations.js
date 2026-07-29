@@ -20,7 +20,8 @@ const {
 const { createPeopleSyncRouter } = require('./integrations/peopleSync');
 const { createElvantoRouter } = require('./integrations/elvanto');
 const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
-const { createFilterBuilderRouter } = require('./integrations/filterBuilder');
+const { createSourceBuilderRouter } = require('./integrations/sourceBuilder');
+const { resolveVisibleSource } = require('../services/peopleSync/sourceSelection');
 
 const router = express.Router();
 
@@ -50,7 +51,7 @@ router.use(requireRole(['admin']));
 // Elvanto routes retained below this router are the gathering discovery and
 // import flow used by ElvantoGatheringImport.
 router.use('/people-sync', createPeopleSyncRouter());
-router.use('/people-sync/providers', createFilterBuilderRouter());
+router.use('/people-sync/providers', createSourceBuilderRouter());
 router.use('/elvanto', createElvantoRouter());
 router.use('/planning-center', createPlanningCenterPeopleSyncRouter());
 
@@ -1299,6 +1300,10 @@ const PCO_V2_CREATE_FIELDS = new Set([
   'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
   'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
 ]);
+const PCO_SOURCE_CREATE_FIELDS = new Set([
+  'name', 'sourceKind', 'sourceExternalId', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
+]);
 
 function parsePositiveSafeInteger(value) {
   const parsed = Number(value);
@@ -1328,42 +1333,15 @@ function validateAllowedFields(body, allowed, message) {
 }
 
 function validateBatchBody(body) {
-  if (body && body.filterSchemaVersion === 2) {
-    const fieldError = validateAllowedFields(body, PCO_V2_CREATE_FIELDS, 'Schema-2 create contains an unknown or active-filter field.');
-    if (fieldError) return fieldError;
-    const { name, draftFilterConfig, broadMatchAcknowledged, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
-    if (typeof name !== 'string' || !name.trim()) return 'name is required.';
-    if (!draftFilterConfig || typeof draftFilterConfig !== 'object' || Array.isArray(draftFilterConfig)) return 'draftFilterConfig must be an object.';
-    if (typeof broadMatchAcknowledged !== 'boolean') return 'broadMatchAcknowledged must be a boolean.';
-    if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
-    const gatheringError = validateGatheringTypeId(gatheringTypeId);
-    if (gatheringError) return gatheringError;
-    if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
-    if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
-    return validateBatchSchedule(scheduleFrequency, scheduleDay);
-  }
-  const fieldError = validateAllowedFields(body, PCO_V1_CREATE_FIELDS, 'Unknown Planning Center batch field.');
-  if (fieldError) return fieldError;
-  const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-          defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
-  if (body.filterSchemaVersion !== undefined && body.filterSchemaVersion !== 1) return 'filterSchemaVersion must be 1 or 2.';
+  const sourceFieldError = validateAllowedFields(body, PCO_SOURCE_CREATE_FIELDS, 'Unknown Planning Center batch field.');
+  if (sourceFieldError) return sourceFieldError;
+  const { name, sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (typeof name !== 'string' || !name.trim()) return 'name is required.';
-  if (typeof membershipFilterEnabled !== 'boolean') return 'membershipFilterEnabled must be a boolean.';
-  if (typeof fieldFilterEnabled !== 'boolean') return 'fieldFilterEnabled must be a boolean.';
-  if (!Array.isArray(membershipAllowlist) || !membershipAllowlist.every((v) => typeof v === 'string')) {
-    return 'membershipAllowlist must be an array of strings.';
-  }
-  if (!Array.isArray(fieldFilters)) return 'fieldFilters must be an array.';
-  for (const rule of fieldFilters) {
-    if (!rule || typeof rule.fieldDefinitionId !== 'string' || !Array.isArray(rule.values) || !rule.values.every((v) => typeof v === 'string')) {
-      return 'Each field filter rule needs a fieldDefinitionId and an array of string values.';
-    }
-  }
-  if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) {
-    return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
-  }
+  if (sourceKind !== 'planning_center_list' || typeof sourceExternalId !== 'string' || !sourceExternalId.trim()) return 'A Planning Center source is required.';
+  if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
   const gatheringError = validateGatheringTypeId(gatheringTypeId);
   if (gatheringError) return gatheringError;
+  if (typeof gatheringAutoRemoveEnabled !== 'boolean') return 'gatheringAutoRemoveEnabled must be a boolean.';
   if (typeof scheduleEnabled !== 'boolean') return 'scheduleEnabled must be a boolean.';
   return validateBatchSchedule(scheduleFrequency, scheduleDay);
 }
@@ -1447,25 +1425,17 @@ router.post('/planning-center/sync-batches', async (req, res) => {
     const err = validateBatchBody(req.body);
     if (err) return res.status(400).json({ error: err });
     const churchId = req.user.church_id;
-    const { name, membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
-            defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+    const { name, sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
+    const source = await resolveVisibleSource({ churchId, provider: 'planning_center', sourceKind, sourceExternalId });
     const batch = await pcoSync.createBatch(churchId, {
-      name: name.trim(), membershipFilterEnabled, membershipAllowlist, fieldFilterEnabled, fieldFilters,
+      name: name.trim(), initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
       defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
-      ...(req.body.filterSchemaVersion === 2 ? {
-        filterSchemaVersion: 2,
-        draftFilterConfig: req.body.draftFilterConfig,
-        broadMatchAcknowledged: req.body.broadMatchAcknowledged,
-      } : {}),
     });
     res.json({ success: true, batch });
   } catch (error) {
-    if (['SYNC_FILTER_INVALID', 'SYNC_FILTER_CACHE_UNAVAILABLE', 'SYNC_FILTER_BROAD_ACK_REQUIRED'].includes(error?.code)) {
-      return res.status(error.code === 'SYNC_FILTER_CACHE_UNAVAILABLE' ? 409 : 400)
-        .json({ error: error.code === 'SYNC_FILTER_BROAD_ACK_REQUIRED' ? 'Broad filters must be acknowledged.' : 'Invalid Planning Center filter.', code: error.code });
-    }
+    if (error?.code === 'SYNC_SOURCE_UNAVAILABLE') return res.status(409).json({ error: 'The requested sync source is unavailable. Reconnect Planning Center and try again.', code: error.code });
     logger.error('Create PCO sync batch error:', error);
     res.status(500).json({ error: 'Failed to create sync batch.' });
   }
@@ -1481,9 +1451,9 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     }
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
-    const isSchema2 = existing.filterSchemaVersion === 2;
-    const err = isSchema2 ? validateSchema2SettingsUpdate(req.body) :
-      (hasSmuggledActiveFilterFields(req.body) ? 'Filter criteria must be saved through the filter draft endpoint.' : validateBatchBody(req.body));
+    const err = hasSmuggledActiveFilterFields(req.body) || Object.keys(req.body || {}).some((key) =>
+      ['membershipFilterEnabled', 'membershipAllowlist', 'fieldFilterEnabled', 'fieldFilters'].includes(key))
+      ? 'Filter criteria must not be saved with a batch update.' : validateSchema2SettingsUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
     const { name, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
@@ -1491,15 +1461,7 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
       name: name.trim(), defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
     };
-    const batch = isSchema2
-      ? await pcoSync.updateBatch(churchId, batchId, settings)
-      : await pcoSync.updateBatch(churchId, batchId, {
-        ...settings,
-        membershipFilterEnabled: req.body.membershipFilterEnabled,
-        membershipAllowlist: req.body.membershipAllowlist,
-        fieldFilterEnabled: req.body.fieldFilterEnabled,
-        fieldFilters: req.body.fieldFilters,
-      });
+    const batch = await pcoSync.updateBatch(churchId, batchId, settings);
 
     // Backfill: the moment this toggle flips off -> on for a batch with a
     // gathering assigned, claim ownership of existing gathering_lists rows this

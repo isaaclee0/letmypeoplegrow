@@ -65,6 +65,7 @@ function noopDeps(extra = {}) {
     createBatch: async (input) => ({ id: 1, ...input }),
     updateBatch: async (input) => ({ id: input.batchId, ...input }),
     deleteBatch: async () => true,
+    resolveVisibleSource: async () => ({ kind: 'elvanto_category', externalId: 'cat-1', name: 'Members', memberCount: null, providerRefreshedAt: null }),
     buildReview: async () => ({ runId: 1, reviewToken: 'tok', summary: {}, plan: {} }),
     applyReviewed: async () => ({ runId: 1, status: 'applied', applied: {}, summary: {} }),
     adapter: {
@@ -309,40 +310,33 @@ test('POST /sync-batches rejects an unknown field', async () => {
   });
 });
 
-test('POST /sync-batches rejects a filter the adapter considers invalid, before any repository write', async () => {
+test('POST /sync-batches rejects legacy filter fields before any repository write', async () => {
   let createCalled = false;
   await withServer(noopDeps({
     createBatch: async () => { createCalled = true; return {}; },
-    adapter: { validateFilter: () => ({ ok: false, value: null, errors: ['statuses must be a non-empty array of strings.'] }) },
   }), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches`, { method: 'POST', body: { name: 'X', filterConfig: {} } });
     assert.equal(status, 400);
-    assert.match(body.error, /invalid elvanto filter/i);
-    assert.deepEqual(body.errors, ['statuses must be a non-empty array of strings.']);
+    assert.match(body.error, /unknown batch field/i);
   });
   assert.equal(createCalled, false);
 });
 
-test('POST /sync-batches creates a validated schema-2 batch as an empty active filter plus an initial draft', async () => {
+test('POST /sync-batches resolves a provider source and creates an initial source draft', async () => {
   let input = null;
-  const draft = { branches: [{ groups: [{ dimensionId: 'status', mode: 'any', values: ['active'] }] }], exclusions: [] };
   await withServer(noopDeps({
     createBatch: async (value) => { input = value; return { id: 7, ...value }; },
-    getFilterCache: () => ({ dimensions: [{ id: 'status', cardinality: 'single', values: [{ id: 'active' }] }], facts: [] }),
-    validateFilterV2: (value) => ({ ok: true, value }),
   }), { user: ADMIN_USER }, async (base) => {
     const response = await requestJson(`${base}/sync-batches`, {
       method: 'POST', body: {
-        name: 'Members', filterSchemaVersion: 2, draftFilterConfig: draft,
+        name: 'Members', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1',
         defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
-        scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, broadMatchAcknowledged: false,
+        scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
       },
     });
     assert.equal(response.status, 200);
   });
-  assert.equal(input.filterSchemaVersion, 2);
-  assert.deepEqual(input.filterConfig, { branches: [], exclusions: [] });
-  assert.deepEqual(input.initialDraftFilterConfig, draft);
+  assert.deepEqual(input.initialDraftSource, { kind: 'elvanto_category', externalId: 'cat-1', name: 'Members' });
 });
 
 // ─── Schedule day/frequency range validation ────────────────────────────────
@@ -359,7 +353,7 @@ test('POST /sync-batches creates a validated schema-2 batch as an empty active f
 test('POST /sync-batches rejects an out-of-range scheduleDay for a weekly schedule', async () => {
   await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches`, {
-      method: 'POST', body: { name: 'X', scheduleFrequency: 'weekly', scheduleDay: 99 },
+      method: 'POST', body: { name: 'X', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', scheduleFrequency: 'weekly', scheduleDay: 99 },
     });
     assert.equal(status, 400);
     assert.match(body.error, /between 0 and 6/i);
@@ -369,7 +363,7 @@ test('POST /sync-batches rejects an out-of-range scheduleDay for a weekly schedu
 test('POST /sync-batches rejects an out-of-range scheduleDay for a monthly schedule', async () => {
   await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches`, {
-      method: 'POST', body: { name: 'X', scheduleFrequency: 'monthly', scheduleDay: -5 },
+      method: 'POST', body: { name: 'X', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', scheduleFrequency: 'monthly', scheduleDay: -5 },
     });
     assert.equal(status, 400);
     assert.match(body.error, /between 1 and 31/i);
@@ -382,7 +376,7 @@ test('POST /sync-batches rejects a scheduleDay that is only invalid because of t
   // with the impossible pair {frequency:'weekly', day:20} unless this is
   // cross-checked against that same default.
   await withServer(noopDeps(), { user: ADMIN_USER }, async (base) => {
-    const { status, body } = await requestJson(`${base}/sync-batches`, { method: 'POST', body: { name: 'X', scheduleDay: 20 } });
+    const { status, body } = await requestJson(`${base}/sync-batches`, { method: 'POST', body: { name: 'X', sourceKind: 'elvanto_category', sourceExternalId: 'cat-1', scheduleDay: 20 } });
     assert.equal(status, 400);
     assert.match(body.error, /between 0 and 6/i);
   });
@@ -437,7 +431,7 @@ test('PUT /sync-batches/:id skips filter re-validation when neither filterConfig
   assert.equal(validateFilterCalled, false);
 });
 
-test('PUT /sync-batches/:id re-validates the filter when ONLY filterSchemaVersion is supplied (regression: used to bypass validation entirely)', async () => {
+test('PUT /sync-batches/:id rejects every legacy filter field', async () => {
   // Before the fix, changing only filterSchemaVersion (with no filterConfig
   // in the same request) skipped adapter.validateFilter entirely, because
   // the gate only checked for the presence of `filterConfig` in the patch.
@@ -450,22 +444,12 @@ test('PUT /sync-batches/:id re-validates the filter when ONLY filterSchemaVersio
   await withServer(noopDeps({
     getBatch: async () => ({ id: 9, filterSchemaVersion: 1, filterConfig: { statuses: ['active'] }, scheduleFrequency: 'weekly', scheduleDay: 1 }),
     updateBatch: async (args) => ({ id: 9, ...args }),
-    adapter: {
-      validateFilter: (config, version) => {
-        calls.push({ config, version });
-        return version === 1 ? { ok: true, value: config, errors: [] } : { ok: false, value: null, errors: ['Unsupported elvanto filter schema version: 2'] };
-      },
-    },
   }), { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/sync-batches/9`, { method: 'PUT', body: { filterSchemaVersion: 2 } });
     assert.equal(status, 400);
-    assert.match(body.error, /invalid elvanto filter/i);
+    assert.match(body.error, /unknown batch field/i);
   });
-  assert.equal(calls.length, 1);
-  // Validated against the EXISTING stored filterConfig (this patch didn't
-  // supply one) and the NEW filterSchemaVersion from the patch.
-  assert.deepEqual(calls[0].config, { statuses: ['active'] });
-  assert.equal(calls[0].version, 2);
+  assert.equal(calls.length, 0);
 });
 
 test('PUT /sync-batches/:id returns 404 for a batch that does not exist for this church', async () => {
