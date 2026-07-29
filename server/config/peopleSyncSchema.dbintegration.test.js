@@ -52,6 +52,14 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
     assert.ok(batchColumnsByName.has('draft_filter_config'));
     assert.ok(batchColumnsByName.has('draft_filter_base_revision'));
     assert.ok(batchColumnsByName.has('draft_filter_updated_at'));
+    for (const name of [
+      'source_kind', 'source_external_id', 'source_name', 'source_revision',
+      'draft_source_kind', 'draft_source_external_id', 'draft_source_name',
+      'draft_source_base_revision', 'draft_source_updated_at', 'source_status',
+      'source_status_checked_at', 'source_status_error_code',
+    ]) assert.ok(batchColumnsByName.has(name), `missing ${name}`);
+    assert.equal(batchColumnsByName.get('source_revision').dflt_value, '1');
+    assert.equal(batchColumnsByName.get('source_status').dflt_value, "'unknown'");
 
     const personForeignKeys = await Database.query('PRAGMA foreign_key_list(external_person_links)');
     const familyForeignKeys = await Database.query('PRAGMA foreign_key_list(external_family_links)');
@@ -100,6 +108,8 @@ test('new church creates the provider-neutral sync schema, defaults, foreign key
         filter_schema_version: '1',
         filter_config: "'{}'",
         filter_revision: '1',
+        source_revision: '1',
+        source_status: "'unknown'",
         default_people_type: "'regular'",
         gathering_auto_remove_enabled: '0',
         schedule_enabled: '0',

@@ -87,6 +87,18 @@ function ensureProviderNeutralSyncSchema(db) {
     ['draft_filter_config', 'TEXT'],
     ['draft_filter_base_revision', 'INTEGER'],
     ['draft_filter_updated_at', 'TEXT'],
+    ['source_kind', 'TEXT'],
+    ['source_external_id', 'TEXT'],
+    ['source_name', 'TEXT'],
+    ['source_revision', 'INTEGER NOT NULL DEFAULT 1'],
+    ['draft_source_kind', 'TEXT'],
+    ['draft_source_external_id', 'TEXT'],
+    ['draft_source_name', 'TEXT'],
+    ['draft_source_base_revision', 'INTEGER'],
+    ['draft_source_updated_at', 'TEXT'],
+    ['source_status', "TEXT NOT NULL DEFAULT 'unknown'"],
+    ['source_status_checked_at', 'TEXT'],
+    ['source_status_error_code', 'TEXT'],
   ];
   for (const [name, definition] of missingBatchColumns) {
     if (!batchColumns.some((column) => column.name === name)) {

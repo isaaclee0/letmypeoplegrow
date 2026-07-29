@@ -1,5 +1,5 @@
 const Database = require('../../config/database');
-const crypto = require('node:crypto');
+const { assertSourceForProvider, normalizeProviderSource, digestSourceIdentity } = require('./sourceModel');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -9,78 +9,34 @@ function assertProvider(provider) {
   if (!PROVIDERS.has(provider)) throw new Error(`Unsupported people-sync provider: ${provider}`);
 }
 
-function parseFilterConfig(value) {
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch (_) {
-    return {};
-  }
-}
-
-function isPlainObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function assertBooleanFilterV2Envelope(filterConfig) {
-  if (!isPlainObject(filterConfig) ||
-      Object.keys(filterConfig).length !== 2 ||
-      !Object.hasOwn(filterConfig, 'branches') || !Object.hasOwn(filterConfig, 'exclusions') ||
-      !Array.isArray(filterConfig.branches) || !Array.isArray(filterConfig.exclusions) ||
-      !filterConfig.branches.every((branch) => isPlainObject(branch) &&
-        Object.keys(branch).length === 1 && Object.hasOwn(branch, 'groups') && Array.isArray(branch.groups))) {
-    throw new Error('Invalid Boolean filter v2 envelope');
-  }
-}
-
-function assertSchema2ActiveFilterUsesDrafts() {
-  throw new Error('Schema-2 active filters must use saveFilterDraft and promoteFilterDraftWithConnection');
-}
-
-function canonicalFilterJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalFilterJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalFilterJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function digestFilterConfig(value) {
-  return crypto.createHash('sha256').update(canonicalFilterJson(value)).digest('hex');
-}
-
-function parseDraftFilterConfig(value) {
-  return value === null || value === undefined ? null : parseFilterConfig(value);
-}
-
-function isCanonicalEmptyV2(filterConfig) {
-  return isPlainObject(filterConfig) && Object.keys(filterConfig).length === 2 &&
-    Array.isArray(filterConfig.branches) && filterConfig.branches.length === 0 &&
-    Array.isArray(filterConfig.exclusions) && filterConfig.exclusions.length === 0;
-}
-
-function isInitialFilterReviewPending(batch) {
-  return Number(batch?.filterSchemaVersion) === 2 && Number(batch?.filterRevision) === 1 &&
-    isCanonicalEmptyV2(batch?.filterConfig);
+function sourceFromColumns(row, prefix = '') {
+  const externalId = row[`${prefix}source_external_id`];
+  return externalId ? {
+    kind: row[`${prefix}source_kind`],
+    externalId,
+    name: row[`${prefix}source_name`],
+  } : null;
 }
 
 function toBatch(row) {
   if (!row) return null;
-  const batch = {
+  const source = sourceFromColumns(row);
+  const draftSource = sourceFromColumns(row, 'draft_');
+  return {
     id: row.id,
     provider: row.provider,
     name: row.name,
     enabled: Boolean(row.enabled),
-    filterSchemaVersion: Number(row.filter_schema_version),
-    filterConfig: parseFilterConfig(row.filter_config),
-    filterRevision: Number(row.filter_revision),
-    draftFilterSchemaVersion: row.draft_filter_schema_version === null ? null : Number(row.draft_filter_schema_version),
-    draftFilterConfig: parseDraftFilterConfig(row.draft_filter_config),
-    draftFilterBaseRevision: row.draft_filter_base_revision === null ? null : Number(row.draft_filter_base_revision),
-    draftFilterUpdatedAt: row.draft_filter_updated_at,
-    needsFilterReview: row.draft_filter_config !== null,
+    source,
+    sourceRevision: Number(row.source_revision),
+    draftSource,
+    draftSourceBaseRevision: row.draft_source_base_revision === null ? null : Number(row.draft_source_base_revision),
+    draftSourceUpdatedAt: row.draft_source_updated_at,
+    needsSourceReview: row.draft_source_external_id !== null,
+    initialSourceReviewPending: row.source_external_id === null,
+    sourceStatus: row.source_status,
+    sourceStatusCheckedAt: row.source_status_checked_at,
+    sourceStatusErrorCode: row.source_status_error_code,
     defaultPeopleType: row.default_people_type,
     gatheringTypeId: row.gathering_type_id,
     gatheringAutoRemoveEnabled: Boolean(row.gathering_auto_remove_enabled),
@@ -92,8 +48,6 @@ function toBatch(row) {
     lastSyncAt: row.last_sync_at,
     lastSyncResult: row.last_sync_result,
   };
-  batch.initialFilterReviewPending = isInitialFilterReviewPending(batch);
-  return batch;
 }
 
 async function getBatch(churchId, provider, batchId) {
@@ -119,79 +73,66 @@ async function listEnabledBatches(churchId, provider) {
 
 function normaliseBatchInput(input) {
   const {
-    churchId, provider, name, enabled = true, filterSchemaVersion = 1, filterConfig = {},
-    defaultPeopleType = 'regular', gatheringTypeId = null, gatheringAutoRemoveEnabled = false,
-    scheduleEnabled = false, scheduleFrequency = 'weekly', scheduleDay = 1, legacyProviderBatchId = null,
-    initialDraftFilterConfig,
+    churchId, provider, name, enabled = true, defaultPeopleType = 'regular', gatheringTypeId = null,
+    gatheringAutoRemoveEnabled = false, scheduleEnabled = false, scheduleFrequency = 'weekly', scheduleDay = 1,
+    legacyProviderBatchId = null, initialDraftSource,
   } = input || {};
   assertProvider(provider);
   if (!churchId || typeof name !== 'string' || !name.trim()) throw new Error('A batch name is required');
-  if (!Number.isInteger(filterSchemaVersion) || filterSchemaVersion < 1) throw new Error('Invalid filter schema version');
-  if (!filterConfig || typeof filterConfig !== 'object' || Array.isArray(filterConfig)) throw new Error('Filter config must be an object');
-  if (initialDraftFilterConfig !== undefined) {
-    assertBooleanFilterV2Envelope(initialDraftFilterConfig);
-  }
   if (!PEOPLE_TYPES.has(defaultPeopleType)) throw new Error('Invalid default people type');
+  if (initialDraftSource !== undefined) assertSourceForProvider(provider, initialDraftSource);
   return {
-    churchId, provider, name: name.trim(), enabled: Boolean(enabled), filterSchemaVersion, filterConfig,
-    defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled: Boolean(gatheringAutoRemoveEnabled),
-    scheduleEnabled: Boolean(scheduleEnabled), scheduleFrequency, scheduleDay, legacyProviderBatchId,
-    initialDraftFilterConfig,
+    churchId, provider, name: name.trim(), enabled: Boolean(enabled), defaultPeopleType, gatheringTypeId,
+    gatheringAutoRemoveEnabled: Boolean(gatheringAutoRemoveEnabled), scheduleEnabled: Boolean(scheduleEnabled),
+    scheduleFrequency, scheduleDay, legacyProviderBatchId,
+    initialDraftSource: initialDraftSource === undefined ? undefined : normalizeProviderSource(provider, initialDraftSource),
   };
 }
 
 async function createBatch(input) {
   const batch = normaliseBatchInput(input);
-  const hasInitialDraft = batch.initialDraftFilterConfig !== undefined;
-  if (!hasInitialDraft && batch.filterSchemaVersion === 2) assertSchema2ActiveFilterUsesDrafts();
-  const activeFilterSchemaVersion = hasInitialDraft ? 2 : batch.filterSchemaVersion;
-  const activeFilterConfig = hasInitialDraft ? { branches: [], exclusions: [] } : batch.filterConfig;
+  const draft = batch.initialDraftSource;
   const result = await Database.queryForChurch(batch.churchId, `INSERT INTO people_sync_batches
-    (church_id, provider, name, enabled, filter_schema_version, filter_config, default_people_type,
-     gathering_type_id, gathering_auto_remove_enabled, schedule_enabled, schedule_frequency, schedule_day,
-     legacy_provider_batch_id, draft_filter_schema_version, draft_filter_config, draft_filter_base_revision,
-     draft_filter_updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      CASE WHEN ? THEN datetime('now') ELSE NULL END)`, [
-    batch.churchId, batch.provider, batch.name, batch.enabled, activeFilterSchemaVersion,
-    JSON.stringify(activeFilterConfig), batch.defaultPeopleType, batch.gatheringTypeId,
+    (church_id, provider, name, enabled, default_people_type, gathering_type_id, gathering_auto_remove_enabled,
+     schedule_enabled, schedule_frequency, schedule_day, legacy_provider_batch_id, draft_source_kind,
+     draft_source_external_id, draft_source_name, draft_source_base_revision, draft_source_updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)`, [
+    batch.churchId, batch.provider, batch.name, batch.enabled, batch.defaultPeopleType, batch.gatheringTypeId,
     batch.gatheringAutoRemoveEnabled, batch.scheduleEnabled, batch.scheduleFrequency, batch.scheduleDay,
-    batch.legacyProviderBatchId, hasInitialDraft ? 2 : null,
-    hasInitialDraft ? JSON.stringify(batch.initialDraftFilterConfig) : null,
-    hasInitialDraft ? 1 : null, hasInitialDraft ? 1 : 0,
+    batch.legacyProviderBatchId, draft?.kind ?? null, draft?.externalId ?? null, draft?.name ?? null,
+    draft ? 1 : null, draft ? 1 : 0,
   ]);
   return getBatch(batch.churchId, batch.provider, result.insertId);
 }
 
-async function saveFilterDraft({ churchId, provider, batchId, schemaVersion, filterConfig }) {
+async function saveSourceDraft({ churchId, provider, batchId, source }) {
   assertProvider(provider);
-  if (schemaVersion !== 2) throw new Error('Draft filters must use schema version 2');
-  assertBooleanFilterV2Envelope(filterConfig);
+  const normalized = normalizeProviderSource(provider, source);
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
-    SET draft_filter_schema_version = ?, draft_filter_config = ?, draft_filter_base_revision = filter_revision,
-      draft_filter_updated_at = datetime('now'), updated_at = datetime('now')
+    SET draft_source_kind = ?, draft_source_external_id = ?, draft_source_name = ?,
+      draft_source_base_revision = source_revision, draft_source_updated_at = datetime('now'), updated_at = datetime('now')
     WHERE id = ? AND church_id = ? AND provider = ?`, [
-    schemaVersion, JSON.stringify(filterConfig), batchId, churchId, provider,
+    normalized.kind, normalized.externalId, normalized.name, batchId, churchId, provider,
   ]);
   return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
 }
 
-async function discardFilterDraft(churchId, provider, batchId) {
+async function discardSourceDraft(churchId, provider, batchId) {
   assertProvider(provider);
   const current = await getBatch(churchId, provider, batchId);
-  if (isInitialFilterReviewPending(current)) {
-    const error = new Error('The initial filter must be reviewed before this batch can run.');
-    error.code = 'SYNC_FILTER_INITIAL_REVIEW_REQUIRED';
+  if (current?.initialSourceReviewPending) {
+    const error = new Error('The initial source must be reviewed before this batch can run.');
+    error.code = 'SYNC_SOURCE_INITIAL_REVIEW_REQUIRED';
     throw error;
   }
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
-    SET draft_filter_schema_version = NULL, draft_filter_config = NULL, draft_filter_base_revision = NULL,
-      draft_filter_updated_at = NULL, updated_at = datetime('now')
+    SET draft_source_kind = NULL, draft_source_external_id = NULL, draft_source_name = NULL,
+      draft_source_base_revision = NULL, draft_source_updated_at = NULL, updated_at = datetime('now')
     WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
   return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
 }
 
-async function promoteFilterDraftWithConnection(conn, {
+async function promoteSourceDraftWithConnection(conn, {
   churchId, provider, batchId, expectedBaseRevision, expectedDraftDigest,
 }) {
   assertProvider(provider);
@@ -203,57 +144,30 @@ async function promoteFilterDraftWithConnection(conn, {
     : conn.prepare(sql).run(...params);
   const row = await readOne(`SELECT * FROM people_sync_batches
     WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
-  const draftConfig = parseDraftFilterConfig(row?.draft_filter_config);
-  if (!row || draftConfig === null || row.filter_revision !== expectedBaseRevision ||
-      row.draft_filter_base_revision !== expectedBaseRevision ||
-      digestFilterConfig(draftConfig) !== expectedDraftDigest) {
-    const error = new Error('Sync filter draft is stale');
-    error.code = 'SYNC_FILTER_DRAFT_STALE';
+  const draft = row ? sourceFromColumns(row, 'draft_') : null;
+  if (!row || !draft || row.source_revision !== expectedBaseRevision ||
+      row.draft_source_base_revision !== expectedBaseRevision ||
+      digestSourceIdentity(draft) !== expectedDraftDigest) {
+    const error = new Error('Sync source draft is stale');
+    error.code = 'SYNC_SOURCE_DRAFT_STALE';
     throw error;
   }
   const result = await write(`UPDATE people_sync_batches
-    SET filter_schema_version = draft_filter_schema_version,
-        filter_config = draft_filter_config,
-        filter_revision = filter_revision + 1,
-        draft_filter_schema_version = NULL,
-        draft_filter_config = NULL,
-        draft_filter_base_revision = NULL,
-        draft_filter_updated_at = NULL,
+    SET source_kind = draft_source_kind, source_external_id = draft_source_external_id, source_name = draft_source_name,
+        source_revision = source_revision + 1, draft_source_kind = NULL, draft_source_external_id = NULL,
+        draft_source_name = NULL, draft_source_base_revision = NULL, draft_source_updated_at = NULL,
+        source_status = 'unknown', source_status_checked_at = NULL, source_status_error_code = NULL,
         updated_at = datetime('now')
-    WHERE id = ? AND church_id = ? AND provider = ? AND filter_revision = ?`, [
-    batchId, churchId, provider, expectedBaseRevision,
+    WHERE id = ? AND church_id = ? AND provider = ? AND source_revision = ? AND draft_source_base_revision = ?`, [
+    batchId, churchId, provider, expectedBaseRevision, expectedBaseRevision,
   ]);
   if ((result.affectedRows ?? result.changes) !== 1) {
-    const error = new Error('Sync filter draft is stale');
-    error.code = 'SYNC_FILTER_DRAFT_STALE';
+    const error = new Error('Sync source draft is stale');
+    error.code = 'SYNC_SOURCE_DRAFT_STALE';
     throw error;
   }
-  const promoted = await readOne(`SELECT * FROM people_sync_batches
-    WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
-  return toBatch(promoted);
-}
-
-// Used only after a reviewed, exact-compatible v1 upgrade has verified every
-// selected batch in the surrounding church transaction.  Keeping the update
-// connection-scoped makes a stale row roll the whole bulk operation back.
-function upgradeLegacyFilterWithConnection(conn, {
-  churchId, provider, batchId, expectedRevision, convertedFilterConfig,
-}) {
-  assertProvider(provider);
-  assertBooleanFilterV2Envelope(convertedFilterConfig);
-  const result = conn.query(`UPDATE people_sync_batches
-    SET filter_schema_version = 2, filter_config = ?, filter_revision = filter_revision + 1,
-        draft_filter_schema_version = NULL, draft_filter_config = NULL, draft_filter_base_revision = NULL,
-        draft_filter_updated_at = NULL, updated_at = datetime('now')
-    WHERE id = ? AND church_id = ? AND provider = ?
-      AND filter_schema_version = 1 AND filter_revision = ?`, [
-    JSON.stringify(convertedFilterConfig), batchId, churchId, provider, expectedRevision,
-  ]);
-  if (result.affectedRows !== 1) {
-    const error = new Error('Sync filter upgrade is stale');
-    error.code = 'SYNC_UPGRADE_STALE';
-    throw error;
-  }
+  return toBatch(await readOne(`SELECT * FROM people_sync_batches
+    WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]));
 }
 
 async function updateBatch(input) {
@@ -261,27 +175,21 @@ async function updateBatch(input) {
   assertProvider(provider);
   const current = await getBatch(churchId, provider, batchId);
   if (!current) return null;
-  const isActiveFilterChange = Object.hasOwn(input, 'filterSchemaVersion') || Object.hasOwn(input, 'filterConfig');
-  if (isActiveFilterChange && (current.filterSchemaVersion === 2 || input.filterSchemaVersion === 2)) {
-    assertSchema2ActiveFilterUsesDrafts();
-  }
-  const allowed = ['name', 'enabled', 'filterSchemaVersion', 'filterConfig', 'defaultPeopleType', 'gatheringTypeId',
-    'gatheringAutoRemoveEnabled', 'scheduleEnabled', 'scheduleFrequency', 'scheduleDay', 'legacyProviderBatchId'];
+  const allowed = ['name', 'enabled', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+    'scheduleEnabled', 'scheduleFrequency', 'scheduleDay', 'legacyProviderBatchId'];
   for (const key of Object.keys(input)) {
     if (!['churchId', 'provider', 'batchId', ...allowed].includes(key)) throw new Error(`Batch update field is not allowlisted: ${key}`);
   }
   const next = { ...current };
   for (const key of allowed) if (Object.hasOwn(input, key)) next[key] = input[key];
-  const normalised = normaliseBatchInput({ churchId, provider, ...next });
+  const batch = normaliseBatchInput({ churchId, provider, ...next });
   await Database.queryForChurch(churchId, `UPDATE people_sync_batches SET name = ?, enabled = ?,
-    filter_schema_version = ?, filter_config = ?, default_people_type = ?, gathering_type_id = ?,
-    gathering_auto_remove_enabled = ?, schedule_enabled = ?, schedule_frequency = ?, schedule_day = ?,
-    legacy_provider_batch_id = ?, updated_at = datetime('now')
+    default_people_type = ?, gathering_type_id = ?, gathering_auto_remove_enabled = ?, schedule_enabled = ?,
+    schedule_frequency = ?, schedule_day = ?, legacy_provider_batch_id = ?, updated_at = datetime('now')
     WHERE id = ? AND church_id = ? AND provider = ?`, [
-    normalised.name, normalised.enabled, normalised.filterSchemaVersion, JSON.stringify(normalised.filterConfig),
-    normalised.defaultPeopleType, normalised.gatheringTypeId, normalised.gatheringAutoRemoveEnabled,
-    normalised.scheduleEnabled, normalised.scheduleFrequency, normalised.scheduleDay,
-    normalised.legacyProviderBatchId, batchId, churchId, provider,
+    batch.name, batch.enabled, batch.defaultPeopleType, batch.gatheringTypeId, batch.gatheringAutoRemoveEnabled,
+    batch.scheduleEnabled, batch.scheduleFrequency, batch.scheduleDay, batch.legacyProviderBatchId,
+    batchId, churchId, provider,
   ]);
   return getBatch(churchId, provider, batchId);
 }
@@ -310,7 +218,5 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
-  saveFilterDraft, discardFilterDraft, promoteFilterDraftWithConnection,
-  upgradeLegacyFilterWithConnection,
-  isInitialFilterReviewPending,
+  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection,
 };
