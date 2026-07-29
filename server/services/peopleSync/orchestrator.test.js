@@ -278,6 +278,50 @@ test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-f
   assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
 });
 
+for (const sourceOrder of [
+  ['context-source', 'terminal-source'],
+  ['terminal-source', 'context-source'],
+]) {
+  test(`cross-batch context cannot re-admit an unlinked lifecycle-ineligible member (${sourceOrder.join(' then ')})`, async () => {
+    const matchingInputs = [];
+    const terminal = person('terminal', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' });
+    const batches = sourceOrder.map((sourceExternalId, index) => batch({
+      id: index + 1,
+      source: source(sourceExternalId),
+    }));
+    const { deps, applied, presence } = makeDeps({
+      batches,
+      localIndividuals: [
+        { id: 9, firstName: 'Grace', lastName: 'Hopper', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+      ],
+      fetchSourceSnapshot: async ({ sourceExternalId }) => sourceExternalId === 'context-source'
+        ? sourceSnapshot(source('context-source'), {
+          people: [person('active-context-source')],
+          memberExternalIds: ['active-context-source'],
+          contextPeople: [terminal],
+        })
+        : sourceSnapshot(source('terminal-source'), {
+          people: [terminal],
+          memberExternalIds: ['terminal'],
+        }),
+      extra: {
+        matchPeople: (input) => {
+          matchingInputs.push(input.externalPeople);
+          return matchPeople(input);
+        },
+      },
+    });
+
+    await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+
+    assert.equal(matchingInputs[0].some((item) => item.id === 'terminal'), false);
+    assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'terminal')), false);
+    assert.deepEqual(applied[0].plan.unmatchedLocalRegulars.map((item) => item.individualId), [9]);
+    assert.equal(presence[0][2].has('terminal'), false);
+    assert.equal(presence[0][3].ignoredExternalIds.has('terminal'), true);
+  });
+}
+
 test('a lifecycle-ineligible existing link is reserved only for safe matching and never archived or presence-counted', async () => {
   const matchingInputs = [];
   const { deps, plans, applied, presence } = makeDeps({

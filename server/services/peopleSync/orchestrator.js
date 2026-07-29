@@ -528,8 +528,11 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         // Lifecycle-ineligible records remain part of the provider snapshot
         // digest/provenance, but never become actionable or "seen" members.
         if (!adapter.isLifecycleEligible(member, settings)) {
-          if (!memberPeopleById.has(id) && !ineligibleMemberPeopleById.has(id)) {
-            ineligibleMemberPeopleById.set(id, member);
+          if (!memberPeopleById.has(id)) {
+            if (!ineligibleMemberPeopleById.has(id)) {
+              ineligibleMemberPeopleById.set(id, member);
+            }
+            matchingPeopleById.delete(id);
           }
           continue;
         }
@@ -543,7 +546,9 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       }
       for (const contextPerson of contextPeopleById.values()) {
         const id = personId(contextPerson);
-        if (!matchingPeopleById.has(id)) matchingPeopleById.set(id, contextPerson);
+        if (!matchingPeopleById.has(id) && !ineligibleMemberPeopleById.has(id)) {
+          matchingPeopleById.set(id, contextPerson);
+        }
       }
       for (const family of sourceSnapshot.families) {
         const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
