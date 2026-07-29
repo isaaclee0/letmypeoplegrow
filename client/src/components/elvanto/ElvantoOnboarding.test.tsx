@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { elvantoSyncAPI, gatheringsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoOnboarding, { type ElvantoOnboardingStep } from './ElvantoOnboarding';
@@ -7,7 +7,7 @@ import type { PeopleSyncBatch, PeopleSyncReview } from '../peopleSync/types';
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn() },
-  elvantoSyncAPI: { createBatch: vi.fn(), getBatchPlan: vi.fn(), applyBatch: vi.fn() },
+  elvantoSyncAPI: { createBatch: vi.fn(), getBatchPlan: vi.fn(), applyBatch: vi.fn(), listBatches: vi.fn() },
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
   peopleSyncAPI: { previewAuthority: vi.fn(), applyAuthority: vi.fn() },
 }));
@@ -50,6 +50,19 @@ const review: PeopleSyncReview = {
   },
 };
 
+const promotedBatch = {
+  ...draftBatch,
+  source: { kind: 'elvanto_group', externalId: 'group-youth', name: 'Youth Group', memberCount: null, providerRefreshedAt: null },
+  sourceRevision: 1, draftSource: null, draftSourceBaseRevision: null, draftSourceUpdatedAt: null,
+  needsSourceReview: false, initialSourceReviewPending: false, sourceStatus: 'available',
+} as PeopleSyncBatch;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => { resolve = onResolve; });
+  return { promise, resolve };
+}
+
 function Harness() {
   const [step, setStep] = useState<ElvantoOnboardingStep>('elvanto-batch');
   return <ElvantoOnboarding step={step} onStepChange={setStep} onContinueToGatherings={vi.fn()} />;
@@ -61,10 +74,15 @@ describe('ElvantoOnboarding source review', () => {
     vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: draftBatch } });
     vi.mocked(elvantoSyncAPI.getBatchPlan).mockResolvedValue({ data: review });
     vi.mocked(elvantoSyncAPI.applyBatch).mockResolvedValue({ data: { success: true, runId: 17, status: 'applied', applied: {}, summary: review.summary } });
+    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({ data: { batches: [promotedBatch] } });
     vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatherings: [] } });
   });
 
-  it('creates a Group source draft, reviews it, and only then advances after promotion', async () => {
+  it('creates a pending Group source draft, then waits for its promoted state after reviewed apply', async () => {
+    const refreshedBatches = deferred<{ data: { batches: PeopleSyncBatch[] } }>();
+    vi.mocked(elvantoSyncAPI.listBatches).mockImplementationOnce(
+      () => refreshedBatches.promise as ReturnType<typeof elvantoSyncAPI.listBatches>,
+    );
     render(<Harness />);
 
     expect(screen.getByText(/Choose one Elvanto Category or Group/)).toBeInTheDocument();
@@ -76,11 +94,28 @@ describe('ElvantoOnboarding source review', () => {
     })));
     await waitFor(() => expect(elvantoSyncAPI.getBatchPlan).toHaveBeenCalledWith(42));
     expect(await screen.findByText(/promotes the selected people source/)).toBeInTheDocument();
+    expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply reviewed source' }));
     await waitFor(() => expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledWith(42, {
       reviewToken: 'review-token', selections: {},
     }));
+    expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
+    await act(async () => { refreshedBatches.resolve({ data: { batches: [promotedBatch] } }); });
     expect(await screen.findByText('Keep LMPG aligned with Elvanto?')).toBeInTheDocument();
+  });
+
+  it('requires batch creation to return a pending source draft before it can begin review', async () => {
+    vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: {
+      batch: { ...draftBatch, draftSource: null, needsSourceReview: false, initialSourceReviewPending: false },
+    } });
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Youth Group' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('did not create a reviewable people source draft');
+    expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
+    expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
   });
 });

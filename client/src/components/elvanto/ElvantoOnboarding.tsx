@@ -84,6 +84,10 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   };
 
   const saveBatch = (savedBatch: PeopleSyncBatch) => {
+    if (!savedBatch.draftSource || !savedBatch.needsSourceReview) {
+      setError('Elvanto did not create a reviewable people source draft. Please try again.');
+      return;
+    }
     setBatch(savedBatch);
     setBatchReview(null);
     onStepChange('elvanto-review');
@@ -93,9 +97,21 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const applyBatch = async (reviewToken: string, selections: PeopleSyncSelections) => {
     if (!batch) return;
     setBusy(true);
+    setError(null);
     try {
       await elvantoSyncAPI.applyBatch(batch.id, { reviewToken, selections });
+      const refreshed = await elvantoSyncAPI.listBatches();
+      const promoted = refreshed.data.batches.find((candidate) => candidate.id === batch.id);
+      const expectedSource = batch.draftSource ?? batch.source;
+      if (!promoted || promoted.draftSource || !promoted.source || !expectedSource
+        || promoted.source.kind !== expectedSource.kind || promoted.source.externalId !== expectedSource.externalId) {
+        setError('Elvanto applied the review, but the promoted people source could not be confirmed. Refresh and try again.');
+        return;
+      }
+      setBatch(promoted);
       onStepChange('elvanto-authority');
+    } catch (cause) {
+      setError(errorMessage(cause, 'Failed to apply the Elvanto source review.'));
     } finally {
       setBusy(false);
     }
@@ -167,6 +183,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     return (
       <section className="space-y-4">
         <p className="text-sm text-gray-700">Choose one Elvanto Category or Group, then optionally assign those people to a gathering.</p>
+        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <ElvantoBatchEditor batch={null} gatherings={gatherings} onSaved={saveBatch} onCancel={onContinueToGatherings} />
       </section>
     );
