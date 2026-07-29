@@ -13,12 +13,8 @@
 // one single place responsible for wiring both providers into the live registry,
 // and keeps this module side-effect-free so it can be required freely (including
 // by this file's own tests) without any risk of a duplicate-registration throw.
-const { isEligible, fromNormalized } = require('../planningCenter/eligibility');
-const { toNormalizedPcoPerson, projectPcoHouseholds } = require('../planningCenter/projection');
-const { getCachedPcoPeople, validatePlanningCenterToken } = require('../planningCenterSync');
-const { fetchFieldDefinitions } = require('../planningCenter/fieldDefinitions');
-const { tallyMembership } = require('../planningCenter/summary');
-const { evaluateFilterV2, validateFilterV2 } = require('./filterEngine');
+const { validateFilterV2 } = require('./filterEngine');
+const { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot } = require('../planningCenter/sourceAdapter');
 
 // PCO's batch filter shape ({ membershipFilterEnabled, membershipAllowlist,
 // fieldFilterEnabled, fieldFilters }) has had exactly one shape since it shipped, so
@@ -198,38 +194,28 @@ function validatePcoFilter(filterConfig, schemaVersion = FILTER_SCHEMA_VERSION) 
   };
 }
 
-// Default dependencies compose already-exported, already-tested PCO functions —
-// nothing here reimplements HTTPS, token refresh, caching, or field-definition
-// fetching. Injected in tests so no test in this file makes a real network call.
+// Dependencies stay injectable so source reads can be exercised without a network
+// connection. Source enumeration/snapshots intentionally do not compose the old
+// full-people cache.
 const defaultDeps = {
-  fetchFieldDefinitions,
   async validateToken(accessToken) {
-    return validatePlanningCenterToken(accessToken);
+    // Keep the legacy PCO sync module out of this adapter's require graph. It
+    // currently depends on filter-preview modules that import validatePcoFilter
+    // from here; lazy loading avoids that old migration-cycle warning while this
+    // source adapter remains independent of the full-people cache.
+    return require('../planningCenterSync').validatePlanningCenterToken(accessToken);
   },
-  async fetchPeople(churchId, accessToken, options) {
-    return getCachedPcoPeople(churchId, accessToken, options);
+  async listSources({ accessToken }) {
+    return listPlanningCenterSources({ accessToken });
   },
-  // Not wired into any current UI (the existing batch editor reads
-  // planningCenter/metadataCache.js's persisted, church-scoped cache directly). This
-  // gives the provider-neutral fetchMetadata contract a working PCO implementation
-  // ahead of Task 9+ deciding whether/how to route the batch editor through it.
-  async fetchMetadata(churchId, accessToken, options = {}, fieldDefinitionsFetcher = fetchFieldDefinitions, peopleFetcher = getCachedPcoPeople) {
-    // Explicit filter refresh already fetched this full roster. Reuse that
-    // exact snapshot rather than asking the PCO people cache/provider again.
-    const peoplePromise = options.snapshot
-      ? Promise.resolve({ people: options.snapshot.people || [] })
-      : peopleFetcher(churchId, accessToken, options);
-    const [{ people }, fieldDefinitions] = await Promise.all([peoplePromise, fieldDefinitionsFetcher(accessToken)]);
-    // Metadata choices must describe the same eligible population as facts.
-    // Archived/inactive-only memberships are not selectable positive values.
-    return { memberships: tallyMembership(people.filter(isActivePcoPerson).map(metadataPerson)).values, fieldDefinitions };
+  async fetchSourceSnapshot({ accessToken, sourceKind, sourceExternalId }) {
+    return fetchPlanningCenterSourceSnapshot({ accessToken, sourceKind, sourceExternalId });
   },
 };
 
 // Factory (not a singleton) so tests can inject fakes for every dependency without
-// touching module state or making network calls. The object it returns is exactly
-// the Task 5 adapter shape — providerRegistry.validateAdapter() rejects any adapter
-// with extra own properties, so no helper methods or debug fields are attached here.
+// touching module state or making network calls. It returns only the source-era
+// contract; providerRegistry is migrated in the subsequent source-runtime task.
 function createPcoAdapter(deps = {}) {
   const resolved = { ...defaultDeps, ...deps };
 
@@ -240,53 +226,26 @@ function createPcoAdapter(deps = {}) {
       return resolved.validateToken(credentials && credentials.accessToken);
     },
 
-    // PCO has no incremental fetch in this phase — every fetchSnapshot call
-    // returns the complete current roster. `mode: 'full'` forces the underlying
-    // 10-minute people cache to refresh (matching the existing "force" semantics
-    // used by the "Refresh from Planning Center" button and the daily cron); any
-    // other mode (including 'incremental', which PCO does not support) reuses the
-    // cache. This does not change getCachedPcoPeople's own cache behaviour at all —
-    // it only decides which of that function's existing two modes to ask for.
-    async fetchSnapshot({ churchId, credentials, mode } = {}) {
-      const accessToken = credentials && credentials.accessToken;
-      const fetched = await resolved.fetchPeople(churchId, accessToken, { force: mode === 'full' });
-      const rawPeople = fetched.people || [];
-      return {
-        provider: 'planning_center',
-        mode: 'full',
-        complete: true,
-        fetchedAt: new Date(fetched.fetchedAt || Date.now()).toISOString(),
-        watermark: null,
-        people: rawPeople.map(toNormalizedPcoPerson),
-        families: projectPcoHouseholds(rawPeople, fetched.householdPrimaryContacts),
-      };
+    // Source reads use the church's already-established connection, but are
+    // deliberately independent from the legacy full-people cache. A List is a
+    // provider-owned selection, not a client-side filter over that cache.
+    async listSources({ credentials } = {}) {
+      return resolved.listSources({ accessToken: credentials && credentials.accessToken });
     },
 
-    async fetchMetadata({ churchId, credentials, force, snapshot } = {}) {
-      const accessToken = credentials && credentials.accessToken;
-      return resolved.fetchMetadata(churchId, accessToken, snapshot === undefined ? { force } : { force, snapshot }, resolved.fetchFieldDefinitions, resolved.fetchPeople);
+    async fetchSourceSnapshot({ credentials, sourceKind, sourceExternalId } = {}) {
+      return resolved.fetchSourceSnapshot({
+        accessToken: credentials && credentials.accessToken,
+        sourceKind,
+        sourceExternalId,
+      });
     },
 
-    validateFilter: validatePcoFilter,
-
-    // eligibility.js's isEligible() remains the single source of truth for PCO
-    // filter semantics; fromNormalized() only reshapes the normalized person back
-    // into what it already expects, so nothing about eligibility is reinterpreted.
-    isEligible(person, filterConfig, schemaVersion = FILTER_SCHEMA_VERSION) {
-      if (schemaVersion === 2) {
-        const fieldValues = (person && person.attributes && person.attributes.fieldValues) || person?.fieldValues || {};
-        const covered = new Set(['membership', ...Object.keys(fieldValues).map((id) => `custom_field:${id}`)]);
-        return evaluateFilterV2(toPcoFilterFacts(person, covered), filterConfig);
-      }
-      return isEligible(fromNormalized(person), filterConfig);
-    },
-
-    toFilterFacts: toPcoFilterFacts,
-
-    buildFilterDimensions: buildPcoFilterDimensions,
-
-    isInFilterPopulation(person) {
-      return isActivePcoPerson(person);
+    // Planning Center terminal-state handling is source hygiene rather than a
+    // configurable local filter. Accept both the source snapshot's normalized
+    // state and the existing raw PCO projection while old call sites migrate.
+    isLifecycleEligible(person) {
+      return !!person && (person.state === 'active' || person.status === 'active');
     },
   };
 }
