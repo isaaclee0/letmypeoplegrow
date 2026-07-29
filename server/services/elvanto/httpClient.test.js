@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const EventEmitter = require('node:events');
+const https = require('node:https');
 
 const {
   createElvantoClient,
@@ -9,6 +11,8 @@ const {
   ELVANTO_UNAVAILABLE,
   ELVANTO_RESPONSE,
   ELVANTO_PAGINATION,
+  defaultRequest,
+  SYNC_SOURCE_UNAVAILABLE,
 } = require('./httpClient');
 
 function basicAuthFor(apiKey) {
@@ -38,12 +42,35 @@ test('production transport serializes array params as repeated fields in inserti
   );
 });
 
+test('production transport preserves response headers for retry classification', async () => {
+  const originalRequest = https.request;
+  https.request = (_options, callback) => {
+    const request = new EventEmitter();
+    request.setTimeout = () => {};
+    request.end = () => {
+      const response = new EventEmitter();
+      response.statusCode = 429;
+      response.headers = { 'retry-after': '3' };
+      callback(response);
+      response.emit('data', '{"status":"error"}');
+      response.emit('end');
+    };
+    return request;
+  };
+  try {
+    const response = await defaultRequest({ path: '/people/getAll.json', method: 'GET', headers: {}, timeoutMs: 1 });
+    assert.deepEqual(response.headers, { 'retry-after': '3' });
+  } finally {
+    https.request = originalRequest;
+  }
+});
+
 // ─── Auth header ────────────────────────────────────────────────────────────
 
 test('get() sends HTTP Basic auth with the API key as username and "x" as password', async () => {
   let seenHeaders;
   const client = createElvantoClient({
-    apiKey: 'key',
+    apiKey: 'key', sleep: async () => {},
     request: async ({ headers }) => {
       seenHeaders = headers;
       return { status: 200, data: { status: 'ok' } };
@@ -404,7 +431,7 @@ test('getAll() stops after 1000 pages and raises ELVANTO_PAGINATION instead of l
 test('getAll() aborts on a partial-page failure and never resolves with accumulated partial items', async () => {
   let call = 0;
   const client = createElvantoClient({
-    apiKey: 'key',
+    apiKey: 'key', sleep: async () => {},
     request: async ({ params }) => {
       call += 1;
       if (params.page === 1) {
@@ -424,7 +451,7 @@ test('getAll() aborts on a partial-page failure and never resolves with accumula
       return true;
     }
   );
-  assert.equal(call, 2);
+  assert.equal(call, 5, 'the later page is retried, but accumulated first-page data is never returned');
 });
 
 test('getAll() aborts when a later page reports a bad body status, never resolving with partial items', async () => {
@@ -469,4 +496,94 @@ test('post() sends the body with method POST and returns the parsed response', a
   assert.equal(seenMethod, 'POST');
   assert.deepEqual(seenBody, { id: 'p1', firstname: 'Test' });
   assert.deepEqual(result, { status: 'ok', people: { total: 0 } });
+});
+
+// ─── Source-read retry semantics ───────────────────────────────────────────
+
+test('get() preserves response headers and honours Retry-After before retrying a rate limit', async () => {
+  const sleeps = [];
+  let attempts = 0;
+  const client = createElvantoClient({
+    apiKey: 'key',
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    request: async () => {
+      attempts += 1;
+      if (attempts === 1) return { status: 429, headers: { 'retry-after': '2' }, data: { status: 'error' } };
+      return { status: 200, headers: { 'x-request-id': 'ok' }, data: { status: 'ok' } };
+    },
+  });
+
+  assert.deepEqual(await client.get('/people/getAll.json', {}), { status: 'ok' });
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test('retries transient GET, read-only people/search POST, and transport failures no more than three times', async () => {
+  for (const operation of [
+    { path: '/people/getAll.json', invoke: (client) => client.get('/people/getAll.json', {}) },
+    { path: '/people/search.json', invoke: (client) => client.post('/people/search.json', { 'search[groups]': 'g1' }) },
+  ]) {
+    let attempts = 0;
+    const client = createElvantoClient({
+      apiKey: 'key', sleep: async () => {},
+      request: async () => {
+        attempts += 1;
+        return { status: 503, data: { status: 'error' } };
+      },
+    });
+    await assert.rejects(() => operation.invoke(client), (err) => err.code === ELVANTO_UNAVAILABLE);
+    assert.equal(attempts, 4, `${operation.path} must make one attempt plus at most three retries`);
+  }
+
+  let transportAttempts = 0;
+  const transportClient = createElvantoClient({
+    apiKey: 'key', sleep: async () => {},
+    request: async () => { transportAttempts += 1; throw new Error('socket reset'); },
+  });
+  await assert.rejects(() => transportClient.get('/people/getAll.json', {}), (err) => err.code === ELVANTO_UNAVAILABLE);
+  assert.equal(transportAttempts, 4);
+});
+
+test('does not retry non-transient response, credential, or missing-source failures', async () => {
+  const cases = [
+    { response: { status: 401, data: { status: 'error' } }, expected: ELVANTO_AUTH },
+    { response: { status: 403, data: { status: 'error' } }, expected: ELVANTO_AUTH },
+    { response: { status: 404, data: { status: 'error' } }, expected: ELVANTO_UNAVAILABLE },
+    { response: { status: 200, data: 'malformed' }, expected: ELVANTO_RESPONSE },
+    { response: { status: 200, data: { status: 'error', error: { message: 'validation failed' } } }, expected: ELVANTO_RESPONSE },
+  ];
+  for (const { response, expected } of cases) {
+    let attempts = 0;
+    const client = createElvantoClient({
+      apiKey: 'key', sleep: async () => {},
+      request: async () => { attempts += 1; return response; },
+    });
+    await assert.rejects(() => client.get('/people/getAll.json', {}), (err) => err.code === expected);
+    assert.equal(attempts, 1);
+  }
+});
+
+test('classifies a source-specific 403 as SYNC_SOURCE_UNAVAILABLE while account credentials remain auth failures', async () => {
+  const sourceClient = createElvantoClient({
+    apiKey: 'key', requestScope: 'source', sleep: async () => {},
+    request: async () => ({ status: 403, data: { status: 'error' } }),
+  });
+  await assert.rejects(() => sourceClient.get('/people/getAll.json', {}), (err) => err.code === SYNC_SOURCE_UNAVAILABLE);
+});
+
+test('getAll() remains sequential and rejects instead of returning accumulated pages after retry exhaustion', async () => {
+  const events = [];
+  const client = createElvantoClient({
+    apiKey: 'key', sleep: async () => {},
+    request: async ({ params }) => {
+      events.push(params.page);
+      if (params.page === 1) {
+        return { status: 200, data: { status: 'ok', people: { total: 2, person: { id: 'p1' } } } };
+      }
+      return { status: 500, data: { status: 'error' } };
+    },
+  });
+  await assert.rejects(() => client.getAll('/people/getAll.json', { page_size: 10 }, 'people', 'person'),
+    (err) => err.code === ELVANTO_UNAVAILABLE);
+  assert.deepEqual(events, [1, 2, 2, 2, 2]);
 });

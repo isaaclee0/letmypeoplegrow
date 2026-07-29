@@ -50,11 +50,13 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const MIN_PAGE_SIZE = 10;
 const MAX_PAGE_SIZE = 1000;
 const MAX_PAGES = 1000;
+const MAX_RETRIES = 3;
 
-const ELVANTO_AUTH = 'ELVANTO_AUTH';
+const ELVANTO_AUTH = 'SYNC_SOURCE_AUTH';
 const ELVANTO_UNAVAILABLE = 'ELVANTO_UNAVAILABLE';
 const ELVANTO_RESPONSE = 'ELVANTO_RESPONSE';
 const ELVANTO_PAGINATION = 'ELVANTO_PAGINATION';
+const SYNC_SOURCE_UNAVAILABLE = 'SYNC_SOURCE_UNAVAILABLE';
 
 /**
  * Error raised by the Elvanto client. `.message` and `.details` are
@@ -121,7 +123,9 @@ function defaultRequest({ path, params, method, headers, body, timeoutMs }) {
           } catch (_e) {
             parsed = data;
           }
-          resolve({ status: res.statusCode, data: parsed });
+          // Keep the full header bag for rate-limit handling. Callers only
+          // ever surface safe scalar error details, never this response.
+          resolve({ status: res.statusCode, headers: res.headers, data: parsed });
         });
       }
     );
@@ -145,7 +149,26 @@ function defaultRequest({ path, params, method, headers, body, timeoutMs }) {
  *   Defaults to a real HTTPS call against api.elvanto.com; tests inject a fake.
  * @param {number} [options.timeoutMs] - Timeout passed through to `request` (default 30000).
  */
-function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function retryAfterMilliseconds(headers, now) {
+  const raw = headers && Object.entries(headers).find(([name]) => String(name).toLowerCase() === 'retry-after');
+  const value = raw && raw[1];
+  const text = Array.isArray(value) ? value[0] : value;
+  if (typeof text !== 'string' || !text.trim()) return 1000;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const timestamp = Date.parse(text);
+  return Number.isNaN(timestamp) ? 1000 : Math.max(0, timestamp - now());
+}
+
+function createElvantoClient({
+  apiKey,
+  request = defaultRequest,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  maxRetries = MAX_RETRIES,
+  now = () => Date.now(),
+  requestScope = 'account',
+} = {}) {
   if (!apiKey) {
     throw new ElvantoError('An Elvanto API key is required.', ELVANTO_AUTH, {});
   }
@@ -169,56 +192,89 @@ function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEF
       .replace(/Basic\s+[A-Za-z0-9+/=]+/gi, 'Basic [REDACTED]');
   }
 
+  const boundedRetries = Math.max(0, Math.min(MAX_RETRIES, Number.isInteger(maxRetries) ? maxRetries : MAX_RETRIES));
+
+  function isReadOperation(method, path) {
+    return method === 'GET' || (method === 'POST' && path === '/people/search.json');
+  }
+
   async function performRequest(method, path, { params, body } = {}) {
     const headers = { Authorization: authHeader, Accept: 'application/json' };
+    const retryable = isReadOperation(method, path);
 
-    let response;
-    try {
-      response = await request({ path, params, method, body, headers, timeoutMs });
-    } catch (err) {
-      const reason = err && typeof err.message === 'string' ? err.message : 'unknown error';
-      throw new ElvantoError(
-        `Elvanto request to ${path} failed: ${redact(reason)}`,
-        ELVANTO_UNAVAILABLE,
-        { path, method }
-      );
+    for (let retry = 0; ; retry += 1) {
+      let response;
+      try {
+        response = await request({ path, params, method, body, headers, timeoutMs });
+      } catch (err) {
+        if (retryable && retry < boundedRetries) {
+          await sleep(1000);
+          continue;
+        }
+        const reason = err && typeof err.message === 'string' ? err.message : 'unknown error';
+        throw new ElvantoError(
+          `Elvanto request to ${path} failed: ${redact(reason)}`,
+          ELVANTO_UNAVAILABLE,
+          { path, method }
+        );
+      }
+
+      const status = response && response.status;
+      const data = response && response.data;
+      const responseHeaders = response && response.headers;
+
+      if (status === 429) {
+        if (retryable && retry < boundedRetries) {
+          await sleep(retryAfterMilliseconds(responseHeaders, now));
+          continue;
+        }
+        throw new ElvantoError(
+          `Elvanto returned an unexpected status ${status} for ${path}.`,
+          ELVANTO_UNAVAILABLE,
+          { path, status }
+        );
+      }
+
+      if (status === 401 || status === 403) {
+        const code = status === 403 && requestScope === 'source' ? SYNC_SOURCE_UNAVAILABLE : ELVANTO_AUTH;
+        throw new ElvantoError(
+          status === 403 && requestScope === 'source'
+            ? `Elvanto source is unavailable for ${path} (status ${status}).`
+            : `Elvanto rejected the request credentials for ${path} (status ${status}).`,
+          code,
+          { path, status }
+        );
+      }
+
+      if (typeof status !== 'number' || status < 200 || status >= 300) {
+        if (retryable && status >= 500 && retry < boundedRetries) {
+          await sleep(1000);
+          continue;
+        }
+        throw new ElvantoError(
+          `Elvanto returned an unexpected status ${status} for ${path}.`,
+          ELVANTO_UNAVAILABLE,
+          { path, status }
+        );
+      }
+
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new ElvantoError(
+          `Elvanto returned a malformed response body for ${path}.`,
+          ELVANTO_RESPONSE,
+          { path, status }
+        );
+      }
+
+      if (data.status && data.status !== 'ok') {
+        const reason = data.error && typeof data.error.message === 'string'
+          ? redact(data.error.message)
+          : 'Elvanto reported an error status.';
+        throw new ElvantoError(reason, ELVANTO_RESPONSE, { path, status, elvantoStatus: data.status });
+      }
+
+      return data;
     }
-
-    const status = response && response.status;
-    const data = response && response.data;
-
-    if (status === 401 || status === 403) {
-      throw new ElvantoError(
-        `Elvanto rejected the request credentials for ${path} (status ${status}).`,
-        ELVANTO_AUTH,
-        { path, status }
-      );
-    }
-
-    if (typeof status !== 'number' || status < 200 || status >= 300) {
-      throw new ElvantoError(
-        `Elvanto returned an unexpected status ${status} for ${path}.`,
-        ELVANTO_UNAVAILABLE,
-        { path, status }
-      );
-    }
-
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      throw new ElvantoError(
-        `Elvanto returned a malformed response body for ${path}.`,
-        ELVANTO_RESPONSE,
-        { path, status }
-      );
-    }
-
-    if (data.status && data.status !== 'ok') {
-      const reason = data.error && typeof data.error.message === 'string'
-        ? redact(data.error.message)
-        : 'Elvanto reported an error status.';
-      throw new ElvantoError(reason, ELVANTO_RESPONSE, { path, status, elvantoStatus: data.status });
-    }
-
-    return data;
   }
 
   function get(path, params) {
@@ -302,10 +358,13 @@ function createElvantoClient({ apiKey, request = defaultRequest, timeoutMs = DEF
 
 module.exports = {
   createElvantoClient,
+  defaultRequest,
   serializeQueryParams,
   ElvantoError,
   ELVANTO_AUTH,
   ELVANTO_UNAVAILABLE,
   ELVANTO_RESPONSE,
   ELVANTO_PAGINATION,
+  SYNC_SOURCE_UNAVAILABLE,
+  retryAfterMilliseconds,
 };
