@@ -470,6 +470,49 @@ test('each later scheduled attempt resolves a missing source again and can recov
   assert.equal(fetches, 2);
 });
 
+test('unattended Planning Center auth exhaustion records a safe source error and leaves the roster untouched', async () => {
+  const planningCenterSource = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
+  const sourceHealth = { status: 'available', errorCode: null };
+  let notificationCalls = 0;
+  let fetches = 0;
+  const { deps, plans, applied: applyCalls } = makeDeps({
+    batches: [batch({ provider: 'planning_center', source: planningCenterSource })],
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async () => {
+      fetches += 1;
+      if (fetches === 1) throw Object.assign(new Error('Planning Center credentials need reconnection'), { code: 'SYNC_SOURCE_AUTH' });
+      return sourceSnapshot(planningCenterSource, { provider: 'planning_center' });
+    },
+    extra: {
+      recordActiveSourceFailure: async ({ code }) => {
+        sourceHealth.status = code === 'SYNC_SOURCE_UNAVAILABLE' ? 'missing' : 'error';
+        sourceHealth.errorCode = code;
+        if (code === 'SYNC_SOURCE_UNAVAILABLE') notificationCalls += 1;
+      },
+      recordActiveSourceAvailable: async () => {
+        sourceHealth.status = 'available';
+        sourceHealth.errorCode = null;
+      },
+    },
+  });
+
+  await assert.rejects(
+    runUnattended({ churchId: 'church-a', provider: 'planning_center', batchId: 1 }, deps),
+    { code: 'SYNC_SOURCE_AUTH' }
+  );
+
+  assert.equal(sourceHealth.status, 'error');
+  assert.equal(sourceHealth.errorCode, 'SYNC_SOURCE_AUTH');
+  assert.equal(notificationCalls, 0);
+  assert.equal(plans.length, 0);
+  assert.equal(applyCalls.length, 0);
+
+  const recovered = await runUnattended({ churchId: 'church-a', provider: 'planning_center', batchId: 1 }, deps);
+  assert.equal(recovered.status, 'applied');
+  assert.equal(sourceHealth.status, 'available');
+  assert.equal(sourceHealth.errorCode, null);
+});
+
 test('review digest binds sorted source identity, revision, draft identity, and snapshot digests', async () => {
   let digested;
   const draft = source('draft-20');

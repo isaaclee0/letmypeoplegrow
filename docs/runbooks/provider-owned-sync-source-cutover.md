@@ -15,6 +15,17 @@ eligible only after **Review & sync** has promoted it.
 - Keep unattended Planning Center sync disabled for this church until the
   successful review has been applied and checked.
 
+## Connection recovery
+
+Planning Center's short-lived access tokens refresh automatically during source
+reads. If the integration shows **Reconnect Planning Center**, an active
+administrator must complete the OAuth reconnect, then confirm a successful
+source read and its audit entry before re-enabling or relying on unattended
+sync. Reconnect preserves the batch configuration, including active and draft
+source selections, schedules, and linked people. Disconnect remains
+authority-guarded: when Planning Center is authoritative, complete the reviewed
+authority change first.
+
 ## Coordinated sequence
 
 1. Identify the one production church and its one current v1 Planning Center

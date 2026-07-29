@@ -172,6 +172,32 @@ test('transient, incomplete, and authentication failures are safe errors that ne
   });
 });
 
+test('a Planning Center authentication failure clears after a later successful source read without notifying admins', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await seedActiveBatch(churchId);
+    const admin = await seedUser(churchId);
+
+    await recordActiveSourceFailure({
+      churchId, provider: 'planning_center', batchId: batch.id, expectedSource: ACTIVE_SOURCE,
+      code: 'SYNC_SOURCE_AUTH', checkedAt: '2026-07-29T01:00:00.000Z',
+    });
+    let updated = await getBatch(churchId, 'planning_center', batch.id);
+
+    assert.equal(updated.sourceStatus, 'error');
+    assert.equal(updated.sourceStatusErrorCode, 'SYNC_SOURCE_AUTH');
+    assert.equal((await notificationsFor(churchId, admin)).length, 0);
+
+    await recordActiveSourceAvailable({
+      churchId, provider: 'planning_center', batchId: batch.id, expectedSource: ACTIVE_SOURCE,
+      observedSource: ACTIVE_SOURCE, checkedAt: '2026-07-29T02:00:00.000Z',
+    });
+    updated = await getBatch(churchId, 'planning_center', batch.id);
+
+    assert.equal(updated.sourceStatus, 'available');
+    assert.equal(updated.sourceStatusErrorCode, null);
+  });
+});
+
 test('a late health result cannot update an active source that was replaced after the fetch began', async () => {
   await withTestChurchDb(async (churchId) => {
     const batch = await seedActiveBatch(churchId);

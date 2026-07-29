@@ -1,7 +1,7 @@
 # Planning Center Connection Recovery Design
 
 **Date:** 2026-07-30  
-**Status:** Proposed
+**Status:** Implemented
 
 ## Problem
 
