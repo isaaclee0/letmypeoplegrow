@@ -202,6 +202,44 @@ async function deleteBatch(churchId, provider, batchId) {
   return result.affectedRows > 0;
 }
 
+async function recordActiveSourceHealthWithConnection(conn, {
+  churchId, provider, batchId, expectedSource, sourceName, sourceStatus, checkedAt, errorCode,
+}) {
+  assertProvider(provider);
+  if (!expectedSource || !expectedSource.kind || !expectedSource.externalId ||
+      !['available', 'missing', 'error'].includes(sourceStatus)) {
+    throw new Error('Invalid active source health update');
+  }
+  const readOne = async (sql, params) => typeof conn.query === 'function'
+    ? (await conn.query(sql, params))[0]
+    : conn.prepare(sql).get(...params);
+  const write = async (sql, params) => typeof conn.query === 'function'
+    ? await conn.query(sql, params)
+    : conn.prepare(sql).run(...params);
+  const row = await readOne(`SELECT id, name, source_kind, source_external_id, source_name, source_status
+    FROM people_sync_batches WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
+  if (!row || row.source_kind !== expectedSource.kind || row.source_external_id !== expectedSource.externalId) {
+    return { updated: false, priorSourceStatus: null, batchName: null, sourceName: null };
+  }
+
+  const nextSourceName = sourceName ?? row.source_name;
+  const result = await write(`UPDATE people_sync_batches
+    SET source_name = ?, source_status = ?, source_status_checked_at = ?, source_status_error_code = ?
+    WHERE id = ? AND church_id = ? AND provider = ? AND source_kind = ? AND source_external_id = ?`, [
+    nextSourceName, sourceStatus, checkedAt, errorCode,
+    batchId, churchId, provider, expectedSource.kind, expectedSource.externalId,
+  ]);
+  if ((result.affectedRows ?? result.changes) !== 1) {
+    return { updated: false, priorSourceStatus: null, batchName: null, sourceName: null };
+  }
+  return {
+    updated: true,
+    priorSourceStatus: row.source_status,
+    batchName: row.name,
+    sourceName: nextSourceName,
+  };
+}
+
 async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMode, complete, status, externalWatermark }) {
   assertProvider(provider);
   if (!RUN_STATUSES.has(status)) throw new Error('Invalid batch result status');
@@ -219,5 +257,5 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
-  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection,
+  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
 };

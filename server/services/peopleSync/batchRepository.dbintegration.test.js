@@ -5,7 +5,7 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { digestSourceIdentity } = require('./sourceModel');
 const {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
-  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection,
+  saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
 } = require('./batchRepository');
 
 const PCO_SOURCE = { kind: 'planning_center_list', externalId: '42', name: 'Sunday Attendance' };
@@ -114,6 +114,32 @@ test('source draft promotion is compare-and-swap guarded and clears the reviewed
     assert.equal(promoted.needsSourceReview, false);
     assert.equal(promoted.initialSourceReviewPending, false);
     assert.equal(promoted.sourceStatus, 'unknown');
+  });
+});
+
+test('active source health updates are exact church/provider/source compare-and-swap writes', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE });
+    const conn = Database.getChurchDb(churchId);
+    await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
+    });
+
+    const first = await recordActiveSourceHealthWithConnection(conn, {
+      churchId, provider: 'elvanto', batchId: batch.id, expectedSource: ELVANTO_SOURCE,
+      sourceName: 'Renamed members', sourceStatus: 'available', checkedAt: '2026-07-29T01:00:00.000Z', errorCode: null,
+    });
+    assert.equal(first.updated, true);
+    assert.deepEqual((await getBatch(churchId, 'elvanto', batch.id)).source, { ...ELVANTO_SOURCE, name: 'Renamed members' });
+
+    const rejected = await recordActiveSourceHealthWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: batch.id, expectedSource: ELVANTO_SOURCE,
+      sourceName: 'Wrong provider', sourceStatus: 'missing', checkedAt: '2026-07-29T02:00:00.000Z',
+      errorCode: 'SYNC_SOURCE_UNAVAILABLE',
+    });
+    assert.equal(rejected.updated, false);
+    assert.equal((await getBatch(churchId, 'elvanto', batch.id)).sourceStatus, 'available');
   });
 });
 
