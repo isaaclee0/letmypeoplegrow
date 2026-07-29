@@ -57,3 +57,48 @@ test('withPlanningCenterSourceToken force-refreshes once after a source 401', as
     pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
   }
 });
+
+test('withPlanningCenterSourceToken converts a thrown forced refresh to a safe source authentication error', async () => {
+  const originalGetAccessTokenForChurch = pcoSync.getAccessTokenForChurch;
+  const tokenCalls = [];
+  let sourceReadAttempts = 0;
+  pcoSync.getAccessTokenForChurch = async (_churchId, options) => {
+    tokenCalls.push(options || {});
+    if (options && options.forceRefresh) throw new Error('refresh transport failed');
+    return 'old-access';
+  };
+
+  try {
+    await assert.rejects(
+      () => pcoSync.withPlanningCenterSourceToken('church-a', async () => {
+        sourceReadAttempts++;
+        throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+      }),
+      (error) => error instanceof PcoSourceError && error.code === 'SYNC_SOURCE_AUTH'
+    );
+    assert.equal(sourceReadAttempts, 1);
+    assert.deepEqual(tokenCalls, [{}, { forceRefresh: true }]);
+  } finally {
+    pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
+  }
+});
+
+test('withPlanningCenterSourceToken does not rotate credentials for a lookalike 401 error', async () => {
+  const originalGetAccessTokenForChurch = pcoSync.getAccessTokenForChurch;
+  const tokenCalls = [];
+  const lookalike = Object.assign(new Error('not a PCO source error'), { details: { status: 401 } });
+  pcoSync.getAccessTokenForChurch = async (_churchId, options) => {
+    tokenCalls.push(options || {});
+    return 'old-access';
+  };
+
+  try {
+    await assert.rejects(
+      () => pcoSync.withPlanningCenterSourceToken('church-a', async () => { throw lookalike; }),
+      (error) => error === lookalike
+    );
+    assert.deepEqual(tokenCalls, [{}]);
+  } finally {
+    pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
+  }
+});

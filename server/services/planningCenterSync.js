@@ -222,6 +222,10 @@ function sourceAuthenticationError() {
   return new PcoSourceError('Planning Center source credentials are unavailable', 'SYNC_SOURCE_AUTH', {});
 }
 
+function isUnauthorizedPcoSourceError(error) {
+  return error instanceof PcoSourceError && error.details && error.details.status === 401;
+}
+
 async function withPlanningCenterSourceToken(churchId, operation) {
   const initialToken = await module.exports.getAccessTokenForChurch(churchId);
   if (!initialToken) throw sourceAuthenticationError();
@@ -229,16 +233,21 @@ async function withPlanningCenterSourceToken(churchId, operation) {
   try {
     return await operation(initialToken);
   } catch (error) {
-    if (!error || !error.details || error.details.status !== 401) throw error;
+    if (!isUnauthorizedPcoSourceError(error)) throw error;
   }
 
-  const refreshedToken = await module.exports.getAccessTokenForChurch(churchId, { forceRefresh: true });
+  let refreshedToken;
+  try {
+    refreshedToken = await module.exports.getAccessTokenForChurch(churchId, { forceRefresh: true });
+  } catch (_) {
+    throw sourceAuthenticationError();
+  }
   if (!refreshedToken) throw sourceAuthenticationError();
 
   try {
     return await operation(refreshedToken);
   } catch (error) {
-    if (error && error.details && error.details.status === 401) throw sourceAuthenticationError();
+    if (isUnauthorizedPcoSourceError(error)) throw sourceAuthenticationError();
     throw error;
   }
 }
