@@ -144,6 +144,7 @@ Planning Center List
 
 243 people
 Last refreshed 4 days ago
+If recent members are missing, refresh this List in Planning Center.
 ```
 
 The selector lists Lists visible to the connected Planning Center user. Each
@@ -184,6 +185,11 @@ The UI always includes text with the relative age and exposes the exact
 timestamp. Colour is supplementary and is never the only signal. The UI does
 not use "stale" wording, a warning banner, or a confirmation checkbox.
 
+Planning Center batches also show the neutral helper text **If recent members
+are missing, refresh this List in Planning Center.** This explains where
+freshness is controlled without implying that an older List is invalid or
+asking LMPG to run it.
+
 For Elvanto, the equivalent line is **Last checked by LMPG**, based on the last
 complete source read. It does not imply that Elvanto maintains a source refresh
 time.
@@ -194,8 +200,10 @@ Stable external IDs are authoritative. A source rename does not break the
 batch; after a successful read, LMPG updates the stored display-name snapshot.
 
 If a source is no longer visible, the editor retains its last known name and
-shows that it is unavailable. LMPG never silently clears the selection or
-converts an unavailable source into an empty source.
+shows **Source missing**. The batch enters a persisted missing-source state,
+scheduled reconciliation is skipped, and active administrators receive one
+deduplicated notification for that transition. LMPG never silently clears the
+selection or converts an unavailable source into an empty source.
 
 ## Data Model
 
@@ -218,6 +226,19 @@ draft_source_name
 draft_source_base_revision
 draft_source_updated_at
 ```
+
+Add operational source-health columns:
+
+```text
+source_status TEXT NOT NULL DEFAULT 'unknown'
+source_status_checked_at
+source_status_error_code
+```
+
+Allowed statuses are `unknown`, `available`, `missing`, and `error`. These
+columns describe the active source only. Status and last-check updates do not
+increment `source_revision` because they record provider-read health, not user
+intent.
 
 `source_revision` starts at 1 and increments whenever a reviewed draft source
 is promoted. During coordinated migration, a batch with no active source is
@@ -285,6 +306,35 @@ normative.
 `complete: true` is returned only after every provider page and every required
 normalization dependency has succeeded. A partial snapshot is never returned.
 An empty but complete source is valid and contains `people: []`.
+
+### Pagination and rate limits
+
+Source snapshot reads must be safe for large churches. Planning Center List
+membership uses the endpoint maximum `per_page=100` and follows the provider's
+pagination links until no next page remains. Elvanto uses its supported page
+size and existing paginated collection client. Page traversal is sequential;
+the adapter must not launch an unbounded request fan-out.
+
+Planning Center rate limits are dynamic. The HTTP client reads
+`X-PCO-API-Request-Rate-Limit`, `X-PCO-API-Request-Rate-Period`, and
+`X-PCO-API-Request-Rate-Count`, and follows `Retry-After` on HTTP 429. It must
+not hard-code the currently documented default quota. Retries are bounded and
+safe because Planning Center source operations are GET-only. If required
+household context cannot be included in the paginated people response,
+follow-up reads use bounded concurrency and the same rate-limit handler rather
+than an unbounded per-person loop.
+
+Elvanto pagination is likewise sequential. Its client honours HTTP 429 and
+`Retry-After` when supplied and uses bounded retry/backoff for retryable
+transport or provider failures. Authentication, permission, missing-source,
+and malformed-response errors are not retried as transient rate limits.
+
+Retry exhaustion aborts the entire source read. Accumulated pages are discarded
+and no complete snapshot is returned.
+
+Official Planning Center rate-limit reference:
+
+- <https://api.planningcenteronline.com/docs/overview/rate-limiting>
 
 Household members fetched only to corroborate matching are context, not source
 members. They must not become eligible or be imported unless their own stable
@@ -413,18 +463,37 @@ non-configurable provider lifecycle boundary.
 
 ### Source unavailable
 
-If the selected source is deleted, inaccessible to the connected provider user,
-or returned with the wrong resource type, the adapter throws a typed
+If the selected source is deleted, archived or invalid where the provider
+exposes such a state, inaccessible to the connected provider user, or returned
+with the wrong resource type, the adapter throws a typed
 `SYNC_SOURCE_UNAVAILABLE` error.
 
 The run fails before planning or mutation. The source is not treated as empty,
-no draft is promoted, and no person is archived because of the failure.
+no draft is promoted, and no person is archived because of the failure. LMPG
+sets `source_status = 'missing'`, records `SYNC_SOURCE_UNAVAILABLE`, and skips
+that scheduled reconciliation.
+
+The first transition into `missing` for a particular active source creates one
+system notification for every active administrator, identifying the batch and
+last-known source name and directing them to select a replacement in Settings
+→ Integrations. Repeated scheduled checks while it remains missing do not spam
+duplicate notifications. Each later schedule still re-resolves the source so
+restored permissions or a restored source can recover automatically. A
+successful complete read changes the status to `available`; if the same source
+goes missing again after recovery, that new transition may notify again.
+
+These persisted transitions apply when the unavailable source is the active
+source. If a draft source becomes unavailable during save or reviewed preview,
+the draft remains pending and the UI shows the draft error, but the active
+source's operational status is unchanged.
 
 ### Incomplete provider response
 
 Any failed page, malformed pagination envelope, missing required relationship,
 transport error, or authentication failure aborts the source fetch. Accumulated
-partial items are discarded. No `ProviderSourceSnapshot` is produced.
+partial items are discarded. No `ProviderSourceSnapshot` is produced. A
+non-missing operational failure records `source_status = 'error'` and its typed
+error code; it does not send the missing-source notification.
 
 ### Legitimately empty source
 
@@ -436,7 +505,7 @@ This is distinct from an unavailable or incomplete source.
 
 A successful read by stable ID updates the stored source-name snapshot. Rename
 alone does not create a draft, increment the source revision, or change
-eligibility.
+eligibility. It sets the operational source status to `available`.
 
 ### Missing or old Planning Center refresh time
 
@@ -529,8 +598,14 @@ affect the authoritative population.
 - Planning Center paginates complete List membership and required household
   context.
 - Planning Center source operations use GET only and never invoke List `run`.
+- Planning Center follows every membership page at `per_page=100`, honours its
+  dynamic rate headers and `Retry-After`, and stops after bounded retries.
+- Required household reads use bounded concurrency and cannot create an
+  unbounded N+1 request burst.
 - Elvanto enumerates Categories and Groups with stable IDs.
 - Elvanto fetches complete category and group membership.
+- Elvanto source pagination is sequential and retry exhaustion discards every
+  accumulated page.
 - Household context outside the source never becomes eligible.
 - Renames update display metadata without changing identity.
 - Deleted, inaccessible, malformed, and partially fetched sources fail closed.
@@ -556,6 +631,11 @@ affect the authoritative population.
 - Removing a person from one source does not archive them while another enabled
   batch still contains them.
 - Source unavailability never produces an archival plan.
+- Missing sources persist a visible batch status, skip scheduled
+  reconciliation, and notify active administrators only on the transition into
+  missing.
+- A later successful source read clears missing/error status and permits a
+  future missing transition to notify again.
 - Legitimately empty complete sources follow normal review/unattended policy.
 - Scheduled sync proceeds for green, orange, red, and unknown Planning Center
   refresh ages.
@@ -570,6 +650,9 @@ affect the authoritative population.
 - Freshness colours change at the exact 7-day and 30-day boundaries.
 - Exact timestamps and non-colour text remain accessible.
 - Missing refresh time renders neutral text.
+- Planning Center displays the neutral helper text directing users to refresh
+  missing recent members inside Planning Center.
+- Source missing and transient source error states are distinguishable.
 - Unavailable saved sources retain their last-known name and can be replaced by
   a newly selected source.
 - Removed filter-builder and upgrade routes/components have no remaining callers.
@@ -591,6 +674,10 @@ affect the authoritative population.
 - LMPG performs no Planning Center List writes or runs.
 - Planning Center List age is visible but never blocks sync.
 - Incomplete or unavailable sources fail closed without producing removals.
+- A missing source is visible on the batch, skips scheduled reconciliation, and
+  produces a deduplicated administrator notification.
+- Large source snapshots paginate completely and respect provider rate-limit
+  signals with bounded retries.
 - Source changes cannot become active before reviewed atomic promotion.
 - Stable provider person IDs, not names, determine persistent links.
 - The local Boolean filter builder, evaluator, preview, facts cache, and upgrade
