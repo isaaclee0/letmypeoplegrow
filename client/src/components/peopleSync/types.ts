@@ -17,6 +17,23 @@
 // own PROVIDERS/AUTHORITY_PROVIDERS sets.
 export type SyncProvider = 'planning_center' | 'elvanto';
 
+export type SourceKind = 'planning_center_list' | 'elvanto_category' | 'elvanto_group';
+export type SourceStatus = 'unknown' | 'available' | 'missing' | 'error';
+
+export interface ProviderSource {
+  kind: SourceKind;
+  externalId: string;
+  name: string;
+  memberCount: number | null;
+  providerRefreshedAt: string | null;
+}
+
+/** Stable source identity accepted by create and source-draft requests. */
+export interface SourceSelection {
+  sourceKind: SourceKind;
+  sourceExternalId: string;
+}
+
 // server/services/peopleSync/authority.js's AUTHORITY_PROVIDERS plus the
 // unlocked 'none' state (people_sync_settings.authority_provider's default).
 export type AuthorityProvider = SyncProvider | 'none';
@@ -138,15 +155,16 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   provider: SyncProvider;
   name: string;
   enabled: boolean;
-  filterSchemaVersion: number;
-  filterConfig: TFilter;
-  filterRevision: number;
-  draftFilterSchemaVersion: number | null;
-  draftFilterConfig: TFilter | null;
-  draftFilterBaseRevision: number | null;
-  draftFilterUpdatedAt: string | null;
-  needsFilterReview: boolean;
-  initialFilterReviewPending: boolean;
+  source: ProviderSource | null;
+  sourceRevision: number;
+  draftSource: ProviderSource | null;
+  draftSourceBaseRevision: number | null;
+  draftSourceUpdatedAt: string | null;
+  needsSourceReview: boolean;
+  initialSourceReviewPending: boolean;
+  sourceStatus: SourceStatus;
+  sourceStatusCheckedAt: string | null;
+  sourceStatusErrorCode: string | null;
   defaultPeopleType: PeopleType;
   gatheringTypeId: number | null;
   gatheringAutoRemoveEnabled: boolean;
@@ -167,6 +185,9 @@ export interface PeopleSyncBatch<TFilter = Record<string, unknown>> {
   lastSyncResult: string | null;
 }
 
+// The filters remain typed while Task 8 migrates the existing editors. They
+// are no longer part of the provider-owned source batch DTO above.
+
 // The filter-draft endpoints deliberately return only this non-PII subset,
 // rather than the complete batch record returned by list/create/update APIs.
 export interface PeopleSyncFilterState<TFilter = Record<string, unknown>> {
@@ -181,6 +202,21 @@ export interface PeopleSyncFilterState<TFilter = Record<string, unknown>> {
   draftFilterUpdatedAt: string | null;
   needsFilterReview: boolean;
   initialFilterReviewPending: boolean;
+}
+
+export interface PeopleSyncSourceState {
+  id: number;
+  provider: SyncProvider;
+  source: ProviderSource | null;
+  sourceRevision: number;
+  draftSource: ProviderSource | null;
+  draftSourceBaseRevision: number | null;
+  draftSourceUpdatedAt: string | null;
+  needsSourceReview: boolean;
+  initialSourceReviewPending: boolean;
+  sourceStatus: SourceStatus;
+  sourceStatusCheckedAt: string | null;
+  sourceStatusErrorCode: string | null;
 }
 
 // Elvanto batches are only ever written through batchRepository's own

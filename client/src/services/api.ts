@@ -3,6 +3,10 @@ import type {
   SyncProvider,
   PeopleSyncBatch,
   PeopleSyncFilterState,
+  PeopleSyncSourceState,
+  ProviderSource,
+  SourceSelection,
+  PeopleType,
   ElvantoSyncBatchInput,
   ElvantoSyncBatchPatch,
   ElvantoSyncMetadata,
@@ -1010,6 +1014,22 @@ export const peopleSyncAPI = {
     api.get<{ success: true; runs: PeopleSyncRun[] }>('/integrations/people-sync/runs', {
       params: limit ? { limit } : {},
     }),
+
+  listSources: (provider: SyncProvider) =>
+    api.get<{ success: true; sources: ProviderSource[] }>(
+      `/integrations/people-sync/providers/${provider}/sources`,
+    ),
+
+  saveSourceDraft: (provider: SyncProvider, batchId: number, selection: SourceSelection) =>
+    api.put<{ success: true; batch: PeopleSyncSourceState }>(
+      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/source-draft`,
+      selection,
+    ),
+
+  discardSourceDraft: (provider: SyncProvider, batchId: number) =>
+    api.delete<{ success: true; batch: PeopleSyncSourceState }>(
+      `/integrations/people-sync/providers/${provider}/sync-batches/${batchId}/source-draft`,
+    ),
 
   getFilterMetadata: (provider: SyncProvider) =>
     api.get<{ success: true; metadata: FilterMetadata; snapshot: FilterSnapshot }>(
