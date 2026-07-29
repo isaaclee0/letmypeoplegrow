@@ -35,10 +35,16 @@ const batch = {
   lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 } as PeopleSyncBatch;
 
-function renderPanel() {
+function renderPanel({
+  status = {},
+  peopleSyncSettings = settings,
+}: {
+  status?: Record<string, unknown>;
+  peopleSyncSettings?: PeopleSyncSettings;
+} = {}) {
   return render(<PlanningCenterIntegrationPanel
-    status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church' }}
-    refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={settings} peopleSyncStatus="known"
+    status={{ enabled: true, connected: true, loading: false, planningCenterAccount: 'Example church', ...status }}
+    refreshStatus={vi.fn()} onBack={vi.fn()} peopleSyncSettings={peopleSyncSettings} peopleSyncStatus="known"
     providerConnections={{ planning_center: true, elvanto: true }} refreshPeopleSync={vi.fn()} retryPeopleSync={vi.fn()}
   />);
 }
@@ -70,5 +76,43 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
 
     expect(await screen.findByText('Source check failed · SYNC_SOURCE_CHECK_FAILED')).toBeInTheDocument();
     expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
+  });
+
+  it('offers reconnect when stored Planning Center credentials need replacement', async () => {
+    // Catches recovery state being rendered as an ordinary first-time connection.
+    vi.mocked(integrationsAPI.authorizePlanningCenter).mockResolvedValue({ data: { authUrl: '#pco-oauth' } });
+    renderPanel({ status: { connected: false, reconnectRequired: true, connectionErrorCode: 'SYNC_SOURCE_AUTH' } });
+
+    expect(screen.getByRole('button', { name: 'Reconnect Planning Center' })).toBeEnabled();
+    expect(screen.getByText(/Lists, batches, and linked people/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect Planning Center' }));
+    await waitFor(() => expect(integrationsAPI.authorizePlanningCenter).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps the initial connect wording when no reconnect is required', () => {
+    // Catches a missing connection being incorrectly presented as credential recovery.
+    renderPanel({ status: { connected: false, reconnectRequired: false, connectionErrorCode: null } });
+
+    expect(screen.getByRole('button', { name: 'Connect Planning Center' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconnect Planning Center' })).not.toBeInTheDocument();
+  });
+
+  it('does not block reconnect when Planning Center is authoritative', () => {
+    // Catches the destructive Disconnect guard leaking into the non-destructive reconnect flow.
+    renderPanel({
+      status: { connected: false, reconnectRequired: true, connectionErrorCode: 'SYNC_SOURCE_AUTH' },
+      peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Reconnect Planning Center' })).toBeEnabled();
+  });
+
+  it('keeps Disconnect guarded when a connected Planning Center is authoritative', async () => {
+    // Catches a connected authoritative provider exposing a destructive confirmation action.
+    renderPanel({ peopleSyncSettings: { ...settings, authorityProvider: 'planning_center' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    expect(await screen.findByText(/authoritative people source/i)).toBeInTheDocument();
+    expect(screen.queryAllByRole('button', { name: 'Disconnect' })).toHaveLength(1);
   });
 });

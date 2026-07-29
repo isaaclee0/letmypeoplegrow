@@ -37,6 +37,7 @@ const IntegrationsTab: React.FC = () => {
 
   const [pcStatus, setPcStatus] = useState<PlanningCenterStatus>({
     enabled: false,
+    configured: false,
     connected: false,
     loading: true,
     planningCenterAccount: null,
@@ -77,9 +78,12 @@ const IntegrationsTab: React.FC = () => {
       const response = await integrationsAPI.getPlanningCenterStatus();
       setPcStatus({
         enabled: response.data.enabled === true,
+        configured: response.data.configured === true,
         connected: response.data.connected === true,
         loading: false,
         planningCenterAccount: response.data.planningCenterAccount ?? null,
+        reconnectRequired: response.data.reconnectRequired === true,
+        connectionErrorCode: response.data.connectionErrorCode === 'SYNC_SOURCE_AUTH' ? 'SYNC_SOURCE_AUTH' : null,
         fetchFailed: false,
       });
     } catch (error) {

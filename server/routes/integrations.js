@@ -18,6 +18,7 @@ const { createElvantoRouter } = require('./integrations/elvanto');
 const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
 const { createSourceBuilderRouter } = require('./integrations/sourceBuilder');
 const { resolveVisibleSource } = require('../services/peopleSync/sourceSelection');
+const authority = require('../services/peopleSync/authority');
 
 const router = express.Router();
 
@@ -699,51 +700,39 @@ router.get('/planning-center/status', async (req, res) => {
         enabled: false,
         configured: false,
         connected: false,
-        planningCenterAccount: null
+        planningCenterAccount: null,
+        reconnectRequired: false,
+        connectionErrorCode: null,
       });
     }
 
     const churchId = req.user.church_id;
-
-    const owned = await getChurchPlanningCenterTokens(churchId);
-    const tokens = owned && owned.tokens;
-
-    if (owned && owned.reconnectRequired) {
-      // Two different admins' legacy tokens disagreed (see
-      // getChurchPlanningCenterTokens above) — surface this distinctly rather
-      // than reporting a plain "not connected", so the UI can prompt an
-      // explicit reconnect instead of leaving an admin to wonder why a
-      // previously-working connection now shows as unconfigured.
-      return res.json({
-        enabled: true,
-        configured: true,
-        connected: false,
-        planningCenterAccount: null,
-        error: 'PCO_RECONNECT_REQUIRED',
-        reconnectRequired: true,
-      });
-    }
-
-    if (!tokens || !tokens.access_token) {
+    // A safe connection lookup only reads metadata, so this status probe can
+    // distinguish a first-time connection from encrypted credentials that
+    // need to be replaced without decrypting, changing source health, or
+    // reviving a legacy per-user credential.
+    const connection = await connectionStore.getConnection(churchId, 'planning_center');
+    if (!connection) {
       return res.json({
         enabled: true,
         configured: false,
         connected: false,
-        planningCenterAccount: null
+        planningCenterAccount: null,
+        reconnectRequired: false,
+        connectionErrorCode: null,
       });
     }
 
-    // Test the connection
+    // getAccessTokenForChurch is the single church-scoped credential owner.
+    // It performs the normal refresh and persists a rotated refresh token;
+    // status intentionally does not implement another refresh path.
     try {
-      const response = await makePlanningCenterRequest(
-        'https://api.planningcenteronline.com/people/v2/me',
-        tokens,
-        owned.ownerUserId,
-        churchId
-      );
+      const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
+      if (!accessToken) throw new Error('Planning Center credentials are unavailable');
+      const validation = await pcoSync.validatePlanningCenterToken(accessToken);
 
-      if (response.status === 200) {
-        const accountName = response.data?.data?.attributes?.name || 'Connected';
+      if (validation.connected) {
+        const accountName = validation.accountName || 'Connected';
         let lastSyncResult = null;
         try {
           const rows = await Database.query(
@@ -757,26 +746,24 @@ router.get('/planning-center/status', async (req, res) => {
           configured: true,
           connected: true,
           planningCenterAccount: accountName,
+          reconnectRequired: false,
+          connectionErrorCode: null,
           lastSyncResult
-        });
-      } else {
-        return res.json({
-          enabled: true,
-          configured: true,
-          connected: false,
-          planningCenterAccount: null,
-          error: 'Token is invalid or expired'
         });
       }
     } catch (error) {
-      return res.json({
-        enabled: true,
-        configured: true,
-        connected: false,
-        planningCenterAccount: null,
-        error: 'Failed to verify connection'
-      });
+      // Credential availability and a rejected /me request are recoverable
+      // through the normal OAuth authorization flow. Deliberately expose no
+      // provider or credential detail from the status probe.
     }
+    return res.json({
+      enabled: true,
+      configured: true,
+      connected: false,
+      planningCenterAccount: null,
+      reconnectRequired: true,
+      connectionErrorCode: 'SYNC_SOURCE_AUTH',
+    });
   } catch (error) {
     console.error('Get Planning Center status error:', error);
     res.status(500).json({ error: 'Failed to get Planning Center integration status.' });
@@ -1000,6 +987,12 @@ router.get('/planning-center/callback', async (req, res) => {
 router.post('/planning-center/disconnect', async (req, res) => {
   try {
     const churchId = req.user.church_id;
+    const activeAuthority = await authority.getAuthority(churchId);
+    if (activeAuthority.active === 'planning_center') {
+      return res.status(409).json({
+        error: 'Planning Center is your authoritative people source. Choose another source before disconnecting.',
+      });
+    }
 
     // Church-wide, not scoped to the clicking admin — the connection isn't
     // "theirs" any more than any other admin's, and status/connect are already

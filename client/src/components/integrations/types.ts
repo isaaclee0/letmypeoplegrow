@@ -1,4 +1,4 @@
-import type { PeopleSyncSettings, SyncProvider } from '../peopleSync/types';
+import type { PeopleSyncSettings, PlanningCenterStatus as PlanningCenterStatusResponse, SyncProvider } from '../peopleSync/types';
 
 export interface ElvantoStatus {
   connected: boolean;
@@ -13,11 +13,8 @@ export interface AiStatus {
   loading: boolean;
 }
 
-export interface PlanningCenterStatus {
-  enabled: boolean;
-  connected: boolean;
+export interface PlanningCenterStatus extends PlanningCenterStatusResponse {
   loading: boolean;
-  planningCenterAccount: string | null;
   /** True when the status fetch itself failed (network/server error), as opposed to a successful response reporting the integration disabled. */
   fetchFailed?: boolean;
 }

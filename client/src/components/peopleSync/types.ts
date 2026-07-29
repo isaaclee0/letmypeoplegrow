@@ -17,6 +17,16 @@
 // own PROVIDERS/AUTHORITY_PROVIDERS sets.
 export type SyncProvider = 'planning_center' | 'elvanto';
 
+/** Response returned by GET /integrations/planning-center/status. */
+export interface PlanningCenterStatus {
+  enabled: boolean;
+  configured?: boolean;
+  connected: boolean;
+  planningCenterAccount: string | null;
+  reconnectRequired?: boolean;
+  connectionErrorCode?: 'SYNC_SOURCE_AUTH' | null;
+}
+
 export type SourceKind = 'planning_center_list' | 'elvanto_category' | 'elvanto_group';
 export type SourceStatus = 'unknown' | 'available' | 'missing' | 'error';
 

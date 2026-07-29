@@ -53,6 +53,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
   const [peopleLinked, setPeopleLinked] = useState(true);
+  const reconnectRequired = status.reconnectRequired === true;
   const batchLoadGeneration = useRef(0);
   const settingsGeneration = useRef(0);
   const settingsMutationInFlight = useRef(false);
@@ -321,9 +322,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
           {/* Connection Form - Only show when not connected */}
           {!status.connected && !status.loading && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-              <h5 className="text-base font-medium text-gray-900 dark:text-gray-100 mb-4">Connect to Planning Center</h5>
+              <h5 className="text-base font-medium text-gray-900 dark:text-gray-100 mb-4">
+                {reconnectRequired ? 'Reconnect Planning Center' : 'Connect to Planning Center'}
+              </h5>
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data.
+                {reconnectRequired
+                  ? 'Reconnect to replace the stored credentials. Your Lists, batches, and linked people will remain unchanged.'
+                  : "You'll be redirected to Planning Center to authorize access. We'll only access your people and check-in data."}
               </p>
 
               {planningCenterError && (
@@ -346,12 +351,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   {planningCenterConnecting ? (
                     <>
                       <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
-                      Connecting...
+                      {reconnectRequired ? 'Reconnecting...' : 'Connecting...'}
                     </>
                   ) : (
                     <>
                       <LinkIcon className="h-4 w-4 mr-2" />
-                      Connect Planning Center
+                      {reconnectRequired ? 'Reconnect Planning Center' : 'Connect Planning Center'}
                     </>
                   )}
                 </button>

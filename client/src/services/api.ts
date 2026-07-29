@@ -18,6 +18,7 @@ import type {
   ExternalLinks,
   ElvantoStatus,
   ElvantoConnection,
+  PlanningCenterStatus,
 } from '../components/peopleSync/types';
 
 // Use relative URL for API requests - this will work with any domain
@@ -891,7 +892,7 @@ export const integrationsAPI = {
     api.post('/integrations/elvanto/import-gatherings', data),
 
   // Planning Center integration - OAuth based
-  getPlanningCenterStatus: () => api.get('/integrations/planning-center/status'),
+  getPlanningCenterStatus: () => api.get<PlanningCenterStatus>('/integrations/planning-center/status'),
   getPlanningCenterSyncStats: () => api.get('/integrations/planning-center/sync-stats'),
   authorizePlanningCenter: (returnTo?: string) =>
     api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
