@@ -161,15 +161,19 @@ async function markPeopleSeen(churchId, provider, seenExternalIds) {
   });
 }
 
-async function recordFullFetchPresence(churchId, provider, seenExternalIds, { complete } = {}) {
+async function recordFullFetchPresence(churchId, provider, seenExternalIds, { complete, ignoredExternalIds = new Set() } = {}) {
   assertProvider(provider);
   if (complete !== true) throw new Error('Refusing missing-person accounting for an incomplete full fetch');
   if (!(seenExternalIds instanceof Set)) throw new Error('Seen external IDs must be a Set');
+  if (!(ignoredExternalIds instanceof Set)) throw new Error('Ignored external IDs must be a Set');
   return Database.transaction(async (conn) => {
     const links = await conn.query(`SELECT id, external_person_id, individual_id, missing_full_sync_count
       FROM external_person_links WHERE church_id = ? AND provider = ?`, [churchId, provider]);
     const missingCandidates = [];
     for (const link of links) {
+      // Lifecycle-ineligible source records are neither seen nor missing;
+      // preserve an existing link without advancing its archive counter.
+      if (ignoredExternalIds.has(link.external_person_id)) continue;
       const seen = seenExternalIds.has(link.external_person_id);
       const missingFullSyncCount = seen ? 0 : Number(link.missing_full_sync_count) + 1;
       await conn.query(`UPDATE external_person_links SET missing_full_sync_count = ?,

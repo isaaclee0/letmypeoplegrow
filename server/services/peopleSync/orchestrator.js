@@ -429,6 +429,10 @@ function sourceIncomplete(provider) {
   return new OrchestratorError('SYNC_SOURCE_INCOMPLETE', `${provider} source did not return a complete snapshot`, 502);
 }
 
+function sourceUnavailable(provider) {
+  return new OrchestratorError('SYNC_SOURCE_UNAVAILABLE', `${provider} source is unavailable`, 502);
+}
+
 function personId(person) {
   const id = person?.id === null || person?.id === undefined ? '' : String(person.id);
   return id || null;
@@ -468,6 +472,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
   const eligibleByBatch = new Map();
   const seenMemberExternalIds = new Set();
   const memberPeopleById = new Map();
+  const ineligibleMemberPeopleById = new Map();
   const matchingPeopleById = new Map();
   const familiesById = new Map();
   const sourceProvenance = [];
@@ -487,9 +492,14 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         sourceExternalId: selectedSource.externalId,
       });
       const providerRefreshedAt = sourceSnapshot?.providerRefreshedAt ?? sourceSnapshot?.source?.providerRefreshedAt ?? null;
-      if (!sourceSnapshot || sourceSnapshot.complete !== true || sourceSnapshot.provider !== provider ||
-          !sameSourceIdentity(sourceSnapshot.source, selectedSource) ||
-          typeof sourceSnapshot.source?.name !== 'string' || !sourceSnapshot.source.name.trim() ||
+      if (!sourceSnapshot || sourceSnapshot.provider !== provider ||
+          !sourceSnapshot.source || typeof sourceSnapshot.source !== 'object' || Array.isArray(sourceSnapshot.source)) {
+        throw sourceIncomplete(provider);
+      }
+      if (!sameSourceIdentity(sourceSnapshot.source, selectedSource)) throw sourceUnavailable(provider);
+      if (sourceSnapshot.complete !== true || typeof sourceSnapshot.source.kind !== 'string' ||
+          typeof sourceSnapshot.source.externalId !== 'string' ||
+          typeof sourceSnapshot.source.name !== 'string' || !sourceSnapshot.source.name.trim() ||
           !isIsoTimestamp(sourceSnapshot.fetchedAt) || !isIsoTimestamp(providerRefreshedAt, { allowNull: true }) ||
           !Array.isArray(sourceSnapshot.memberExternalIds) || !Array.isArray(sourceSnapshot.people) ||
           !Array.isArray(sourceSnapshot.contextPeople) || !Array.isArray(sourceSnapshot.families)) {
@@ -497,24 +507,41 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       }
 
       const sourcePeopleById = new Map();
-      for (const candidate of [...sourceSnapshot.people, ...sourceSnapshot.contextPeople]) {
+      for (const candidate of sourceSnapshot.people) {
         const id = personId(candidate);
         if (!id) throw sourceIncomplete(provider);
         if (!sourcePeopleById.has(id)) sourcePeopleById.set(id, candidate);
       }
+      const contextPeopleById = new Map();
+      for (const candidate of sourceSnapshot.contextPeople) {
+        const id = personId(candidate);
+        if (!id || sourcePeopleById.has(id)) throw sourceIncomplete(provider);
+        if (!contextPeopleById.has(id)) contextPeopleById.set(id, candidate);
+      }
       const memberIds = new Set();
+      const eligible = new Set();
       for (const rawId of sourceSnapshot.memberExternalIds) {
         const id = rawId === null || rawId === undefined ? '' : String(rawId);
         const member = sourcePeopleById.get(id);
         if (!id || !member) throw sourceIncomplete(provider);
         memberIds.add(id);
+        // Lifecycle-ineligible records remain part of the provider snapshot
+        // digest/provenance, but never become actionable or "seen" members.
+        if (!adapter.isLifecycleEligible(member, settings)) {
+          if (!memberPeopleById.has(id) && !ineligibleMemberPeopleById.has(id)) {
+            ineligibleMemberPeopleById.set(id, member);
+          }
+          continue;
+        }
+        eligible.add(id);
         seenMemberExternalIds.add(id);
+        ineligibleMemberPeopleById.delete(id);
         if (!memberPeopleById.has(id)) {
           memberPeopleById.set(id, member);
           matchingPeopleById.set(id, member);
         }
       }
-      for (const contextPerson of sourceSnapshot.contextPeople) {
+      for (const contextPerson of contextPeopleById.values()) {
         const id = personId(contextPerson);
         if (!matchingPeopleById.has(id)) matchingPeopleById.set(id, contextPerson);
       }
@@ -524,11 +551,6 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         if (!familiesById.has(id)) familiesById.set(id, family);
       }
 
-      const eligible = new Set();
-      for (const id of memberIds) {
-        const member = sourcePeopleById.get(id);
-        if (adapter.isLifecycleEligible(member, settings)) eligible.add(id);
-      }
       eligibleByBatch.set(batch.id, eligible);
 
       const provenanceEntry = {
@@ -574,6 +596,8 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       families: [...familiesById.values()],
     },
     matchingPeople: [...matchingPeopleById.values()],
+    ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
+    ignoredLifecycleExternalIds: new Set(ineligibleMemberPeopleById.keys()),
     eligibleByBatch,
     seenMemberExternalIds,
     sourceProvenance,
@@ -610,12 +634,24 @@ async function runPipelineBody({
     deps.listGatheringMemberships(churchId),
   ]);
 
+  const linkedExternalIds = new Set(personLinks.map((link) => String(link.externalPersonId)));
+  const matchingPeople = [...acquired.matchingPeople];
+  // Retain an ineligible record only when it protects an existing durable
+  // link from being rematched. Its matcher result and presence projection
+  // are filtered below, so this context cannot create lifecycle actions.
+  for (const person of acquired.ineligibleMemberPeople) {
+    if (linkedExternalIds.has(String(person.id))) matchingPeople.push(person);
+  }
+  const actionablePersonLinks = personLinks.filter((link) =>
+    !acquired.ignoredLifecycleExternalIds.has(String(link.externalPersonId))
+  );
+
   // 6. match
   const matcherResult = memberOnlyMatcherResult(deps.matchPeople({
-    externalPeople: acquired.matchingPeople,
+    externalPeople: matchingPeople,
     localPeople: individuals,
     existingLinks: personLinks.map((link) => ({ externalPersonId: link.externalPersonId, individualId: link.individualId })),
-    externalFamilyMembers: groupMembersByFamily(acquired.matchingPeople),
+    externalFamilyMembers: groupMembersByFamily(matchingPeople),
     localFamilyMembers: groupMembersByFamily(individuals),
   }), acquired.seenMemberExternalIds);
 
@@ -633,7 +669,7 @@ async function runPipelineBody({
     authoritative,
     activeAuthority,
     trigger,
-    personLinks: personLinks.map((link) => ({
+    personLinks: actionablePersonLinks.map((link) => ({
       externalPersonId: link.externalPersonId, individualId: link.individualId, missingFullSyncCount: link.missingFullSyncCount,
     })),
     snapshot: { fetchedAt: snapshot.fetchedAt, watermark: snapshot.watermark, mode: snapshot.mode, complete: snapshot.complete },
@@ -849,7 +885,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   // re-fetched the complete provider-owned source set above, so this is
   // unconditional here.
   try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, { complete: true });
+    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
+      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
+    });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
   }
@@ -946,7 +984,9 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
 
   // 9. persist member-only full-fetch presence exactly once after apply.
   try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, { complete: true });
+    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
+      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
+    });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
   }

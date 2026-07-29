@@ -248,17 +248,64 @@ test('household context can corroborate a member match but never becomes eligibl
   assert.deepEqual([...presence[0][2]], ['member']);
 });
 
-test('lifecycle-ineligible source members are excluded from batch eligibility', async () => {
-  const { deps, plans } = makeDeps({
+test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-fetch presence', async () => {
+  const matchingInputs = [];
+  const terminal = person('archived', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' });
+  const { deps, plans, applied, presence } = makeDeps({
+    localIndividuals: [
+      { id: 9, firstName: 'Grace', lastName: 'Hopper', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+    ],
     fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
-      people: [person('active'), person('archived', { state: 'archived' })],
+      people: [person('active'), terminal],
       memberExternalIds: ['active', 'archived'],
     }),
+    extra: {
+      matchPeople: (input) => {
+        matchingInputs.push(input.externalPeople);
+        return matchPeople(input);
+      },
+    },
   });
 
-  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
 
   assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['active']);
+  assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['active']);
+  assert.deepEqual(matchingInputs[0].map((item) => item.id), ['active']);
+  assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
+  assert.deepEqual(applied[0].plan.unmatchedLocalRegulars.map((item) => item.individualId), [9]);
+  assert.deepEqual([...presence[0][2]], ['active']);
+  assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
+});
+
+test('a lifecycle-ineligible existing link is reserved only for safe matching and never archived or presence-counted', async () => {
+  const matchingInputs = [];
+  const { deps, plans, applied, presence } = makeDeps({
+    localIndividuals: [
+      { id: 9, firstName: 'Grace', lastName: 'Hopper', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+    ],
+    personLinks: [{ externalPersonId: 'archived', individualId: 9, missingFullSyncCount: 1 }],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [person('archived', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' })],
+      memberExternalIds: ['archived'],
+    }),
+    extra: {
+      matchPeople: (input) => {
+        matchingInputs.push(input.externalPeople);
+        return matchPeople(input);
+      },
+    },
+  });
+
+  await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+
+  assert.deepEqual(matchingInputs[0].map((item) => item.id), ['archived'], 'only an existing link may retain terminal matching context');
+  assert.deepEqual(plans[0].externalPeople, []);
+  assert.deepEqual(plans[0].personLinks, []);
+  assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
+  assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
+  assert.deepEqual([...presence[0][2]], []);
+  assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
 });
 
 test('a complete empty source is accepted', async () => {
@@ -275,6 +322,12 @@ for (const failure of [
   { name: 'incomplete', snapshot: sourceSnapshot(source('group-1'), { complete: false }) },
   { name: 'malformed complete', snapshot: sourceSnapshot(source('group-1', ''), { fetchedAt: null }) },
   { name: 'unsafe provenance', snapshot: sourceSnapshot(source('group-1', 'x'.repeat(501))) },
+  { name: 'context-only claimed member', snapshot: sourceSnapshot(source('group-1'), {
+    people: [], memberExternalIds: ['context-only'], contextPeople: [person('context-only')],
+  }) },
+  { name: 'member/context overlap', snapshot: sourceSnapshot(source('group-1'), {
+    people: [person('overlap')], memberExternalIds: ['overlap'], contextPeople: [person('overlap')],
+  }) },
 ]) {
   test(`${failure.name} active source fails before planning, apply, and presence while recording health`, async () => {
     const { deps, plans, applied, presence, failedHealth, failed } = makeDeps({
@@ -292,6 +345,29 @@ for (const failure of [
     assert.equal(presence.length, 0);
     assert.equal(failedHealth.length, 1);
     assert.equal(failed.length, 1);
+  });
+}
+
+for (const mismatch of [
+  { name: 'wrong stable ID', snapshot: sourceSnapshot(source('replacement', 'Replacement'), { complete: false }) },
+  { name: 'wrong kind', snapshot: sourceSnapshot({ kind: 'elvanto_category', externalId: 'group-1', name: 'Members' }) },
+]) {
+  test(`${mismatch.name} from an active source is unavailable and records missing-source health`, async () => {
+    const { deps, plans, applied, presence, failedHealth, failed } = makeDeps({
+      fetchSourceSnapshot: async () => mismatch.snapshot,
+    });
+
+    await assert.rejects(
+      buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps),
+      (error) => error.code === 'SYNC_SOURCE_UNAVAILABLE'
+    );
+
+    assert.equal(plans.length, 0);
+    assert.equal(applied.length, 0);
+    assert.equal(presence.length, 0);
+    assert.equal(failedHealth.length, 1);
+    assert.equal(failedHealth[0].code, 'SYNC_SOURCE_UNAVAILABLE');
+    assert.equal(failed[0].errorCode, 'SYNC_SOURCE_UNAVAILABLE');
   });
 }
 

@@ -249,6 +249,30 @@ test('context people corroborate matching but are excluded from durable full-fet
   });
 });
 
+test('a lifecycle-ineligible linked source member is neither archived nor counted by full-fetch presence', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const individualId = await seedIndividual(churchId, { firstName: 'Grace', lastName: 'Hopper' });
+    await linkPerson(churchId, 'terminal', individualId, 1);
+    scenarios = new Map([['members', snapshot(selected, {
+      people: [person('terminal', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' })],
+      memberExternalIds: ['terminal'],
+    })]]);
+
+    const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
+
+    assert.equal(result.status, 'applied');
+    const [individual] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]
+    );
+    assert.equal(individual.is_active, 1);
+    assert.deepEqual(await missingCounts(churchId), { terminal: 1 });
+  });
+});
+
 test('a missing active source records health and every later run attempts the stable ID again', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
@@ -270,6 +294,36 @@ test('a missing active source records health and every later run attempts the st
     assert.equal(current.sourceStatus, 'available');
     assert.equal(fetchCount - before, 2);
     assert.deepEqual((await runRepository.listRecentRuns(churchId, 'elvanto')).map((run) => run.status), ['applied', 'failed']);
+  });
+});
+
+test('a mismatched returned stable source is unavailable, marks active health missing, and notifies admins', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    const selected = source('secret-members-id', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    await Database.query(
+      `INSERT INTO users (church_id, email, role, first_name, last_name, is_active)
+       VALUES (?, ?, 'admin', 'Source', 'Admin', 1)`,
+      [churchId, `source-admin-${Math.random().toString(36).slice(2)}@example.com`]
+    );
+    scenarios = new Map([['secret-members-id', snapshot(source('replacement', 'Replacement'))]]);
+
+    await assert.rejects(
+      orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual' }),
+      (error) => error.code === 'SYNC_SOURCE_UNAVAILABLE'
+    );
+
+    const updated = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
+    assert.equal(updated.sourceStatus, 'missing');
+    assert.equal(updated.sourceStatusErrorCode, 'SYNC_SOURCE_UNAVAILABLE');
+    const notices = await Database.query(
+      `SELECT title, message FROM notifications WHERE church_id = ? AND notification_type = 'system'`, [churchId]
+    );
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].message.includes(selected.externalId), false);
+    const [latest] = await runRepository.listRecentRuns(churchId, 'elvanto');
+    assert.equal(latest.errorCode, 'SYNC_SOURCE_UNAVAILABLE');
   });
 });
 
