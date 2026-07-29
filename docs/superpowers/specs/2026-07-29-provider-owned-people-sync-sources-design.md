@@ -1,8 +1,10 @@
 # Provider-Owned People Sync Sources Design
 
 **Date:** 2026-07-29
-**Status:** Approved for implementation planning
+**Status:** Implemented
 **Applies to:** Planning Center and Elvanto people-sync batches
+
+**Operational runbook:** [Provider-owned sync source cutover](../../runbooks/provider-owned-sync-source-cutover.md)
 
 ## Summary
 
