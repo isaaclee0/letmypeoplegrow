@@ -35,6 +35,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const [batchReview, setBatchReview] = useState<PeopleSyncReview | null>(null);
   const [authorityReview, setAuthorityReview] = useState<PeopleSyncReview | null>(null);
   const [authorityStarted, setAuthorityStarted] = useState(false);
+  const [batchApplyCommitted, setBatchApplyCommitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,8 +91,28 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     }
     setBatch(savedBatch);
     setBatchReview(null);
+    setBatchApplyCommitted(false);
     onStepChange('elvanto-review');
     void loadBatchReview(savedBatch);
+  };
+
+  const confirmAppliedBatch = async (): Promise<boolean> => {
+    if (!batch) return false;
+    try {
+      const refreshed = await elvantoSyncAPI.listBatches();
+      const promoted = refreshed.data.batches.find((candidate) => candidate.id === batch.id);
+      const expectedSource = batch.draftSource ?? batch.source;
+      if (!promoted || promoted.draftSource || !promoted.source || !expectedSource
+        || promoted.source.kind !== expectedSource.kind || promoted.source.externalId !== expectedSource.externalId) {
+        throw new Error('Promoted source was not returned.');
+      }
+      setBatch(promoted);
+      onStepChange('elvanto-authority');
+      return true;
+    } catch {
+      setError('Elvanto applied the review, but the promoted people source could not be confirmed. Refresh the source status to continue.');
+      return false;
+    }
   };
 
   const applyBatch = async (reviewToken: string, selections: PeopleSyncSelections) => {
@@ -100,19 +121,21 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     setError(null);
     try {
       await elvantoSyncAPI.applyBatch(batch.id, { reviewToken, selections });
-      const refreshed = await elvantoSyncAPI.listBatches();
-      const promoted = refreshed.data.batches.find((candidate) => candidate.id === batch.id);
-      const expectedSource = batch.draftSource ?? batch.source;
-      if (!promoted || promoted.draftSource || !promoted.source || !expectedSource
-        || promoted.source.kind !== expectedSource.kind || promoted.source.externalId !== expectedSource.externalId) {
-        setError('Elvanto applied the review, but the promoted people source could not be confirmed. Refresh and try again.');
-        return;
-      }
-      setBatch(promoted);
-      onStepChange('elvanto-authority');
+      setBatchApplyCommitted(true);
+      await confirmAppliedBatch();
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to apply the Elvanto source review.'));
       throw cause;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryAppliedBatchRefresh = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await confirmAppliedBatch();
     } finally {
       setBusy(false);
     }
@@ -194,15 +217,20 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     return (
       <section className="space-y-4">
         <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the selected people source before you continue.</p>
-        {busy && <p className="text-sm text-gray-500">Preparing review…</p>}
+        {busy && <p className="text-sm text-gray-500">{batchApplyCommitted ? 'Confirming applied source…' : 'Preparing review…'}</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        {batchReview && (
+        {batchApplyCommitted ? (
+          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p role="status" className="text-sm text-amber-900">Sync applied. Confirm the promoted people source before continuing.</p>
+            <button type="button" onClick={() => void retryAppliedBatchRefresh()} disabled={busy} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-50">Retry source refresh</button>
+          </div>
+        ) : batchReview && (
           <div role="region" aria-label="Elvanto onboarding batch sync review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
             <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />
           </div>
         )}
         <div className="flex flex-wrap gap-3">
-          {error && batch && <button type="button" onClick={() => void loadBatchReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh review</button>}
+          {error && batch && !batchApplyCommitted && <button type="button" onClick={() => void loadBatchReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh review</button>}
         </div>
       </section>
     );

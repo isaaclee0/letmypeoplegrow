@@ -236,6 +236,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   const [connectionRevision, setConnectionRevision] = useState(0);
   const connectedRef = useRef(status.connected);
   const connectedDataGeneration = useRef(0);
+  const reviewLoadGeneration = useRef(0);
   connectedRef.current = status.connected;
 
   const loadConnectedData = useCallback(async () => {
@@ -269,6 +270,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   }, []);
 
   const reloadConnectionData = useCallback(async () => {
+    reviewLoadGeneration.current += 1;
     setConnectionRevision((current) => current + 1);
     setBatches([]);
     setGatherings([]);
@@ -290,26 +292,30 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     void loadConnectedData();
     return () => {
       connectedDataGeneration.current += 1;
+      reviewLoadGeneration.current += 1;
     };
   }, [loadConnectedData, status.connected]);
 
   const openReview = async (batch: PeopleSyncBatch) => {
-    const switchingBatch = reviewingBatch?.id !== batch.id;
+    const generation = ++reviewLoadGeneration.current;
     setReviewingBatch(batch);
     setReviewLoading(true);
     setReviewError(null);
-    if (switchingBatch) setReview(null);
+    setReview((current) => current?.batch.id === batch.id ? current : null);
     try {
       const response = await elvantoSyncAPI.getBatchPlan(batch.id);
+      if (generation !== reviewLoadGeneration.current) return;
       setReview({ batch, data: response.data });
     } catch (cause) {
+      if (generation !== reviewLoadGeneration.current) return;
       setReviewError(errorMessage(cause, 'Failed to prepare the sync review.'));
     } finally {
-      setReviewLoading(false);
+      if (generation === reviewLoadGeneration.current) setReviewLoading(false);
     }
   };
 
   const closeReview = () => {
+    reviewLoadGeneration.current += 1;
     setReview(null);
     setReviewingBatch(null);
     setReviewError(null);
@@ -431,7 +437,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                         review={review.data}
                         onRefresh={() => openReview(batch)}
                         onApply={applyReview}
-                        applying={applying}
+                        applying={applying || reviewLoading}
                       />}
                       {reviewError && <button type="button" onClick={() => void openReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">Refresh plan</button>}
                       <button type="button" onClick={closeReview} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">Close review</button>

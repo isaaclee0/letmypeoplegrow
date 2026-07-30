@@ -149,4 +149,21 @@ describe('ElvantoOnboarding source review', () => {
     expect(screen.queryByRole('button', { name: 'Apply reviewed source' })).not.toBeInTheDocument();
     expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledTimes(1);
   });
+
+  it('never reapplies after apply succeeds but promoted-batch refresh fails', async () => {
+    vi.mocked(elvantoSyncAPI.listBatches).mockRejectedValueOnce(new Error('refresh unavailable'));
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Youth Group' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply reviewed source' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/applied.*could not be confirmed/i);
+    expect(screen.queryByRole('button', { name: 'Apply reviewed source' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry source refresh' })).toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry source refresh' }));
+    expect(await screen.findByText('Keep LMPG aligned with Elvanto?')).toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledTimes(1);
+  });
 });

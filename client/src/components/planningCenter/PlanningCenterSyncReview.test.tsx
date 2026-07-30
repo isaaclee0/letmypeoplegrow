@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanningCenterSyncReview from './PlanningCenterSyncReview';
@@ -119,6 +119,21 @@ describe('PlanningCenterSyncReview', () => {
     await waitFor(() => expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeEnabled());
     expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables apply and refresh actions while an ordinary plan refresh is pending', async () => {
+    let resolveRefresh!: (value: { data: { success: true } & PeopleSyncReview }) => void;
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
+    expect(screen.getAllByRole('button', { name: 'Applying…' })[0]).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Refresh plan' })[0]).toBeDisabled();
+
+    await act(async () => resolveRefresh({ data: { success: true, ...review, reviewToken: 'refreshed-token' } }));
   });
 
   it('explains a retired batch when a stale page loads its review', async () => {
