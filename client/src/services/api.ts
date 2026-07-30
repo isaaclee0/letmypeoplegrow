@@ -905,8 +905,6 @@ export const integrationsAPI = {
     api.get('/integrations/planning-center/authorize', { params: returnTo ? { returnTo } : {} }),
   disconnectPlanningCenter: () => api.post('/integrations/planning-center/disconnect'),
   // People sync (replaces the old browse/import flow)
-  searchPlanningCenterPeople: (q: string) =>
-    api.get('/integrations/planning-center/people-search', { params: { q }, timeout: 30000 }),
   getPlanningCenterSyncBatches: () =>
     api.get<{ success: true; batches: PeopleSyncBatch[] }>('/integrations/planning-center/sync-batches'),
   createPlanningCenterSyncBatch: (data: PlanningCenterSyncBatchInput) =>

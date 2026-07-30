@@ -552,7 +552,10 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                             // implicitly closes the first without a dedicated "closing" click.
                             loadSyncStats();
                           }}
-                            className="text-sm underline text-gray-600 dark:text-gray-300">
+                            aria-label={`${reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'} ${batch.name}`}
+                            className={reviewingBatchId === batch.id
+                              ? 'rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
+                              : 'rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2'}>
                             {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
                           </button>
                           {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
@@ -560,7 +563,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         </div>
                       </div>
                       {reviewingBatchId === batch.id && (
-                        <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
+                        <div className="mt-4">
                           <PlanningCenterSyncReview connected={status.connected} batchId={batch.id} onApplied={() => reloadAfterBatchMutation()} />
                         </div>
                       )}

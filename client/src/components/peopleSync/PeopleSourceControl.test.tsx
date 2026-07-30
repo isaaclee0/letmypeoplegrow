@@ -17,6 +17,24 @@ const plan: PeopleSyncPlan = {
   provider: 'elvanto',
   authoritative: true,
   snapshot: { fetchedAt: '2026-07-25T09:00:00.000Z', mode: 'full' },
+  people: {
+    external: { 'e-1': { firstName: 'Alex', lastName: 'Smith', family: { state: 'none' } } },
+    local: {
+      '1': { firstName: 'Alex', lastName: 'Smith', matchEligible: true, family: { state: 'none' } },
+      '2': { firstName: 'Alex', lastName: 'Jones', matchEligible: true, family: { state: 'none' } },
+    },
+  },
+  reviewContext: {
+    version: 2,
+    manualCandidateIndividualIds: [1, 2],
+    identities: {
+      'e-1': {
+        suggestedIndividualId: 1, candidateIndividualIds: [1], excludedIndividualIds: [],
+        held: false, canCreate: true,
+        createPerson: { firstName: 'Alex', lastName: 'Smith', isChild: false, externalFamilyId: null, peopleType: 'regular' },
+      },
+    },
+  },
   linkPeople: [{ id: 'link:1', externalPersonId: 'e-1', individualId: 1, reason: 'Matched', reviewRequired: false }],
   linkFamilies: [],
   addPeople: [
@@ -46,6 +64,7 @@ const plan: PeopleSyncPlan = {
 const review: PeopleSyncReview = {
   runId: 10,
   reviewToken: 'authority-review',
+  decisionContractVersion: 2,
   plan,
   snapshot: plan.snapshot,
   summary: {
@@ -201,9 +220,19 @@ describe('PeopleSourceControl', () => {
     const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    expect(await screen.findByRole('region', { name: 'Elvanto authority review' })).toHaveClass(
+      'rounded-lg', 'border', 'bg-gray-50/50', 'p-4', 'dark:bg-gray-900/20',
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'Choose someone else' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select Alex Jones' }));
     fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
 
-    await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', expect.any(Object)));
+    await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', {
+      decisionContractVersion: 2,
+      identityDecisions: { 'e-1': { outcome: 'link', individualId: 2 } },
+      acceptArchiveIndividualIds: [],
+      acceptFamilyRenameIds: [],
+    }));
     await waitFor(() => expect(toggle).toBeChecked());
   });
 

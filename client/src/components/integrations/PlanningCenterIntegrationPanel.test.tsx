@@ -16,7 +16,14 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
 vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({ default: () => <div>Batch editor</div> }));
-vi.mock('../planningCenter/PlanningCenterSyncReview', () => ({ default: () => <div>Sync review</div> }));
+vi.mock('../planningCenter/PlanningCenterSyncReview', () => ({
+  default: ({ onApplied }: { onApplied?: () => void | Promise<void> }) => (
+    <div>
+      <p>Sync review</p>
+      <button type="button" onClick={() => void onApplied?.()}>Complete reviewed sync</button>
+    </div>
+  ),
+}));
 vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
 
 const settings: PeopleSyncSettings = {
@@ -66,6 +73,19 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard source draft' }));
     await waitFor(() => expect(peopleSyncAPI.discardSourceDraft).toHaveBeenCalledWith('planning_center', 12));
     await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+  });
+
+  it('uses the primary review action, nests the expanded review, and reloads batches and stats after apply', async () => {
+    renderPanel();
+    const reviewButton = await screen.findByRole('button', { name: 'Review & sync Members' });
+    expect(reviewButton).toHaveClass('rounded-md', 'bg-green-600', 'text-white');
+
+    fireEvent.click(reviewButton);
+    expect(screen.getByRole('button', { name: 'Hide review Members' })).toHaveClass('rounded-md', 'border', 'border-gray-300');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Complete reviewed sync' }));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncStats).toHaveBeenCalledTimes(3));
   });
 
   it('shows source check errors with their safe code instead of calling the source missing', async () => {
@@ -133,7 +153,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.getByText(/no longer runs/i)).toBeInTheDocument();
     expect(screen.getByText(/Prior settings: scheduled monthly \(day 15\)/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
-    expect(screen.getAllByRole('button', { name: 'Review & sync' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Review & sync Members' })).toHaveLength(1);
 
     const legacyCard = screen.getByText('Old membership filters').closest('li');
     expect(legacyCard).not.toBeNull();

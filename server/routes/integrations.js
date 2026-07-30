@@ -10,7 +10,6 @@ const {
   assertPlanningCenterBatchOperational,
 } = require('../services/peopleSync/legacyBatch');
 const pcoSync = require('../services/planningCenterSync');
-const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
@@ -1380,29 +1379,6 @@ function validateBatchSettingsUpdate(body) {
 function resolveGatheringAutoRemoveEnabled(body) {
   return typeof body.gatheringAutoRemoveEnabled === 'boolean' ? body.gatheringAutoRemoveEnabled : false;
 }
-
-// Search PCO people by name for manual linking (ambiguous / unmatched-extra review).
-// Excludes anyone already linked to an existing individual in this church.
-router.get('/planning-center/people-search', async (req, res) => {
-  try {
-    const churchId = req.user.church_id;
-    const q = typeof req.query.q === 'string' ? req.query.q : '';
-    const accessToken = await pcoSync.getAccessTokenForChurch(churchId);
-    if (!accessToken) return res.status(400).json({ error: 'Planning Center not connected.' });
-
-    const { people } = await pcoSync.getCachedPcoPeople(churchId, accessToken);
-    const linkedRows = await Database.query(
-      `SELECT planning_center_id FROM individuals WHERE church_id = ? AND planning_center_id IS NOT NULL`,
-      [churchId]
-    );
-    const alreadyLinked = new Set(linkedRows.map((r) => r.planning_center_id));
-    const results = searchPcoPeople(people, q, alreadyLinked);
-    res.json({ success: true, results });
-  } catch (error) {
-    logger.error('PCO people search error:', error);
-    res.status(500).json({ error: 'Failed to search Planning Center people.' });
-  }
-});
 
 // List all saved sync batches for this church.
 router.get('/planning-center/sync-batches', async (req, res) => {

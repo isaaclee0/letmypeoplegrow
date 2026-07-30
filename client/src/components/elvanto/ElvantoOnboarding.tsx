@@ -112,6 +112,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
       onStepChange('elvanto-authority');
     } catch (cause) {
       setError(errorMessage(cause, 'Failed to apply the Elvanto source review.'));
+      throw cause;
     } finally {
       setBusy(false);
     }
@@ -195,9 +196,13 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
         <p className="text-sm text-gray-700">Review every match and change before importing. Applying this review promotes the selected people source before you continue.</p>
         {busy && <p className="text-sm text-gray-500">Preparing review…</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        {batchReview && <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />}
+        {batchReview && (
+          <div role="region" aria-label="Elvanto onboarding batch sync review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
+            <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />
+          </div>
+        )}
         <div className="flex flex-wrap gap-3">
-          {error && batch && <button type="button" onClick={() => void loadBatchReview(batch)} className="text-sm underline">Retry review</button>}
+          {error && batch && <button type="button" onClick={() => void loadBatchReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh review</button>}
         </div>
       </section>
     );
@@ -217,8 +222,12 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
       </> : <>
         {busy && <p className="text-sm text-gray-500">Preparing authority review…</p>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        {authorityReview && <SyncReview provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} />}
-        {error && <button type="button" onClick={() => void previewAuthority()} className="text-sm underline">Retry authority review</button>}
+        {authorityReview && (
+          <div role="region" aria-label="Elvanto onboarding authority review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
+            <SyncReview provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} />
+          </div>
+        )}
+        {error && <button type="button" onClick={() => void previewAuthority()} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh authority review</button>}
       </>}
     </section>
   );

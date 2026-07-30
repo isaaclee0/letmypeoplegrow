@@ -18,11 +18,28 @@ vi.mock('../peopleSync/BatchSourceControls', () => ({
   ),
 }));
 
-vi.mock('../peopleSync/SyncReview', () => ({
-  default: ({ onApply }: { onApply: (reviewToken: string, selections: Record<string, never>) => void }) => (
-    <section aria-label="Elvanto source review"><p>Elvanto sync review</p><button type="button" onClick={() => onApply('review-token', {})}>Apply reviewed source</button></section>
-  ),
-}));
+vi.mock('../peopleSync/SyncReview', async () => {
+  const ReactModule = await import('react');
+  return {
+    default: ({ onApply, onRefresh }: {
+      onApply: (reviewToken: string, selections: Record<string, never>) => void | Promise<void>;
+      onRefresh: () => void | Promise<void>;
+    }) => {
+      const [stale, setStale] = ReactModule.useState(false);
+      return (
+        <section aria-label="Elvanto source review">
+          <p>Elvanto sync review</p>
+          {!stale && <button type="button" onClick={async () => {
+            try { await onApply('review-token', {}); } catch (cause) {
+              if ((cause as { response?: { data?: { code?: string } } }).response?.data?.code === 'SYNC_PLAN_STALE') setStale(true);
+            }
+          }}>Apply reviewed source</button>}
+          {stale && <button type="button" onClick={() => void onRefresh()}>Refresh plan</button>}
+        </section>
+      );
+    },
+  };
+});
 
 const draftBatch = {
   id: 42, provider: 'elvanto', name: 'Youth Group', enabled: true,
@@ -117,5 +134,19 @@ describe('ElvantoOnboarding source review', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('did not create a reviewable people source draft');
     expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
+  });
+
+  it('propagates stale apply errors to the shared review so only plan refresh is offered', async () => {
+    vi.mocked(elvantoSyncAPI.applyBatch).mockRejectedValue({
+      response: { data: { code: 'SYNC_PLAN_STALE', error: 'The review is stale.' } },
+    });
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Youth Group' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply reviewed source' }));
+
+    expect(await screen.findByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply reviewed source' })).not.toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledTimes(1);
   });
 });

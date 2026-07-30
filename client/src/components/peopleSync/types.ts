@@ -525,23 +525,10 @@ export interface PeopleSyncApplyResult {
 
 // ─── Reviewer selections (server/services/peopleSync/apply.js's validateSelections) ──
 //
-// Deliberately named PeopleSyncSelections, NOT SyncSelections --
-// client/src/components/planningCenter/syncSelections.ts already exports a
-// (legacy, PCO-specific) type of that exact name, and the two are NOT
-// interchangeable despite similar-looking fields:
-//   - `ambiguous`'s direction is reversed: the legacy type maps
-//     individualId -> chosen pcoId (string); this one maps
-//     externalPersonId -> chosen individualId (number).
-//   - the legacy `skipFamilyNameUpdateIds` is opt-OUT; this type's
-//     `acceptFamilyRenameIds` is opt-IN -- same intent, inverted polarity.
-//   - the legacy `archiveAmbiguousIds` ("archive instead of picking a
-//     candidate") and this type's `acceptArchiveIndividualIds` ("confirm
-//     this archive") are different concepts with confusingly similar names.
-// TypeScript alone won't catch a hand-built `ambiguous` map in the wrong
-// direction or a flipped opt-in/opt-out boolean, so keeping these two types
-// under different names is the only real guard against Task 18 (which
-// touches both trees) mixing them up. The legacy type is removed in Task 21;
-// until then, do not rename this back to `SyncSelections`.
+// Provider-neutral selections shared by Planning Center and Elvanto. V2
+// identity decisions are keyed by external person ID; a manual link carries
+// the chosen local individual ID. The pre-v2 fields remain only for stale PWA
+// clients using the immediately previous review contract.
 export type IdentityDecision =
   | { outcome: 'accept'; excludeIndividualId?: never }
   | { outcome: 'link'; individualId: number; excludeIndividualId?: number }
