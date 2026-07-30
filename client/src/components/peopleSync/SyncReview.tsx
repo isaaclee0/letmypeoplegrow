@@ -44,16 +44,52 @@ interface SyncReviewProps {
   requireAllPlannedArchivesAccepted?: boolean;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPositiveIntegerArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+function isValidCreatePerson(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.firstName === 'string'
+    && typeof value.lastName === 'string'
+    && (typeof value.isChild === 'boolean' || value.isChild === null)
+    && (typeof value.externalFamilyId === 'string' || value.externalFamilyId === null)
+    && typeof value.peopleType === 'string'
+    && ['regular', 'local_visitor', 'traveller_visitor'].includes(value.peopleType);
+}
+
+function hasValidV2Context(review: PeopleSyncReview): boolean {
+  const context = review.plan.reviewContext;
+  if (review.decisionContractVersion !== 2
+    || context?.version !== 2
+    || !isPositiveIntegerArray(context.manualCandidateIndividualIds)
+    || !isRecord(context.identities)) return false;
+
+  return Object.values(context.identities).every((identity) => {
+    if (!isRecord(identity)) return false;
+    const suggestedId = identity.suggestedIndividualId;
+    const validSuggestedId = suggestedId === null
+      || (typeof suggestedId === 'number' && Number.isSafeInteger(suggestedId) && suggestedId > 0);
+    const validCreatePerson = identity.createPerson === null || isValidCreatePerson(identity.createPerson);
+    return validSuggestedId
+      && isPositiveIntegerArray(identity.candidateIndividualIds)
+      && isPositiveIntegerArray(identity.excludedIndividualIds)
+      && typeof identity.held === 'boolean'
+      && typeof identity.canCreate === 'boolean'
+      && validCreatePerson
+      && (identity.canCreate !== true || isValidCreatePerson(identity.createPerson));
+  });
+}
+
 function stateForReview(review: PeopleSyncReview): SyncSelectionState {
-  const hasValidV2Context = review.decisionContractVersion === 2
-    && review.plan.reviewContext?.version === 2
-    && Array.isArray(review.plan.reviewContext.manualCandidateIndividualIds)
-    && !!review.plan.reviewContext.identities
-    && typeof review.plan.reviewContext.identities === 'object'
-    && !Array.isArray(review.plan.reviewContext.identities);
+  const validV2Context = hasValidV2Context(review);
   return {
     identityDecisions: review.decisionContractVersion === 2
-      ? (hasValidV2Context ? initializeIdentityDecisions(review) : {})
+      ? (validV2Context ? initializeIdentityDecisions(review) : {})
       : undefined,
     ambiguousChoices: {},
     skippedExternalIds: new Set(),
@@ -268,12 +304,7 @@ export default function SyncReview({
   const { plan } = review;
   const directory: PeopleSyncPeopleDirectory = plan.people || { external: {}, local: {} };
   const declaresV2 = review.decisionContractVersion === 2;
-  const validV2Context = declaresV2
-    && plan.reviewContext?.version === 2
-    && Array.isArray(plan.reviewContext.manualCandidateIndividualIds)
-    && !!plan.reviewContext.identities
-    && typeof plan.reviewContext.identities === 'object'
-    && !Array.isArray(plan.reviewContext.identities);
+  const validV2Context = hasValidV2Context(review);
   const malformedV2 = declaresV2 && !validV2Context;
   const reviewContext = validV2Context ? plan.reviewContext : undefined;
   const isV2 = declaresV2 && validV2Context;
@@ -371,13 +402,13 @@ export default function SyncReview({
     && !(action.individualId != null && rejectedSuggestedIndividualIds.has(action.individualId));
   const effectiveUpdateManagedFields = isV2
     ? plan.updateManagedFields.filter(suggestionStillAccepted)
-    : plan.updateManagedFields.filter((action) => !action.reviewRequired);
+    : plan.updateManagedFields;
   const effectivePromoteToRegular = isV2
     ? plan.promoteToRegular.filter(suggestionStillAccepted)
     : plan.promoteToRegular.filter((action) => !action.reviewRequired);
   const effectiveDemoteToLocalVisitor = isV2
     ? plan.demoteToLocalVisitor.filter(suggestionStillAccepted)
-    : plan.demoteToLocalVisitor.filter((action) => !action.reviewRequired);
+    : plan.demoteToLocalVisitor;
   const effectiveArchive = isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive;
   const effectiveReactivate = isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate;
   const effectiveMoveFamily = isV2 ? plan.moveFamily.filter(suggestionStillAccepted) : plan.moveFamily;

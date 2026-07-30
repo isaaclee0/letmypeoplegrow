@@ -322,6 +322,29 @@ describe('SyncReview v2 identity review', () => {
     screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
     expect(screen.queryByText('Decide later')).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['an invalid nested identity shape', { candidateIndividualIds: {} as number[] }],
+    ['a creatable identity without signed create data', { canCreate: true, createPerson: null }],
+  ])('fails closed when v2 contains %s', (_label, identityPatch) => {
+    const base = singleIdentityReview();
+    const identity = { ...base.plan.reviewContext!.identities['ext-auto'], ...identityPatch };
+    const malformed = {
+      ...base,
+      plan: {
+        ...base.plan,
+        reviewContext: {
+          ...base.plan.reviewContext!,
+          identities: { 'ext-auto': identity },
+        },
+      },
+    };
+    render(<SyncReview provider="planning_center" review={malformed} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.queryByText('Match decisions')).not.toBeInTheDocument();
+  });
 });
 
 describe('SyncReview legacy destructive review', () => {
@@ -386,6 +409,8 @@ describe('SyncReview legacy destructive review', () => {
         local: {
           '13': { firstName: 'Local', lastName: 'Linked', family: { state: 'none' } },
           '18': { firstName: 'Local', lastName: 'Visitor', family: { state: 'none' } },
+          '19': { firstName: 'Managed', lastName: 'Update', family: { state: 'none' } },
+          '20': { firstName: 'Managed', lastName: 'Demotion', family: { state: 'none' } },
         },
       },
       linkPeople: [
@@ -397,6 +422,14 @@ describe('SyncReview legacy destructive review', () => {
         id: 'promote:visitor', externalPersonId: 'ext-visitor', individualId: 18,
         fromPeopleType: 'local_visitor', toPeopleType: 'regular', reason: 'provider_state_active', reviewRequired: true,
       }],
+      updateManagedFields: [{
+        id: 'update:managed', externalPersonId: 'ext-managed', individualId: 19,
+        changes: [{ field: 'firstName', localValue: 'Old', externalValue: 'Managed' }], reason: 'provider_managed_fields', reviewRequired: true,
+      }],
+      demoteToLocalVisitor: [{
+        id: 'demote:managed', externalPersonId: 'ext-demoted', individualId: 20,
+        fromPeopleType: 'regular', toPeopleType: 'local_visitor', reason: 'provider_state_inactive', reviewRequired: true,
+      }],
     };
     const review = { ...base, plan, summary: summaryFor(plan) };
     render(<SyncReview provider="elvanto" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
@@ -404,6 +437,8 @@ describe('SyncReview legacy destructive review', () => {
     expect(screen.getByText('Links and restores')).toBeInTheDocument();
     expect(screen.getByText('Link External Linked to Local Linked')).toBeInTheDocument();
     expect(screen.getByText('Link a provider family to an LMPG family')).toBeInTheDocument();
+    expect(screen.getByText('Update Managed Update')).toBeInTheDocument();
+    expect(screen.getByText('Make Managed Demotion a local visitor')).toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: 'Keep as visitor' }));
     expect(screen.queryByText('Make Local Visitor a regular')).not.toBeInTheDocument();
   });
