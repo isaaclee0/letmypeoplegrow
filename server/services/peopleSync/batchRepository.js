@@ -158,7 +158,10 @@ async function promoteSourceDraftWithConnection(conn, {
   }
   const result = await write(`UPDATE people_sync_batches
     SET source_kind = draft_source_kind, source_external_id = draft_source_external_id, source_name = draft_source_name,
-        name = CASE WHEN provider = 'planning_center' THEN draft_source_name ELSE name END,
+        name = CASE
+          WHEN provider IN ('planning_center', 'elvanto') THEN draft_source_name
+          ELSE name
+        END,
         source_revision = source_revision + 1, draft_source_kind = NULL, draft_source_external_id = NULL,
         draft_source_name = NULL, draft_source_base_revision = NULL, draft_source_updated_at = NULL,
         source_status = 'unknown', source_status_checked_at = NULL, source_status_error_code = NULL,
@@ -181,7 +184,7 @@ async function updateBatch(input) {
   assertProvider(provider);
   const current = await getBatch(churchId, provider, batchId);
   if (!current) return null;
-  const allowed = ['name', 'enabled', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  const allowed = ['enabled', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
     'scheduleEnabled', 'scheduleFrequency', 'scheduleDay', 'legacyProviderBatchId'];
   for (const key of Object.keys(input)) {
     if (!['churchId', 'provider', 'batchId', ...allowed].includes(key)) throw new Error(`Batch update field is not allowlisted: ${key}`);
@@ -228,9 +231,15 @@ async function recordActiveSourceHealthWithConnection(conn, {
   }
 
   const nextSourceName = sourceName ?? row.source_name;
+  const nextBatchName = provider === 'elvanto' ||
+    (provider === 'planning_center' && row.legacy_provider_batch_id === null)
+    ? nextSourceName
+    : row.name;
   const result = await write(`UPDATE people_sync_batches
     SET name = CASE
-          WHEN provider = 'planning_center' AND legacy_provider_batch_id IS NULL THEN ?
+          WHEN provider = 'elvanto'
+            OR (provider = 'planning_center' AND legacy_provider_batch_id IS NULL)
+          THEN ?
           ELSE name
         END,
         source_name = ?, source_status = ?, source_status_checked_at = ?, source_status_error_code = ?
@@ -244,7 +253,7 @@ async function recordActiveSourceHealthWithConnection(conn, {
   return {
     updated: true,
     priorSourceStatus: row.source_status,
-    batchName: row.name,
+    batchName: nextBatchName,
     sourceName: nextSourceName,
   };
 }

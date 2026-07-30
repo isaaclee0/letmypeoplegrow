@@ -14,6 +14,7 @@ const {
 
 const ACTIVE_SOURCE = { kind: 'planning_center_list', externalId: 'list-secret-42', name: 'Sunday Attendance' };
 const REPLACEMENT_SOURCE = { kind: 'planning_center_list', externalId: 'list-43', name: 'Evening Attendance' };
+const ELVANTO_SOURCE = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
 
 async function seedActiveBatch(churchId, source = ACTIVE_SOURCE) {
   const batch = await createBatch({
@@ -25,6 +26,29 @@ async function seedActiveBatch(churchId, source = ACTIVE_SOURCE) {
   });
   return getBatch(churchId, 'planning_center', batch.id);
 }
+
+test('a successful Elvanto source refresh derives the batch name from the observed source name', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE,
+    });
+    await promoteSourceDraftWithConnection(Database.getChurchDb(churchId), {
+      churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
+    });
+
+    const result = await recordActiveSourceAvailable({
+      churchId, provider: 'elvanto', batchId: batch.id, expectedSource: ELVANTO_SOURCE,
+      observedSource: { ...ELVANTO_SOURCE, name: 'Members renamed' },
+      checkedAt: '2026-07-29T01:00:00.000Z',
+    });
+    const updated = await getBatch(churchId, 'elvanto', batch.id);
+
+    assert.equal(result.updated, true);
+    assert.equal(updated.name, 'Members renamed');
+    assert.equal(updated.source.name, 'Members renamed');
+  });
+});
 
 async function seedUser(churchId, { role = 'admin', isActive = 1, label = role } = {}) {
   const result = await Database.query(
