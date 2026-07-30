@@ -620,10 +620,11 @@ test('a v2 replacement link excludes the rejected suggestion and clears its hold
     });
 
     const [link] = await Database.query(
-      'SELECT individual_id FROM external_person_links WHERE church_id = ? AND external_person_id = ?',
+      'SELECT individual_id, link_source FROM external_person_links WHERE church_id = ? AND external_person_id = ?',
       [churchId, 'ext-1']
     );
     assert.equal(link.individual_id, replacementIndividualId);
+    assert.equal(link.link_source, 'manual');
     assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
       exclusions: [{ externalPersonId: 'ext-1', individualId: suggestedIndividualId }], holds: [],
     });
@@ -761,6 +762,11 @@ test('a v2 deliberate link to an excluded pair removes that exclusion and clears
     });
 
     assert.equal((await counts(churchId)).links, 1);
+    const [link] = await Database.query(
+      'SELECT link_source FROM external_person_links WHERE church_id = ? AND external_person_id = ?',
+      [churchId, 'ext-1']
+    );
+    assert.equal(link.link_source, 'manual');
     assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
       exclusions: [], holds: [],
     });

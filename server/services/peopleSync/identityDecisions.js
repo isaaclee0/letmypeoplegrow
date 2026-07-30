@@ -104,12 +104,14 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
     const decision = validateDecisionFields(externalPersonId, decisions[externalPersonId]);
     const suggestedIndividualId = entry.suggestedIndividualId;
     let acceptedIndividualId = null;
+    let linkSource = null;
 
     if (decision.outcome === 'accept') {
       if (!Number.isSafeInteger(suggestedIndividualId) || suggestedIndividualId <= 0) {
         throw new Error(`Identity ${externalPersonId} has no suggested individual to accept`);
       }
       acceptedIndividualId = suggestedIndividualId;
+      linkSource = 'matched';
     } else if (decision.outcome === 'link') {
       acceptedIndividualId = positiveInteger(
         decision.individualId,
@@ -118,6 +120,7 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
       if (!manualCandidates.has(acceptedIndividualId)) {
         throw new Error(`Link individual ID for ${externalPersonId} must be one of this plan's manual candidates`);
       }
+      linkSource = 'manual';
     } else if (decision.outcome === 'create') {
       if (entry.canCreate !== true) throw new Error(`Identity ${externalPersonId} cannot be created`);
       if (!asRecord(entry.createPerson)) {
@@ -136,7 +139,7 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
         throw new Error(`Individual ${acceptedIndividualId} is already claimed by another identity decision`);
       }
       claimedIndividualIds.add(acceptedIndividualId);
-      linkActions.push({ externalPersonId, individualId: acceptedIndividualId });
+      linkActions.push({ externalPersonId, individualId: acceptedIndividualId, linkSource });
       if (asArray(entry.excludedIndividualIds).includes(acceptedIndividualId)) {
         exclusionsToRemove.push({ externalPersonId, individualId: acceptedIndividualId });
       }

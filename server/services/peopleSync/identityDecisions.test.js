@@ -71,8 +71,8 @@ test('normalizes every v2 outcome into explicit apply data', () => {
 
   assert.equal(accepted.contractVersion, 2);
   assert.deepEqual(accepted.linkActions, [
-    { externalPersonId: 'ext-accept', individualId: 10 },
-    { externalPersonId: 'ext-link', individualId: 12 },
+    { externalPersonId: 'ext-accept', individualId: 10, linkSource: 'matched' },
+    { externalPersonId: 'ext-link', individualId: 12, linkSource: 'manual' },
   ]);
   assert.deepEqual([...accepted.createExternalIds], ['ext-create']);
   assert.deepEqual([...accepted.deferredReasons], [['ext-defer', 'deferred']]);
@@ -250,7 +250,9 @@ test('manually linking an excluded pair removes that exact exclusion', () => {
   const accepted = validateIdentityDecisions(plan, selections({
     'ext-1': { outcome: 'link', individualId: 12 },
   }));
-  assert.deepEqual(accepted.linkActions, [{ externalPersonId: 'ext-1', individualId: 12 }]);
+  assert.deepEqual(accepted.linkActions, [{
+    externalPersonId: 'ext-1', individualId: 12, linkSource: 'manual',
+  }]);
   assert.deepEqual(accepted.exclusionsToRemove, [{ externalPersonId: 'ext-1', individualId: 12 }]);
 });
 
