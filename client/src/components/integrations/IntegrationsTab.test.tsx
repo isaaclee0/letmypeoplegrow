@@ -63,15 +63,20 @@ describe('IntegrationsTab authority status', () => {
     screen.getAllByRole('button', { name: 'Disconnect' }).forEach((button) => expect(button).toBeEnabled());
   });
 
-  it('preserves a Planning Center source rate-limit status code', async () => {
+  it.each([
+    ['SYNC_SOURCE_AUTH', 'SYNC_SOURCE_AUTH'],
+    ['SYNC_SOURCE_RATE_LIMIT', 'SYNC_SOURCE_RATE_LIMIT'],
+    ['SYNC_SOURCE_CHECK_FAILED', 'SYNC_SOURCE_CHECK_FAILED'],
+    ['refresh_token=credential-value', 'none'],
+  ])('preserves only the safe Planning Center status code %s', async (connectionErrorCode, expectedCode) => {
     vi.mocked(integrationsAPI.getPlanningCenterStatus).mockResolvedValue({
       data: {
         enabled: true,
         connected: false,
         planningCenterAccount: null,
-        connectionErrorCode: 'SYNC_SOURCE_RATE_LIMIT',
+        connectionErrorCode,
       },
-    });
+    } as never);
     vi.mocked(peopleSyncAPI.getSettings).mockResolvedValue({ data: { success: true, settings } });
     render(<IntegrationsTab />);
 
@@ -79,6 +84,6 @@ describe('IntegrationsTab authority status', () => {
     expect(planningCenterCard).not.toBeNull();
     fireEvent.click(within(planningCenterCard!).getByRole('button', { name: 'Set up' }));
 
-    expect(await screen.findByTestId('planning-center-status-code')).toHaveTextContent('SYNC_SOURCE_RATE_LIMIT');
+    expect(await screen.findByTestId('planning-center-status-code')).toHaveTextContent(expectedCode);
   });
 });
