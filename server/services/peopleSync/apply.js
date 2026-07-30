@@ -1,5 +1,6 @@
 const Database = require('../../config/database');
 const linkRepository = require('./linkRepository');
+const matchReviewRepository = require('./matchReviewRepository');
 const authority = require('./authority');
 const batchRepository = require('./batchRepository');
 const { BUCKETS } = require('./plan');
@@ -17,6 +18,9 @@ const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
 // subject to the authority lock — see enforceAuthorityLock() below for why.
 const INDIVIDUAL_MUTATION_BUCKETS = [
   'updateManagedFields', 'promoteToRegular', 'demoteToLocalVisitor', 'archive', 'reactivate', 'moveFamily',
+];
+const SUGGESTION_DEPENDENT_BUCKETS = [
+  ...INDIVIDUAL_MUTATION_BUCKETS, 'addToGathering', 'removeFromGathering',
 ];
 
 function assertProvider(provider) {
@@ -169,6 +173,25 @@ function collectTouchedFamilyIds(plan) {
   return [...ids];
 }
 
+function planWithSuppressedSuggestions(plan, accepted) {
+  if (accepted.contractVersion !== 2) return plan;
+  const externalPersonIds = new Set();
+  const individualIds = new Set();
+  for (const pair of accepted.suppressedSuggestedPairs) {
+    externalPersonIds.add(pair.externalPersonId);
+    individualIds.add(pair.suggestedIndividualId);
+  }
+  if (externalPersonIds.size === 0) return plan;
+
+  const filtered = { ...plan };
+  for (const bucket of SUGGESTION_DEPENDENT_BUCKETS) {
+    filtered[bucket] = asArray(plan[bucket]).filter((action) =>
+      !externalPersonIds.has(action.externalPersonId) && !individualIds.has(action.individualId)
+    );
+  }
+  return filtered;
+}
+
 // Defense in depth: Task 6's plan.js already refuses to generate managed
 // mutations for a person/family locked by a DIFFERENT active authority (see
 // plan.js's `canManage`/`activeAuthority` gating). This re-checks the same
@@ -230,7 +253,8 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
   const accepted = validateSelections(plan, selections);
 
   return Database.transactionForChurch(churchId, async (conn) => {
-    await enforceAuthorityLock(churchId, provider, plan, accepted.acceptedArchiveIndividualIds);
+    const applicablePlan = planWithSuppressedSuggestions(plan, accepted);
+    await enforceAuthorityLock(churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 
     const result = emptyResult();
 
@@ -239,7 +263,9 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // auto-linked-then-archived person (see plan.js's carried-forward note)
     // ends up linked, then archived — not archived against a link that
     // doesn't exist yet.
-    const linkActions = [...asArray(plan.linkPeople).filter((a) => !a.reviewRequired), ...accepted.acceptedLinks];
+    const linkActions = accepted.contractVersion === 2
+      ? accepted.linkActions
+      : [...asArray(plan.linkPeople).filter((a) => !a.reviewRequired), ...accepted.acceptedLinks];
     for (const action of linkActions) {
       await linkRepository.upsertPersonLinkWithConnection(conn, {
         churchId, provider, externalPersonId: action.externalPersonId,
@@ -306,8 +332,38 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // family (or a name for one) on this path — that stays reserved for an
     // explicit addFamilies action carrying a reviewed name.
     const newIndividualIdByExternal = new Map();
-    for (const action of asArray(plan.addPeople)) {
-      if (accepted.skipExternalPersonIds.has(action.externalPersonId)) continue;
+    let addPeopleActions;
+    if (accepted.contractVersion === 2) {
+      const byExternalPersonId = new Map();
+      const createPersonFor = (externalPersonId) => {
+        const createPerson = plan.reviewContext.identities[externalPersonId].createPerson;
+        return {
+          id: `addPeople:${externalPersonId}`,
+          externalPersonId,
+          firstName: createPerson.firstName,
+          lastName: createPerson.lastName,
+          isChild: createPerson.isChild,
+          familyId: createPerson.externalFamilyId,
+          peopleType: createPerson.peopleType,
+        };
+      };
+      for (const action of asArray(plan.addPeople)) {
+        if (accepted.skippedAddExternalIds.has(action.externalPersonId)) continue;
+        if (accepted.createExternalIds.has(action.externalPersonId)) {
+          byExternalPersonId.set(action.externalPersonId, createPersonFor(action.externalPersonId));
+        }
+      }
+      for (const externalPersonId of accepted.createExternalIds) {
+        if (!byExternalPersonId.has(externalPersonId)) {
+          byExternalPersonId.set(externalPersonId, createPersonFor(externalPersonId));
+        }
+      }
+      addPeopleActions = [...byExternalPersonId.values()];
+    } else {
+      addPeopleActions = asArray(plan.addPeople)
+        .filter((action) => !accepted.skipExternalPersonIds.has(action.externalPersonId));
+    }
+    for (const action of addPeopleActions) {
       const peopleType = action.peopleType;
       if (!PEOPLE_TYPES.has(peopleType)) throw new Error(`addPeople action ${action.id} has an invalid people type`);
       let familyId = null;
@@ -338,7 +394,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // externalValue is null/undefined — never write an unknown child state
     // into is_child, even if a plan somehow carried one (plan.js itself
     // never emits such a change; this is belt-and-braces).
-    for (const action of asArray(plan.updateManagedFields)) {
+    for (const action of asArray(applicablePlan.updateManagedFields)) {
       const setClauses = [];
       const params = [];
       for (const change of asArray(action.changes)) {
@@ -359,14 +415,14 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     }
 
     // 6. People-type alignment.
-    for (const action of asArray(plan.promoteToRegular)) {
+    for (const action of asArray(applicablePlan.promoteToRegular)) {
       await conn.query(
         `UPDATE individuals SET people_type = 'regular', updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [action.individualId, churchId]
       );
       result.promoteToRegular++;
     }
-    for (const action of asArray(plan.demoteToLocalVisitor)) {
+    for (const action of asArray(applicablePlan.demoteToLocalVisitor)) {
       await conn.query(
         `UPDATE individuals SET people_type = 'local_visitor', updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [action.individualId, churchId]
@@ -377,7 +433,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // 7. Archive: plan-driven (lifecycle/presence based) plus any extra
     // individuals the reviewer explicitly chose to archive instead of
     // linking/leaving unmatched.
-    for (const action of asArray(plan.archive)) {
+    for (const action of asArray(applicablePlan.archive)) {
       await conn.query(
         `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [action.individualId, churchId]
@@ -393,7 +449,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     }
 
     // 8. Reactivate.
-    for (const action of asArray(plan.reactivate)) {
+    for (const action of asArray(applicablePlan.reactivate)) {
       await conn.query(
         `UPDATE individuals SET is_active = 1, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [action.individualId, churchId]
@@ -410,7 +466,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // a future "move an individual to a different existing family" action
     // might look like; do not treat the synthetic test as proof the real
     // contract matches once a producer for this bucket actually exists.
-    for (const action of asArray(plan.moveFamily)) {
+    for (const action of asArray(applicablePlan.moveFamily)) {
       const familyId = toPositiveInt(action.familyId, 'moveFamily familyId');
       await linkRepository.assertLocalRecord(conn, 'families', familyId, churchId);
       await conn.query(
@@ -441,7 +497,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // addToGathering action exactly when it targets a brand-new addPeople
     // person — resolve it via the externalPersonId -> new individual map
     // built in step 4 (which must therefore run before this step).
-    for (const action of asArray(plan.addToGathering)) {
+    for (const action of asArray(applicablePlan.addToGathering)) {
       const individualId = action.individualId ?? newIndividualIdByExternal.get(action.externalPersonId);
       if (!individualId) continue; // the person this targeted was never created (e.g. skipped) — nothing to add.
       const insertResult = await conn.query(
@@ -470,11 +526,11 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // could detect on its own. If a future orchestrator ever computes a
     // single-batch (not combined) plan, this check alone would NOT be
     // sufficient to protect a row another batch's plan still wants kept.
-    const staying = new Set(asArray(plan.addToGathering).map((a) => {
+    const staying = new Set(asArray(applicablePlan.addToGathering).map((a) => {
       const individualId = a.individualId ?? newIndividualIdByExternal.get(a.externalPersonId);
       return `${a.gatheringTypeId}:${individualId}`;
     }));
-    for (const action of asArray(plan.removeFromGathering)) {
+    for (const action of asArray(applicablePlan.removeFromGathering)) {
       if (staying.has(`${action.gatheringTypeId}:${action.individualId}`)) continue;
       const deleteResult = await conn.query(
         `DELETE FROM gathering_lists
@@ -483,6 +539,34 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       );
       result.removeFromGathering++;
       if (deleteResult.affectedRows > 0) result.gatheringRemoved++;
+    }
+
+    if (accepted.contractVersion === 2) {
+      for (const [externalPersonId, reason] of accepted.deferredReasons) {
+        await matchReviewRepository.upsertHoldWithConnection(conn, {
+          churchId, provider, externalPersonId, reason, userId,
+        });
+      }
+      for (const action of linkActions) {
+        await matchReviewRepository.deleteHoldWithConnection(conn, {
+          churchId, provider, externalPersonId: action.externalPersonId,
+        });
+      }
+      for (const externalPersonId of newIndividualIdByExternal.keys()) {
+        await matchReviewRepository.deleteHoldWithConnection(conn, {
+          churchId, provider, externalPersonId,
+        });
+      }
+      for (const exclusion of accepted.exclusionsToAdd) {
+        await matchReviewRepository.upsertExclusionWithConnection(conn, {
+          churchId, provider, ...exclusion, userId,
+        });
+      }
+      for (const exclusion of accepted.exclusionsToRemove) {
+        await matchReviewRepository.deleteExclusionWithConnection(conn, {
+          churchId, provider, ...exclusion,
+        });
+      }
     }
 
     if (sourcePromotion) {

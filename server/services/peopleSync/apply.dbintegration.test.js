@@ -5,6 +5,7 @@ const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const { applyPeopleSyncPlan } = require('./apply');
 const { BUCKETS } = require('./plan');
 const batchRepository = require('./batchRepository');
+const matchReviewRepository = require('./matchReviewRepository');
 const { digestSourceIdentity } = require('./sourceModel');
 
 // Minimal, self-documenting empty plan shape — every bucket applyPeopleSyncPlan
@@ -14,6 +15,33 @@ function emptyPlan(overrides = {}) {
   const plan = { provider: overrides.provider || 'elvanto', authoritative: overrides.authoritative !== false };
   for (const bucket of BUCKETS) plan[bucket] = [];
   return { ...plan, ...overrides };
+}
+
+function reviewIdentity(overrides = {}) {
+  return {
+    suggestedIndividualId: null,
+    candidateIndividualIds: [],
+    excludedIndividualIds: [],
+    held: false,
+    canCreate: true,
+    createPerson: {
+      firstName: 'Alex', lastName: 'Smith', isChild: false,
+      externalFamilyId: null, peopleType: 'regular',
+    },
+    ...overrides,
+  };
+}
+
+function v2Plan(identities, overrides = {}) {
+  const manualCandidateIndividualIds = overrides.manualCandidateIndividualIds || [];
+  return emptyPlan({
+    ...overrides,
+    reviewContext: { version: 2, manualCandidateIndividualIds, identities },
+  });
+}
+
+function v2Selections(identityDecisions) {
+  return { decisionContractVersion: 2, identityDecisions };
 }
 
 async function seedIndividual(churchId, overrides = {}) {
@@ -531,6 +559,311 @@ test('skipping an addPeople selection leaves that person uncreated', async () =>
     assert.equal(result.addPeople, 1);
     const rows = await Database.query('SELECT first_name FROM individuals WHERE church_id = ?', [churchId]);
     assert.deepEqual(rows.map((r) => r.first_name), ['Keep']);
+  });
+});
+
+test('a v2 accepted deterministic suggestion links the person and clears its hold', async () => {
+  // Catches v2 apply falling back to implicit plan links or forgetting that a
+  // successful reviewed link resolves the durable hold for this identity.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await matchReviewRepository.upsertHold({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', reason: 'deferred',
+    });
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({ suggestedIndividualId: individualId, candidateIndividualIds: [individualId], held: true }),
+    }, {
+      linkPeople: [{ id: 'linkPeople:ext-1', externalPersonId: 'ext-1', individualId, reviewRequired: false }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'accept' } }),
+    });
+
+    assert.equal(result.linkPeople, 1);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [], holds: [],
+    });
+    const [link] = await Database.query(
+      'SELECT external_person_id, individual_id FROM external_person_links WHERE church_id = ?', [churchId]
+    );
+    assert.deepEqual(link, { external_person_id: 'ext-1', individual_id: individualId });
+  });
+});
+
+test('a v2 replacement link excludes the rejected suggestion and clears its hold', async () => {
+  // Catches the legacy implicit auto-link path racing the explicit replacement
+  // and catches either durable decision being written outside the apply transaction.
+  await withTestChurchDb(async (churchId) => {
+    const suggestedIndividualId = await seedIndividual(churchId, { firstName: 'Suggested' });
+    const replacementIndividualId = await seedIndividual(churchId, { firstName: 'Replacement' });
+    await matchReviewRepository.upsertHold({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', reason: 'deferred',
+    });
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({
+        suggestedIndividualId,
+        candidateIndividualIds: [suggestedIndividualId, replacementIndividualId],
+        held: true,
+      }),
+    }, {
+      manualCandidateIndividualIds: [suggestedIndividualId, replacementIndividualId],
+      linkPeople: [{ id: 'linkPeople:ext-1', externalPersonId: 'ext-1', individualId: suggestedIndividualId, reviewRequired: false }],
+    });
+
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({
+        'ext-1': { outcome: 'link', individualId: replacementIndividualId, excludeIndividualId: suggestedIndividualId },
+      }),
+    });
+
+    const [link] = await Database.query(
+      'SELECT individual_id FROM external_person_links WHERE church_id = ? AND external_person_id = ?',
+      [churchId, 'ext-1']
+    );
+    assert.equal(link.individual_id, replacementIndividualId);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [{ externalPersonId: 'ext-1', individualId: suggestedIndividualId }], holds: [],
+    });
+  });
+});
+
+test('a v2 create uses only signed create data, resolves its external family, and clears its hold', async () => {
+  // Catches create decisions being ignored when the identity originated as a
+  // suggested link, or being synthesized from unsigned plan/provider data.
+  await withTestChurchDb(async (churchId) => {
+    const suggestedIndividualId = await seedIndividual(churchId, { firstName: 'Not Alex' });
+    const familyId = await seedFamily(churchId, 'Smith Household');
+    await Database.query(
+      `INSERT INTO external_family_links (church_id, provider, external_family_id, family_id, link_source)
+       VALUES (?, 'planning_center', 'pco-family-1', ?, 'matched')`,
+      [churchId, familyId]
+    );
+    await matchReviewRepository.upsertHold({
+      churchId, provider: 'planning_center', externalPersonId: 'pco-1', reason: 'deferred',
+    });
+    const plan = v2Plan({
+      'pco-1': reviewIdentity({
+        suggestedIndividualId,
+        candidateIndividualIds: [suggestedIndividualId],
+        held: true,
+        createPerson: {
+          firstName: 'Alex', lastName: 'Smith', isChild: true,
+          externalFamilyId: 'pco-family-1', peopleType: 'local_visitor',
+        },
+      }),
+    }, {
+      provider: 'planning_center',
+      linkPeople: [{ id: 'linkPeople:pco-1', externalPersonId: 'pco-1', individualId: suggestedIndividualId, reviewRequired: false }],
+      addPeople: [
+        {
+          id: 'addPeople:pco-1:first', externalPersonId: 'pco-1', firstName: 'Unsigned', lastName: 'First',
+          isChild: false, familyId: null, peopleType: 'regular',
+        },
+        {
+          id: 'addPeople:pco-1:duplicate', externalPersonId: 'pco-1', firstName: 'Unsigned', lastName: 'Duplicate',
+          isChild: false, familyId: null, peopleType: 'regular',
+        },
+      ],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'planning_center', plan,
+      selections: v2Selections({ 'pco-1': { outcome: 'create' } }),
+    });
+
+    assert.equal(result.addPeople, 1);
+    assert.equal(result.linkPeople, 0);
+    const [created] = await Database.query(
+      `SELECT family_id, first_name, last_name, people_type, is_child, planning_center_id
+         FROM individuals WHERE church_id = ? AND planning_center_id = 'pco-1'`,
+      [churchId]
+    );
+    assert.deepEqual(created, {
+      family_id: familyId, first_name: 'Alex', last_name: 'Smith',
+      people_type: 'local_visitor', is_child: 1, planning_center_id: 'pco-1',
+    });
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'planning_center'), {
+      exclusions: [], holds: [],
+    });
+  });
+});
+
+test('a v2 defer upserts a deferred hold without linking or creating the person', async () => {
+  // Catches a deferred addPeople identity falling through to the legacy
+  // creation path or failing to persist its durable review hold.
+  await withTestChurchDb(async (churchId) => {
+    const plan = v2Plan({ 'ext-1': reviewIdentity() }, {
+      addPeople: [{
+        id: 'addPeople:ext-1', externalPersonId: 'ext-1', firstName: 'Unsigned', lastName: 'Value',
+        isChild: false, familyId: null, peopleType: 'regular',
+      }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'defer' } }),
+    });
+
+    assert.equal(result.addPeople, 0);
+    assert.equal(result.linkPeople, 0);
+    assert.deepEqual(await counts(churchId), { individuals: 0, families: 0, links: 0 });
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [], holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }],
+    });
+  });
+});
+
+test('a v2 rejected pair persists both its exact exclusion and pair-rejected hold', async () => {
+  // Catches pair rejection being treated as a transient skip, losing either
+  // the exact candidate exclusion or the stronger hold reason.
+  await withTestChurchDb(async (churchId) => {
+    const suggestedIndividualId = await seedIndividual(churchId);
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({ suggestedIndividualId, candidateIndividualIds: [suggestedIndividualId] }),
+    }, {
+      linkPeople: [{ id: 'linkPeople:ext-1', externalPersonId: 'ext-1', individualId: suggestedIndividualId, reviewRequired: false }],
+    });
+
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'defer', excludeIndividualId: suggestedIndividualId } }),
+    });
+
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [{ externalPersonId: 'ext-1', individualId: suggestedIndividualId }],
+      holds: [{ externalPersonId: 'ext-1', reason: 'pair_rejected' }],
+    });
+    assert.equal((await counts(churchId)).links, 0);
+  });
+});
+
+test('a v2 deliberate link to an excluded pair removes that exclusion and clears its hold', async () => {
+  // Catches a reviewer override establishing the link while leaving stale
+  // durable state that would hide or hold the same pair on the next review.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await matchReviewRepository.upsertExclusion({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', individualId,
+    });
+    await matchReviewRepository.upsertHold({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', reason: 'pair_rejected',
+    });
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({ excludedIndividualIds: [individualId], held: true }),
+    }, { manualCandidateIndividualIds: [individualId] });
+
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'link', individualId } }),
+    });
+
+    assert.equal((await counts(churchId)).links, 1);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [], holds: [],
+    });
+  });
+});
+
+test('rejecting a v2 deterministic suggestion suppresses all dependent person, family, lifecycle, and gathering actions', async () => {
+  // Catches stale dependent actions calculated for the rejected suggestion
+  // mutating that local person before a fresh plan can be computed.
+  await withTestChurchDb(async (churchId) => {
+    const originalFamilyId = await seedFamily(churchId, 'Original');
+    const targetFamilyId = await seedFamily(churchId, 'Target');
+    const individualId = await seedIndividual(churchId, {
+      firstName: 'Original', familyId: originalFamilyId, peopleType: 'local_visitor',
+    });
+    const addGatheringId = await seedGatheringType(churchId, 'Add Target');
+    const removeGatheringId = await seedGatheringType(churchId, 'Remove Target');
+    const batchId = await seedSyncBatch(churchId, 'elvanto');
+    await seedGatheringListRow(churchId, removeGatheringId, individualId, batchId);
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({ suggestedIndividualId: individualId, candidateIndividualIds: [individualId] }),
+    }, {
+      linkPeople: [{ id: 'linkPeople:ext-1', externalPersonId: 'ext-1', individualId, reviewRequired: false }],
+      updateManagedFields: [{
+        id: 'updateManagedFields:ext-1', externalPersonId: 'ext-1', individualId,
+        changes: [{ field: 'firstName', localValue: 'Original', externalValue: 'Changed' }],
+      }],
+      promoteToRegular: [{ id: 'promote:ext-1', externalPersonId: 'ext-1', individualId }],
+      demoteToLocalVisitor: [{ id: 'demote:ext-1', externalPersonId: 'ext-1', individualId }],
+      archive: [{ id: 'archive:ext-1', externalPersonId: 'ext-1', individualId }],
+      reactivate: [{ id: 'reactivate:ext-1', externalPersonId: 'ext-1', individualId }],
+      moveFamily: [{ id: 'moveFamily:ext-1', externalPersonId: 'ext-1', individualId, familyId: targetFamilyId }],
+      addToGathering: [{ id: 'add:ext-1', externalPersonId: 'ext-1', individualId, gatheringTypeId: addGatheringId, batchId }],
+      removeFromGathering: [{ id: 'remove:ext-1', individualId, gatheringTypeId: removeGatheringId, batchId }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({ 'ext-1': { outcome: 'defer', excludeIndividualId: individualId } }),
+    });
+
+    for (const bucket of [
+      'linkPeople', 'updateManagedFields', 'promoteToRegular', 'demoteToLocalVisitor',
+      'archive', 'reactivate', 'moveFamily', 'addToGathering', 'removeFromGathering',
+    ]) assert.equal(result[bucket], 0, `${bucket} must be suppressed`);
+    const [person] = await Database.query(
+      'SELECT first_name, family_id, people_type, is_active FROM individuals WHERE id = ?', [individualId]
+    );
+    assert.deepEqual(person, {
+      first_name: 'Original', family_id: originalFamilyId, people_type: 'local_visitor', is_active: 1,
+    });
+    assert.equal((await Database.query(
+      'SELECT COUNT(*) AS n FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
+      [addGatheringId, individualId]
+    ))[0].n, 0);
+    assert.equal((await Database.query(
+      'SELECT COUNT(*) AS n FROM gathering_lists WHERE gathering_type_id = ? AND individual_id = ?',
+      [removeGatheringId, individualId]
+    ))[0].n, 1);
+  });
+});
+
+test('a later source-promotion failure rolls back every v2 identity and durable review mutation', async () => {
+  // Catches v2 creates, links, exclusions, or holds escaping the transaction
+  // when a later source promotion fails.
+  await withTestChurchDb(async (churchId) => {
+    const rejectedIndividualId = await seedIndividual(churchId, { firstName: 'Suggested' });
+    const before = await counts(churchId);
+    const plan = v2Plan({
+      'ext-create': reviewIdentity(),
+      'ext-reject': reviewIdentity({
+        suggestedIndividualId: rejectedIndividualId,
+        candidateIndividualIds: [rejectedIndividualId],
+      }),
+    }, {
+      addPeople: [{
+        id: 'addPeople:ext-create', externalPersonId: 'ext-create', firstName: 'Unsigned', lastName: 'Data',
+        isChild: false, familyId: null, peopleType: 'regular',
+      }],
+      linkPeople: [{
+        id: 'linkPeople:ext-reject', externalPersonId: 'ext-reject',
+        individualId: rejectedIndividualId, reviewRequired: false,
+      }],
+    });
+
+    await assert.rejects(() => applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan,
+      selections: v2Selections({
+        'ext-create': { outcome: 'create' },
+        'ext-reject': { outcome: 'defer', excludeIndividualId: rejectedIndividualId },
+      }),
+      sourcePromotion: {
+        batchId: 999999, expectedBaseRevision: 1, expectedDraftDigest: '0'.repeat(64),
+      },
+    }), (error) => error.code === 'SYNC_SOURCE_DRAFT_STALE');
+
+    assert.deepEqual(await counts(churchId), before);
+    assert.deepEqual(await Database.query(
+      'SELECT id FROM people_sync_match_holds WHERE church_id = ?', [churchId]
+    ), []);
+    assert.deepEqual(await Database.query(
+      'SELECT id FROM people_sync_match_exclusions WHERE church_id = ?', [churchId]
+    ), []);
   });
 });
 

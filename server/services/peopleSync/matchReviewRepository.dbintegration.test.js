@@ -128,6 +128,47 @@ test('match review deletion removes only its requested exact decision', async ()
   });
 });
 
+test('connection-aware match review helpers participate in their caller outer transaction', async () => {
+  // Catches a WithConnection helper opening or committing its own transaction,
+  // which would let reviewed decisions escape a later apply failure.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId, 'Ada');
+
+    await assert.rejects(Database.transactionForChurch(churchId, async (conn) => {
+      await repository.upsertExclusionWithConnection(conn, {
+        churchId, provider: 'elvanto', externalPersonId: 'ext-1', individualId,
+      });
+      await repository.upsertHoldWithConnection(conn, {
+        churchId, provider: 'elvanto', externalPersonId: 'ext-1', reason: 'pair_rejected',
+      });
+      throw new Error('force outer rollback after upserts');
+    }), /force outer rollback/);
+    assert.deepEqual(await repository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [], holds: [],
+    });
+
+    await repository.upsertExclusion({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', individualId,
+    });
+    await repository.upsertHold({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-1', reason: 'pair_rejected',
+    });
+    await assert.rejects(Database.transactionForChurch(churchId, async (conn) => {
+      assert.equal(await repository.deleteExclusionWithConnection(conn, {
+        churchId, provider: 'elvanto', externalPersonId: 'ext-1', individualId,
+      }), true);
+      assert.equal(await repository.deleteHoldWithConnection(conn, {
+        churchId, provider: 'elvanto', externalPersonId: 'ext-1',
+      }), true);
+      throw new Error('force outer rollback after deletes');
+    }), /force outer rollback/);
+    assert.deepEqual(await repository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [{ externalPersonId: 'ext-1', individualId }],
+      holds: [{ externalPersonId: 'ext-1', reason: 'pair_rejected' }],
+    });
+  });
+});
+
 test('match review mutations reject invalid provider, IDs, and hold reason', async () => {
   // Catches invalid values reaching the database boundary where they could
   // create ambiguous decisions or inconsistent provider records.
