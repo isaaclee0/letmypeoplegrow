@@ -304,6 +304,27 @@ function matchPeople(input) {
     const externalPersonId = stableString(externalPerson.id);
     if (usedExternalIds.has(externalPersonId)) continue;
 
+    const linkedIndividualId = validByExternal.get(externalPersonId);
+    if (linkedIndividualId !== undefined) {
+      const localPerson = localById.get(linkedIndividualId);
+      reserve(externalPerson, localPerson);
+      result.linked.push({ individualId: linkedIndividualId, externalPersonId, reason: 'existing_link' });
+      continue;
+    }
+
+    const decision = regularDecisions.get(externalPersonId);
+    const review = reviewDecisions.get(externalPersonId);
+    if (heldExternalIds.has(externalPersonId)) {
+      const candidates = decision?.candidates.length > 0 ? decision.candidates : review?.candidates || [];
+      result.ambiguous.push({
+        externalPersonId,
+        candidateIndividualIds: candidates.map((person) => Number(person.id)),
+        reason: 'review_deferred',
+      });
+      usedExternalIds.add(externalPersonId);
+      continue;
+    }
+
     if (duplicateExternalIds.has(externalPersonId)) {
       result.ambiguous.push({
         externalPersonId,
@@ -331,27 +352,6 @@ function matchPeople(input) {
         externalPersonId,
         candidateIndividualIds: conflictedByExternal.get(externalPersonId),
         reason: 'conflicting_existing_link',
-      });
-      usedExternalIds.add(externalPersonId);
-      continue;
-    }
-
-    const linkedIndividualId = validByExternal.get(externalPersonId);
-    if (linkedIndividualId !== undefined) {
-      const localPerson = localById.get(linkedIndividualId);
-      reserve(externalPerson, localPerson);
-      result.linked.push({ individualId: linkedIndividualId, externalPersonId, reason: 'existing_link' });
-      continue;
-    }
-
-    const decision = regularDecisions.get(externalPersonId);
-    const review = reviewDecisions.get(externalPersonId);
-    if (heldExternalIds.has(externalPersonId)) {
-      const candidates = decision?.candidates.length > 0 ? decision.candidates : review?.candidates || [];
-      result.ambiguous.push({
-        externalPersonId,
-        candidateIndividualIds: candidates.map((person) => Number(person.id)),
-        reason: 'review_deferred',
       });
       usedExternalIds.add(externalPersonId);
       continue;

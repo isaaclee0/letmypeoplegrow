@@ -107,6 +107,47 @@ test('a held unmatched person is returned for review without an add proposal', (
   }]);
 });
 
+test('a held person with a stale durable link is returned as deferred review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith')],
+    existingLinks: [{ externalPersonId: 'ext-1', individualId: 99 }],
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'ext-1', candidateIndividualIds: [], reason: 'review_deferred',
+  }]);
+});
+
+test('a held person with conflicting durable links is returned as deferred review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith'), local(8, 'Alex', 'Smith')],
+    existingLinks: [
+      { externalPersonId: 'ext-1', individualId: 7 },
+      { externalPersonId: 'ext-1', individualId: 8 },
+    ],
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'ext-1', candidateIndividualIds: [], reason: 'review_deferred',
+  }]);
+});
+
+test('a held duplicate external identity is returned as deferred review', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith'), external('ext-1', 'Blair', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith'), local(8, 'Blair', 'Smith')],
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'ext-1', candidateIndividualIds: [], reason: 'review_deferred',
+  }]);
+});
+
 test('a durable link retains precedence over a hold and exclusion', () => {
   const result = matchPeople(input({
     externalPeople: [external('ext-1', 'Alex', 'Smith')],
