@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import PlanningCenterIntegrationPanel from './PlanningCenterIntegrationPanel';
@@ -78,6 +78,18 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
   });
 
+  it('explains a stale source-draft action when its batch has been retired', async () => {
+    vi.mocked(peopleSyncAPI.discardSourceDraft).mockRejectedValue({
+      response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Members')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard source draft' }));
+
+    expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
+  });
+
   it('renders a historical object sync result without crashing the integration page', async () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
       data: {
@@ -93,6 +105,40 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
 
     expect(await screen.findByText('Members')).toBeInTheDocument();
     expect(screen.getByText(/2 people added · 1 person updated/)).toBeInTheDocument();
+  });
+
+  it('renders retired legacy batches as history and confirms deletion using the canonical batch id', async () => {
+    const legacyBatch = {
+      ...batch,
+      id: 53,
+      name: 'Old membership filters',
+      gatheringTypeId: 8,
+      scheduleEnabled: true,
+      scheduleFrequency: 'daily' as const,
+      legacyProviderBatchId: 41,
+      lastSyncAt: '2026-07-28T01:30:00.000Z',
+      lastSyncResult: { addPeople: 2 },
+    } as PeopleSyncBatch;
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({ data: { batches: [batch, legacyBatch] } });
+    vi.mocked(integrationsAPI.deletePlanningCenterSyncBatch).mockResolvedValue({ data: { success: true } });
+
+    renderPanel();
+
+    expect(await screen.findByText('Sync batches')).toBeInTheDocument();
+    expect(screen.getByText('Retired legacy batches')).toBeInTheDocument();
+    expect(screen.getByText('Old membership filters')).toBeInTheDocument();
+    expect(screen.getByText(/no longer runs/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Review & sync' })).toHaveLength(1);
+
+    const legacyCard = screen.getByText('Old membership filters').closest('li');
+    expect(legacyCard).not.toBeNull();
+    fireEvent.click(within(legacyCard!).getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('Delete retired legacy batch?')).toBeInTheDocument();
+    expect(screen.getByText(/People already imported and gathering assignments already created will remain/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete retired batch' }));
+    await waitFor(() => expect(integrationsAPI.deletePlanningCenterSyncBatch).toHaveBeenCalledWith(53));
   });
 
   it('offers reconnect when stored Planning Center credentials need replacement', async () => {

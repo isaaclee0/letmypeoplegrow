@@ -12,6 +12,7 @@ vi.mock('../../services/api', () => ({
     applyPlanningCenterBatch: vi.fn(),
   },
 }));
+vi.mock('../../utils/logger', () => ({ default: { error: vi.fn() } }));
 
 const plan: PeopleSyncPlan = {
   provider: 'planning_center', authoritative: false,
@@ -50,5 +51,36 @@ describe('PlanningCenterSyncReview', () => {
     await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(7, {
       reviewToken: 'pco-review-7', selections: expect.any(Object),
     }));
+  });
+
+  it('explains a retired batch when a stale page loads its review', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockRejectedValue({
+      response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } },
+    });
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+
+    expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
+  });
+
+  it('explains a retired batch when a stale page applies a reviewed plan', async () => {
+    vi.mocked(integrationsAPI.applyPlanningCenterBatch).mockRejectedValue({
+      response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } },
+    });
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+    expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
+  });
+
+  it('explains a retired batch when a stale page refreshes an already loaded review', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockRejectedValueOnce({ response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } } });
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh from Planning Center' }));
+    expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
   });
 });

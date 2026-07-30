@@ -4,6 +4,7 @@ import SyncReview from '../peopleSync/SyncReview';
 import type { PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
 import { integrationsAPI } from '../../services/api';
 import logger from '../../utils/logger';
+import { isRetiredLegacyBatchError, planningCenterBatchErrorMessage, RETIRED_LEGACY_BATCH_MESSAGE } from '../../utils/pcoBatchError';
 
 export default function PlanningCenterSyncReview({ connected, batchId, onApplied }: { connected: boolean; batchId: number; onApplied?: () => void | Promise<void> }) {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ export default function PlanningCenterSyncReview({ connected, batchId, onApplied
       setReview(response.data);
     } catch (caught: any) {
       logger.error('Failed to compute Planning Center batch sync plan', caught);
-      setError(caught.response?.data?.error || 'Failed to compute sync plan.');
+      setError(planningCenterBatchErrorMessage(caught, 'Failed to compute sync plan.'));
     } finally {
       setLoading(false);
     }
@@ -49,7 +50,11 @@ export default function PlanningCenterSyncReview({ connected, batchId, onApplied
       await onApplied?.();
     } catch (caught: any) {
       logger.error('Failed to apply Planning Center batch sync', caught);
-      setError(caught.response?.data?.error || 'Failed to apply sync.');
+      if (isRetiredLegacyBatchError(caught)) {
+        setError(null);
+        throw new Error(RETIRED_LEGACY_BATCH_MESSAGE);
+      }
+      setError(planningCenterBatchErrorMessage(caught, 'Failed to apply sync.'));
       throw caught;
     } finally {
       setApplying(false);

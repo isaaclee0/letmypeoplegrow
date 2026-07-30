@@ -35,6 +35,26 @@ describe('PlanningCenterBatchEditor', () => {
     await waitFor(() => expect(integrationsAPI.updatePlanningCenterSyncBatch).toHaveBeenCalled());
     expect(peopleSyncAPI.saveSourceDraft).not.toHaveBeenCalled();
   });
+  it('explains a stale settings save after the batch has been retired', async () => {
+    vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockRejectedValue({
+      response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } },
+    });
+    renderEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This legacy batch has been retired. Reload the page to view or delete it.');
+  });
+  it('explains a stale source-draft save after the batch has been retired', async () => {
+    vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch } });
+    vi.mocked(peopleSyncAPI.saveSourceDraft).mockRejectedValue({
+      response: { data: { code: 'PCO_LEGACY_BATCH_RETIRED', error: 'Batch retired.' } },
+    });
+    renderEditor();
+    fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This legacy batch has been retired. Reload the page to view or delete it.');
+  });
   it('blocks schedule changes while a source review is pending', async () => {
     renderEditor({ ...batch, draftSource: { ...batch.source!, externalId: 'list-2' }, needsSourceReview: true });
     await waitFor(() => expect(gatheringsAPI.getAll).toHaveBeenCalled());

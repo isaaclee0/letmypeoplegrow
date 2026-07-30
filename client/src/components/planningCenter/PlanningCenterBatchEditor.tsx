@@ -3,22 +3,12 @@ import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type PlanningCenterSyncB
 import BatchSourceControls from '../peopleSync/BatchSourceControls';
 import type { PeopleSyncBatch, PeopleSyncSourceState, PeopleType, SourceSelection } from '../peopleSync/types';
 import { ordinalDay } from '../../utils/pcoSchedule';
+import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
 import Modal from '../Modal';
 
 interface GatheringOption { id: number; name: string; }
 interface Props { batch: PeopleSyncBatch | null; onSaved: (batch: PeopleSyncBatch) => void; onCancel: () => void; }
 type CreatePayload = PlanningCenterSyncBatchInput & SourceSelection;
-
-function errorMessage(error: unknown, fallback: string): string {
-  if (typeof error === 'object' && error !== null && 'response' in error) {
-    const response = error.response;
-    if (typeof response === 'object' && response !== null && 'data' in response) {
-      const data = response.data;
-      if (typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string') return data.error;
-    }
-  }
-  return fallback;
-}
 
 export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved, onCancel }: Props) {
   const [currentBatch, setCurrentBatch] = useState<PeopleSyncBatch | null>(initialBatch);
@@ -64,11 +54,11 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
       const common = { defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
       if (!currentBatch) { const created = await integrationsAPI.createPlanningCenterSyncBatch({ ...common, ...selection } as CreatePayload); onSaved(created.data.batch); return; }
       try { await integrationsAPI.updatePlanningCenterSyncBatch(currentBatch.id, common as PlanningCenterSyncBatchPatch); }
-      catch (cause) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${errorMessage(cause, 'Failed to save batch settings.')}` : errorMessage(cause, 'Failed to save batch settings.')); return; }
+      catch (cause) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')}` : planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')); return; }
       if (!sourceChanged) { onSaved(currentBatch); return; }
       try { const draft = await peopleSyncAPI.saveSourceDraft('planning_center', currentBatch.id, selection); onSaved(draft.data.batch as PeopleSyncBatch); }
-      catch (cause) { setError(`${savedGathering ? 'The gathering was created and ' : ''}Batch settings were saved, but people source draft was not: ${errorMessage(cause, 'Failed to save people source draft.')}`); }
-    } catch (cause) { setError(savedGathering ? `The gathering was created, but the batch was not saved: ${errorMessage(cause, 'Failed to save sync batch.')}` : errorMessage(cause, 'Failed to save sync batch.')); }
+      catch (cause) { setError(`${savedGathering ? 'The gathering was created and ' : ''}Batch settings were saved, but people source draft was not: ${planningCenterBatchErrorMessage(cause, 'Failed to save people source draft.')}`); }
+    } catch (cause) { setError(savedGathering ? `The gathering was created, but the batch was not saved: ${planningCenterBatchErrorMessage(cause, 'Failed to save sync batch.')}` : planningCenterBatchErrorMessage(cause, 'Failed to save sync batch.')); }
     finally { setSaving(false); }
   };
 

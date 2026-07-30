@@ -20,6 +20,7 @@ import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEdit
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 import type { PeopleSyncBatch } from '../peopleSync/types';
+import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
 
 const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
   addPeople: ['person added', 'people added'],
@@ -77,6 +78,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
+  const [legacyBatchPendingDelete, setLegacyBatchPendingDelete] = useState<PeopleSyncBatch | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
   const [peopleLinked, setPeopleLinked] = useState(true);
@@ -184,7 +186,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       await integrationsAPI.deletePlanningCenterSyncBatch(batchId);
       await reloadAfterBatchMutation();
     } catch (e: any) {
-      setPlanningCenterError(e.response?.data?.error || 'Failed to delete sync batch.');
+      setPlanningCenterError(planningCenterBatchErrorMessage(e, 'Failed to delete sync batch.'));
+    }
+  };
+
+  const deleteLegacyBatch = async () => {
+    if (!legacyBatchPendingDelete) return;
+    try {
+      await integrationsAPI.deletePlanningCenterSyncBatch(legacyBatchPendingDelete.id);
+      setLegacyBatchPendingDelete(null);
+      await reloadAfterBatchMutation();
+    } catch (e: any) {
+      setBatchesError(planningCenterBatchErrorMessage(e, 'Failed to delete retired legacy batch.'));
     }
   };
 
@@ -193,7 +206,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
       await peopleSyncAPI.discardSourceDraft('planning_center', batchId);
       await reloadAfterBatchMutation();
     } catch (e: any) {
-      setBatchesError(e.response?.data?.error || 'Failed to discard the people source draft.');
+      setBatchesError(planningCenterBatchErrorMessage(e, 'Failed to discard the people source draft.'));
     }
   };
 
@@ -257,10 +270,13 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
     };
   }, [status.connected, loadBatches, loadSyncStats, loadPcSettings]);
 
+  const modernBatches = batches.filter((batch) => batch.legacyProviderBatchId === null);
+  const legacyBatches = batches.filter((batch) => batch.legacyProviderBatchId !== null);
+
   const peopleSourceControl = peopleSyncStatus === 'known' ? (
     <PeopleSourceControl
       provider="planning_center"
-      hasEnabledBatch={status.connected && !batchesLoading && batches.length > 0}
+      hasEnabledBatch={status.connected && !batchesLoading && modernBatches.length > 0}
       settings={peopleSyncSettings}
       connections={providerConnections}
       onRefresh={refreshPeopleSync}
@@ -493,12 +509,12 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                   </div>
                 )}
 
-                {!batchesLoading && batches.length === 0 && editingBatch === null && (
+                {!batchesLoading && modernBatches.length === 0 && editingBatch === null && (
                   <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No sync batches yet — create one to start importing people from Planning Center.</p>
                 )}
 
                 <ul className="mt-3 space-y-3">
-                  {batches.map((batch) => (
+                  {modernBatches.map((batch) => (
                     <li key={batch.id} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
                       <div className="flex items-center justify-between">
                         <div>
@@ -545,6 +561,34 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                     </li>
                   ))}
                 </ul>
+
+                {legacyBatches.length > 0 && (
+                  <section className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h5 className="text-sm font-medium text-gray-900 dark:text-gray-100">Retired legacy batches</h5>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">These historical Planning Center batches are retained for reference and no longer run.</p>
+                    <ul className="mt-3 space-y-3">
+                      {legacyBatches.map((batch) => (
+                        <li key={batch.id} className="border border-gray-200 dark:border-gray-700 rounded-md p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{batch.name}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">This retired legacy batch no longer runs and cannot be edited or reviewed.</p>
+                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Prior settings: {batch.scheduleEnabled ? `scheduled ${batch.scheduleFrequency}` : 'manual only'} · {batch.gatheringTypeId ? 'assigned to a gathering' : 'no gathering assignment'} · new people were added as {batch.defaultPeopleType.replace('_', ' ')}.
+                              </p>
+                              {batch.lastSyncAt && (
+                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                  Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}.
+                                </p>
+                              )}
+                            </div>
+                            <button type="button" onClick={() => setLegacyBatchPendingDelete(batch)} className="shrink-0 text-sm underline text-red-600 dark:text-red-400">Delete</button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
               </div>
 
               {peopleSourceControl}
@@ -670,6 +714,20 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                 Disconnect
               </button>}
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={legacyBatchPendingDelete !== null}
+        onClose={() => setLegacyBatchPendingDelete(null)}
+      >
+        <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Delete retired legacy batch?</h3>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">This permanently removes the old batch records. People already imported and gathering assignments already created will remain.</p>
+          <div className="mt-6 flex gap-3">
+            <button type="button" onClick={() => setLegacyBatchPendingDelete(null)} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">Cancel</button>
+            <button type="button" onClick={() => void deleteLegacyBatch()} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700">Delete retired batch</button>
           </div>
         </div>
       </Modal>
