@@ -504,4 +504,4 @@ function summarizePlan(plan) {
   return Object.fromEntries(BUCKETS.map((bucket) => [bucket, Array.isArray(plan?.[bucket]) ? plan[bucket].length : 0]));
 }
 
-module.exports = { BUCKETS, computePeopleSyncPlan, summarizePlan };
+module.exports = { BUCKETS, computePeopleSyncPlan, summarizePlan, desiredPeopleType };

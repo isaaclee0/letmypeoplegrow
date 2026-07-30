@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { computePeopleSyncPlan, summarizePlan } = require('./plan');
+const { computePeopleSyncPlan, summarizePlan, desiredPeopleType } = require('./plan');
 
 function person(overrides = {}) {
   return { id: 'ext-1', firstName: 'Ada', lastName: 'Lovelace', child: false,
@@ -34,6 +34,14 @@ function input(overrides = {}) {
     ...overrides,
   };
 }
+
+test('exports the active, contact, and batch-default people type precedence for review context', () => {
+  assert.equal(desiredPeopleType({ state: 'active' }, [{ defaultPeopleType: 'local_visitor' }]), 'regular');
+  assert.equal(desiredPeopleType({ state: 'contact' }, [{ defaultPeopleType: 'regular' }]), 'local_visitor');
+  assert.equal(desiredPeopleType({ state: 'other' }, [
+    { defaultPeopleType: 'local_visitor' }, { defaultPeopleType: 'regular' },
+  ]), 'regular');
+});
 
 const bucketNames = [
   'linkPeople', 'linkFamilies', 'addPeople', 'addFamilies', 'updateManagedFields',

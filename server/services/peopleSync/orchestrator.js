@@ -57,10 +57,12 @@ const batchRepository = require('./batchRepository');
 const unattendedPolicy = require('./unattendedPolicy');
 const runRepository = require('./runRepository');
 const linkRepository = require('./linkRepository');
+const matchReviewRepository = require('./matchReviewRepository');
 const authority = require('./authority');
 const providerRegistry = require('./providerRegistry');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
+const { DECISION_CONTRACT_VERSION, buildReviewContext, buildReviewDirectory } = require('./reviewContext');
 const { applyPeopleSyncPlan, validateSelections } = require('./apply');
 const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
 const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
@@ -176,6 +178,7 @@ const defaultDeps = {
   validateSourceProvenance: runRepository.validateSourceProvenance,
   getProvider: providerRegistry.getProvider,
   listPersonLinks: linkRepository.listPersonLinks,
+  listMatchReviewState: matchReviewRepository.listMatchReviewState,
   listFamilyLinks: linkRepository.listFamilyLinks,
   recordFullFetchPresence: linkRepository.recordFullFetchPresence,
   listLocalIndividuals: defaultListLocalIndividuals,
@@ -292,30 +295,13 @@ function stripRawFields(action) {
 // plan.js's own bucket shapes are already lean (scalar fields only), but
 // this stays defensive against a future plan.js change embedding a raw
 // external-person fragment on an action.
-function reviewPeopleDirectory(externalPeople = [], localPeople = []) {
-  const safeName = (person) => ({
-    firstName: typeof person?.firstName === 'string' ? person.firstName : '',
-    lastName: typeof person?.lastName === 'string' ? person.lastName : '',
-  });
-  const directory = (people, idFor) => Object.fromEntries((people || [])
-    .map((person) => [idFor(person), safeName(person)])
-    .filter(([id]) => id !== null)
-    .sort(([left], [right]) => left.localeCompare(right, 'en')));
-  return {
-    external: directory(externalPeople, personId),
-    local: directory(localPeople, (person) => {
-      const id = Number(person?.id);
-      return Number.isSafeInteger(id) && id > 0 ? String(id) : null;
-    }),
-  };
-}
-
-function sanitizePlanForReview(plan, externalPeople = [], localPeople = []) {
+function sanitizePlanForReview(plan, externalPeople = [], localPeople = [], externalFamilies = [], localFamilies = []) {
   const sanitized = {
     provider: plan.provider,
     authoritative: plan.authoritative,
     snapshot: { fetchedAt: plan.snapshot.fetchedAt, mode: plan.snapshot.mode },
-    people: reviewPeopleDirectory(externalPeople, localPeople),
+    reviewContext: plan.reviewContext,
+    people: buildReviewDirectory({ externalPeople, externalFamilies, localPeople, localFamilies, reviewContext: plan.reviewContext }),
   };
   for (const bucket of BUCKETS) {
     sanitized[bucket] = (plan[bucket] || []).map(stripRawFields);
@@ -524,6 +510,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
   const memberPeopleById = new Map();
   const ineligibleMemberPeopleById = new Map();
   const matchingPeopleById = new Map();
+  const contextPeopleById = new Map();
   const familiesById = new Map();
   const sourceProvenance = [];
 
@@ -562,11 +549,11 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         if (!id) throw sourceIncomplete(provider);
         if (!sourcePeopleById.has(id)) sourcePeopleById.set(id, candidate);
       }
-      const contextPeopleById = new Map();
+      const sourceContextPeopleById = new Map();
       for (const candidate of sourceSnapshot.contextPeople) {
         const id = personId(candidate);
         if (!id || sourcePeopleById.has(id)) throw sourceIncomplete(provider);
-        if (!contextPeopleById.has(id)) contextPeopleById.set(id, candidate);
+        if (!sourceContextPeopleById.has(id)) sourceContextPeopleById.set(id, candidate);
       }
       const memberIds = new Set();
       const eligible = new Set();
@@ -594,11 +581,15 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
           matchingPeopleById.set(id, member);
         }
       }
-      for (const contextPerson of contextPeopleById.values()) {
+      for (const contextPerson of sourceContextPeopleById.values()) {
         const id = personId(contextPerson);
         if (!matchingPeopleById.has(id) && !ineligibleMemberPeopleById.has(id)) {
           matchingPeopleById.set(id, contextPerson);
         }
+      }
+      for (const contextPerson of sourceContextPeopleById.values()) {
+        const id = personId(contextPerson);
+        if (!memberPeopleById.has(id) && !contextPeopleById.has(id)) contextPeopleById.set(id, contextPerson);
       }
       for (const family of sourceSnapshot.families) {
         const id = family?.id === null || family?.id === undefined ? '' : String(family.id);
@@ -650,6 +641,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       people: [...memberPeopleById.values()],
       families: [...familiesById.values()],
     },
+    contextPeople: [...contextPeopleById.values()],
     matchingPeople: [...matchingPeopleById.values()],
     ineligibleMemberPeople: [...ineligibleMemberPeopleById.values()],
     ignoredLifecycleExternalIds: new Set(ineligibleMemberPeopleById.keys()),
@@ -681,12 +673,13 @@ async function runPipelineBody({
   const { snapshot } = acquired;
 
   // 5. load local state/links and existing missing counters
-  const [individuals, families, personLinks, familyLinks, gatheringMemberships] = await Promise.all([
+  const [individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState] = await Promise.all([
     deps.listLocalIndividuals(churchId),
     deps.listLocalFamilies(churchId),
     deps.listPersonLinks(churchId, provider),
     deps.listFamilyLinks(churchId, provider),
     deps.listGatheringMemberships(churchId),
+    deps.listMatchReviewState(churchId, provider),
   ]);
 
   const linkedExternalIds = new Set(personLinks.map((link) => String(link.externalPersonId)));
@@ -706,6 +699,9 @@ async function runPipelineBody({
     externalPeople: matchingPeople,
     localPeople: individuals,
     existingLinks: personLinks.map((link) => ({ externalPersonId: link.externalPersonId, individualId: link.individualId })),
+    excludedPairs: new Set((matchReviewState?.exclusions || []).map((entry) =>
+      `${String(entry.externalPersonId)}\u0000${Number(entry.individualId)}`)),
+    heldExternalIds: new Set((matchReviewState?.holds || []).map((entry) => String(entry.externalPersonId))),
     externalFamilyMembers: groupMembersByFamily(matchingPeople),
     localFamilyMembers: groupMembersByFamily(individuals),
   }), acquired.seenMemberExternalIds);
@@ -731,8 +727,22 @@ async function runPipelineBody({
     familyConflicts: [],
     gatheringMemberships,
   });
+  const externalPeople = [...snapshot.people, ...acquired.contextPeople];
+  plan.reviewContext = buildReviewContext({
+    plan,
+    externalPeople,
+    localPeople: individuals,
+    personLinks,
+    exclusions: matchReviewState?.exclusions || [],
+    holds: matchReviewState?.holds || [],
+    batches,
+    eligibleByBatch: acquired.eligibleByBatch,
+  });
 
-  return { ...acquired, individuals, families, personLinks, familyLinks, gatheringMemberships, matcherResult, plan };
+  return {
+    ...acquired, externalPeople, individuals, families, personLinks, familyLinks, gatheringMemberships,
+    matchReviewState, matcherResult, plan,
+  };
 }
 
 // ─── buildReview ─────────────────────────────────────────────────────────────
@@ -777,9 +787,10 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
     return {
       runId: run.id,
       reviewToken,
+      decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
       coverage: reviewCoverage(body.matcherResult, body.individuals),
-      plan: sanitizePlanForReview(body.plan, body.snapshot.people, body.individuals),
+      plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
     };
   } catch (err) {
@@ -836,9 +847,10 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
     return {
       runId: run.id,
       reviewToken,
+      decisionContractVersion: DECISION_CONTRACT_VERSION,
       summary: summarizePlan(body.plan),
       coverage: reviewCoverage(body.matcherResult, body.individuals),
-      plan: sanitizePlanForReview(body.plan, body.snapshot.people, body.individuals),
+      plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
       authority: authorityState,
     };

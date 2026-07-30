@@ -88,6 +88,7 @@ function makeDeps({
     (value.state !== 'contact' || settings.includeContacts !== false),
   localIndividuals = [],
   personLinks = [],
+  matchReviewState = { exclusions: [], holds: [] },
   gatheringMemberships = [],
   verifyResult = { ok: true },
   extra = {},
@@ -127,6 +128,7 @@ function makeDeps({
     recordActiveSourceAvailable: async (input) => { events.push(`available:${input.batchId}`); availableHealth.push(input); },
     recordActiveSourceFailure: async (input) => { events.push(`failure:${input.batchId}`); failedHealth.push(input); },
     listPersonLinks: async () => personLinks,
+    listMatchReviewState: async () => matchReviewState,
     listFamilyLinks: async () => [],
     recordFullFetchPresence: async (...args) => { events.push('presence'); presence.push(args); return {}; },
     listLocalIndividuals: async () => localIndividuals,
@@ -248,8 +250,8 @@ test('review preserves the names used to match external and local people', async
     reviewRequired: false,
   }], 'the normalized names must still drive the matcher');
   assert.deepEqual(review.plan.people, {
-    external: { 'external-ada': { firstName: 'Ada', lastName: 'Lovelace' } },
-    local: { '42': { firstName: 'Ada', lastName: 'Lovelace' } },
+    external: { 'external-ada': { firstName: 'Ada', lastName: 'Lovelace', family: { state: 'none' } } },
+    local: { '42': { firstName: 'Ada', lastName: 'Lovelace', family: { state: 'none' }, matchEligible: true } },
   }, 'the review response must retain safe display names instead of exposing only IDs');
 });
 
@@ -315,6 +317,87 @@ test('household context can corroborate a member match but never becomes eligibl
     assert.equal(applied[0].plan[bucketName].some((item) => item.externalPersonId === 'context'), false);
   }
   assert.deepEqual([...presence[0][2]], ['member']);
+});
+
+test('review signs durable match context and returns a family-aware directory without exposing raw people', async () => {
+  const member = person('ext-1', { firstName: 'Alex', lastName: 'Smith', familyId: 'house-1' });
+  const context = person('ext-2', { firstName: 'Jamie', lastName: 'Smith', familyId: 'house-1' });
+  const matchInputs = [];
+  let signedPlan;
+  const { deps } = makeDeps({
+    localIndividuals: [
+      { id: 7, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+      { id: 8, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+      { id: 9, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+      { id: 10, firstName: 'Durable', lastName: 'Link', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+    ],
+    personLinks: [{ externalPersonId: 'old-link', individualId: 10, missingFullSyncCount: 0 }],
+    matchReviewState: {
+      exclusions: [{ externalPersonId: 'ext-1', individualId: 9 }],
+      holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }],
+    },
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [member], memberExternalIds: ['ext-1'], contextPeople: [context],
+      families: [{ id: 'house-1', name: 'Smith Household', memberExternalIds: ['ext-2', 'ext-1'] }],
+    }),
+    extra: {
+      matchPeople: (input) => { matchInputs.push(input); return matchPeople(input); },
+      digestPlan: (plan) => { signedPlan = structuredClone(plan); return 'a'.repeat(64); },
+    },
+  });
+
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+
+  assert.deepEqual(matchInputs[0].excludedPairs, new Set(['ext-1\u00009']));
+  assert.deepEqual(matchInputs[0].heldExternalIds, new Set(['ext-1']));
+  assert.equal(review.decisionContractVersion, 2);
+  assert.deepEqual(signedPlan.reviewContext, {
+    version: 2,
+    manualCandidateIndividualIds: [7, 8, 9],
+    identities: {
+      'ext-1': {
+        suggestedIndividualId: null,
+        candidateIndividualIds: [7, 8],
+        excludedIndividualIds: [9],
+        held: true,
+        canCreate: true,
+        createPerson: {
+          firstName: 'Alex', lastName: 'Smith', isChild: false,
+          externalFamilyId: 'house-1', peopleType: 'regular',
+        },
+      },
+    },
+  });
+  assert.deepEqual(review.plan.people.external['ext-1'].family, {
+    state: 'known', name: 'Smith Household',
+    members: [{ firstName: 'Jamie', lastName: 'Smith' }], totalOtherMembers: 1,
+  });
+  assert.equal(review.plan.people.local['10'].matchEligible, false);
+});
+
+test('reviewed apply rebuilds signed review context before token verification', async () => {
+  const member = person('ext-1', { firstName: 'Alex', lastName: 'Smith', familyId: null });
+  let signedDigest;
+  const { deps } = makeDeps({
+    localIndividuals: [{ id: 7, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true }],
+    matchReviewState: { exclusions: [], holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }] },
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), { people: [member], memberExternalIds: ['ext-1'] }),
+    extra: {
+      digestPlan: (plan) => {
+        assert.equal(plan.reviewContext?.version, 2);
+        return digestPlan(plan);
+      },
+      createReviewToken: ({ planDigest }) => { signedDigest = planDigest; return `review:${planDigest}`; },
+      verifyReviewToken: (token, { planDigest }) => ({ ok: token === `review:${planDigest}` && planDigest === signedDigest }),
+    },
+  });
+
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+  const result = await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', reviewToken: review.reviewToken, selections: {}, userId: 1,
+  }, deps);
+
+  assert.equal(result.status, 'applied');
 });
 
 test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-fetch presence', async () => {
