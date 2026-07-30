@@ -219,6 +219,75 @@ test('duplicate members are normalized once while each batch retains its own mem
   assert.deepEqual([...plans[0].eligibleByBatch.get(2)], ['shared', 'two-only']);
 });
 
+test('review preserves the names used to match external and local people', async () => {
+  const external = person('external-ada', { firstName: 'Ada', lastName: 'Lovelace' });
+  const local = {
+    id: 42,
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    peopleType: 'regular',
+    familyId: null,
+    isChild: false,
+    isActive: true,
+  };
+  const { deps } = makeDeps({
+    localIndividuals: [local],
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1', 'Members'), {
+      people: [external],
+      memberExternalIds: [external.id],
+    }),
+  });
+
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+
+  assert.deepEqual(review.plan.linkPeople, [{
+    id: 'linkPeople:external-ada:42',
+    externalPersonId: 'external-ada',
+    individualId: 42,
+    reason: 'unique_name',
+    reviewRequired: false,
+  }], 'the normalized names must still drive the matcher');
+  assert.deepEqual(review.plan.people, {
+    external: { 'external-ada': { firstName: 'Ada', lastName: 'Lovelace' } },
+    local: { '42': { firstName: 'Ada', lastName: 'Lovelace' } },
+  }, 'the review response must retain safe display names instead of exposing only IDs');
+});
+
+test('review coverage counts distinct unmatched active local regulars without creating plan actions', async () => {
+  const localIndividuals = [
+    { id: 11, firstName: 'Una', lastName: 'Matched', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+    { id: 12, firstName: 'Vera', lastName: 'Visitor', peopleType: 'local_visitor', familyId: null, isChild: false, isActive: true },
+    { id: 13, firstName: 'Ina', lastName: 'Inactive', peopleType: 'regular', familyId: null, isChild: false, isActive: false },
+    { id: 14, firstName: 'Mia', lastName: 'Matched', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+  ];
+  const { deps } = makeDeps({
+    localIndividuals,
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [person('matched', { firstName: 'Mia', lastName: 'Matched' })],
+      memberExternalIds: ['matched'],
+    }),
+    extra: {
+      matchPeople: () => ({
+        linked: [],
+        matches: [{ externalPersonId: 'matched', individualId: 14, reason: 'unique_name' }],
+        ambiguous: [],
+        unmatchedExternalIds: [],
+        unmatchedLocalIds: [11, '11', 12, 13],
+        visitorMatches: [],
+        archivedMatches: [],
+      }),
+    },
+  });
+
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+
+  assert.deepEqual(review.coverage, {
+    unmatchedActiveLocalRegulars: 1,
+  });
+  assert.deepEqual(review.plan.unmatchedLocalRegulars, []);
+  assert.deepEqual(review.plan.archive, []);
+});
+
 test('household context can corroborate a member match but never becomes eligible or actionable', async () => {
   const member = person('member', { firstName: 'Ada', lastName: 'Smith', familyId: 'external-family' });
   const context = person('context', { firstName: 'Bob', lastName: 'Smith', familyId: 'external-family' });
@@ -563,11 +632,22 @@ test('previewAuthoritySwitch remains review-only and validates sources before st
   let begins = 0;
   const { deps, applied, presence } = makeDeps({
     authorityState: { active: 'none', pending: null },
-    extra: { beginAuthoritySwitch: async () => { begins += 1; return { active: 'none', pending: 'elvanto' }; } },
+    localIndividuals: [
+      { id: 51, firstName: 'Una', lastName: 'Matched', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+    ],
+    extra: {
+      beginAuthoritySwitch: async () => { begins += 1; return { active: 'none', pending: 'elvanto' }; },
+      matchPeople: () => ({
+        linked: [], matches: [], ambiguous: [], unmatchedExternalIds: [], unmatchedLocalIds: [51], visitorMatches: [], archivedMatches: [],
+      }),
+    },
   });
   const review = await previewAuthoritySwitch({ churchId: 'church-a', provider: 'elvanto' }, deps);
   assert.equal(begins, 1);
   assert.equal(review.authority.pending, 'elvanto');
+  assert.deepEqual(review.coverage, {
+    unmatchedActiveLocalRegulars: 1,
+  });
   assert.equal(applied.length, 0);
   assert.equal(presence.length, 0);
 });
