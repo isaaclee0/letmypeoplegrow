@@ -21,6 +21,33 @@ import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
 import type { PeopleSyncBatch } from '../peopleSync/types';
 
+const PCO_SYNC_RESULT_LABELS: Record<string, [string, string]> = {
+  addPeople: ['person added', 'people added'],
+  updateManagedFields: ['person updated', 'people updated'],
+  linkPeople: ['person linked', 'people linked'],
+  archive: ['person archived', 'people archived'],
+  reactivate: ['person reactivated', 'people reactivated'],
+  addFamilies: ['family added', 'families added'],
+  linkFamilies: ['family linked', 'families linked'],
+  gatheringAssigned: ['gathering assignment added', 'gathering assignments added'],
+  gatheringRemoved: ['gathering assignment removed', 'gathering assignments removed'],
+};
+
+function formatLastSyncResult(result: PeopleSyncBatch['lastSyncResult']): string | null {
+  if (typeof result === 'string') return result.replaceAll('_', ' ');
+  if (!result) return null;
+
+  const counts = Object.entries(result)
+    .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && entry[1] > 0)
+    .map(([key, count]) => {
+      const labels = PCO_SYNC_RESULT_LABELS[key];
+      const label = labels?.[count === 1 ? 0 : 1] || key.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+      return `${count} ${label}`;
+    });
+
+  return counts.length > 0 ? counts.join(' · ') : 'completed';
+}
+
 const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> & PeopleSyncPanelProps & { initialAction?: 'disconnect' }> = ({
   status,
   refreshStatus,
@@ -486,7 +513,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                           </p>
                           {batch.lastSyncAt && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                              Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${batch.lastSyncResult.replaceAll('_', ' ')}` : ''}.
+                              Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}.
                             </p>
                           )}
                           {batch.source && <p className="mt-1 text-xs text-gray-500">{batch.source.kind === 'planning_center_list' ? 'Planning Center List' : batch.source.kind}: {batch.source.name}</p>}

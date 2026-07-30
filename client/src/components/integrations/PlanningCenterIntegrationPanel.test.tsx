@@ -78,6 +78,23 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.queryByText('Source missing')).not.toBeInTheDocument();
   });
 
+  it('renders a historical object sync result without crashing the integration page', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: {
+        batches: [{
+          ...batch,
+          lastSyncAt: '2026-07-29T01:30:00.000Z',
+          lastSyncResult: { addPeople: 2, updateManagedFields: 1 },
+        }],
+      },
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText('Members')).toBeInTheDocument();
+    expect(screen.getByText(/2 people added · 1 person updated/)).toBeInTheDocument();
+  });
+
   it('offers reconnect when stored Planning Center credentials need replacement', async () => {
     // Catches recovery state being rendered as an ordinary first-time connection.
     vi.mocked(integrationsAPI.authorizePlanningCenter).mockResolvedValue({ data: { authUrl: '#pco-oauth' } });

@@ -97,15 +97,10 @@ export interface PeopleSyncBatch {
   legacyProviderBatchId: number | null;
   lastExternalWatermark: string | null;
   lastSyncAt: string | null;
-  // IMPORTANT DEVIATION from the plan's own inline snippet (which showed
-  // `Record<string, number | string> | null`): batchRepository.js's
-  // toBatch() does NOT JSON.parse this column -- `lastSyncResult:
-  // row.last_sync_result` is a raw passthrough of a TEXT column. The two
-  // scheduled provider-neutral path writes a run-status string (see
-  // RUN_STATUSES in batchRepository.js). Historical Planning Center rows may
-  // still contain a JSON summary written by the retired legacy path, so the
-  // shared DTO deliberately remains the broad `string | null` shape.
-  lastSyncResult: string | null;
+  // Provider-neutral runs return a status string. The Planning Center
+  // compatibility adapter also JSON-parses summaries stored by the retired
+  // legacy path, so old PCO batches can return an object here.
+  lastSyncResult: string | Record<string, unknown> | null;
 }
 
 export interface PeopleSyncSourceState {
@@ -124,22 +119,19 @@ export interface PeopleSyncSourceState {
 }
 
 // Elvanto batches are only ever written through batchRepository's own
-// recordBatchResult (see the note on `lastSyncResult` above), so for an
-// Elvanto batch specifically, lastSyncResult -- once non-null -- is always
-// one of these four strings.
+// recordBatchResult, so for an Elvanto batch specifically, lastSyncResult --
+// once non-null -- is always one of these four strings.
 export type ElvantoLastSyncResult = 'review_required' | 'applied' | 'failed' | 'cancelled';
 
 const ELVANTO_LAST_SYNC_RESULTS = new Set<ElvantoLastSyncResult>([
   'review_required', 'applied', 'failed', 'cancelled',
 ]);
 
-// Narrows PeopleSyncBatch['lastSyncResult'] (a raw `string | null`) down to
-// ElvantoLastSyncResult for an Elvanto batch specifically. Returns false for
-// `null` (never synced) and for any unrecognised string (e.g. a
-// provider='planning_center' row's JSON-stringified summary, if this were
-// ever mistakenly called on one -- see the field's own doc comment above).
-export function isElvantoLastSyncResult(value: string | null): value is ElvantoLastSyncResult {
-  return value !== null && ELVANTO_LAST_SYNC_RESULTS.has(value as ElvantoLastSyncResult);
+// Narrows PeopleSyncBatch['lastSyncResult'] down to ElvantoLastSyncResult for
+// an Elvanto batch specifically. Returns false for `null`, unrecognised
+// strings, and Planning Center legacy summary objects.
+export function isElvantoLastSyncResult(value: PeopleSyncBatch['lastSyncResult']): value is ElvantoLastSyncResult {
+  return typeof value === 'string' && ELVANTO_LAST_SYNC_RESULTS.has(value as ElvantoLastSyncResult);
 }
 
 // Request body accepted by POST /elvanto/sync-batches (name required) and
