@@ -54,6 +54,13 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
   const [confirmedDestructiveChanges, setConfirmedDestructiveChanges] = useState(false);
   const [applyError, setApplyError] = useState<unknown>(null);
   const { plan } = review;
+  const unmatchedCoverageCount = review.coverage?.unmatchedActiveLocalRegulars ?? 0;
+  const displayName = (person: { firstName: string; lastName: string } | undefined) =>
+    `${person?.firstName || ''} ${person?.lastName || ''}`.trim();
+  const externalPerson = (externalPersonId: string) =>
+    displayName(plan.people?.external[externalPersonId]) || `external person ${externalPersonId}`;
+  const localPerson = (individualId: number) =>
+    displayName(plan.people?.local[String(individualId)]) || `person ${individualId}`;
 
   useEffect(() => {
     setState(emptyState());
@@ -111,13 +118,19 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
         </div>
       </div>
 
-      {(plan.ambiguousPeople.length > 0 || plan.familyConflicts.length > 0 || plan.unmatchedLocalRegulars.length > 0 || plan.promoteToRegular.some((action) => action.reviewRequired)) && (
+      {unmatchedCoverageCount > 0 && (
+        <section className="rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+          {unmatchedCoverageCount} active LMPG regulars are not matched to any currently configured {providerLabel(provider)} source. They will remain unchanged. Add another sync batch if they should be included.
+        </section>
+      )}
+
+      {(plan.ambiguousPeople.length > 0 || plan.familyConflicts.length > 0 || plan.promoteToRegular.some((action) => action.reviewRequired)) && (
         <section>
           <h4 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">Needs your decision</h4>
           <ul className="space-y-3">
             {plan.ambiguousPeople.map((action) => (
               <PlanItem key={action.id}>
-                <p className="mb-2">{action.externalPersonId} — {action.reason}</p>
+                <p className="mb-2">{externalPerson(action.externalPersonId)} — {action.reason}</p>
                 <div className="space-y-1">
                   {(() => {
                     const archiveIndividualId = resolveAmbiguousArchiveIndividualId?.(action);
@@ -126,7 +139,7 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
                     <label key={candidateId} className="flex items-center gap-2">
                       <input type="radio" name={`ambiguous-${action.id}`} checked={state.ambiguousChoices[action.externalPersonId] === candidateId}
                         onChange={() => selectCandidate(action.externalPersonId, candidateId, archiveIndividualId)} />
-                      <span>{renderCandidateLabel ? renderCandidateLabel(action, candidateId) : `Use local person ${candidateId} for ${action.externalPersonId}`}</span>
+                      <span>{renderCandidateLabel ? renderCandidateLabel(action, candidateId) : `Use ${localPerson(candidateId)} for ${externalPerson(action.externalPersonId)}`}</span>
                     </label>
                   ))}
                   {archiveIndividualId !== undefined && <label className="flex items-center gap-2">
@@ -153,16 +166,10 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
               </PlanItem>
             ))}
             {plan.familyConflicts.map((conflict, index) => <PlanItem key={conflict.id || index}>{String(conflict.reason || 'Family conflict requires review')}</PlanItem>)}
-            {plan.unmatchedLocalRegulars.map((action) => (
-              <PlanItem key={action.id}>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={state.acceptedArchiveIds.has(action.individualId)} onChange={() => toggleArchive(action.individualId)} />Archive person {action.individualId}</label>
-                <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">{action.reason}</p>
-              </PlanItem>
-            ))}
             {plan.promoteToRegular.filter((action) => action.reviewRequired).map((action) => (
               <PlanItem key={action.id}>
-                <p className="mb-2">Visitor {action.individualId} — {action.reason}</p>
-                <label className="mr-4"><input type="radio" name={`visitor-${action.id}`} checked={state.visitorChoices[action.externalPersonId] === 'promote'} onChange={() => chooseVisitor(action.externalPersonId, 'promote')} /> Promote visitor {action.individualId}</label>
+                <p className="mb-2">{localPerson(action.individualId)} — {action.reason}</p>
+                <label className="mr-4"><input type="radio" name={`visitor-${action.id}`} checked={state.visitorChoices[action.externalPersonId] === 'promote'} onChange={() => chooseVisitor(action.externalPersonId, 'promote')} /> Promote {localPerson(action.individualId)}</label>
                 <label><input type="radio" name={`visitor-${action.id}`} checked={state.visitorChoices[action.externalPersonId] === 'keep'} onChange={() => chooseVisitor(action.externalPersonId, 'keep')} /> Keep as visitor</label>
               </PlanItem>
             ))}
@@ -175,18 +182,18 @@ export default function SyncReview({ provider, review, onRefresh, onApply, apply
           <h4 className="mb-1 text-sm font-semibold text-amber-900 dark:text-amber-100">Destructive changes</h4>
           <p className="mb-3 text-xs text-amber-800 dark:text-amber-200">This will archive people or remove them from gatherings. Review every change before applying.</p>
           <ul className="space-y-2">
-            {plan.archive.map((action) => <li key={action.id}><label className="flex items-center gap-2"><input type="checkbox" checked={state.acceptedArchiveIds.has(action.individualId)} onChange={() => toggleArchive(action.individualId)} />Archive person {action.individualId}</label><span className="ml-6 text-xs">{action.reason}</span></li>)}
-            {plan.removeFromGathering.map((action) => <li key={action.id}>Remove person {action.individualId} from gathering {action.gatheringTypeId}: {action.reason}</li>)}
+            {plan.archive.map((action) => <li key={action.id}><label className="flex items-center gap-2"><input type="checkbox" checked={state.acceptedArchiveIds.has(action.individualId)} onChange={() => toggleArchive(action.individualId)} />Archive {localPerson(action.individualId)}</label><span className="ml-6 text-xs">{action.reason}</span></li>)}
+            {plan.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from gathering {action.gatheringTypeId}: {action.reason}</li>)}
             {plan.renameFamily.map((action) => <li key={action.id}><label className="flex items-center gap-2"><input type="checkbox" checked={state.acceptedFamilyRenameIds.has(action.id)} onChange={() => toggleRename(action.id)} />Accept family rename to {action.familyName}</label></li>)}
           </ul>
         </section>
       )}
 
-      {(plan.linkPeople.length > 0 || plan.linkFamilies.length > 0 || plan.reactivate.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Links and restores</h4><ul className="space-y-1 text-sm">{plan.linkPeople.map((action) => <li key={action.id}>Link {action.externalPersonId} to person {action.individualId}</li>)}{plan.linkFamilies.map((action) => <li key={action.id}>Link external family {action.externalFamilyId} to family {action.familyId}</li>)}{plan.reactivate.map((action) => <li key={action.id}>Restore person {action.individualId}</li>)}</ul></section>}
+      {(plan.linkPeople.length > 0 || plan.linkFamilies.length > 0 || plan.reactivate.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Links and restores</h4><ul className="space-y-1 text-sm">{plan.linkPeople.map((action) => <li key={action.id}>Link {externalPerson(action.externalPersonId)} to {localPerson(action.individualId)}</li>)}{plan.linkFamilies.map((action) => <li key={action.id}>Link external family {action.externalFamilyId} to family {action.familyId}</li>)}{plan.reactivate.map((action) => <li key={action.id}>Restore {localPerson(action.individualId)}</li>)}</ul></section>}
       {(plan.addPeople.length > 0 || plan.addFamilies.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Adds</h4><ul className="space-y-1 text-sm">{plan.addPeople.map((action) => <li key={action.id}><label className="flex items-center gap-2"><input type="checkbox" checked={!state.skippedExternalIds.has(action.externalPersonId)} onChange={() => toggleSkipped(action.externalPersonId)} />Add {action.firstName} {action.lastName}</label></li>)}{plan.addFamilies.map((action) => <li key={action.id}>Add family {action.familyName}</li>)}</ul></section>}
-      {(plan.updateManagedFields.length > 0 || plan.promoteToRegular.some((action) => !action.reviewRequired) || plan.demoteToLocalVisitor.length > 0 || plan.moveFamily.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Managed updates</h4><ul className="space-y-1 text-sm">{plan.updateManagedFields.map((action) => <li key={action.id}>Update person {action.individualId}: {action.reason}</li>)}{plan.promoteToRegular.filter((action) => !action.reviewRequired).map((action) => <li key={action.id}>Promote person {action.individualId}</li>)}{plan.demoteToLocalVisitor.map((action) => <li key={action.id}>Make person {action.individualId} a local visitor</li>)}{plan.moveFamily.map((action) => <li key={action.id}>Move person {action.individualId} to family {action.familyId}</li>)}</ul></section>}
-      {(plan.addToGathering.length > 0 || plan.removeFromGathering.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Gathering changes</h4><ul className="space-y-1 text-sm">{plan.addToGathering.map((action) => <li key={action.id}>Add {action.externalPersonId} to gathering {action.gatheringTypeId}</li>)}{plan.removeFromGathering.map((action) => <li key={action.id}>Remove person {action.individualId} from gathering {action.gatheringTypeId}</li>)}</ul></section>}
-      {plan.skipped.length > 0 && <section><h4 className="mb-2 text-sm font-semibold">Skipped</h4><ul className="space-y-1 text-sm">{plan.skipped.map((action) => <li key={action.id}>{action.externalPersonId}: {action.reason}</li>)}</ul></section>}
+      {(plan.updateManagedFields.length > 0 || plan.promoteToRegular.some((action) => !action.reviewRequired) || plan.demoteToLocalVisitor.length > 0 || plan.moveFamily.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Managed updates</h4><ul className="space-y-1 text-sm">{plan.updateManagedFields.map((action) => <li key={action.id}>Update {localPerson(action.individualId)}: {action.reason}</li>)}{plan.promoteToRegular.filter((action) => !action.reviewRequired).map((action) => <li key={action.id}>Promote {localPerson(action.individualId)}</li>)}{plan.demoteToLocalVisitor.map((action) => <li key={action.id}>Make {localPerson(action.individualId)} a local visitor</li>)}{plan.moveFamily.map((action) => <li key={action.id}>Move {localPerson(action.individualId)} to family {action.familyId}</li>)}</ul></section>}
+      {(plan.addToGathering.length > 0 || plan.removeFromGathering.length > 0) && <section><h4 className="mb-2 text-sm font-semibold">Gathering changes</h4><ul className="space-y-1 text-sm">{plan.addToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to gathering {action.gatheringTypeId}</li>)}{plan.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from gathering {action.gatheringTypeId}</li>)}</ul></section>}
+      {plan.skipped.length > 0 && <section><h4 className="mb-2 text-sm font-semibold">Skipped</h4><ul className="space-y-1 text-sm">{plan.skipped.map((action) => <li key={action.id}>{externalPerson(action.externalPersonId)}: {action.reason}</li>)}</ul></section>}
 
       {requiresConfirmation && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmedDestructiveChanges} onChange={(event) => setConfirmedDestructiveChanges(event.target.checked)} />I understand that this sync will archive people, remove gathering assignments, or rename families.</label>}
       {applyError && <ErrorMessage error={applyError} onRefresh={onRefresh} />}

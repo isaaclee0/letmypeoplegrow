@@ -292,16 +292,54 @@ function stripRawFields(action) {
 // plan.js's own bucket shapes are already lean (scalar fields only), but
 // this stays defensive against a future plan.js change embedding a raw
 // external-person fragment on an action.
-function sanitizePlanForReview(plan) {
+function reviewPeopleDirectory(externalPeople = [], localPeople = []) {
+  const safeName = (person) => ({
+    firstName: typeof person?.firstName === 'string' ? person.firstName : '',
+    lastName: typeof person?.lastName === 'string' ? person.lastName : '',
+  });
+  const directory = (people, idFor) => Object.fromEntries((people || [])
+    .map((person) => [idFor(person), safeName(person)])
+    .filter(([id]) => id !== null)
+    .sort(([left], [right]) => left.localeCompare(right, 'en')));
+  return {
+    external: directory(externalPeople, personId),
+    local: directory(localPeople, (person) => {
+      const id = Number(person?.id);
+      return Number.isSafeInteger(id) && id > 0 ? String(id) : null;
+    }),
+  };
+}
+
+function sanitizePlanForReview(plan, externalPeople = [], localPeople = []) {
   const sanitized = {
     provider: plan.provider,
     authoritative: plan.authoritative,
     snapshot: { fetchedAt: plan.snapshot.fetchedAt, mode: plan.snapshot.mode },
+    people: reviewPeopleDirectory(externalPeople, localPeople),
   };
   for (const bucket of BUCKETS) {
     sanitized[bucket] = (plan[bucket] || []).map(stripRawFields);
   }
   return sanitized;
+}
+
+function reviewCoverage(matcherResult, localPeople) {
+  const unmatchedIds = new Set((matcherResult?.unmatchedLocalIds || [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isSafeInteger(value) && value > 0));
+
+  const localById = new Map((localPeople || [])
+    .map((person) => [Number(person?.id), person])
+    .filter(([id]) => Number.isSafeInteger(id) && id > 0));
+  let unmatchedActiveLocalRegulars = 0;
+  for (const individualId of unmatchedIds) {
+    const person = localById.get(individualId);
+    if (person?.isActive !== false && person?.isActive !== 0 && person?.peopleType === 'regular') {
+      unmatchedActiveLocalRegulars += 1;
+    }
+  }
+
+  return { unmatchedActiveLocalRegulars };
 }
 
 function safeErrorCode(error) {
@@ -740,7 +778,8 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
       runId: run.id,
       reviewToken,
       summary: summarizePlan(body.plan),
-      plan: sanitizePlanForReview(body.plan),
+      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      plan: sanitizePlanForReview(body.plan, body.snapshot.people, body.individuals),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
     };
   } catch (err) {
@@ -798,7 +837,8 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       runId: run.id,
       reviewToken,
       summary: summarizePlan(body.plan),
-      plan: sanitizePlanForReview(body.plan),
+      coverage: reviewCoverage(body.matcherResult, body.individuals),
+      plan: sanitizePlanForReview(body.plan, body.snapshot.people, body.individuals),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
       authority: authorityState,
     };
@@ -1046,6 +1086,7 @@ module.exports = {
   runUnattended,
   previewAuthoritySwitch,
   sanitizePlanForReview,
+  reviewCoverage,
   // Exported for orchestrator.test.js's dependency-injected unit tests.
   defaultDeps,
 };

@@ -328,19 +328,6 @@ function addUnmatchedActions(context) {
   }
 }
 
-function addUnmatchedLocalReview(plan, matcherResult, localById) {
-  if (!plan.presenceProjection.completeFullSnapshot) return;
-  for (const rawIndividualId of matcherResult.unmatchedLocalIds || []) {
-    const individualId = positiveInteger(rawIndividualId, 'Unmatched local individual ID');
-    const localPerson = localById.get(individualId);
-    if (!localPerson || !isActive(localPerson) || peopleType(localPerson) !== 'regular') continue;
-    plan.unmatchedLocalRegulars.push({
-      id: actionId('unmatchedLocalRegulars', individualId), individualId,
-      reason: 'unmatched_local_regular', reviewRequired: true,
-    });
-  }
-}
-
 function presenceLinks(input) {
   if ((input.personLinks || []).length > 0) return input.personLinks;
   // Compatibility for callers that still pass Task 3's already-incremented
@@ -504,7 +491,6 @@ function computePeopleSyncPlan(input = {}) {
   };
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
-  addUnmatchedLocalReview(plan, matcherResult, localById);
   addMissingActions(plan, input, conflictIds);
   addGatheringActions(context);
 

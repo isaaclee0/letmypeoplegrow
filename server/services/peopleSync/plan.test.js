@@ -339,17 +339,18 @@ test('repeated matcher IDs cannot duplicate plan actions', () => {
   assert.equal(plan.addPeople[0].id, 'addPeople:ext-1');
 });
 
-test('unmatched local regulars remain review-only baseline items', () => {
+test('unmatched unlinked locals never become archive actions', () => {
   const plan = computePeopleSyncPlan(input({
     externalPeople: [], batches: [batch({ eligibleExternalPersonIds: [] })],
-    matcher: matcher({ unmatchedLocalIds: [2, 1] }),
-    localPeople: [local({ id: 2, peopleType: 'local_visitor' }), local({ id: 1 })],
+    matcher: matcher({ unmatchedLocalIds: [3, 2, 1] }),
+    localPeople: [
+      local({ id: 1 }),
+      local({ id: 2, peopleType: 'local_visitor' }),
+      local({ id: 3, isActive: false }),
+    ],
   }));
 
-  assert.deepEqual(plan.unmatchedLocalRegulars, [{
-    id: 'unmatchedLocalRegulars:1', individualId: 1,
-    reason: 'unmatched_local_regular', reviewRequired: true,
-  }]);
+  assert.deepEqual(plan.unmatchedLocalRegulars, []);
   assert.deepEqual(plan.archive, []);
 });
 
