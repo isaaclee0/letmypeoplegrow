@@ -83,7 +83,11 @@ const IntegrationsTab: React.FC = () => {
         loading: false,
         planningCenterAccount: response.data.planningCenterAccount ?? null,
         reconnectRequired: response.data.reconnectRequired === true,
-        connectionErrorCode: response.data.connectionErrorCode === 'SYNC_SOURCE_AUTH' ? 'SYNC_SOURCE_AUTH' : null,
+        connectionErrorCode: [
+          'SYNC_SOURCE_AUTH',
+          'SYNC_SOURCE_RATE_LIMIT',
+          'SYNC_SOURCE_CHECK_FAILED',
+        ].includes(response.data.connectionErrorCode ?? '') ? response.data.connectionErrorCode : null,
         fetchFailed: false,
       });
     } catch (error) {
