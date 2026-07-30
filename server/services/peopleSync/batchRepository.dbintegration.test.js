@@ -156,6 +156,7 @@ test('promoting a modern Planning Center source draft derives the batch name fro
       expectedDraftDigest: digestSourceIdentity(members),
     });
     const draft = await saveSourceDraft({ churchId, provider: 'planning_center', batchId: batch.id, source: youth });
+    assert.equal((await getBatch(churchId, 'planning_center', batch.id)).name, 'Members');
 
     const promoted = await promoteSourceDraftWithConnection(conn, {
       churchId, provider: 'planning_center', batchId: batch.id,

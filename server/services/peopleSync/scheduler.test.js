@@ -68,6 +68,41 @@ test('only enabled and due batches are executed', async () => {
   assert.deepEqual(executed, [4]);
 });
 
+test('a migrated legacy Planning Center batch is excluded from scheduler dispatch', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const legacy = await Database.query(
+      `INSERT INTO planning_center_sync_batches
+        (church_id, name, membership_allowlist, field_filters, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, 'Retired scheduled batch', '[]', '[]', 1, 'weekly', 1)`,
+      [churchId],
+    );
+    Database.closeChurchDb(churchId);
+    Database.getChurchDb(churchId);
+
+    const migrated = await Database.query(
+      `SELECT id, enabled, schedule_enabled, legacy_provider_batch_id
+       FROM people_sync_batches
+       WHERE church_id = ? AND provider = 'planning_center' AND legacy_provider_batch_id = ?`,
+      [churchId, legacy.insertId],
+    );
+    assert.deepEqual(migrated.map((row) => ({
+      enabled: row.enabled,
+      scheduleEnabled: row.schedule_enabled,
+      legacyProviderBatchId: row.legacy_provider_batch_id,
+    })), [{ enabled: 0, scheduleEnabled: 0, legacyProviderBatchId: legacy.insertId }]);
+
+    const executed = [];
+    await runChurch(churchId, baseOptions({
+      providers: ['planning_center'],
+      runUnattended: async ({ batchId }) => {
+        executed.push(batchId);
+        return { status: 'applied', fetchMode: 'full', complete: true, externalWatermark: null };
+      },
+    }));
+    assert.deepEqual(executed, []);
+  });
+});
+
 test('a batch for the active authority provider runs unattended', async () => {
   const executed = [];
   await runChurch('church-a', baseOptions({

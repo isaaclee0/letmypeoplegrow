@@ -389,6 +389,36 @@ test('legacy Planning Center batches reject all orchestration paths before fetch
   });
 });
 
+test('legacy Planning Center retirement wins before connection and credential setup', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const legacy = await batchRepository.createBatch({
+      churchId, provider: 'planning_center', name: 'Retired PCO members', legacyProviderBatchId: 78,
+      initialDraftSource: { kind: 'planning_center_list', externalId: '78', name: 'Retired list' },
+    });
+    let connectionLoads = 0;
+    let credentialLoads = 0;
+    let providerLoads = 0;
+    const overrides = {
+      getConnection: async () => { connectionLoads += 1; return null; },
+      getCredentials: async () => { credentialLoads += 1; return null; },
+      getProvider: () => { providerLoads += 1; throw new Error('provider setup must not run'); },
+    };
+    const expected = { code: 'PCO_LEGACY_BATCH_RETIRED', status: 409 };
+
+    await assert.rejects(
+      orchestrator.buildReview({ churchId, provider: 'planning_center', batchId: legacy.id, trigger: 'manual' }, overrides),
+      expected,
+    );
+    await assert.rejects(
+      orchestrator.runUnattended({ churchId, provider: 'planning_center', batchId: legacy.id }, overrides),
+      expected,
+    );
+    assert.deepEqual({ connectionLoads, credentialLoads, providerLoads }, {
+      connectionLoads: 0, credentialLoads: 0, providerLoads: 0,
+    });
+  });
+});
+
 test('source runs ignore a legacy watermark and remain full snapshot reconciliations', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);

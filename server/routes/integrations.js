@@ -4,7 +4,11 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const logger = require('../config/logger');
-const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE } = require('../services/peopleSync/legacyBatch');
+const {
+  CODE: LEGACY_BATCH_RETIRED,
+  MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE,
+  assertPlanningCenterBatchOperational,
+} = require('../services/peopleSync/legacyBatch');
 const pcoSync = require('../services/planningCenterSync');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
@@ -1443,6 +1447,7 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     }
     const existing = await pcoSync.getBatch(churchId, batchId);
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
+    assertPlanningCenterBatchOperational(existing);
     const err = validateBatchSettingsUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
     const { defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;

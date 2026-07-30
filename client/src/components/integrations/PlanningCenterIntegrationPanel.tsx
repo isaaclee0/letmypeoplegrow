@@ -580,7 +580,9 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                               <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{batch.name}</p>
                               <p className="text-xs text-gray-500 dark:text-gray-400">This retired legacy batch no longer runs and cannot be edited or reviewed.</p>
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                Prior settings: {batch.scheduleEnabled ? `scheduled ${batch.scheduleFrequency}` : 'manual only'} · {batch.gatheringTypeId ? 'assigned to a gathering' : 'no gathering assignment'} · new people were added as {batch.defaultPeopleType.replace('_', ' ')}.
+                                Prior settings: {batch.priorScheduleEnabled
+                                  ? `scheduled ${batch.priorScheduleFrequency}${batch.priorScheduleFrequency === 'daily' || batch.priorScheduleDay === null || batch.priorScheduleDay === undefined ? '' : ` (day ${batch.priorScheduleDay})`}`
+                                  : 'manual only'} · {batch.gatheringTypeId ? 'assigned to a gathering' : 'no gathering assignment'} · new people were added as {batch.defaultPeopleType.replace('_', ' ')}.
                               </p>
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                 Last run {batch.lastSyncAt ? `${new Date(batch.lastSyncAt).toLocaleString()}${batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}` : 'Never run'}.

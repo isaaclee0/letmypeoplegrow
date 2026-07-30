@@ -70,7 +70,7 @@ export type ExternalLinks = Partial<Record<SyncProvider, string>>;
 // straight from batchRepository's own return value) -- so this is exactly
 // what the client receives, including `legacyProviderBatchId`, which the
 // plan's own abbreviated snippet omits. Elvanto batches never populate that
-// field (it exists for Planning Center's dual-write migration -- see
+// field (it identifies retained Planning Center compatibility rows -- see
 // planningCenterSync.js), but it is still present (always null) on every
 // Elvanto batch response, so it is included here for an exact shape match.
 export interface PeopleSyncBatch {
@@ -94,6 +94,9 @@ export interface PeopleSyncBatch {
   scheduleEnabled: boolean;
   scheduleFrequency: 'daily' | 'weekly' | 'monthly';
   scheduleDay: number;
+  priorScheduleEnabled?: boolean | null;
+  priorScheduleFrequency?: 'daily' | 'weekly' | 'monthly' | null;
+  priorScheduleDay?: number | null;
   legacyProviderBatchId: number | null;
   lastExternalWatermark: string | null;
   lastSyncAt: string | null;

@@ -105,7 +105,50 @@ test('PCO source-era PUT retains the trusted List name while updating settings w
   });
 });
 
-test('retired legacy PCO batches cannot be updated and delete both batch rows without removing people or gathering membership', async () => {
+test('migrated legacy PCO history keeps prior scheduling separate from disabled operational settings', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const legacyRow = await Database.query(
+      `INSERT INTO planning_center_sync_batches
+        (church_id, name, membership_allowlist, field_filters, schedule_enabled, schedule_frequency, schedule_day)
+       VALUES (?, 'Retired scheduled members', '[]', '[]', 1, 'monthly', 15)`,
+      [churchId],
+    );
+
+    Database.closeChurchDb(churchId);
+    Database.getChurchDb(churchId);
+    const [migrated] = await Database.query(
+      `SELECT id, enabled, schedule_enabled FROM people_sync_batches
+       WHERE church_id = ? AND provider = 'planning_center' AND legacy_provider_batch_id = ?`,
+      [churchId, legacyRow.insertId],
+    );
+    assert.deepEqual(
+      { enabled: migrated.enabled, scheduleEnabled: migrated.schedule_enabled },
+      { enabled: 0, scheduleEnabled: 0 },
+    );
+
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request('/api/integrations/planning-center/sync-batches');
+      assert.equal(response.status, 200);
+      const retired = response.body.batches.find((candidate) => candidate.id === migrated.id);
+      assert.deepEqual({
+        scheduleEnabled: retired.scheduleEnabled,
+        priorScheduleEnabled: retired.priorScheduleEnabled,
+        priorScheduleFrequency: retired.priorScheduleFrequency,
+        priorScheduleDay: retired.priorScheduleDay,
+      }, {
+        scheduleEnabled: false,
+        priorScheduleEnabled: true,
+        priorScheduleFrequency: 'monthly',
+        priorScheduleDay: 15,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('retired legacy PCO deletion survives restart without removing people, links, attendance, or gathering membership', async () => {
   await withRouteChurchDb(async (churchId) => {
     const legacyRow = await Database.query(
       `INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters)
@@ -124,6 +167,29 @@ test('retired legacy PCO batches cannot be updated and delete both batch rows wi
       `INSERT INTO individuals (church_id, first_name, last_name, people_type, is_active)
        VALUES (?, 'Retained', 'Person', 'regular', 1)`, [churchId],
     );
+    const attendanceUser = await Database.query(
+      `INSERT INTO users (church_id, email, role, first_name, last_name, is_active)
+       VALUES (?, ?, 'admin', 'Attendance', 'Recorder', 1)`,
+      [churchId, `retention-${Math.random().toString(36).slice(2)}@example.com`],
+    );
+    await Database.query(
+      `INSERT INTO external_person_links
+        (church_id, provider, external_person_id, individual_id, link_source)
+       VALUES (?, 'planning_center', 'retained-pco-person', ?, 'legacy_backfill')`,
+      [churchId, person.insertId],
+    );
+    const session = await Database.query(
+      `INSERT INTO attendance_sessions
+        (church_id, gathering_type_id, session_date, created_by)
+       VALUES (?, ?, '2026-07-20', ?)`,
+      [churchId, gathering.insertId, attendanceUser.insertId],
+    );
+    await Database.query(
+      `INSERT INTO attendance_records
+        (church_id, session_id, individual_id, present, people_type_at_time)
+       VALUES (?, ?, ?, 1, 'regular')`,
+      [churchId, session.insertId, person.insertId],
+    );
     await Database.query(
       `INSERT INTO gathering_lists
         (church_id, gathering_type_id, individual_id, added_by_sync_batch_id, added_by_pco_batch_id)
@@ -133,7 +199,7 @@ test('retired legacy PCO batches cannot be updated and delete both batch rows wi
     const app = await startApp(churchId);
     try {
       const put = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: settings(),
+        method: 'PUT', body: { ...settings(), name: 'Stale pre-deployment editor name' },
       });
       assert.equal(put.status, 409);
       assert.deepEqual(put.body, {
@@ -149,20 +215,39 @@ test('retired legacy PCO batches cannot be updated and delete both batch rows wi
       assert.equal((await Database.query(
         'SELECT id FROM planning_center_sync_batches WHERE id = ? AND church_id = ?', [legacyRow.insertId, churchId],
       )).length, 0);
-      assert.equal((await Database.query(
-        'SELECT id FROM individuals WHERE id = ? AND church_id = ?', [person.insertId, churchId],
-      )).length, 1);
-      const [membership] = await Database.query(
-        `SELECT id, added_by_sync_batch_id, added_by_pco_batch_id FROM gathering_lists
-         WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?`,
-        [churchId, gathering.insertId, person.insertId],
-      );
-      assert.ok(membership);
-      assert.equal(membership.added_by_sync_batch_id, null);
-      assert.equal(membership.added_by_pco_batch_id, null);
     } finally {
       await app.close();
     }
+
+    Database.closeChurchDb(churchId);
+    Database.getChurchDb(churchId);
+    assert.equal((await Database.query(
+      'SELECT id FROM people_sync_batches WHERE id = ? AND church_id = ?', [batch.id, churchId],
+    )).length, 0, 'deleted canonical batch must not be backfilled on restart');
+    assert.equal((await Database.query(
+      'SELECT id FROM planning_center_sync_batches WHERE id = ? AND church_id = ?', [legacyRow.insertId, churchId],
+    )).length, 0, 'deleted compatibility row must remain absent on restart');
+    assert.equal((await Database.query(
+      'SELECT id FROM individuals WHERE id = ? AND church_id = ?', [person.insertId, churchId],
+    )).length, 1);
+    assert.equal((await Database.query(
+      `SELECT id FROM external_person_links
+       WHERE church_id = ? AND provider = 'planning_center' AND external_person_id = ? AND individual_id = ?`,
+      [churchId, 'retained-pco-person', person.insertId],
+    )).length, 1);
+    assert.equal((await Database.query(
+      `SELECT id FROM attendance_records
+       WHERE church_id = ? AND session_id = ? AND individual_id = ? AND present = 1`,
+      [churchId, session.insertId, person.insertId],
+    )).length, 1);
+    const [membership] = await Database.query(
+      `SELECT id, added_by_sync_batch_id, added_by_pco_batch_id FROM gathering_lists
+       WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?`,
+      [churchId, gathering.insertId, person.insertId],
+    );
+    assert.ok(membership);
+    assert.equal(membership.added_by_sync_batch_id, null);
+    assert.equal(membership.added_by_pco_batch_id, null);
   });
 });
 

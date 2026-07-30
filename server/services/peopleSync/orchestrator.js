@@ -7,7 +7,9 @@
 //
 // ─── The 10-step pipeline ───────────────────────────────────────────────────
 //
-// Every public function below runs (a prefix or all of) this exact order:
+// A specifically requested batch is first loaded and rejected if retired,
+// before connection or credential setup. Every operational batch then runs a
+// prefix or all of this exact order:
 //   1. load connection
 //   2. load/validate batches and settings
 //   3. start audit run
@@ -392,6 +394,18 @@ function safeSummarizePlan(logContext, plan) {
 // ─── Steps 1-2: load connection, batches, settings, authority ───────────────
 
 async function loadPreconditions({ churchId, provider, batchId, deps }) {
+  let providerBatches = null;
+  if (batchId !== null && batchId !== undefined) {
+    const all = await deps.listBatches(churchId, provider);
+    providerBatches = all || [];
+    const batch = providerBatches.find((candidate) => candidate.id === batchId);
+    if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${provider}`, 404);
+    if (isRetiredPlanningCenterBatch(batch)) {
+      throw new OrchestratorError(LEGACY_BATCH_RETIRED, LEGACY_BATCH_RETIRED_MESSAGE, 409);
+    }
+    if (!batch.enabled) throw new OrchestratorError('SYNC_BATCH_DISABLED', `Batch ${batchId} is disabled`, 400);
+  }
+
   // 1. load connection
   const connection = await deps.getConnection(churchId, provider);
   if (!connection) throw new OrchestratorError('SYNC_NOT_CONNECTED', `No ${provider} connection for this church`, 400);
@@ -404,15 +418,9 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const adapter = deps.getProvider(provider);
 
   // 2. load/validate batches and settings
-  const all = await deps.listBatches(churchId, provider);
-  const providerBatches = all || [];
-  if (batchId !== null && batchId !== undefined) {
-    const batch = providerBatches.find((candidate) => candidate.id === batchId);
-    if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${provider}`, 404);
-    if (isRetiredPlanningCenterBatch(batch)) {
-      throw new OrchestratorError(LEGACY_BATCH_RETIRED, LEGACY_BATCH_RETIRED_MESSAGE, 409);
-    }
-    if (!batch.enabled) throw new OrchestratorError('SYNC_BATCH_DISABLED', `Batch ${batchId} is disabled`, 400);
+  if (providerBatches === null) {
+    const all = await deps.listBatches(churchId, provider);
+    providerBatches = all || [];
   }
   const batches = providerBatches.filter((batch) => batch.enabled);
   if (batches.length === 0) throw new OrchestratorError('SYNC_NO_BATCHES', `No enabled ${provider} batches to review`, 400);

@@ -323,22 +323,15 @@ async function fetchAllPcoPeople(accessToken) {
 
 // ─── PCO sync batches ─────────────────────────────────────────────────────────
 //
-// Task 9: people_sync_batches (via batchRepository) is now the canonical store
-// for PCO batches. planning_center_sync_batches (the legacy table) is dual-
-// written during the compatibility window — every generic PCO batch row keeps
-// a matching legacy row, whose id is recorded on the generic row as
-// legacy_provider_batch_id (see backfillProviderNeutralSync in
-// config/database.js, which already produces exactly this shape for
-// pre-existing batches). This lets gathering_lists keep populating its legacy
-// added_by_pco_batch_id FK column (still referencing planning_center_sync_batches)
-// alongside the new added_by_sync_batch_id column, and lets the legacy table's
-// last_sync_at/last_sync_result stay populated for anything not yet migrated
-// off it.
+// people_sync_batches (via batchRepository) is the canonical store for PCO
+// batches. Modern List-based batches exist only there. Pre-List batches retain
+// a compatibility row in planning_center_sync_batches, linked through
+// legacy_provider_batch_id, solely so administrators can inspect their prior
+// configuration and delete both records together.
 //
-// The DTO shape returned to callers (routes/integrations.js, and from there
-// the PCO batch UI) is UNCHANGED from before this refactor — same field names,
-// same types — plus one additive field, legacyProviderBatchId, used internally
-// by routes/integrations.js to populate added_by_pco_batch_id when applying.
+// The DTO retains canonical operational fields and adds read-only legacy
+// identity/history fields. In particular, prior schedule values must never be
+// confused with the forced-off runtime flags on retired batches.
 
 function safeJsonParse(value, fallback) {
   if (value === null || value === undefined) return fallback;
@@ -349,7 +342,7 @@ function safeJsonParse(value, fallback) {
 // Generic batch -> the source-era PCO DTO. Provider-owned source identity is
 // returned explicitly; legacy client-side filter fields are intentionally not
 // flattened or accepted by the CRUD API.
-function toLegacyPcoBatchDto(batch) {
+function toLegacyPcoBatchDto(batch, priorSchedule = null) {
   return {
     id: batch.id,
     provider: batch.provider || 'planning_center',
@@ -371,6 +364,11 @@ function toLegacyPcoBatchDto(batch) {
     scheduleEnabled: !!batch.scheduleEnabled,
     scheduleFrequency: batch.scheduleFrequency || 'weekly',
     scheduleDay: typeof batch.scheduleDay === 'number' ? batch.scheduleDay : 1,
+    priorScheduleEnabled: priorSchedule ? !!priorSchedule.schedule_enabled : null,
+    priorScheduleFrequency: priorSchedule?.schedule_frequency || null,
+    priorScheduleDay: priorSchedule && typeof priorSchedule.schedule_day === 'number'
+      ? priorSchedule.schedule_day
+      : null,
     lastSyncAt: batch.lastSyncAt || null,
     lastSyncResult: safeJsonParse(batch.lastSyncResult, null),
     legacyProviderBatchId: batch.legacyProviderBatchId ?? null,
@@ -379,12 +377,33 @@ function toLegacyPcoBatchDto(batch) {
 
 async function listBatches(churchId) {
   const batches = await batchRepository.listBatches(churchId, 'planning_center');
-  return batches.map(toLegacyPcoBatchDto);
+  const priorSchedules = await Database.queryForChurch(churchId,
+    `SELECT canonical.id AS batch_id, legacy.schedule_enabled, legacy.schedule_frequency, legacy.schedule_day
+     FROM people_sync_batches canonical
+     INNER JOIN planning_center_sync_batches legacy
+       ON legacy.id = canonical.legacy_provider_batch_id
+      AND legacy.church_id = canonical.church_id
+     WHERE canonical.church_id = ? AND canonical.provider = 'planning_center'
+       AND canonical.legacy_provider_batch_id IS NOT NULL`,
+    [churchId],
+  );
+  const priorScheduleByBatchId = new Map(priorSchedules.map((row) => [row.batch_id, row]));
+  return batches.map((batch) => toLegacyPcoBatchDto(batch, priorScheduleByBatchId.get(batch.id) || null));
 }
 
 async function getBatch(churchId, batchId) {
   const batch = await batchRepository.getBatch(churchId, 'planning_center', batchId);
-  return batch ? toLegacyPcoBatchDto(batch) : null;
+  if (!batch) return null;
+  let priorSchedule = null;
+  if (batch.legacyProviderBatchId !== null && batch.legacyProviderBatchId !== undefined) {
+    const rows = await Database.queryForChurch(churchId,
+      `SELECT schedule_enabled, schedule_frequency, schedule_day
+       FROM planning_center_sync_batches WHERE id = ? AND church_id = ?`,
+      [batch.legacyProviderBatchId, churchId],
+    );
+    priorSchedule = rows[0] || null;
+  }
+  return toLegacyPcoBatchDto(batch, priorSchedule);
 }
 
 // Create a PCO source draft in the canonical generic batch table. The source
@@ -407,10 +426,8 @@ async function createBatch(churchId, input) {
   return getBatch(churchId, generic.id);
 }
 
-// Update an existing PCO sync batch (batchId is the canonical people_sync_batches
-// id, as returned by listBatches/getBatch/createBatch). Dual-writes the legacy
-// row when one is linked (always true for a batch created during/after Task 9,
-// and for anything backfillProviderNeutralSync has already backfilled).
+// Update a modern PCO sync batch in the canonical people_sync_batches table.
+// Retired compatibility-linked rows are rejected before this write.
 async function updateBatch(churchId, batchId, input) {
   const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
   if (!current) return null;
@@ -430,8 +447,8 @@ async function updateBatch(churchId, batchId, input) {
   return getBatch(churchId, batchId);
 }
 
-// Delete a PCO sync batch (both the generic row and its dual-written legacy
-// row, when one exists). Neither row's FK from gathering_lists is RESTRICT —
+// Delete a PCO sync batch and its linked legacy compatibility row, when one
+// exists. Neither row's FK from gathering_lists is RESTRICT —
 // both added_by_sync_batch_id and added_by_pco_batch_id are ON DELETE SET
 // NULL, so existing roster rows this batch created are left in place, just
 // un-owned — same "does not unlink or archive anyone" behavior as before.
@@ -459,9 +476,9 @@ async function deleteBatch(churchId, batchId) {
   });
 }
 
-// Persist a batch's sync summary to both the canonical generic row and (while
-// legacy_provider_batch_id is present) the legacy table — same dual-write
-// posture as createBatch/updateBatch. Shared by the interactive apply route
+// Persist a batch's sync summary to the canonical row and, for any retained
+// compatibility-linked caller, its legacy history row. Shared by the
+// interactive apply route
 // (routes/integrations.js) and runBatchSync (below) so the two never drift.
 // runBatchSync itself is no longer the unattended scheduled path as of
 // Task 15 — see the header note above start()/stop()/runNow() — it is kept

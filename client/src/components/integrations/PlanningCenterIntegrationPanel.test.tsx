@@ -115,6 +115,9 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
       gatheringTypeId: 8,
       scheduleEnabled: true,
       scheduleFrequency: 'daily' as const,
+      priorScheduleEnabled: true,
+      priorScheduleFrequency: 'monthly' as const,
+      priorScheduleDay: 15,
       legacyProviderBatchId: 41,
       lastSyncAt: '2026-07-28T01:30:00.000Z',
       lastSyncResult: { addPeople: 2 },
@@ -128,6 +131,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     expect(screen.getByText('Retired legacy batches')).toBeInTheDocument();
     expect(screen.getByText('Old membership filters')).toBeInTheDocument();
     expect(screen.getByText(/no longer runs/i)).toBeInTheDocument();
+    expect(screen.getByText(/Prior settings: scheduled monthly \(day 15\)/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'Review & sync' })).toHaveLength(1);
 
