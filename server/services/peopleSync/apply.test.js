@@ -19,7 +19,7 @@ test('validateSelections on an empty plan with no selections accepts nothing', (
   assert.equal(accepted.acceptedFamilyRenameIds.size, 0);
 });
 
-test('validateSelections dispatches only an explicit version 2 payload to the identity contract', () => {
+test('validateSelections dispatches an explicit version 2 payload to the identity contract', () => {
   const plan = emptyPlan({
     reviewContext: {
       version: 2,
@@ -28,8 +28,23 @@ test('validateSelections dispatches only an explicit version 2 payload to the id
     },
   });
   assert.equal(validateSelections(plan, { decisionContractVersion: 2, identityDecisions: {} }).contractVersion, 2);
-  assert.equal(validateSelections(plan, { decisionContractVersion: 3 }).contractVersion, 1);
   assert.equal(validateLegacySelections(plan, { decisionContractVersion: 2 }).contractVersion, 1);
+});
+
+test('validateSelections rejects every explicitly present unsupported decision contract version', () => {
+  for (const decisionContractVersion of [1, 3, null, undefined, '2']) {
+    assert.throws(
+      () => validateSelections(emptyPlan(), { decisionContractVersion }),
+      /unsupported identity decision contract version/i
+    );
+  }
+});
+
+test('validateSelections rejects identity decisions that omit decision contract version 2', () => {
+  assert.throws(
+    () => validateSelections(emptyPlan(), { identityDecisions: {} }),
+    /identity decisions require decision contract version 2/i
+  );
 });
 
 test('an ambiguous selection must reference a person actually offered for review', () => {

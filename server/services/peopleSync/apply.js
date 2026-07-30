@@ -141,9 +141,16 @@ function validateLegacySelections(plan, selections = {}) {
 }
 
 function validateSelections(plan, selections = {}) {
-  return selections?.decisionContractVersion === 2
-    ? validateIdentityDecisions(plan, selections)
-    : validateLegacySelections(plan, selections);
+  if (selections && Object.hasOwn(selections, 'decisionContractVersion')) {
+    if (selections.decisionContractVersion !== 2) {
+      throw new Error('Unsupported identity decision contract version');
+    }
+    return validateIdentityDecisions(plan, selections);
+  }
+  if (selections && Object.hasOwn(selections, 'identityDecisions')) {
+    throw new Error('Identity decisions require decision contract version 2');
+  }
+  return validateLegacySelections(plan, selections);
 }
 
 function collectTouchedIndividualIds(plan, acceptedArchiveIndividualIds) {
