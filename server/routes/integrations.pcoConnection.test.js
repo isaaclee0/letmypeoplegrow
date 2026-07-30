@@ -232,6 +232,39 @@ test('PCO status reports reconnect required when validation rejects the access t
   }
 });
 
+test('PCO status preserves typed transient credential-refresh failures without requesting reconnect', async () => {
+  // Catches token-endpoint rate limits/outages being flattened to a null
+  // status code even though reconnecting cannot resolve them.
+  const previousEnabled = process.env.PLANNING_CENTER_ENABLED;
+  process.env.PLANNING_CENTER_ENABLED = 'true';
+  try {
+    await withRouteChurchDb(async ({ churchId, app }) => {
+      await seedPcoConnection(churchId);
+      for (const code of ['SYNC_SOURCE_RATE_LIMIT', 'SYNC_SOURCE_CHECK_FAILED']) {
+        await withPcoStatusStubs({
+          getAccessTokenForChurch: async () => {
+            const error = new Error('transient refresh failure');
+            error.code = code;
+            throw error;
+          },
+          getTokensForChurch: async () => null,
+          validatePlanningCenterToken: async () => ({ connected: true, accountName: 'Example Church' }),
+        }, async () => {
+          const response = await app.request('/api/integrations/planning-center/status');
+          assert.equal(response.status, 200);
+          assert.equal(response.body.connected, false);
+          assert.equal(response.body.reconnectRequired, false);
+          assert.equal(response.body.connectionErrorCode, code);
+          assert.equal(response.body.error, 'Failed to verify connection');
+        });
+      }
+    });
+  } finally {
+    if (previousEnabled === undefined) delete process.env.PLANNING_CENTER_ENABLED;
+    else process.env.PLANNING_CENTER_ENABLED = previousEnabled;
+  }
+});
+
 test('PCO disconnect is blocked while Planning Center is the authority provider', async () => {
   // Catches a direct API request bypassing the panel's guarded Disconnect flow.
   await withRouteChurchDb(async ({ churchId, app }) => {

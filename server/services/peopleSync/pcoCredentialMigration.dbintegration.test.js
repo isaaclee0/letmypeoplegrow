@@ -350,10 +350,13 @@ test('a deferred old refresh cannot overwrite a successful OAuth reconnect', asy
       connectedBy: null,
       metadata: { accountName: 'Reconnected Church' },
     });
+    let reconnectSettled = false;
+    reconnect.then(() => { reconnectSettled = true; });
     // Give a non-serialized/CAS implementation ample opportunity to commit
     // reconnect before the deliberately late old refresh resolves.
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reconnectSettled, true, 'a stalled refresh must not block OAuth reconnect');
     releaseRefresh();
     await Promise.all([refresh, reconnect]);
 
@@ -389,10 +392,13 @@ test('a deferred old refresh cannot resurrect credentials after disconnect', asy
     await refreshStarted;
 
     const disconnect = disconnectConnection(churchId);
+    let disconnectSettled = false;
+    disconnect.then(() => { disconnectSettled = true; });
     // If disconnect is not serialized, let its deletion finish before the
     // late refresh response is released so the regression would resurrect.
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(disconnectSettled, true, 'a stalled refresh must not block disconnect');
     releaseRefresh();
     await Promise.all([refresh, disconnect]);
 

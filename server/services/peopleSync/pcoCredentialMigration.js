@@ -222,55 +222,68 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh, { f
 
   if (refreshInFlight.has(churchId)) return refreshInFlight.get(churchId);
 
-  const promise = withCredentialMutation(churchId, async () => {
-    // Re-read after acquiring the mutation queue. If OAuth reconnect or
-    // disconnect won the queue while this caller was waiting, the original
-    // credentials are stale and must never be refreshed/persisted.
-    const currentCredentials = await Database.transactionForChurch(churchId, () =>
-      connectionStore.getCredentials(churchId, 'planning_center')
+  const promise = (async () => {
+    // Snapshot the credential generation under the mutation queue, then
+    // release it before calling PCO. A slow or stalled token endpoint must
+    // never prevent an admin from reconnecting or disconnecting.
+    const currentCredentials = await withCredentialMutation(churchId, () =>
+      Database.transactionForChurch(churchId, () =>
+        connectionStore.getCredentials(churchId, 'planning_center')
+      )
     );
     if (!currentCredentials) return null;
     if (credentialFingerprint(currentCredentials) !== credentialFingerprint(credentials)) {
       return currentCredentials;
     }
 
-    const fresh = await requestRefresh(currentCredentials.refreshToken);
-    if (!fresh || !fresh.accessToken) {
-      // Refresh failed (e.g. refresh token revoked). If the access token is
-      // already past its real expiry there's nothing usable left; otherwise
-      // hand back what we have so a caller mid-flight can still use it until
-      // it's actually rejected by PCO.
-      const trulyExpired = currentCredentials.expiresAt && Date.now() >= currentCredentials.expiresAt;
-      return trulyExpired ? null : currentCredentials;
+    let fresh;
+    let refreshError;
+    try {
+      fresh = await requestRefresh(currentCredentials.refreshToken);
+    } catch (error) {
+      refreshError = error;
     }
-    const refreshed = {
-      accessToken: fresh.accessToken,
-      refreshToken: fresh.refreshToken || currentCredentials.refreshToken,
-      expiresAt: fresh.expiresAt,
-    };
-    return Database.transactionForChurch(churchId, async () => {
-      // Cross-process CAS: another server process may have reconnected or
-      // disconnected this church while the network refresh was in flight.
-      // Re-read inside the write transaction and persist only if the exact
-      // credential generation we refreshed is still current.
-      const latestCredentials = await connectionStore.getCredentials(churchId, 'planning_center');
-      if (!latestCredentials) return null;
-      if (credentialFingerprint(latestCredentials) !== credentialFingerprint(currentCredentials)) {
-        return latestCredentials;
-      }
 
-      const { connectedBy, metadata } = await readPreservedConnectionFields(churchId);
-      await connectionStore.upsertConnection({
-        churchId,
-        provider: 'planning_center',
-        authType: 'oauth',
-        credentials: refreshed,
-        connectedBy,
-        metadata,
-      });
-      return refreshed;
-    });
-  });
+    return withCredentialMutation(churchId, () =>
+      Database.transactionForChurch(churchId, async () => {
+        // Cross-process CAS: another server process may have reconnected or
+        // disconnected this church while the network refresh was in flight.
+        // Re-read inside the write transaction and persist only if the exact
+        // credential generation we refreshed is still current. This check
+        // also makes a newer reconnect/disconnect win over a stale error.
+        const latestCredentials = await connectionStore.getCredentials(churchId, 'planning_center');
+        if (!latestCredentials) return null;
+        if (credentialFingerprint(latestCredentials) !== credentialFingerprint(currentCredentials)) {
+          return latestCredentials;
+        }
+
+        if (refreshError) throw refreshError;
+        if (!fresh || !fresh.accessToken) {
+          // Refresh failed (e.g. refresh token revoked). If the access token
+          // is already past its real expiry there's nothing usable left;
+          // otherwise hand back what remains usable until PCO rejects it.
+          const trulyExpired = currentCredentials.expiresAt && Date.now() >= currentCredentials.expiresAt;
+          return trulyExpired ? null : currentCredentials;
+        }
+
+        const refreshed = {
+          accessToken: fresh.accessToken,
+          refreshToken: fresh.refreshToken || currentCredentials.refreshToken,
+          expiresAt: fresh.expiresAt,
+        };
+        const { connectedBy, metadata } = await readPreservedConnectionFields(churchId);
+        await connectionStore.upsertConnection({
+          churchId,
+          provider: 'planning_center',
+          authType: 'oauth',
+          credentials: refreshed,
+          connectedBy,
+          metadata,
+        });
+        return refreshed;
+      })
+    );
+  })();
 
   refreshInFlight.set(churchId, promise);
   try {

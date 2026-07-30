@@ -731,13 +731,17 @@ router.get('/planning-center/status', async (req, res) => {
       accessToken = await pcoSync.getAccessTokenForChurch(churchId);
     } catch (error) {
       if (error?.code !== 'SYNC_SOURCE_AUTH') {
+        const transientCode = error?.code === 'SYNC_SOURCE_RATE_LIMIT' ||
+          error?.code === 'SYNC_SOURCE_CHECK_FAILED'
+          ? error.code
+          : null;
         return res.json({
           enabled: true,
           configured: true,
           connected: false,
           planningCenterAccount: null,
           reconnectRequired: false,
-          connectionErrorCode: null,
+          connectionErrorCode: transientCode,
           error: 'Failed to verify connection',
         });
       }
