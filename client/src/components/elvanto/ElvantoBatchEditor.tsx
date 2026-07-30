@@ -12,7 +12,6 @@ function message(error: unknown, fallback: string): string { if (typeof error ==
 
 export default function ElvantoBatchEditor({ batch: initialBatch, gatherings, onSaved, onCancel }: ElvantoBatchEditorProps) {
   const [currentBatch, setCurrentBatch] = useState<PeopleSyncBatch | null>(initialBatch);
-  const [name, setName] = useState(initialBatch?.name ?? 'Elvanto people');
   const [enabled, setEnabled] = useState(initialBatch?.enabled ?? true);
   const [defaultPeopleType, setDefaultPeopleType] = useState<PeopleType>(initialBatch?.defaultPeopleType ?? 'regular');
   const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(initialBatch?.gatheringTypeId ? 'existing' : 'none');
@@ -33,14 +32,14 @@ export default function ElvantoBatchEditor({ batch: initialBatch, gatherings, on
   const sourceReviewPending = currentBatch?.needsSourceReview ?? false;
   const changeFrequency = (frequency: 'daily' | 'weekly' | 'monthly') => { setScheduleFrequency(frequency); setScheduleDay(day => frequency === 'weekly' ? (day >= 0 && day <= 6 ? day : 1) : frequency === 'monthly' ? (day >= 1 && day <= 31 ? day : 1) : day); };
   const save = async () => {
-    setError(null); if (!name.trim()) { setError('Enter a batch name.'); return; } if (!selection) { setError('Choose a people source.'); return; }
+    setError(null); if (!selection) { setError('Choose a people source.'); return; }
     if (scheduleEnabled && (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6) || scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31))) { setError('Choose a valid schedule day.'); return; }
     setSaving(true); let savedGathering = createdGathering;
     try {
       let finalGatheringTypeId: number | null = gatheringMode === 'existing' ? gatheringTypeId : null;
       if (gatheringMode === 'existing' && !finalGatheringTypeId) { setError('Choose a gathering.'); return; }
       if (gatheringMode === 'new') { if (!newGatheringName.trim()) { setError('Enter a name for the new gathering.'); return; } if (createdGathering?.name === newGatheringName.trim()) finalGatheringTypeId = createdGathering.id; else { const created = await gatheringsAPI.create({ name: newGatheringName.trim(), attendanceType: 'standard', dayOfWeek: 'Sunday', startTime: '10:00', frequency: 'weekly' }); finalGatheringTypeId = created.data.id ?? null; if (finalGatheringTypeId) { savedGathering = { id: finalGatheringTypeId, name: newGatheringName.trim() }; setCreatedGathering(savedGathering); } } if (!finalGatheringTypeId) { setError('Failed to create the new gathering.'); return; } }
-      const common = { name: name.trim(), enabled, defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
+      const common = { enabled, defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
       if (!currentBatch) { const created = await elvantoSyncAPI.createBatch({ ...common, ...selection } as CreatePayload); onSaved(created.data.batch); return; }
       try { await elvantoSyncAPI.updateBatch(currentBatch.id, common); } catch (cause) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${message(cause, 'Failed to save batch settings.')}` : message(cause, 'Failed to save batch settings.')); return; }
       if (!sourceChanged) { onSaved(currentBatch); return; }
@@ -48,7 +47,6 @@ export default function ElvantoBatchEditor({ batch: initialBatch, gatherings, on
     } catch (cause) { setError(savedGathering ? `The gathering was created, but the batch was not saved: ${message(cause, 'Failed to save sync batch.')}` : message(cause, 'Failed to save sync batch.')); } finally { setSaving(false); }
   };
   return <div className="space-y-5 rounded-md border border-gray-200 p-4 dark:border-gray-700">
-    <div><label htmlFor="elvanto-batch-name" className="mb-1 block text-sm font-medium">Batch name</label><input id="elvanto-batch-name" value={name} onChange={e => setName(e.target.value)} className="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700" /></div>
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />Enable this batch</label>
     <BatchSourceControls provider="elvanto" batch={currentBatch} value={selection} onChange={setSelection} onDiscarded={(state: PeopleSyncSourceState) => { const next = { ...currentBatch!, ...state }; setCurrentBatch(next); setSelection(next.source ? { sourceKind: next.source.kind, sourceExternalId: next.source.externalId } : null); }} />
     <div><label className="mb-1 block text-sm font-medium" htmlFor="elvanto-people-type">New people from this batch are added as</label><select id="elvanto-people-type" value={defaultPeopleType} onChange={e => setDefaultPeopleType(e.target.value as PeopleType)}><option value="regular">Regulars</option><option value="local_visitor">Local visitors</option><option value="traveller_visitor">Traveller visitors</option></select></div>

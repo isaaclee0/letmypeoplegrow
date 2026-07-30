@@ -137,12 +137,10 @@ export function isElvantoLastSyncResult(value: PeopleSyncBatch['lastSyncResult']
   return typeof value === 'string' && ELVANTO_LAST_SYNC_RESULTS.has(value as ElvantoLastSyncResult);
 }
 
-// Request body accepted by POST /elvanto/sync-batches (name required) and
-// PUT /elvanto/sync-batches/:id (all fields optional -- a partial patch
-// merged over the existing stored batch). Mirrors elvanto.js's own
+// Request body accepted by POST /elvanto/sync-batches. The update request is
+// a partial patch merged over the existing stored batch. Mirrors elvanto.js's
 // BATCH_BODY_ALLOWED allow-list exactly.
 export interface ElvantoSyncBatchInput {
-  name: string;
   enabled?: boolean;
   sourceKind: 'elvanto_category' | 'elvanto_group';
   sourceExternalId: string;
@@ -154,7 +152,7 @@ export interface ElvantoSyncBatchInput {
   scheduleDay?: number;
 }
 
-export type ElvantoSyncBatchPatch = Partial<ElvantoSyncBatchInput>;
+export type ElvantoSyncBatchPatch = Partial<Omit<ElvantoSyncBatchInput, 'sourceKind' | 'sourceExternalId'>>;
 
 // ─── people-sync settings (server/routes/integrations/peopleSync.js) ──────
 

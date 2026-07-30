@@ -41,11 +41,15 @@ describe('ElvantoBatchEditor source drafts', () => {
     vi.mocked(elvantoSyncAPI.createBatch).mockResolvedValue({ data: { batch: created } });
     const saved = vi.fn();
     renderEditor(null, saved);
+    expect(screen.queryByLabelText('Batch name')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'category-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
     await waitFor(() => expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(expect.objectContaining({
       sourceKind: 'elvanto_category', sourceExternalId: 'category-1',
     })));
+    expect(elvantoSyncAPI.createBatch).toHaveBeenCalledWith(
+      expect.not.objectContaining({ name: expect.anything() }),
+    );
     expect(saved).toHaveBeenCalledWith(expect.objectContaining({ needsSourceReview: true }));
   });
 
@@ -53,11 +57,16 @@ describe('ElvantoBatchEditor source drafts', () => {
     vi.mocked(elvantoSyncAPI.updateBatch).mockResolvedValue({ data: { batch } });
     vi.mocked(peopleSyncAPI.saveSourceDraft).mockResolvedValue({ data: { batch: { ...batch, needsSourceReview: true } } });
     renderEditor();
+    expect(screen.queryByLabelText('Batch name')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'category-2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
     await waitFor(() => expect(peopleSyncAPI.saveSourceDraft).toHaveBeenCalledWith('elvanto', 11, {
       sourceKind: 'elvanto_category', sourceExternalId: 'category-2',
     }));
+    expect(elvantoSyncAPI.updateBatch).toHaveBeenCalledWith(
+      11,
+      expect.not.objectContaining({ name: expect.anything() }),
+    );
   });
 
   it('keeps an existing source draft and blocks its schedule', async () => {
