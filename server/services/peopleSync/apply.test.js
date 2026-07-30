@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateSelections } = require('./apply');
+const { validateLegacySelections, validateSelections } = require('./apply');
 const { BUCKETS } = require('./plan');
 
 function emptyPlan(overrides = {}) {
@@ -12,10 +12,24 @@ function emptyPlan(overrides = {}) {
 
 test('validateSelections on an empty plan with no selections accepts nothing', () => {
   const accepted = validateSelections(emptyPlan(), {});
+  assert.equal(accepted.contractVersion, 1);
   assert.deepEqual(accepted.acceptedLinks, []);
   assert.equal(accepted.skipExternalPersonIds.size, 0);
   assert.equal(accepted.acceptedArchiveIndividualIds.size, 0);
   assert.equal(accepted.acceptedFamilyRenameIds.size, 0);
+});
+
+test('validateSelections dispatches only an explicit version 2 payload to the identity contract', () => {
+  const plan = emptyPlan({
+    reviewContext: {
+      version: 2,
+      manualCandidateIndividualIds: [],
+      identities: {},
+    },
+  });
+  assert.equal(validateSelections(plan, { decisionContractVersion: 2, identityDecisions: {} }).contractVersion, 2);
+  assert.equal(validateSelections(plan, { decisionContractVersion: 3 }).contractVersion, 1);
+  assert.equal(validateLegacySelections(plan, { decisionContractVersion: 2 }).contractVersion, 1);
 });
 
 test('an ambiguous selection must reference a person actually offered for review', () => {

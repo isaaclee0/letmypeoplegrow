@@ -3,6 +3,10 @@ const linkRepository = require('./linkRepository');
 const authority = require('./authority');
 const batchRepository = require('./batchRepository');
 const { BUCKETS } = require('./plan');
+const {
+  validateDestructiveSelections,
+  validateIdentityDecisions,
+} = require('./identityDecisions');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -74,7 +78,7 @@ function emptyResult() {
  * validateSelections never accepts a bare ID it hasn't first verified
  * appears somewhere in the plan's own review buckets.
  */
-function validateSelections(plan, selections = {}) {
+function validateLegacySelections(plan, selections = {}) {
   if (!plan || typeof plan !== 'object') throw new Error('A plan is required to validate selections against');
 
   const ambiguousByExternal = new Map(asArray(plan.ambiguousPeople).map((a) => [a.externalPersonId, a]));
@@ -83,9 +87,6 @@ function validateSelections(plan, selections = {}) {
     asArray(plan.linkPeople).filter((a) => a.reviewRequired).map((a) => [a.externalPersonId, a])
   );
   const establishedLinks = asArray(plan.linkPeople).filter((a) => !a.reviewRequired);
-  const unmatchedLocalIds = new Set(asArray(plan.unmatchedLocalRegulars).map((a) => a.individualId));
-  const renameById = new Map(asArray(plan.renameFamily).map((a) => [a.id, a]));
-
   const acceptedLinks = [];
   const claimedExternalIds = new Set(establishedLinks.map((a) => a.externalPersonId));
   const claimedIndividualIds = new Set(establishedLinks.map((a) => a.individualId));
@@ -130,29 +131,19 @@ function validateSelections(plan, selections = {}) {
     skipExternalPersonIds.add(externalPersonId);
   }
 
-  const acceptedArchiveIndividualIds = new Set();
-  for (const rawIndividualId of asArray(selections.acceptArchiveIndividualIds)) {
-    const individualId = toPositiveInt(rawIndividualId, 'Archive selection individual ID');
-    const inAmbiguousCandidates = asArray(plan.ambiguousPeople)
-      .some((a) => (a.candidateIndividualIds || []).includes(individualId));
-    if (!unmatchedLocalIds.has(individualId) && !inAmbiguousCandidates) {
-      throw new Error(`Cannot archive an individual not surfaced for review in this plan: ${individualId}`);
-    }
-    if (claimedIndividualIds.has(individualId)) {
-      throw new Error(`Archive selection for ${individualId} collides with an accepted link`);
-    }
-    acceptedArchiveIndividualIds.add(individualId);
-  }
+  const destructive = validateDestructiveSelections(plan, selections, claimedIndividualIds);
+  return {
+    contractVersion: 1,
+    acceptedLinks,
+    skipExternalPersonIds,
+    ...destructive,
+  };
+}
 
-  const acceptedFamilyRenameIds = new Set();
-  for (const actionId of asArray(selections.acceptFamilyRenameIds)) {
-    if (!renameById.has(actionId)) {
-      throw new Error(`Cannot accept a family rename not offered in this plan: ${actionId}`);
-    }
-    acceptedFamilyRenameIds.add(actionId);
-  }
-
-  return { acceptedLinks, skipExternalPersonIds, acceptedArchiveIndividualIds, acceptedFamilyRenameIds };
+function validateSelections(plan, selections = {}) {
+  return selections?.decisionContractVersion === 2
+    ? validateIdentityDecisions(plan, selections)
+    : validateLegacySelections(plan, selections);
 }
 
 function collectTouchedIndividualIds(plan, acceptedArchiveIndividualIds) {
@@ -525,4 +516,9 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
   });
 }
 
-module.exports = { applyPeopleSyncPlan, validateSelections };
+module.exports = {
+  applyPeopleSyncPlan,
+  validateIdentityDecisions,
+  validateLegacySelections,
+  validateSelections,
+};
