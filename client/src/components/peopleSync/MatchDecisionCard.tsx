@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import PersonIdentitySummary, { personDisplayName } from './PersonIdentitySummary';
 import type {
   IdentityDecision,
@@ -15,6 +15,7 @@ interface MatchDecisionCardProps {
   directory: PeopleSyncPeopleDirectory;
   decision: IdentityDecision | null;
   claimedIndividualIds: Set<number>;
+  manualCandidateIndividualIds: Set<number>;
   onChange: (decision: IdentityDecision | null) => void;
 }
 
@@ -66,6 +67,7 @@ export default function MatchDecisionCard({
   directory,
   decision,
   claimedIndividualIds,
+  manualCandidateIndividualIds,
   onChange,
 }: MatchDecisionCardProps) {
   const [searchOpen, setSearchOpen] = useState(decision?.outcome === 'link');
@@ -76,8 +78,10 @@ export default function MatchDecisionCard({
   const selectedId = individualIdForDecision(entry, decision);
   const comparisonId = pendingExcludedId ?? selectedId ?? suggestedId ?? entry.candidateIndividualIds[0] ?? null;
   const externalPerson = directory.external[externalId];
+  const externalName = personDisplayName(externalPerson);
   const localPerson = comparisonId === null ? undefined : directory.local[String(comparisonId)];
   const suggestionRejected = suggestedId !== null && decision !== null && selectedId !== suggestedId;
+  const cardTitleId = useId();
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus();
@@ -116,15 +120,16 @@ export default function MatchDecisionCard({
 
   const name = `identity-${externalId}`;
   return (
-    <article className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50/70 shadow-sm dark:border-gray-700 dark:bg-gray-900/40">
+    <article aria-labelledby={cardTitleId} className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50/70 shadow-sm dark:border-gray-700 dark:bg-gray-900/40">
       <div className="p-4 sm:p-5">
+        <h4 id={cardTitleId} className="sr-only">Match decision for {externalName}</h4>
         <div data-testid={`identity-comparison-${externalId}`} className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <PersonIdentitySummary label={`${providerLabel(provider)} person`} person={externalPerson} />
           <PersonIdentitySummary label="Let My People Grow person" person={localPerson} />
         </div>
 
         <fieldset className="mt-4">
-          <legend className="text-sm font-semibold text-gray-900 dark:text-white">What should happen?</legend>
+          <legend className="text-sm font-semibold text-gray-900 dark:text-white">What should happen for {externalName}?</legend>
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {suggestedId !== null && (
               <RadioChoice
@@ -179,8 +184,9 @@ export default function MatchDecisionCard({
               {results.length === 0 && <p className="py-3 text-sm text-gray-500 dark:text-gray-400">No matching people found.</p>}
               {results.map(({ id, person }) => {
                 const claimed = claimedIndividualIds.has(id);
-                const durableLinked = person.matchEligible === false;
-                const disabled = claimed || durableLinked;
+                const signedEligible = manualCandidateIndividualIds.has(id);
+                const durableLinked = !signedEligible && person.matchEligible === false;
+                const disabled = claimed || !signedEligible;
                 return (
                   <div key={id} className={`rounded-lg border p-3 ${disabled ? 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50' : 'border-gray-200 bg-white dark:border-gray-600 dark:bg-gray-800'}`}>
                     <PersonIdentitySummary label="Let My People Grow person" person={person} />
@@ -195,6 +201,7 @@ export default function MatchDecisionCard({
                     </button>
                     {claimed && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Already selected for {personDisplayName(person)} in this review.</p>}
                     {!claimed && durableLinked && <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Already linked to this provider.</p>}
+                    {!claimed && !signedEligible && !durableLinked && <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Not available for matching in this review.</p>}
                   </div>
                 );
               })}

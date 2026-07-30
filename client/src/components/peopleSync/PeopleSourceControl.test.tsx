@@ -201,7 +201,7 @@ describe('PeopleSourceControl', () => {
     const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
 
     await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', expect.any(Object)));
     await waitFor(() => expect(toggle).toBeChecked());
@@ -231,7 +231,7 @@ describe('PeopleSourceControl', () => {
     const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The authority change was applied, but its status could not be refreshed: Authority status could not be refreshed.',
@@ -267,7 +267,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
     expect(await screen.findByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
 
     rerender(
@@ -295,7 +295,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The review expired; refresh the plan.');
     expect(screen.queryByText(/Request failed with status code 409/i)).not.toBeInTheDocument();
@@ -311,7 +311,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply sync' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
 
     const applyError = await screen.findByRole('alert');
     expect(within(applyError).getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();

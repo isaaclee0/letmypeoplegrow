@@ -45,8 +45,16 @@ interface SyncReviewProps {
 }
 
 function stateForReview(review: PeopleSyncReview): SyncSelectionState {
+  const hasValidV2Context = review.decisionContractVersion === 2
+    && review.plan.reviewContext?.version === 2
+    && Array.isArray(review.plan.reviewContext.manualCandidateIndividualIds)
+    && !!review.plan.reviewContext.identities
+    && typeof review.plan.reviewContext.identities === 'object'
+    && !Array.isArray(review.plan.reviewContext.identities);
   return {
-    identityDecisions: review.decisionContractVersion === 2 ? initializeIdentityDecisions(review) : undefined,
+    identityDecisions: review.decisionContractVersion === 2
+      ? (hasValidV2Context ? initializeIdentityDecisions(review) : {})
+      : undefined,
     ambiguousChoices: {},
     skippedExternalIds: new Set(),
     visitorChoices: {},
@@ -204,14 +212,20 @@ function LegacyIdentityDecisions({
                   </label>
                 )}
                 <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`ambiguous-${action.id}`}
-                    checked={state.ambiguousChoices[action.externalPersonId] === null}
-                    onChange={() => setState((previous) => ({
-                      ...previous,
-                      ambiguousChoices: { ...previous.ambiguousChoices, [action.externalPersonId]: null },
-                    }))}
+                    <input
+                      type="radio"
+                      name={`ambiguous-${action.id}`}
+                      checked={state.ambiguousChoices[action.externalPersonId] === null
+                        && (archiveId === undefined || !state.acceptedArchiveIds.has(archiveId))}
+                    onChange={() => setState((previous) => {
+                      const acceptedArchiveIds = new Set(previous.acceptedArchiveIds);
+                      if (archiveId !== undefined) acceptedArchiveIds.delete(archiveId);
+                      return {
+                        ...previous,
+                        acceptedArchiveIds,
+                        ambiguousChoices: { ...previous.ambiguousChoices, [action.externalPersonId]: null },
+                      };
+                    })}
                   />
                   Decide later
                 </label>
@@ -253,9 +267,21 @@ export default function SyncReview({
   const [applyError, setApplyError] = useState<unknown>(null);
   const { plan } = review;
   const directory: PeopleSyncPeopleDirectory = plan.people || { external: {}, local: {} };
-  const reviewContext = review.decisionContractVersion === 2 ? plan.reviewContext : undefined;
-  const isV2 = review.decisionContractVersion === 2 && reviewContext?.version === 2;
+  const declaresV2 = review.decisionContractVersion === 2;
+  const validV2Context = declaresV2
+    && plan.reviewContext?.version === 2
+    && Array.isArray(plan.reviewContext.manualCandidateIndividualIds)
+    && !!plan.reviewContext.identities
+    && typeof plan.reviewContext.identities === 'object'
+    && !Array.isArray(plan.reviewContext.identities);
+  const malformedV2 = declaresV2 && !validV2Context;
+  const reviewContext = validV2Context ? plan.reviewContext : undefined;
+  const isV2 = declaresV2 && validV2Context;
   const unmatchedCoverageCount = review.coverage?.unmatchedActiveLocalRegulars ?? 0;
+  const manualCandidateIndividualIds = useMemo(
+    () => new Set(reviewContext?.manualCandidateIndividualIds || []),
+    [reviewContext],
+  );
 
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
@@ -286,17 +312,6 @@ export default function SyncReview({
 
   const collisions = [...claims.entries()].filter(([, externalIds]) => externalIds.length > 1);
   const incompleteExternalIds = incompleteIdentityExternalIds(state, reviewContext);
-  const requiresConfirmation = plan.archive.length > 0
-    || plan.removeFromGathering.length > 0
-    || state.acceptedFamilyRenameIds.size > 0
-    || state.acceptedArchiveIds.size > 0;
-  const allPlannedArchivesAccepted = !requireAllPlannedArchivesAccepted
-    || plan.archive.every((action) => state.acceptedArchiveIds.has(action.individualId));
-  const applyDisabled = applying
-    || incompleteExternalIds.length > 0
-    || collisions.length > 0
-    || !allPlannedArchivesAccepted
-    || (requiresConfirmation && !confirmedDestructiveChanges);
 
   const setIdentityDecision = (externalId: string, decision: IdentityDecision | null) => setState((previous) => ({
     ...previous,
@@ -319,6 +334,7 @@ export default function SyncReview({
   });
 
   const submit = async () => {
+    if (applyDisabled) return;
     setApplyError(null);
     try {
       await onApply(review.reviewToken, buildSyncSelections(state));
@@ -335,12 +351,70 @@ export default function SyncReview({
       local: decision?.outcome === 'link' ? localPerson(decision.individualId) : '',
     }));
 
-  const suggestedCount = isV2 ? Object.values(state.identityDecisions || {}).filter((decision) => decision?.outcome === 'accept').length : plan.linkPeople.length;
+  const rejectedSuggestedExternalIds = new Set<string>();
+  const rejectedSuggestedIndividualIds = new Set<number>();
+  const createdExternalIds = new Set<string>();
+  const deferredExternalIds: string[] = [];
+  if (isV2 && reviewContext) {
+    for (const [externalId, entry] of Object.entries(reviewContext.identities)) {
+      const decision = state.identityDecisions?.[externalId];
+      if (decision?.outcome === 'create') createdExternalIds.add(externalId);
+      if (decision?.outcome === 'defer') deferredExternalIds.push(externalId);
+      if (entry.suggestedIndividualId !== null && decisionTarget(externalId, decision) !== entry.suggestedIndividualId) {
+        rejectedSuggestedExternalIds.add(externalId);
+        rejectedSuggestedIndividualIds.add(entry.suggestedIndividualId);
+      }
+    }
+  }
+  const suggestionStillAccepted = (action: { externalPersonId?: string; individualId?: number | null }) =>
+    !(action.externalPersonId && rejectedSuggestedExternalIds.has(action.externalPersonId))
+    && !(action.individualId != null && rejectedSuggestedIndividualIds.has(action.individualId));
+  const effectiveUpdateManagedFields = isV2
+    ? plan.updateManagedFields.filter(suggestionStillAccepted)
+    : plan.updateManagedFields.filter((action) => !action.reviewRequired);
+  const effectivePromoteToRegular = isV2
+    ? plan.promoteToRegular.filter(suggestionStillAccepted)
+    : plan.promoteToRegular.filter((action) => !action.reviewRequired);
+  const effectiveDemoteToLocalVisitor = isV2
+    ? plan.demoteToLocalVisitor.filter(suggestionStillAccepted)
+    : plan.demoteToLocalVisitor.filter((action) => !action.reviewRequired);
+  const effectiveArchive = isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive;
+  const effectiveReactivate = isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate;
+  const effectiveMoveFamily = isV2 ? plan.moveFamily.filter(suggestionStillAccepted) : plan.moveFamily;
+  const effectiveAddToGathering = isV2
+    ? plan.addToGathering
+      .filter(suggestionStillAccepted)
+      .filter((action) => action.individualId !== null || createdExternalIds.has(action.externalPersonId))
+    : plan.addToGathering;
+  const effectiveRemoveFromGathering = isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering;
+  const effectiveNewPeople = isV2 && reviewContext
+    ? [...createdExternalIds].flatMap((externalId) => {
+      const createPerson = reviewContext.identities[externalId]?.createPerson;
+      return createPerson ? [{ id: `create:${externalId}`, externalPersonId: externalId, ...createPerson }] : [];
+    })
+    : plan.addPeople;
+  const automaticPersonLinks = declaresV2 ? [] : plan.linkPeople.filter((action) => !action.reviewRequired);
+  const linksAndRestoresCount = automaticPersonLinks.length + plan.linkFamilies.length + effectiveReactivate.length;
+  const requiresConfirmation = effectiveArchive.length > 0
+    || effectiveRemoveFromGathering.length > 0
+    || state.acceptedFamilyRenameIds.size > 0
+    || state.acceptedArchiveIds.size > 0;
+  const allPlannedArchivesAccepted = !requireAllPlannedArchivesAccepted
+    || effectiveArchive.every((action) => state.acceptedArchiveIds.has(action.individualId));
+  const applyDisabled = applying
+    || stale
+    || malformedV2
+    || incompleteExternalIds.length > 0
+    || collisions.length > 0
+    || !allPlannedArchivesAccepted
+    || (requiresConfirmation && !confirmedDestructiveChanges);
+
+  const suggestedCount = isV2 ? Object.values(state.identityDecisions || {}).filter((decision) => decision?.outcome === 'accept').length : automaticPersonLinks.length;
   const neededCount = isV2 ? incompleteExternalIds.length : plan.ambiguousPeople.length + plan.familyConflicts.length;
-  const managedCount = plan.updateManagedFields.length + plan.promoteToRegular.length + plan.demoteToLocalVisitor.length + plan.moveFamily.length + plan.reactivate.length;
-  const gatheringCount = plan.addToGathering.length + plan.removeFromGathering.length;
-  const destructiveCount = plan.archive.length + plan.removeFromGathering.length + plan.renameFamily.length;
-  const skippedCount = plan.skipped.length + plan.unmatchedLocalRegulars.length;
+  const managedCount = effectiveUpdateManagedFields.length + effectivePromoteToRegular.length + effectiveDemoteToLocalVisitor.length + effectiveMoveFamily.length;
+  const gatheringCount = effectiveAddToGathering.length + effectiveRemoveFromGathering.length;
+  const destructiveCount = effectiveArchive.length + effectiveRemoveFromGathering.length + plan.renameFamily.length;
+  const skippedCount = plan.skipped.length + plan.unmatchedLocalRegulars.length + deferredExternalIds.length;
 
   return (
     <div className="space-y-5 text-gray-900 dark:text-gray-100">
@@ -357,7 +431,7 @@ export default function SyncReview({
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <SummaryCard label="Suggested matches" count={suggestedCount} />
           <SummaryCard label="Decisions needed" count={neededCount} tone={neededCount > 0 ? 'amber' : 'neutral'} />
-          <SummaryCard label="New people" count={plan.addPeople.length} />
+          <SummaryCard label="New people" count={effectiveNewPeople.length} />
           <SummaryCard label="Managed updates" count={managedCount} />
           <SummaryCard label="Gathering changes" count={gatheringCount} />
           <SummaryCard label="Destructive changes" count={destructiveCount} tone={destructiveCount > 0 ? 'amber' : 'neutral'} />
@@ -367,6 +441,12 @@ export default function SyncReview({
       {unmatchedCoverageCount > 0 && (
         <div className="rounded-lg border border-gray-200 bg-stone-50 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
           {unmatchedCoverageCount} active LMPG regulars are not matched to any currently configured {providerLabel(provider)} source. They will remain unchanged. Add another sync batch if they should be included.
+        </div>
+      )}
+
+      {malformedV2 && (
+        <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
+          This sync review could not be safely loaded. Refresh the plan before applying it.
         </div>
       )}
 
@@ -397,6 +477,7 @@ export default function SyncReview({
                     directory={directory}
                     decision={state.identityDecisions?.[externalId] ?? null}
                     claimedIndividualIds={claimedByOthers}
+                    manualCandidateIndividualIds={manualCandidateIndividualIds}
                     onChange={(decision) => setIdentityDecision(externalId, decision)}
                   />
                 </div>
@@ -406,7 +487,7 @@ export default function SyncReview({
         </Section>
       )}
 
-      {!isV2 && (
+      {!declaresV2 && (
         <LegacyIdentityDecisions
           review={review}
           state={state}
@@ -417,9 +498,19 @@ export default function SyncReview({
         />
       )}
 
-      <Section title="New people" count={plan.addPeople.length + plan.addFamilies.length}>
+      <Section title="Links and restores" count={linksAndRestoresCount}>
+        <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
+          {automaticPersonLinks.map((action) => (
+            <li key={action.id}>Link {externalPerson(action.externalPersonId)} to {localPerson(action.individualId)}</li>
+          ))}
+          {plan.linkFamilies.map((action) => <li key={action.id}>Link a provider family to an LMPG family</li>)}
+          {effectiveReactivate.map((action) => <li key={action.id}>Restore {localPerson(action.individualId)}</li>)}
+        </ul>
+      </Section>
+
+      <Section title="New people" count={effectiveNewPeople.length + plan.addFamilies.length}>
         <ul className="space-y-2 text-sm">
-          {plan.addPeople.map((action) => (
+          {effectiveNewPeople.map((action) => (
             <li key={action.id} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               {isV2 ? (
                 <span>Add {action.firstName} {action.lastName}</span>
@@ -437,25 +528,24 @@ export default function SyncReview({
 
       <Section title="Managed updates" count={managedCount}>
         <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
-          {plan.updateManagedFields.map((action) => <li key={action.id}>Update {localPerson(action.individualId)}</li>)}
-          {plan.promoteToRegular.map((action) => <li key={action.id}>Make {localPerson(action.individualId)} a regular</li>)}
-          {plan.demoteToLocalVisitor.map((action) => <li key={action.id}>Make {localPerson(action.individualId)} a local visitor</li>)}
-          {plan.moveFamily.map((action) => <li key={action.id}>Move {localPerson(action.individualId)} to another family</li>)}
-          {plan.reactivate.map((action) => <li key={action.id}>Reactivate {localPerson(action.individualId)}</li>)}
+          {effectiveUpdateManagedFields.map((action) => <li key={action.id}>Update {localPerson(action.individualId)}</li>)}
+          {effectivePromoteToRegular.map((action) => <li key={action.id}>Make {localPerson(action.individualId)} a regular</li>)}
+          {effectiveDemoteToLocalVisitor.map((action) => <li key={action.id}>Make {localPerson(action.individualId)} a local visitor</li>)}
+          {effectiveMoveFamily.map((action) => <li key={action.id}>Move {localPerson(action.individualId)} to another family</li>)}
         </ul>
       </Section>
 
       <Section title="Gathering changes" count={gatheringCount}>
         <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
-          {plan.addToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to a gathering</li>)}
-          {plan.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from a gathering</li>)}
+          {effectiveAddToGathering.map((action) => <li key={action.id}>Add {externalPerson(action.externalPersonId)} to a gathering</li>)}
+          {effectiveRemoveFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from a gathering</li>)}
         </ul>
       </Section>
 
       <Section title="Destructive changes" count={destructiveCount} tone="amber" open>
         <p className="mb-3 text-sm text-amber-900 dark:text-amber-100">This will archive people or remove them from gatherings. Review every change before applying.</p>
         <ul className="space-y-3 text-sm">
-          {plan.archive.map((action) => (
+          {effectiveArchive.map((action) => (
             <li key={action.id}>
               <label className="flex items-start gap-2">
                 <input type="checkbox" aria-label={`Archive ${localPerson(action.individualId)}`} checked={state.acceptedArchiveIds.has(action.individualId)} onChange={() => toggleArchive(action.individualId)} className="mt-0.5" />
@@ -463,7 +553,7 @@ export default function SyncReview({
               </label>
             </li>
           ))}
-          {plan.removeFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from a gathering</li>)}
+          {effectiveRemoveFromGathering.map((action) => <li key={action.id}>Remove {localPerson(action.individualId)} from a gathering</li>)}
           {plan.renameFamily.map((action) => (
             <li key={action.id}>
               <label className="flex items-center gap-2"><input type="checkbox" checked={state.acceptedFamilyRenameIds.has(action.id)} onChange={() => toggleRename(action.id)} />Accept family rename to {action.familyName}</label>
@@ -476,6 +566,7 @@ export default function SyncReview({
         <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
           {plan.skipped.map((action) => <li key={action.id}>{externalPerson(action.externalPersonId)} will remain unchanged.</li>)}
           {plan.unmatchedLocalRegulars.map((action) => <li key={action.id}>{localPerson(action.individualId)} will remain unchanged.</li>)}
+          {deferredExternalIds.map((externalId) => <li key={`deferred:${externalId}`}>{externalPerson(externalId)} will be skipped for now.</li>)}
         </ul>
       </Section>
 

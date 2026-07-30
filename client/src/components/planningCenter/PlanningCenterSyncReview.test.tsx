@@ -46,7 +46,7 @@ describe('PlanningCenterSyncReview', () => {
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
     expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
 
     await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(7, {
       reviewToken: 'pco-review-7', selections: expect.any(Object),
@@ -69,7 +69,7 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
     expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
   });
 

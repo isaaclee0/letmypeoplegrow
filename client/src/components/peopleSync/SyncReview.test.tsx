@@ -126,6 +126,8 @@ describe('SyncReview v2 identity review', () => {
     expect(screen.getByText('Same full name with a linked family member')).toBeInTheDocument();
     expect(screen.getByText('More than one person has this name')).toBeInTheDocument();
     expect(screen.getByTestId('identity-comparison-ext-auto')).toHaveClass('grid-cols-1', 'md:grid-cols-2');
+    expect(screen.getByRole('article', { name: 'Match decision for Alex Smith' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'What should happen for Alex Smith?' })).toBeInTheDocument();
     expect(screen.getByText(/Match decisions/).closest('details')).not.toBeNull();
     expect(screen.getAllByRole('button', { name: 'Apply sync' })).toHaveLength(2);
   });
@@ -174,6 +176,55 @@ describe('SyncReview v2 identity review', () => {
     expect(screen.getByRole('button', { name: /Select Durable Link/ })).toBeDisabled();
     expect(screen.getByText(/Already linked to this provider/)).toBeInTheDocument();
     expect(screen.getByText('Household information unavailable')).toBeInTheDocument();
+  });
+
+  it('uses the signed manual-candidate allow-list even when display metadata says a person is eligible', async () => {
+    const user = userEvent.setup();
+    const review = v2Review();
+    const restrictedReview = {
+      ...review,
+      plan: {
+        ...review.plan,
+        reviewContext: { ...review.plan.reviewContext!, manualCandidateIndividualIds: [7, 9] },
+      },
+    };
+    render(<SyncReview provider="planning_center" review={restrictedReview} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    await user.click(screen.getAllByRole('radio', { name: 'Choose someone else' })[1]);
+    await user.type(screen.getByRole('searchbox', { name: 'Search Let My People Grow people' }), 'Taylor Reed');
+    expect(screen.getByRole('button', { name: /Select Taylor Reed/ })).toBeDisabled();
+    expect(screen.getByText('Not available for matching in this review.')).toBeInTheDocument();
+  });
+
+  it('derives v2 add, managed, and gathering disclosures from the current identity decision', async () => {
+    const user = userEvent.setup();
+    const base = singleIdentityReview();
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      addPeople: [{
+        id: 'add:ext-auto', externalPersonId: 'ext-auto', firstName: 'Alex', lastName: 'Smith',
+        isChild: false, familyId: 'smiths', peopleType: 'regular', reason: 'unmatched', reviewRequired: true,
+      }],
+      updateManagedFields: [{
+        id: 'update:ext-auto', externalPersonId: 'ext-auto', individualId: 7,
+        changes: [{ field: 'firstName', localValue: 'Alec', externalValue: 'Alex' }], reason: 'provider_managed_fields', reviewRequired: false,
+      }],
+      addToGathering: [{
+        id: 'gathering:ext-auto', batchId: 1, gatheringTypeId: 2, externalPersonId: 'ext-auto',
+        individualId: 7, eligibleBatchIds: [1], reason: 'batch_eligible',
+      }],
+    };
+    const review = { ...base, plan, summary: summaryFor(plan) };
+    render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.queryByText('Add Alex Smith')).not.toBeInTheDocument();
+    expect(screen.getByText('Update Alex Smith')).toBeInTheDocument();
+    expect(screen.getByText('Add Alex Smith to a gathering')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: 'Add as a new person' }));
+    expect(screen.getByText('Add Alex Smith')).toBeInTheDocument();
+    expect(screen.queryByText('Update Alex Smith')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add Alex Smith to a gathering')).not.toBeInTheDocument();
   });
 
   it('supports create, defer, exact rejection, and confirmation of an excluded pair override', async () => {
@@ -251,6 +302,8 @@ describe('SyncReview v2 identity review', () => {
     expect(alert).toHaveTextContent('Blair Jones');
     expect(alert).toHaveTextContent('Taylor Reed');
     expect(alert).toHaveTextContent('may no longer be available');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    await user.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
     expect(onApply).toHaveBeenCalledTimes(2);
     expect(onRefresh).not.toHaveBeenCalled();
     await user.click(within(alert).getByRole('button', { name: 'Refresh plan' }));
@@ -258,6 +311,16 @@ describe('SyncReview v2 identity review', () => {
 
     rerender(<SyncReview provider="planning_center" review={{ ...base, reviewToken: 'new-token' }} onRefresh={onRefresh} onApply={onApply} applying={false} />);
     expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeDisabled();
+  });
+
+  it('fails closed when a response declares v2 without a valid signed review context', () => {
+    const base = v2Review();
+    const malformed = { ...base, plan: { ...base.plan, reviewContext: undefined } };
+    render(<SyncReview provider="planning_center" review={malformed} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.queryByText('Decide later')).not.toBeInTheDocument();
   });
 });
 
@@ -280,5 +343,68 @@ describe('SyncReview legacy destructive review', () => {
     expect(screen.getByText(/208 active LMPG regulars/)).toBeInTheDocument();
     rerender(<SyncReview provider="elvanto" review={{ ...review, coverage: { unmatchedActiveLocalRegulars: 0 } }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
     expect(screen.queryByText(/remain unchanged/i)).not.toBeInTheDocument();
+  });
+
+  it('clears an ambiguous archive choice when the reviewer decides later', async () => {
+    const user = userEvent.setup();
+    const base = legacyReview();
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      archive: [], removeFromGathering: [], renameFamily: [],
+      ambiguousPeople: [{ id: 'ambiguous:ext-archive', externalPersonId: 'ext-archive', reason: 'duplicate_name', candidateIndividualIds: [11] }],
+    };
+    const review = { ...base, plan, summary: summaryFor(plan) };
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="elvanto"
+      review={review}
+      onRefresh={vi.fn()}
+      onApply={onApply}
+      applying={false}
+      resolveAmbiguousArchiveIndividualId={() => 11}
+    />);
+
+    await user.click(screen.getByRole('radio', { name: 'Archive this person' }));
+    expect(screen.getByLabelText(/I understand that this sync/)).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: 'Decide later' }));
+    expect(screen.queryByLabelText(/I understand that this sync/)).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    expect(onApply).toHaveBeenCalledWith('legacy-token', expect.objectContaining({ acceptArchiveIndividualIds: [] }));
+  });
+
+  it('discloses automatic links and families without repeating a rejected visitor promotion', async () => {
+    const user = userEvent.setup();
+    const base = legacyReview();
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      archive: [], removeFromGathering: [], renameFamily: [],
+      people: {
+        external: {
+          'ext-linked': { firstName: 'External', lastName: 'Linked', family: { state: 'none' } },
+          'ext-visitor': { firstName: 'External', lastName: 'Visitor', family: { state: 'none' } },
+        },
+        local: {
+          '13': { firstName: 'Local', lastName: 'Linked', family: { state: 'none' } },
+          '18': { firstName: 'Local', lastName: 'Visitor', family: { state: 'none' } },
+        },
+      },
+      linkPeople: [
+        { id: 'link:linked', externalPersonId: 'ext-linked', individualId: 13, reason: 'unique_name', reviewRequired: false },
+        { id: 'link:visitor', externalPersonId: 'ext-visitor', individualId: 18, reason: 'visitor_match', reviewRequired: true },
+      ],
+      linkFamilies: [{ id: 'family:1', externalFamilyId: 'external-family', familyId: 4, reason: 'family_match' }],
+      promoteToRegular: [{
+        id: 'promote:visitor', externalPersonId: 'ext-visitor', individualId: 18,
+        fromPeopleType: 'local_visitor', toPeopleType: 'regular', reason: 'provider_state_active', reviewRequired: true,
+      }],
+    };
+    const review = { ...base, plan, summary: summaryFor(plan) };
+    render(<SyncReview provider="elvanto" review={review} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.getByText('Links and restores')).toBeInTheDocument();
+    expect(screen.getByText('Link External Linked to Local Linked')).toBeInTheDocument();
+    expect(screen.getByText('Link a provider family to an LMPG family')).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: 'Keep as visitor' }));
+    expect(screen.queryByText('Make Local Visitor a regular')).not.toBeInTheDocument();
   });
 });
