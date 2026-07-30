@@ -380,9 +380,52 @@ export interface PeopleSyncPersonName {
   lastName: string;
 }
 
+export type PeopleSyncFamilyDisplay =
+  | { state: 'unavailable' }
+  | { state: 'none' }
+  | {
+    state: 'known';
+    name: string;
+    members: PeopleSyncPersonName[];
+    totalOtherMembers: number;
+  };
+
+// Presentation-only data from reviewContext.js's buildReviewDirectory().
+// `matchEligible` is only present for local people; selections are still
+// constrained by the separately signed review context.
+export interface PeopleSyncPersonDisplay extends PeopleSyncPersonName {
+  family: PeopleSyncFamilyDisplay;
+  matchEligible?: boolean;
+}
+
 export interface PeopleSyncPeopleDirectory {
-  external: Record<string, PeopleSyncPersonName>;
-  local: Record<string, PeopleSyncPersonName>;
+  external: Record<string, PeopleSyncPersonDisplay>;
+  local: Record<string, PeopleSyncPersonDisplay>;
+}
+
+export interface IdentityCreatePerson {
+  firstName: string;
+  lastName: string;
+  isChild: boolean | null;
+  externalFamilyId: string | null;
+  peopleType: PeopleType;
+}
+
+export interface IdentityReviewEntry {
+  suggestedIndividualId: number | null;
+  candidateIndividualIds: number[];
+  excludedIndividualIds: number[];
+  held: boolean;
+  canCreate: boolean;
+  createPerson: IdentityCreatePerson | null;
+}
+
+// Signed identity choices and create payloads. Unlike `people`, this is an
+// authorization boundary, not just a display model.
+export interface PeopleSyncReviewContext {
+  version: 2;
+  manualCandidateIndividualIds: number[];
+  identities: Record<string, IdentityReviewEntry>;
 }
 
 // The full plan shape as the CLIENT actually receives it -- i.e. after
@@ -397,6 +440,7 @@ export interface PeopleSyncPlan {
   snapshot: PeopleSyncSnapshotInfo;
   // Safe display-only names. IDs remain the action keys used during apply.
   people?: PeopleSyncPeopleDirectory;
+  reviewContext?: PeopleSyncReviewContext;
   linkPeople: LinkPersonAction[];
   linkFamilies: LinkFamilyAction[];
   addPeople: AddPersonAction[];
@@ -419,7 +463,10 @@ export interface PeopleSyncPlan {
 // The 17 action-bucket keys of PeopleSyncPlan (i.e. plan.js's own BUCKETS
 // list), derived rather than re-typed so it can never drift from the
 // interface above.
-export type PeopleSyncBucketName = Exclude<keyof PeopleSyncPlan, 'provider' | 'authoritative' | 'snapshot' | 'people'>;
+export type PeopleSyncBucketName = Exclude<
+  keyof PeopleSyncPlan,
+  'provider' | 'authoritative' | 'snapshot' | 'people' | 'reviewContext'
+>;
 
 // server/services/peopleSync/plan.js's summarizePlan(): bucket name -> count.
 export type PeopleSyncPlanSummary = Record<PeopleSyncBucketName, number>;
@@ -447,6 +494,7 @@ export interface PeopleSyncCoverage {
 export interface PeopleSyncReview {
   runId: number;
   reviewToken: string;
+  decisionContractVersion?: 2;
   summary: PeopleSyncPlanSummary;
   plan: PeopleSyncPlan;
   snapshot: PeopleSyncSnapshotInfo;
@@ -494,7 +542,18 @@ export interface PeopleSyncApplyResult {
 // under different names is the only real guard against Task 18 (which
 // touches both trees) mixing them up. The legacy type is removed in Task 21;
 // until then, do not rename this back to `SyncSelections`.
+export type IdentityDecision =
+  | { outcome: 'accept'; excludeIndividualId?: never }
+  | { outcome: 'link'; individualId: number; excludeIndividualId?: number }
+  | { outcome: 'create'; excludeIndividualId?: number }
+  | { outcome: 'defer'; excludeIndividualId?: number };
+
 export interface PeopleSyncSelections {
+  // V2 selections replace legacy identity fields with one decision for each
+  // signed external identity. Omit both fields for pre-v2 review responses.
+  decisionContractVersion?: 2;
+  identityDecisions?: Record<string, IdentityDecision>;
+  // Compatibility-only legacy fields. Do not use them when submitting v2.
   // externalPersonId -> chosen individualId, for entries in
   // plan.ambiguousPeople the reviewer resolved manually.
   ambiguous?: Record<string, number>;

@@ -21,6 +21,14 @@ import type {
   PlanningCenterStatus,
 } from '../components/peopleSync/types';
 
+// Shared by Planning Center and Elvanto reviewed applies. Keeping this
+// provider-neutral prevents either endpoint from adapting identity IDs or
+// quietly falling back to a provider-specific selection shape.
+export interface PeopleSyncApplyRequest {
+  reviewToken: string;
+  selections?: PeopleSyncSelections;
+}
+
 // Use relative URL for API requests - this will work with any domain
 const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
 
@@ -912,7 +920,7 @@ export const integrationsAPI = {
       params: opts?.force ? { refresh: 1 } : undefined,
       timeout: 120000,
     }),
-  applyPlanningCenterBatch: (id: number, data: { reviewToken: string; selections?: PeopleSyncSelections }) =>
+  applyPlanningCenterBatch: (id: number, data: PeopleSyncApplyRequest) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
   getCheckinEvents: (params: { startDate?: string; endDate?: string; jobId?: string }) =>
@@ -1043,7 +1051,7 @@ export const elvantoSyncAPI = {
   // `selections` is optional here (mirroring applyAuthority's own default
   // above) since the server treats a missing/non-object `selections` the
   // same as `{}` (see elvanto.js's POST /sync-batches/:id/apply handler).
-  applyBatch: (id: number, data: { reviewToken: string; selections?: PeopleSyncSelections }) =>
+  applyBatch: (id: number, data: PeopleSyncApplyRequest) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(
       `/integrations/elvanto/sync-batches/${id}/apply`,
       data,
