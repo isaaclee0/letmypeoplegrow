@@ -273,7 +273,7 @@ test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-f
   assert.deepEqual(plans[0].externalPeople.map((item) => item.id), ['active']);
   assert.deepEqual(matchingInputs[0].map((item) => item.id), ['active']);
   assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
-  assert.deepEqual(applied[0].plan.unmatchedLocalRegulars.map((item) => item.individualId), [9]);
+  assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
   assert.deepEqual([...presence[0][2]], ['active']);
   assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
 });
@@ -316,7 +316,7 @@ for (const sourceOrder of [
 
     assert.equal(matchingInputs[0].some((item) => item.id === 'terminal'), false);
     assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'terminal')), false);
-    assert.deepEqual(applied[0].plan.unmatchedLocalRegulars.map((item) => item.individualId), [9]);
+    assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
     assert.equal(presence[0][2].has('terminal'), false);
     assert.equal(presence[0][3].ignoredExternalIds.has('terminal'), true);
   });
