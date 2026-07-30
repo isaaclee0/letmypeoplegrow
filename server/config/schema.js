@@ -92,6 +92,37 @@ CREATE INDEX IF NOT EXISTS idx_external_family_links_church ON external_family_l
 CREATE INDEX IF NOT EXISTS idx_external_family_links_lookup ON external_family_links(church_id, provider, external_family_id);
 CREATE INDEX IF NOT EXISTS idx_external_family_links_family ON external_family_links(family_id);
 
+CREATE TABLE IF NOT EXISTS people_sync_match_exclusions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_person_id TEXT NOT NULL,
+  individual_id INTEGER NOT NULL,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_person_id, individual_id),
+  FOREIGN KEY (individual_id) REFERENCES individuals(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_match_exclusions_lookup
+  ON people_sync_match_exclusions(church_id, provider, external_person_id);
+
+CREATE TABLE IF NOT EXISTS people_sync_match_holds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  external_person_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK(reason IN ('deferred', 'pair_rejected')),
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, external_person_id),
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_match_holds_lookup
+  ON people_sync_match_holds(church_id, provider, external_person_id);
+
 CREATE TABLE IF NOT EXISTS people_sync_migration_issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT NOT NULL,
