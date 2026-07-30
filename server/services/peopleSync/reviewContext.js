@@ -164,12 +164,12 @@ function sortedMembers(people, ids) {
 function knownFamily(person, people, families) {
   const id = externalId(person.familyId);
   const family = families.get(id);
+  if (!family) return { state: 'unavailable' };
   const memberIds = new Set((family?.memberExternalIds || []).map(externalId).filter(Boolean));
   for (const member of people || []) {
     if (externalId(member?.familyId) === id) memberIds.add(externalId(member?.id));
   }
   memberIds.delete(externalId(person?.id));
-  if (!family && memberIds.size === 0) return { state: 'unavailable' };
   const otherMembers = sortedMembers(people, memberIds);
   return {
     state: 'known',
