@@ -375,6 +375,16 @@ export interface PeopleSyncSnapshotInfo {
   mode: 'full' | 'incremental' | null;
 }
 
+export interface PeopleSyncPersonName {
+  firstName: string;
+  lastName: string;
+}
+
+export interface PeopleSyncPeopleDirectory {
+  external: Record<string, PeopleSyncPersonName>;
+  local: Record<string, PeopleSyncPersonName>;
+}
+
 // The full plan shape as the CLIENT actually receives it -- i.e. after
 // orchestrator.js's sanitizePlanForReview() strips raw attribute/
 // custom-field maps (a defensive no-op today, since none of plan.js's own
@@ -385,6 +395,8 @@ export interface PeopleSyncPlan {
   provider: SyncProvider;
   authoritative: boolean;
   snapshot: PeopleSyncSnapshotInfo;
+  // Safe display-only names. IDs remain the action keys used during apply.
+  people?: PeopleSyncPeopleDirectory;
   linkPeople: LinkPersonAction[];
   linkFamilies: LinkFamilyAction[];
   addPeople: AddPersonAction[];
@@ -407,7 +419,7 @@ export interface PeopleSyncPlan {
 // The 17 action-bucket keys of PeopleSyncPlan (i.e. plan.js's own BUCKETS
 // list), derived rather than re-typed so it can never drift from the
 // interface above.
-export type PeopleSyncBucketName = Exclude<keyof PeopleSyncPlan, 'provider' | 'authoritative' | 'snapshot'>;
+export type PeopleSyncBucketName = Exclude<keyof PeopleSyncPlan, 'provider' | 'authoritative' | 'snapshot' | 'people'>;
 
 // server/services/peopleSync/plan.js's summarizePlan(): bucket name -> count.
 export type PeopleSyncPlanSummary = Record<PeopleSyncBucketName, number>;
@@ -424,6 +436,10 @@ export type PeopleSyncApplyCounts = Record<PeopleSyncBucketName, number> & {
 
 // ─── Review / apply results (server/services/peopleSync/orchestrator.js) ──
 
+export interface PeopleSyncCoverage {
+  unmatchedActiveLocalRegulars: number;
+}
+
 // buildReview()'s and previewAuthoritySwitch()'s return shape. `authority`
 // is present ONLY for previewAuthoritySwitch (POST
 // /people-sync/people-authority/preview) -- buildReview (GET
@@ -435,6 +451,7 @@ export interface PeopleSyncReview {
   plan: PeopleSyncPlan;
   snapshot: PeopleSyncSnapshotInfo;
   authority?: PeopleSyncAuthorityState;
+  coverage?: PeopleSyncCoverage;
 }
 
 // applyReviewed()'s return shape -- used by both POST

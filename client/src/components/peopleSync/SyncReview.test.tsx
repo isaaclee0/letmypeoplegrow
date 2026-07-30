@@ -6,6 +6,19 @@ import type { PeopleSyncPlan, PeopleSyncReview } from './types';
 
 const plan: PeopleSyncPlan = {
   provider: 'elvanto', authoritative: true, snapshot: { fetchedAt: '2026-07-25T09:00:00.000Z', mode: 'full' },
+  people: {
+    external: {
+      'ext-1': { firstName: 'External', lastName: 'Ambiguous' },
+      'ext-link': { firstName: 'External', lastName: 'Linked' },
+      'ext-archive': { firstName: 'External', lastName: 'Archived' },
+    },
+    local: {
+      '7': { firstName: 'Local', lastName: 'Candidate' },
+      '10': { firstName: 'Local', lastName: 'Unmatched' },
+      '11': { firstName: 'Local', lastName: 'Archived' },
+      '13': { firstName: 'Local', lastName: 'Linked' },
+    },
+  },
   ambiguousPeople: [{ id: 'ambiguous:ext-1', externalPersonId: 'ext-1', reason: 'Multiple local matches', candidateIndividualIds: [7, 8] }],
   familyConflicts: [{ id: 'familyConflict:1', reason: 'Choose a household' }],
   unmatchedLocalRegulars: [{ id: 'unmatched:10', individualId: 10, reason: 'No external match', reviewRequired: true }],
@@ -29,10 +42,11 @@ const review: PeopleSyncReview = {
   runId: 1,
   reviewToken: 'review-token',
   summary: Object.fromEntries(Object.entries(plan)
-    .filter(([key]) => !['provider', 'authoritative', 'snapshot'].includes(key))
+    .filter(([key]) => !['provider', 'authoritative', 'snapshot', 'people'].includes(key))
     .map(([key, value]) => [key, Array.isArray(value) ? value.length : 0])) as PeopleSyncReview['summary'],
   plan,
   snapshot: plan.snapshot,
+  coverage: { unmatchedActiveLocalRegulars: 208 },
 };
 
 describe('SyncReview', () => {
@@ -51,7 +65,30 @@ describe('SyncReview', () => {
     expect(screen.getByText('Skipped')).toBeInTheDocument();
     expect(screen.getByText('ambiguousPeople: 1')).toBeInTheDocument();
     expect(screen.getByText('removeFromGathering: 1')).toBeInTheDocument();
-    expect(screen.getByText(/ext-skip:/)).toBeInTheDocument();
+    expect(screen.getByText(/external person ext-skip:/)).toBeInTheDocument();
+    expect(screen.getByText('External Ambiguous — Multiple local matches')).toBeInTheDocument();
+    expect(screen.getByLabelText('Use Local Candidate for External Ambiguous')).toBeInTheDocument();
+    expect(screen.getByText('Link External Linked to Local Linked')).toBeInTheDocument();
+    expect(screen.getByText(
+      '208 active LMPG regulars are not matched to any currently configured Elvanto source. They will remain unchanged. Add another sync batch if they should be included.'
+    )).toBeInTheDocument();
+    expect(screen.queryByLabelText('Archive Local Unmatched')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Archive Local Archived')).toBeInTheDocument();
+  });
+
+  it('does not render source coverage guidance when coverage is absent or zero', () => {
+    const { unmount } = render(
+      <SyncReview provider="elvanto" review={{ ...review, coverage: undefined }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />
+    );
+
+    expect(screen.queryByText(/remain unchanged/i)).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <SyncReview provider="elvanto" review={{ ...review, coverage: { unmatchedActiveLocalRegulars: 0 } }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />
+    );
+
+    expect(screen.queryByText(/remain unchanged/i)).not.toBeInTheDocument();
   });
 
   it('serializes reviewer choices and requires explicit destructive confirmation before applying', () => {
@@ -59,10 +96,9 @@ describe('SyncReview', () => {
     render(<SyncReview provider="planning_center" review={review} onRefresh={vi.fn()} onApply={onApply} applying={false} />);
 
     expect(screen.getByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Use local person 7 for ext-1'));
-    fireEvent.click(screen.getByLabelText('Promote visitor 18'));
-    fireEvent.click(screen.getByLabelText('Archive person 10'));
-    fireEvent.click(screen.getByLabelText('Archive person 11'));
+    fireEvent.click(screen.getByLabelText('Use Local Candidate for External Ambiguous'));
+    fireEvent.click(screen.getByLabelText('Promote person 18'));
+    fireEvent.click(screen.getByLabelText('Archive Local Archived'));
     fireEvent.click(screen.getByLabelText('Accept family rename to New family name'));
 
     const apply = screen.getByRole('button', { name: 'Apply sync' });
@@ -75,7 +111,7 @@ describe('SyncReview', () => {
       ambiguous: { 'ext-1': 7 },
       skipExternalPersonIds: [],
       visitorChoices: { 'ext-visitor': 'promote' },
-      acceptArchiveIndividualIds: [10, 11],
+      acceptArchiveIndividualIds: [11],
       acceptFamilyRenameIds: ['renameFamily:20'],
     });
   });
@@ -85,7 +121,7 @@ describe('SyncReview', () => {
 
     fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
     expect(screen.getByRole('button', { name: 'Apply sync' })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Archive person 11'));
+    fireEvent.click(screen.getByLabelText('Archive Local Archived'));
     expect(screen.getByRole('button', { name: 'Apply sync' })).toBeEnabled();
   });
 
@@ -120,7 +156,7 @@ describe('SyncReview', () => {
     render(<SyncReview provider="elvanto" review={review} onRefresh={onRefresh} onApply={onApply} applying={false} />);
 
     fireEvent.click(screen.getByLabelText(/I understand that this sync will archive people/));
-    fireEvent.click(screen.getByLabelText('Archive person 11'));
+    fireEvent.click(screen.getByLabelText('Archive Local Archived'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply sync' }));
 
     expect(await screen.findByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
