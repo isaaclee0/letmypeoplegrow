@@ -203,7 +203,7 @@ function backfillProviderNeutralSync(db, churchId) {
        default_people_type, gathering_type_id, gathering_auto_remove_enabled,
        schedule_enabled, schedule_frequency, schedule_day, legacy_provider_batch_id,
        last_sync_at, last_sync_result)
-     VALUES (?, 'planning_center', ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, 'planning_center', ?, 0, 1, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
   );
   for (const row of legacyBatches) {
     const filterConfig = JSON.stringify({
@@ -219,7 +219,6 @@ function backfillProviderNeutralSync(db, churchId) {
       row.default_people_type || 'regular',
       row.gathering_type_id,
       row.gathering_auto_remove_enabled || 0,
-      row.schedule_enabled || 0,
       row.schedule_frequency || 'weekly',
       row.schedule_day === null || row.schedule_day === undefined ? 1 : row.schedule_day,
       row.id,
@@ -227,6 +226,11 @@ function backfillProviderNeutralSync(db, churchId) {
       row.last_sync_result
     );
   }
+
+  db.prepare(`UPDATE people_sync_batches
+    SET enabled = 0, schedule_enabled = 0, updated_at = datetime('now')
+    WHERE church_id = ? AND provider = 'planning_center' AND legacy_provider_batch_id IS NOT NULL`
+  ).run(churchId);
 
   // Existing PCO schedules ran unattended before provider-neutral authority
   // was introduced. Infer that authority once so a deployment cannot silently

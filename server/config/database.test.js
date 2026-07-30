@@ -345,12 +345,17 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     ).get(churchId, 'planning_center', legacyBatchId);
 
     assert.ok(firstGenericBatch, 'legacy PCO batch should be represented by one generic batch');
+    firstStartup.prepare(
+      `UPDATE people_sync_batches
+       SET enabled = 1, schedule_enabled = 1
+       WHERE id = ?`
+    ).run(firstGenericBatch.id);
 
     Database.closeAll();
     Database.initialize();
     const migrated = Database.getChurchDb(churchId);
     const genericBatches = migrated.prepare(
-      'SELECT id, schedule_enabled, schedule_frequency, schedule_day FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
+      'SELECT id, enabled, schedule_enabled, schedule_frequency, schedule_day FROM people_sync_batches WHERE church_id = ? AND provider = ? AND legacy_provider_batch_id = ?'
     ).all(churchId, 'planning_center', legacyBatchId);
     const existingV1Batch = migrated.prepare(
       `SELECT filter_schema_version, filter_config, filter_revision, schedule_enabled, schedule_frequency, schedule_day,
@@ -363,7 +368,9 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
 
     assert.strictEqual(genericBatches.length, 1, 'restart must not duplicate the generic batch');
     assert.strictEqual(genericBatches[0].id, firstGenericBatch.id, 'restart must preserve the generic batch identity');
-    assert.strictEqual(genericBatches[0].schedule_enabled, 1);
+    assert.deepStrictEqual(genericBatches.map(({ enabled, schedule_enabled }) => ({ enabled, schedule_enabled })), [
+      { enabled: 0, schedule_enabled: 0 },
+    ]);
     assert.strictEqual(genericBatches[0].schedule_frequency, 'monthly');
     assert.strictEqual(genericBatches[0].schedule_day, 4);
     assert.equal(migratedBatchColumns.get('filter_revision').dflt_value, '1');
@@ -385,8 +392,7 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM people_sync_settings WHERE church_id = ?').get(churchId).count, 1);
     assert.deepStrictEqual(
       migrated.prepare('SELECT authority_provider, pending_authority_provider FROM people_sync_settings WHERE church_id = ?').get(churchId),
-      { authority_provider: 'planning_center', pending_authority_provider: null },
-      'an existing scheduled PCO church must keep unattended sync running after migration'
+      { authority_provider: 'planning_center', pending_authority_provider: null }
     );
     assert.strictEqual(migrated.prepare('SELECT COUNT(*) AS count FROM planning_center_sync_batches WHERE church_id = ?').get(churchId).count, 1);
     assert.deepStrictEqual(
