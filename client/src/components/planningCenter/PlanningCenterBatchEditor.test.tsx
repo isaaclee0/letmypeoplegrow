@@ -15,15 +15,16 @@ describe('PlanningCenterBatchEditor', () => {
   it('creates from one selected List and leaves the batch pending review', async () => {
     const created = { ...batch, id: 8, source: { ...batch.source!, externalId: 'list-2', name: 'New members' }, needsSourceReview: true, initialSourceReviewPending: true };
     vi.mocked(integrationsAPI.createPlanningCenterSyncBatch).mockResolvedValue({ data: { batch: created } }); const saved = vi.fn(); renderEditor(null, saved);
-    fireEvent.change(screen.getByLabelText('Batch name'), { target: { value: 'New members' } }); fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } }); fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
-    await waitFor(() => expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith(expect.objectContaining({ name: 'New members', sourceKind: 'planning_center_list', sourceExternalId: 'list-2' })));
+    expect(screen.queryByLabelText('Batch name')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } }); fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+    await waitFor(() => expect(integrationsAPI.createPlanningCenterSyncBatch).toHaveBeenCalledWith({ sourceKind: 'planning_center_list', sourceExternalId: 'list-2', defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1 }));
     expect(saved).toHaveBeenCalledWith(expect.objectContaining({ needsSourceReview: true }));
   });
   it('saves settings without a source draft when the source identity is unchanged', async () => {
     vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch } }); const saved = vi.fn(); renderEditor(batch, saved); fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
-    await waitFor(() => expect(integrationsAPI.updatePlanningCenterSyncBatch).toHaveBeenCalledWith(4, expect.not.objectContaining({ sourceKind: expect.anything(), sourceExternalId: expect.anything() }))); expect(peopleSyncAPI.saveSourceDraft).not.toHaveBeenCalled(); expect(saved).toHaveBeenCalledWith(batch);
+    await waitFor(() => expect(integrationsAPI.updatePlanningCenterSyncBatch).toHaveBeenCalledWith(4, { defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false, scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1 })); expect(peopleSyncAPI.saveSourceDraft).not.toHaveBeenCalled(); expect(saved).toHaveBeenCalledWith(batch);
   });
-  it('saves a source draft only when identity changes, not after a display-name-only rename', async () => {
+  it('saves a source draft only when source identity changes', async () => {
     vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch } }); vi.mocked(peopleSyncAPI.saveSourceDraft).mockResolvedValue({ data: { batch: { ...batch, needsSourceReview: true } } }); renderEditor(); fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } }); fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
     await waitFor(() => expect(peopleSyncAPI.saveSourceDraft).toHaveBeenCalledWith('planning_center', 4, { sourceKind: 'planning_center_list', sourceExternalId: 'list-2' }));
   });

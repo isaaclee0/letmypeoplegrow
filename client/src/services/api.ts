@@ -859,7 +859,6 @@ export const settingsAPI = {
 };
 
 export interface PlanningCenterSyncBatchInput {
-  name: string;
   sourceKind: 'planning_center_list';
   sourceExternalId: string;
   defaultPeopleType: 'regular' | 'local_visitor' | 'traveller_visitor';

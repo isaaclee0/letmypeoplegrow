@@ -22,7 +22,6 @@ function errorMessage(error: unknown, fallback: string): string {
 
 export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved, onCancel }: Props) {
   const [currentBatch, setCurrentBatch] = useState<PeopleSyncBatch | null>(initialBatch);
-  const [name, setName] = useState(initialBatch?.name ?? '');
   const [defaultPeopleType, setDefaultPeopleType] = useState<PeopleType>(initialBatch?.defaultPeopleType ?? 'regular');
   const [gatherings, setGatherings] = useState<GatheringOption[]>([]);
   const [gatheringMode, setGatheringMode] = useState<'none' | 'existing' | 'new'>(initialBatch?.gatheringTypeId ? 'existing' : 'none');
@@ -49,7 +48,6 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
 
   const save = async () => {
     setError(null);
-    if (!name.trim()) { setError('Enter a batch name.'); return; }
     if (!selection) { setError('Choose a people source.'); return; }
     if (scheduleEnabled && (scheduleFrequency === 'weekly' && (scheduleDay < 0 || scheduleDay > 6) || scheduleFrequency === 'monthly' && (scheduleDay < 1 || scheduleDay > 31))) { setError('Choose a valid schedule day.'); return; }
     setSaving(true);
@@ -63,7 +61,7 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
         else { const created = await gatheringsAPI.create({ name: newGatheringName.trim(), attendanceType: 'standard', dayOfWeek: 'Sunday', startTime: '10:00', frequency: 'weekly' }); finalGatheringTypeId = created.data.id ?? null; if (finalGatheringTypeId) { savedGathering = { id: finalGatheringTypeId, name: newGatheringName.trim() }; setCreatedGathering(savedGathering); } }
         if (!finalGatheringTypeId) { setError('Failed to create the new gathering.'); return; }
       }
-      const common = { name: name.trim(), defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
+      const common = { defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
       if (!currentBatch) { const created = await integrationsAPI.createPlanningCenterSyncBatch({ ...common, ...selection } as CreatePayload); onSaved(created.data.batch); return; }
       try { await integrationsAPI.updatePlanningCenterSyncBatch(currentBatch.id, common as PlanningCenterSyncBatchPatch); }
       catch (cause) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${errorMessage(cause, 'Failed to save batch settings.')}` : errorMessage(cause, 'Failed to save batch settings.')); return; }
@@ -75,7 +73,6 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
   };
 
   return <div className="space-y-5 rounded-md border border-gray-200 p-4 dark:border-gray-700">
-    <div><label htmlFor="pco-batch-name" className="mb-1 block text-sm font-medium">Batch name</label><input id="pco-batch-name" value={name} onChange={e => setName(e.target.value)} className="w-full rounded-md border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-700" /></div>
     <BatchSourceControls provider="planning_center" batch={currentBatch} value={selection} onChange={setSelection} onDiscarded={(state: PeopleSyncSourceState) => { const next = { ...currentBatch!, ...state }; setCurrentBatch(next); setSelection(next.source ? { sourceKind: next.source.kind, sourceExternalId: next.source.externalId } : null); }} />
     <div><label className="mb-1 block text-sm font-medium" htmlFor="pco-people-type">New people from this batch are added as</label><select id="pco-people-type" value={defaultPeopleType} onChange={e => setDefaultPeopleType(e.target.value as PeopleType)}><option value="regular">Regulars</option><option value="local_visitor">Local visitors</option><option value="traveller_visitor">Traveller visitors</option></select></div>
     <div><label className="mb-1 block text-sm font-medium" htmlFor="pco-gathering-mode">Add everyone from this batch to a gathering</label><select id="pco-gathering-mode" aria-label="Gathering assignment" value={gatheringMode} onChange={e => { const mode = e.target.value as 'none' | 'existing' | 'new'; setGatheringMode(mode); setCreatedGathering(null); if (mode === 'none') setGatheringAutoRemoveEnabled(false); }}><option value="none">Don't assign a gathering</option><option value="existing">Existing gathering</option><option value="new">Create a new gathering</option></select>{gatheringMode === 'existing' && <select aria-label="Existing gathering" value={gatheringTypeId ?? ''} onChange={e => setGatheringTypeId(e.target.value ? Number(e.target.value) : null)}><option value="">Choose…</option>{gatherings.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select>}{gatheringMode === 'new' && <input aria-label="New gathering name" value={newGatheringName} onChange={e => { setNewGatheringName(e.target.value); setCreatedGathering(null); }} placeholder="New gathering name" />}</div>
