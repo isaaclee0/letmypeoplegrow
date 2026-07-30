@@ -112,9 +112,13 @@ async function saveSourceDraft({ churchId, provider, batchId, source }) {
   assertPlanningCenterBatchOperational(await getBatch(churchId, provider, batchId));
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
     SET draft_source_kind = ?, draft_source_external_id = ?, draft_source_name = ?,
+      name = CASE
+        WHEN provider = 'elvanto' AND source_external_id IS NULL THEN ?
+        ELSE name
+      END,
       draft_source_base_revision = source_revision, draft_source_updated_at = datetime('now'), updated_at = datetime('now')
     WHERE id = ? AND church_id = ? AND provider = ?`, [
-    normalized.kind, normalized.externalId, normalized.name, batchId, churchId, provider,
+    normalized.kind, normalized.externalId, normalized.name, normalized.name, batchId, churchId, provider,
   ]);
   return result.affectedRows > 0 ? getBatch(churchId, provider, batchId) : null;
 }

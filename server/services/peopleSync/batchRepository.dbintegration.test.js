@@ -70,6 +70,48 @@ test('saving a source draft captures the active revision and a normal draft can 
   });
 });
 
+test('replacing an Elvanto initial source draft derives the batch name from the replacement', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const members = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
+    const youth = { kind: 'elvanto_group', externalId: 'youth', name: 'Youth' };
+    const batch = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: members,
+    });
+
+    const saved = await saveSourceDraft({
+      churchId, provider: 'elvanto', batchId: batch.id, source: youth,
+    });
+
+    assert.equal(saved.source, null);
+    assert.deepEqual(saved.draftSource, youth);
+    assert.equal(saved.initialSourceReviewPending, true);
+    assert.equal(saved.name, 'Youth');
+  });
+});
+
+test('saving an Elvanto replacement draft preserves the active-source batch name', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const members = { kind: 'elvanto_group', externalId: 'members', name: 'Members' };
+    const youth = { kind: 'elvanto_group', externalId: 'youth', name: 'Youth' };
+    const batch = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: members,
+    });
+    await promoteSourceDraftWithConnection(Database.getChurchDb(churchId), {
+      churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(members),
+    });
+
+    const saved = await saveSourceDraft({
+      churchId, provider: 'elvanto', batchId: batch.id, source: youth,
+    });
+
+    assert.deepEqual(saved.source, members);
+    assert.deepEqual(saved.draftSource, youth);
+    assert.equal(saved.initialSourceReviewPending, false);
+    assert.equal(saved.name, 'Members');
+  });
+});
+
 test('an initial source draft cannot be discarded into a runnable batch', async () => {
   await withTestChurchDb(async (churchId) => {
     const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE });
