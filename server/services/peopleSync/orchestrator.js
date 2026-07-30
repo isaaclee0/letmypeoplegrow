@@ -64,6 +64,7 @@ const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDige
 const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
+const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, isRetiredPlanningCenterBatch } = require('./legacyBatch');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const BUILD_REVIEW_TRIGGERS = new Set(['onboarding', 'manual', 'full_reconciliation']);
@@ -408,6 +409,9 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   if (batchId !== null && batchId !== undefined) {
     const batch = providerBatches.find((candidate) => candidate.id === batchId);
     if (!batch) throw new OrchestratorError('SYNC_BATCH_NOT_FOUND', `Batch ${batchId} not found for ${provider}`, 404);
+    if (isRetiredPlanningCenterBatch(batch)) {
+      throw new OrchestratorError(LEGACY_BATCH_RETIRED, LEGACY_BATCH_RETIRED_MESSAGE, 409);
+    }
     if (!batch.enabled) throw new OrchestratorError('SYNC_BATCH_DISABLED', `Batch ${batchId} is disabled`, 400);
   }
   const batches = providerBatches.filter((batch) => batch.enabled);

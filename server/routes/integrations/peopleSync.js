@@ -217,6 +217,7 @@ async function defaultListAllRecentRuns(churchId, limit) {
 // is deliberately distinguished from "an error code this table doesn't
 // know about yet" so the two don't read identically.
 const RUN_ERROR_MESSAGES = {
+  PCO_LEGACY_BATCH_RETIRED: 'This legacy Planning Center batch is retired and can only be viewed or deleted.',
   SYNC_PROVIDER_INVALID: 'Unsupported people-sync provider.',
   SYNC_CHURCH_REQUIRED: 'A church context was required.',
   SYNC_NOT_CONNECTED: 'No connection was configured for this provider.',

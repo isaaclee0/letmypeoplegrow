@@ -4,6 +4,7 @@ const logger = require('../config/logger');
 const { projectPerson } = require('./planningCenter/projection');
 const { PcoSourceError } = require('./planningCenter/readClient');
 const batchRepository = require('./peopleSync/batchRepository');
+const { assertPlanningCenterBatchOperational } = require('./peopleSync/legacyBatch');
 
 // ─── PCO people cache ─────────────────────────────────────────────────────────
 // Fetching every person from Planning Center is slow, so the legacy manual people
@@ -413,6 +414,7 @@ async function createBatch(churchId, input) {
 async function updateBatch(churchId, batchId, input) {
   const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
   if (!current) return null;
+  assertPlanningCenterBatchOperational(current);
   const genericUpdate = {
     churchId,
     provider: 'planning_center',
@@ -435,10 +437,27 @@ async function updateBatch(churchId, batchId, input) {
 // NULL, so existing roster rows this batch created are left in place, just
 // un-owned — same "does not unlink or archive anyone" behavior as before.
 async function deleteBatch(churchId, batchId) {
-  const current = await batchRepository.getBatch(churchId, 'planning_center', batchId);
-  if (!current) return false;
-  await batchRepository.deleteBatch(churchId, 'planning_center', batchId);
-  return true;
+  return Database.transactionForChurch(churchId, async (conn) => {
+    const current = await conn.query(
+      `SELECT * FROM people_sync_batches
+       WHERE id = ? AND church_id = ? AND provider = 'planning_center'`,
+      [batchId, churchId],
+    );
+    const batch = current[0];
+    if (!batch) return false;
+    await conn.query(
+      `DELETE FROM people_sync_batches
+       WHERE id = ? AND church_id = ? AND provider = 'planning_center'`,
+      [batchId, churchId],
+    );
+    if (batch.legacy_provider_batch_id !== null && batch.legacy_provider_batch_id !== undefined) {
+      await conn.query(
+        'DELETE FROM planning_center_sync_batches WHERE id = ? AND church_id = ?',
+        [batch.legacy_provider_batch_id, churchId],
+      );
+    }
+    return true;
+  });
 }
 
 // Persist a batch's sync summary to both the canonical generic row and (while

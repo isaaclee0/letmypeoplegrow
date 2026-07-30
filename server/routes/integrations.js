@@ -4,6 +4,7 @@ const Database = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
 const { ensureChurchIsolation } = require('../middleware/churchIsolation');
 const logger = require('../config/logger');
+const { CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE } = require('../services/peopleSync/legacyBatch');
 const pcoSync = require('../services/planningCenterSync');
 const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
@@ -1459,6 +1460,9 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
 
     res.json({ success: true, batch });
   } catch (error) {
+    if (error?.code === LEGACY_BATCH_RETIRED) {
+      return res.status(409).json({ error: LEGACY_BATCH_RETIRED_MESSAGE, code: error.code });
+    }
     logger.error('Update PCO sync batch error:', error);
     res.status(500).json({ error: 'Failed to update sync batch.' });
   }

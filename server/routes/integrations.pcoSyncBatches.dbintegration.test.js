@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('../services/planningCenterSync');
+const batchRepository = require('../services/peopleSync/batchRepository');
 const integrationsRouter = require('./integrations');
 
 async function withRouteChurchDb(run) {
@@ -87,6 +88,67 @@ test('PCO source-era PUT accepts settings only and never creates legacy compatib
       assert.equal(response.body.batch.name, 'Renamed members');
       const legacy = await Database.query('SELECT * FROM planning_center_sync_batches WHERE church_id = ?', [churchId]);
       assert.deepEqual(legacy, []);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('retired legacy PCO batches cannot be updated and delete both batch rows without removing people or gathering membership', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    const legacyRow = await Database.query(
+      `INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters)
+       VALUES (?, 'Retired legacy members', '[]', '[]')`,
+      [churchId],
+    );
+    const batch = await batchRepository.createBatch({
+      churchId, provider: 'planning_center', name: 'Retired legacy members',
+      legacyProviderBatchId: legacyRow.insertId,
+      initialDraftSource: { kind: 'planning_center_list', externalId: 'legacy-list', name: 'Legacy list' },
+    });
+    const gathering = await Database.query(
+      `INSERT INTO gathering_types (church_id, name) VALUES (?, 'Legacy gathering')`, [churchId],
+    );
+    const person = await Database.query(
+      `INSERT INTO individuals (church_id, first_name, last_name, people_type, is_active)
+       VALUES (?, 'Retained', 'Person', 'regular', 1)`, [churchId],
+    );
+    await Database.query(
+      `INSERT INTO gathering_lists
+        (church_id, gathering_type_id, individual_id, added_by_sync_batch_id, added_by_pco_batch_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [churchId, gathering.insertId, person.insertId, batch.id, legacyRow.insertId],
+    );
+    const app = await startApp(churchId);
+    try {
+      const put = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
+        method: 'PUT', body: settings('Attempted update'),
+      });
+      assert.equal(put.status, 409);
+      assert.deepEqual(put.body, {
+        error: 'This legacy Planning Center batch is retired and can only be viewed or deleted.',
+        code: 'PCO_LEGACY_BATCH_RETIRED',
+      });
+
+      const remove = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, { method: 'DELETE' });
+      assert.equal(remove.status, 200);
+      assert.equal((await Database.query(
+        'SELECT id FROM people_sync_batches WHERE id = ? AND church_id = ?', [batch.id, churchId],
+      )).length, 0);
+      assert.equal((await Database.query(
+        'SELECT id FROM planning_center_sync_batches WHERE id = ? AND church_id = ?', [legacyRow.insertId, churchId],
+      )).length, 0);
+      assert.equal((await Database.query(
+        'SELECT id FROM individuals WHERE id = ? AND church_id = ?', [person.insertId, churchId],
+      )).length, 1);
+      const [membership] = await Database.query(
+        `SELECT id, added_by_sync_batch_id, added_by_pco_batch_id FROM gathering_lists
+         WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?`,
+        [churchId, gathering.insertId, person.insertId],
+      );
+      assert.ok(membership);
+      assert.equal(membership.added_by_sync_batch_id, null);
+      assert.equal(membership.added_by_pco_batch_id, null);
     } finally {
       await app.close();
     }

@@ -356,6 +356,39 @@ test('a mismatched returned stable source is unavailable, marks active health mi
   });
 });
 
+test('legacy Planning Center batches reject all orchestration paths before fetch or run creation', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const legacy = await batchRepository.createBatch({
+      churchId, provider: 'planning_center', name: 'Retired PCO members', legacyProviderBatchId: 77,
+      initialDraftSource: { kind: 'planning_center_list', externalId: '77', name: 'Retired list' },
+    });
+    let fetches = 0;
+    let starts = 0;
+    const overrides = {
+      getConnection: async () => ({ connectionStatus: 'active' }),
+      getCredentials: async () => ({ accessToken: 'test-token' }),
+      getProvider: () => ({ fetchSourceSnapshot: async () => { fetches += 1; return null; } }),
+      startRun: async () => { starts += 1; return { id: 1 }; },
+    };
+    const expected = { code: 'PCO_LEGACY_BATCH_RETIRED', status: 409 };
+
+    await assert.rejects(
+      orchestrator.buildReview({ churchId, provider: 'planning_center', batchId: legacy.id, trigger: 'manual' }, overrides),
+      expected,
+    );
+    await assert.rejects(
+      orchestrator.applyReviewed({ churchId, provider: 'planning_center', batchId: legacy.id, reviewToken: 'retired' }, overrides),
+      expected,
+    );
+    await assert.rejects(
+      orchestrator.runUnattended({ churchId, provider: 'planning_center', batchId: legacy.id }, overrides),
+      expected,
+    );
+    assert.equal(fetches, 0);
+    assert.equal(starts, 0);
+  });
+});
+
 test('source runs ignore a legacy watermark and remain full snapshot reconciliations', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);

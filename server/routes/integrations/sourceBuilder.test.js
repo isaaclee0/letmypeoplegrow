@@ -116,6 +116,33 @@ test('DELETE source draft refuses an initial review and discards a normal draft'
   });
 });
 
+test('legacy Planning Center source-draft routes return their retirement boundary', async () => {
+  const retired = Object.assign(new Error('internal details must not leak'), {
+    code: 'PCO_LEGACY_BATCH_RETIRED', status: 409,
+  });
+  let sourceLookups = 0;
+  await withServer(deps({
+    getBatch: async () => ({ id: 8, provider: 'planning_center', legacyProviderBatchId: 3 }),
+    resolveVisibleSource: async () => { sourceLookups += 1; return source; },
+    saveSourceDraft: async () => { throw retired; },
+    discardSourceDraft: async () => { throw retired; },
+  }), ADMIN, async (base) => {
+    const put = await request(`${base}/planning_center/sync-batches/8/source-draft`, {
+      method: 'PUT', body: { sourceKind: source.kind, sourceExternalId: source.externalId },
+    });
+    const remove = await request(`${base}/planning_center/sync-batches/8/source-draft`, { method: 'DELETE' });
+    const expected = {
+      error: 'This legacy Planning Center batch is retired and can only be viewed or deleted.',
+      code: 'PCO_LEGACY_BATCH_RETIRED',
+    };
+    assert.equal(put.status, 409);
+    assert.deepEqual(put.body, expected);
+    assert.equal(remove.status, 409);
+    assert.deepEqual(remove.body, expected);
+  });
+  assert.equal(sourceLookups, 0);
+});
+
 test('the source parser wins over a broader app parser and returns the source-specific body-limit response', async () => {
   const app = express();
   app.use('/providers', createSourceBuilderJsonParser());

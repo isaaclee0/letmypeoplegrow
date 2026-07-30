@@ -1,5 +1,6 @@
 const Database = require('../../config/database');
 const { assertSourceForProvider, normalizeProviderSource, digestSourceIdentity } = require('./sourceModel');
+const { assertPlanningCenterBatchOperational } = require('./legacyBatch');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -108,6 +109,7 @@ async function createBatch(input) {
 async function saveSourceDraft({ churchId, provider, batchId, source }) {
   assertProvider(provider);
   const normalized = normalizeProviderSource(provider, source);
+  assertPlanningCenterBatchOperational(await getBatch(churchId, provider, batchId));
   const result = await Database.queryForChurch(churchId, `UPDATE people_sync_batches
     SET draft_source_kind = ?, draft_source_external_id = ?, draft_source_name = ?,
       draft_source_base_revision = source_revision, draft_source_updated_at = datetime('now'), updated_at = datetime('now')
@@ -120,6 +122,7 @@ async function saveSourceDraft({ churchId, provider, batchId, source }) {
 async function discardSourceDraft(churchId, provider, batchId) {
   assertProvider(provider);
   const current = await getBatch(churchId, provider, batchId);
+  assertPlanningCenterBatchOperational(current);
   if (current?.initialSourceReviewPending) {
     const error = new Error('The initial source must be reviewed before this batch can run.');
     error.code = 'SYNC_SOURCE_INITIAL_REVIEW_REQUIRED';
@@ -144,6 +147,7 @@ async function promoteSourceDraftWithConnection(conn, {
     : conn.prepare(sql).run(...params);
   const row = await readOne(`SELECT * FROM people_sync_batches
     WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
+  assertPlanningCenterBatchOperational(toBatch(row));
   const draft = row ? sourceFromColumns(row, 'draft_') : null;
   if (!row || !draft || row.source_revision !== expectedBaseRevision ||
       row.draft_source_base_revision !== expectedBaseRevision ||

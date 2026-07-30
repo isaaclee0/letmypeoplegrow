@@ -77,6 +77,34 @@ test('an initial source draft cannot be discarded into a runnable batch', async 
   });
 });
 
+test('legacy Planning Center batches reject every source-draft mutation', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const legacy = await createBatch({
+      churchId, provider: 'planning_center', name: 'Retired PCO members',
+      legacyProviderBatchId: 91, initialDraftSource: PCO_SOURCE,
+    });
+    const errorMatches = (error) => error?.code === 'PCO_LEGACY_BATCH_RETIRED' && error?.status === 409;
+
+    await assert.rejects(
+      saveSourceDraft({ churchId, provider: 'planning_center', batchId: legacy.id, source: PCO_SOURCE }),
+      errorMatches,
+    );
+    await assert.rejects(discardSourceDraft(churchId, 'planning_center', legacy.id), errorMatches);
+    await assert.rejects(
+      promoteSourceDraftWithConnection(Database.getChurchDb(churchId), {
+        churchId, provider: 'planning_center', batchId: legacy.id,
+        expectedBaseRevision: legacy.draftSourceBaseRevision,
+        expectedDraftDigest: digestSourceIdentity(legacy.draftSource),
+      }),
+      errorMatches,
+    );
+
+    const unchanged = await getBatch(churchId, 'planning_center', legacy.id);
+    assert.deepEqual(unchanged.draftSource, PCO_SOURCE);
+    assert.equal(unchanged.legacyProviderBatchId, 91);
+  });
+});
+
 test('source draft promotion is compare-and-swap guarded and clears the reviewed draft', async () => {
   await withTestChurchDb(async (churchId) => {
     const otherChurchId = `${churchId}_other`;

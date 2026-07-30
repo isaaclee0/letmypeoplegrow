@@ -9,6 +9,9 @@ const connectionStore = require('../../services/peopleSync/connectionStore');
 const batchRepository = require('../../services/peopleSync/batchRepository');
 const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
 const { SOURCE_KINDS_BY_PROVIDER } = require('../../services/peopleSync/sourceModel');
+const {
+  CODE: LEGACY_BATCH_RETIRED, MESSAGE: LEGACY_BATCH_RETIRED_MESSAGE, assertPlanningCenterBatchOperational,
+} = require('../../services/peopleSync/legacyBatch');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const MAX_BODY_BYTES = 16 * 1024;
@@ -83,6 +86,7 @@ function createJsonParser() {
 function respondError(res, error, label) {
   if (error?.code === 'SYNC_SOURCE_UNAVAILABLE') return res.status(409).json({ error: 'The requested sync source is unavailable. Reconnect the provider and try again.', code: error.code });
   if (error?.code === 'SYNC_SOURCE_INITIAL_REVIEW_REQUIRED') return res.status(409).json({ error: 'The initial source must be reviewed before this batch can run.', code: error.code });
+  if (error?.code === LEGACY_BATCH_RETIRED) return res.status(409).json({ error: LEGACY_BATCH_RETIRED_MESSAGE, code: error.code });
   logger.error(`${label}: ${error?.message}`, { stack: error?.stack });
   return res.status(500).json({ error: 'Unable to complete this sync source request.' });
 }
@@ -126,7 +130,9 @@ function createSourceBuilderRouter(overrides = {}) {
     if (batchId === null || !validSourceBody(req.body, provider)) return res.status(400).json({ error: 'Invalid sync source request.', code: 'SYNC_SOURCE_INVALID' });
     const churchId = req.user.church_id;
     try {
-      if (!(await deps.getBatch(churchId, provider, batchId))) return res.status(404).json({ error: 'Sync batch not found.' });
+      const existing = await deps.getBatch(churchId, provider, batchId);
+      if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
+      assertPlanningCenterBatchOperational(existing);
       const resolved = await deps.resolveVisibleSource({ churchId, provider, sourceKind: req.body.sourceKind, sourceExternalId: req.body.sourceExternalId });
       const batch = await deps.saveSourceDraft({ churchId, provider, batchId, source: { kind: resolved.kind, externalId: resolved.externalId, name: resolved.name } });
       return res.json({ success: true, batch: safeBatch(batch) });
@@ -139,7 +145,9 @@ function createSourceBuilderRouter(overrides = {}) {
     if (batchId === null) return res.status(400).json({ error: 'Invalid sync source request.', code: 'SYNC_SOURCE_INVALID' });
     const churchId = req.user.church_id;
     try {
-      if (!(await deps.getBatch(churchId, provider, batchId))) return res.status(404).json({ error: 'Sync batch not found.' });
+      const existing = await deps.getBatch(churchId, provider, batchId);
+      if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
+      assertPlanningCenterBatchOperational(existing);
       return res.json({ success: true, batch: safeBatch(await deps.discardSourceDraft(churchId, provider, batchId)) });
     } catch (error) { return respondError(res, error, 'discard sync source draft'); }
   });
