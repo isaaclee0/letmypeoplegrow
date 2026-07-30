@@ -208,7 +208,8 @@ test('backfillProviderNeutralSync preserves legacy PCO links and roster provenan
     assert.equal(batches[0].default_people_type, 'local_visitor');
     assert.equal(batches[0].gathering_type_id, gatheringId);
     assert.equal(batches[0].gathering_auto_remove_enabled, 1);
-    assert.equal(batches[0].schedule_enabled, 1);
+    assert.equal(batches[0].enabled, 0);
+    assert.equal(batches[0].schedule_enabled, 0);
     assert.equal(batches[0].schedule_frequency, 'monthly');
     assert.equal(batches[0].schedule_day, 4);
     assert.equal(batches[0].last_sync_at, '2026-07-20T00:00:00Z');
