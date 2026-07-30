@@ -46,6 +46,80 @@ test('uses an existing durable link before considering a conflicting name', () =
   });
 });
 
+test('an exclusion removes only the exact candidate pair', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith'), local(8, 'Alex', 'Smith')],
+    excludedPairs: new Set(['ext-1\u00007']),
+  }));
+
+  assert.deepEqual(result.matches.map((row) => row.individualId), [8]);
+});
+
+test('exclusions apply to visitor and archived review candidates', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [
+      local(7, 'Alex', 'Smith', { peopleType: 'local_visitor' }),
+      local(8, 'Alex', 'Smith', { isActive: false }),
+    ],
+    excludedPairs: new Set(['ext-1\u00007']),
+  }));
+
+  assert.deepEqual(result.archivedMatches, [{ externalPersonId: 'ext-1', individualId: 8 }]);
+  assert.deepEqual(result.visitorMatches, []);
+});
+
+test('all excluded candidates leave the external person unmatched', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith')],
+    excludedPairs: new Set(['ext-1\u00007']),
+  }));
+
+  assert.deepEqual(result.unmatchedExternalIds, ['ext-1']);
+  assert.deepEqual(result.matches, []);
+});
+
+test('a held deterministic match is returned for review instead of automatic linking', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith')],
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.matches, []);
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'ext-1', candidateIndividualIds: [7], reason: 'review_deferred',
+  }]);
+});
+
+test('a held unmatched person is returned for review without an add proposal', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [],
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.unmatchedExternalIds, []);
+  assert.deepEqual(result.ambiguous, [{
+    externalPersonId: 'ext-1', candidateIndividualIds: [], reason: 'review_deferred',
+  }]);
+});
+
+test('a durable link retains precedence over a hold and exclusion', () => {
+  const result = matchPeople(input({
+    externalPeople: [external('ext-1', 'Alex', 'Smith')],
+    localPeople: [local(7, 'Alex', 'Smith')],
+    existingLinks: [{ externalPersonId: 'ext-1', individualId: 7 }],
+    excludedPairs: new Set(['ext-1\u00007']),
+    heldExternalIds: new Set(['ext-1']),
+  }));
+
+  assert.deepEqual(result.linked, [{ individualId: 7, externalPersonId: 'ext-1', reason: 'existing_link' }]);
+  assert.deepEqual(result.ambiguous, []);
+});
+
 test('matches a unique normalized name and ignores email and mobile values', () => {
   const result = matchPeople(input({
     externalPeople: [external('e1', 'Jos\u00e9', "O\u2019Brien-Smith", {

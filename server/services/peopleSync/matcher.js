@@ -12,6 +12,14 @@ function compareNumericId(left, right) {
   return Number(left.id) - Number(right.id);
 }
 
+function pairKey(externalPersonId, individualId) {
+  return `${stableString(externalPersonId)}\u0000${Number(individualId)}`;
+}
+
+function candidateAllowed(externalPersonId, localPerson, excludedPairs) {
+  return !excludedPairs.has(pairKey(externalPersonId, localPerson.id));
+}
+
 function normalizeName(value) {
   return stableString(value)
     .normalize('NFKD')
@@ -171,11 +179,12 @@ function isVisitorActive(person) {
   return person.isActive !== false && !isRegularActive(person);
 }
 
-function regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext) {
+function regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext, excludedPairs) {
   const key = nameKey(externalPerson);
   if (!key) return { candidates: [], proposal: null };
   let candidates = (regularByName.get(key) || [])
-    .filter((person) => !reservedLocalIds.has(Number(person.id)));
+    .filter((person) => !reservedLocalIds.has(Number(person.id)))
+    .filter((person) => candidateAllowed(externalPerson.id, person, excludedPairs));
   if (candidates.length === 1) return { candidates, proposal: { person: candidates[0], reason: 'unique_name' } };
 
   if (candidates.length > 1 && typeof externalPerson.child === 'boolean') {
@@ -200,10 +209,13 @@ function regularDecision(externalPerson, regularByName, reservedLocalIds, family
   return { candidates, proposal: null };
 }
 
-function reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds) {
+function reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds, excludedPairs) {
   const key = nameKey(externalPerson);
   if (!key) return { candidates: [], proposal: null };
-  const available = (person) => !reservedLocalIds.has(Number(person.id));
+  const available = (person) => (
+    !reservedLocalIds.has(Number(person.id))
+    && candidateAllowed(externalPerson.id, person, excludedPairs)
+  );
   const visitors = (visitorByName.get(key) || []).filter(available);
   const archived = (archivedByName.get(key) || []).filter(available);
   const candidates = [...visitors, ...archived].sort(compareNumericId);
@@ -227,6 +239,8 @@ function contentionByLocal(proposals) {
 function matchPeople(input) {
   const { externalPeople, duplicateExternalIds } = prepareExternalPeople(input?.externalPeople);
   const localPeople = uniquePeopleById(input?.localPeople || [], compareNumericId);
+  const excludedPairs = input?.excludedPairs instanceof Set ? input.excludedPairs : new Set(input?.excludedPairs || []);
+  const heldExternalIds = new Set([...(input?.heldExternalIds || [])].map(stableString));
   const externalById = new Map(externalPeople.map((person) => [stableString(person.id), person]));
   const localById = new Map(localPeople.map((person) => [Number(person.id), person]));
   const { validByExternal, conflictedByExternal, staleByExternal, reservedLocalIds } = buildDurableLinks(
@@ -267,14 +281,14 @@ function matchPeople(input) {
   for (const externalPerson of externalPeople) {
     const externalPersonId = stableString(externalPerson.id);
     if (excludedExternalIds.has(externalPersonId)) continue;
-    const decision = regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext);
+    const decision = regularDecision(externalPerson, regularByName, reservedLocalIds, familyContext, excludedPairs);
     regularDecisions.set(externalPersonId, decision);
     if (decision.proposal) {
       regularProposals.set(externalPersonId, decision.proposal);
       continue;
     }
     if (decision.candidates.length === 0) {
-      const review = reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds);
+      const review = reviewDecision(externalPerson, visitorByName, archivedByName, reservedLocalIds, excludedPairs);
       reviewDecisions.set(externalPersonId, review);
       if (review.proposal) reviewProposals.set(externalPersonId, review.proposal);
     }
@@ -330,6 +344,19 @@ function matchPeople(input) {
       continue;
     }
 
+    const decision = regularDecisions.get(externalPersonId);
+    const review = reviewDecisions.get(externalPersonId);
+    if (heldExternalIds.has(externalPersonId)) {
+      const candidates = decision?.candidates.length > 0 ? decision.candidates : review?.candidates || [];
+      result.ambiguous.push({
+        externalPersonId,
+        candidateIndividualIds: candidates.map((person) => Number(person.id)),
+        reason: 'review_deferred',
+      });
+      usedExternalIds.add(externalPersonId);
+      continue;
+    }
+
     const key = nameKey(externalPerson);
     if (!key) {
       result.unmatchedExternalIds.push(externalPersonId);
@@ -337,7 +364,6 @@ function matchPeople(input) {
       continue;
     }
 
-    const decision = regularDecisions.get(externalPersonId);
     if (decision?.proposal) {
       const { person, reason } = decision.proposal;
       if (isContended(regularContention, person)) {
@@ -363,9 +389,9 @@ function matchPeople(input) {
       continue;
     }
 
-    const review = reviewDecisions.get(externalPersonId) || { candidates: [], proposal: null };
-    if (review.proposal) {
-      const { person, bucket } = review.proposal;
+    const reviewDecisionResult = review || { candidates: [], proposal: null };
+    if (reviewDecisionResult.proposal) {
+      const { person, bucket } = reviewDecisionResult.proposal;
       if (isContended(reviewContention, person)) {
         result.ambiguous.push({
           externalPersonId,
@@ -388,10 +414,10 @@ function matchPeople(input) {
       continue;
     }
 
-    if (review.candidates.length > 1) {
+    if (reviewDecisionResult.candidates.length > 1) {
       result.ambiguous.push({
         externalPersonId,
-        candidateIndividualIds: review.candidates.map((person) => Number(person.id)),
+        candidateIndividualIds: reviewDecisionResult.candidates.map((person) => Number(person.id)),
         reason: 'review_candidates',
       });
     } else {
