@@ -44,7 +44,7 @@ const { OrchestratorError } = orchestrator;
 const PROVIDER = 'elvanto';
 
 const BATCH_BODY_ALLOWED = new Set([
-  'name', 'enabled', 'sourceKind', 'sourceExternalId', 'defaultPeopleType',
+  'enabled', 'sourceKind', 'sourceExternalId', 'defaultPeopleType',
   'gatheringTypeId', 'gatheringAutoRemoveEnabled', 'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
 ]);
 const VALID_PEOPLE_TYPES = new Set(['regular', 'local_visitor', 'traveller_visitor']);
@@ -82,9 +82,9 @@ function validateScheduleDayForFrequency(frequency, day) {
 }
 
 // Strict allow-list + type validator for a sync-batch request body, shared
-// by create (full body, name required, `current` is
-// CREATE_SCHEDULE_DEFAULTS) and update (partial patch, name only validated
-// if supplied, `current` is the existing stored batch — batchRepository.
+// by create (full body, source required, `current` is
+// CREATE_SCHEDULE_DEFAULTS) and update (partial patch, source fields are
+// forbidden, `current` is the existing stored batch — batchRepository.
 // updateBatch itself merges a partial patch over the existing row, see its
 // own header note). Mirrors the existing PCO `validateBatchBody` in
 // routes/integrations.js in spirit (a pure function returning `null` or a
@@ -102,15 +102,10 @@ function validateScheduleDayForFrequency(frequency, day) {
 // impossible pair (weekly only ever matches day 0-6), and
 // scheduler.isDueToday would then never fire for that batch again, with no
 // error anywhere.
-function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAULTS } = {}) {
+function validateBatchBody(body, { create = false, current = CREATE_SCHEDULE_DEFAULTS } = {}) {
   if (!isPlainObject(body)) return 'Request body must be an object.';
   for (const key of Object.keys(body)) {
     if (!BATCH_BODY_ALLOWED.has(key)) return `Unknown batch field: ${key}`;
-  }
-  if (body.name !== undefined) {
-    if (typeof body.name !== 'string' || !body.name.trim()) return 'A batch name is required.';
-  } else if (requireName) {
-    return 'A batch name is required.';
   }
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') return 'enabled must be a boolean.';
   if (body.defaultPeopleType !== undefined && !VALID_PEOPLE_TYPES.has(body.defaultPeopleType)) return 'Invalid defaultPeopleType.';
@@ -125,8 +120,8 @@ function validateBatchBody(body, { requireName, current = CREATE_SCHEDULE_DEFAUL
     return 'Invalid scheduleFrequency.';
   }
   if (body.scheduleDay !== undefined && !Number.isInteger(body.scheduleDay)) return 'scheduleDay must be an integer.';
-  if (requireName && (!SOURCE_KINDS_BY_PROVIDER.elvanto.has(body.sourceKind) || typeof body.sourceExternalId !== 'string' || !body.sourceExternalId.trim())) return 'An Elvanto source is required.';
-  if (!requireName && (Object.hasOwn(body, 'sourceKind') || Object.hasOwn(body, 'sourceExternalId'))) return 'Sync sources must be changed through the source draft endpoint.';
+  if (create && (!SOURCE_KINDS_BY_PROVIDER.elvanto.has(body.sourceKind) || typeof body.sourceExternalId !== 'string' || !body.sourceExternalId.trim())) return 'An Elvanto source is required.';
+  if (!create && (Object.hasOwn(body, 'sourceKind') || Object.hasOwn(body, 'sourceExternalId'))) return 'Sync sources must be changed through the source draft endpoint.';
 
   const resultingFrequency = body.scheduleFrequency !== undefined ? body.scheduleFrequency : current.scheduleFrequency;
   const resultingDay = body.scheduleDay !== undefined ? body.scheduleDay : current.scheduleDay;
@@ -370,13 +365,14 @@ function createElvantoRouter(overrides = {}) {
     const churchId = req.user.church_id;
     try {
       const body = req.body || {};
-      const bodyError = validateBatchBody(body, { requireName: true });
+      const bodyError = validateBatchBody(body, { create: true });
       if (bodyError) return res.status(400).json({ error: bodyError });
 
       const fields = extractBatchFields(body);
       const source = await deps.resolveVisibleSource({ churchId, provider: PROVIDER, sourceKind: body.sourceKind, sourceExternalId: body.sourceExternalId });
       const batch = await deps.createBatch({
         churchId, provider: PROVIDER, ...fields,
+        name: source.name,
         initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
       });
       res.json({ success: true, batch });
@@ -394,7 +390,7 @@ function createElvantoRouter(overrides = {}) {
       if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
 
       const body = req.body || {};
-      const bodyError = validateBatchBody(body, { requireName: false, current: existing });
+      const bodyError = validateBatchBody(body, { current: existing });
       if (bodyError) return res.status(400).json({ error: bodyError });
 
       const fields = extractBatchFields(body);
