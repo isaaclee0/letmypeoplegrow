@@ -141,6 +141,36 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     await waitFor(() => expect(integrationsAPI.deletePlanningCenterSyncBatch).toHaveBeenCalledWith(53));
   });
 
+  it('shows Never run in legacy history when a retired batch has no last run', async () => {
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, id: 53, name: 'Old membership filters', legacyProviderBatchId: 41, lastSyncAt: null }] },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Old membership filters')).toBeInTheDocument();
+    expect(screen.getByText('Last run Never run.')).toBeInTheDocument();
+  });
+
+  it('keeps a rejected retired-batch delete visible and disables repeat confirmation while it is pending', async () => {
+    let rejectDelete: (reason: unknown) => void = () => {};
+    vi.mocked(integrationsAPI.getPlanningCenterSyncBatches).mockResolvedValue({
+      data: { batches: [{ ...batch, id: 53, name: 'Old membership filters', legacyProviderBatchId: 41 }] },
+    });
+    vi.mocked(integrationsAPI.deletePlanningCenterSyncBatch).mockImplementation(() => new Promise((_, reject) => {
+      rejectDelete = reject;
+    }) as never);
+    renderPanel();
+
+    expect(await screen.findByText('Old membership filters')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByText('Old membership filters').closest('li')!).getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete retired batch' }));
+    expect(screen.getByRole('button', { name: 'Deleting retired batch…' })).toBeDisabled();
+
+    rejectDelete({ response: { data: { error: 'Could not delete this old batch.' } } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete this old batch.');
+    expect(screen.getByRole('button', { name: 'Delete retired batch' })).toBeEnabled();
+  });
+
   it('offers reconnect when stored Planning Center credentials need replacement', async () => {
     // Catches recovery state being rendered as an ordinary first-time connection.
     vi.mocked(integrationsAPI.authorizePlanningCenter).mockResolvedValue({ data: { authUrl: '#pco-oauth' } });

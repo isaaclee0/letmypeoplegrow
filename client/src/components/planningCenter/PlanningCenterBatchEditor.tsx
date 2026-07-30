@@ -3,7 +3,7 @@ import { gatheringsAPI, integrationsAPI, peopleSyncAPI, type PlanningCenterSyncB
 import BatchSourceControls from '../peopleSync/BatchSourceControls';
 import type { PeopleSyncBatch, PeopleSyncSourceState, PeopleType, SourceSelection } from '../peopleSync/types';
 import { ordinalDay } from '../../utils/pcoSchedule';
-import { planningCenterBatchErrorMessage } from '../../utils/pcoBatchError';
+import { isRetiredLegacyBatchError, planningCenterBatchErrorMessage, RETIRED_LEGACY_BATCH_MESSAGE } from '../../utils/pcoBatchError';
 import Modal from '../Modal';
 
 interface GatheringOption { id: number; name: string; }
@@ -54,10 +54,10 @@ export default function PlanningCenterBatchEditor({ batch: initialBatch, onSaved
       const common = { defaultPeopleType, gatheringTypeId: finalGatheringTypeId, gatheringAutoRemoveEnabled: finalGatheringTypeId === null ? false : gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay };
       if (!currentBatch) { const created = await integrationsAPI.createPlanningCenterSyncBatch({ ...common, ...selection } as CreatePayload); onSaved(created.data.batch); return; }
       try { await integrationsAPI.updatePlanningCenterSyncBatch(currentBatch.id, common as PlanningCenterSyncBatchPatch); }
-      catch (cause) { setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')}` : planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')); return; }
+      catch (cause) { if (isRetiredLegacyBatchError(cause)) { setError(RETIRED_LEGACY_BATCH_MESSAGE); return; } setError(savedGathering ? `The gathering was created, but batch settings were not saved: ${planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')}` : planningCenterBatchErrorMessage(cause, 'Failed to save batch settings.')); return; }
       if (!sourceChanged) { onSaved(currentBatch); return; }
       try { const draft = await peopleSyncAPI.saveSourceDraft('planning_center', currentBatch.id, selection); onSaved(draft.data.batch as PeopleSyncBatch); }
-      catch (cause) { setError(`${savedGathering ? 'The gathering was created and ' : ''}Batch settings were saved, but people source draft was not: ${planningCenterBatchErrorMessage(cause, 'Failed to save people source draft.')}`); }
+      catch (cause) { if (isRetiredLegacyBatchError(cause)) { setError(RETIRED_LEGACY_BATCH_MESSAGE); } else { setError(`${savedGathering ? 'The gathering was created and ' : ''}Batch settings were saved, but people source draft was not: ${planningCenterBatchErrorMessage(cause, 'Failed to save people source draft.')}`); } }
     } catch (cause) { setError(savedGathering ? `The gathering was created, but the batch was not saved: ${planningCenterBatchErrorMessage(cause, 'Failed to save sync batch.')}` : planningCenterBatchErrorMessage(cause, 'Failed to save sync batch.')); }
     finally { setSaving(false); }
   };

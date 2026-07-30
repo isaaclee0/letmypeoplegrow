@@ -79,6 +79,8 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
   const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
   const [legacyBatchPendingDelete, setLegacyBatchPendingDelete] = useState<PeopleSyncBatch | null>(null);
+  const [legacyBatchDeleting, setLegacyBatchDeleting] = useState(false);
+  const [legacyBatchDeleteError, setLegacyBatchDeleteError] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [checkinAvailable, setCheckinAvailable] = useState(false);
   const [peopleLinked, setPeopleLinked] = useState(true);
@@ -191,13 +193,17 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   };
 
   const deleteLegacyBatch = async () => {
-    if (!legacyBatchPendingDelete) return;
+    if (!legacyBatchPendingDelete || legacyBatchDeleting) return;
+    setLegacyBatchDeleting(true);
+    setLegacyBatchDeleteError(null);
     try {
       await integrationsAPI.deletePlanningCenterSyncBatch(legacyBatchPendingDelete.id);
       setLegacyBatchPendingDelete(null);
       await reloadAfterBatchMutation();
     } catch (e: any) {
-      setBatchesError(planningCenterBatchErrorMessage(e, 'Failed to delete retired legacy batch.'));
+      setLegacyBatchDeleteError(planningCenterBatchErrorMessage(e, 'Failed to delete retired legacy batch.'));
+    } finally {
+      setLegacyBatchDeleting(false);
     }
   };
 
@@ -576,13 +582,11 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                 Prior settings: {batch.scheduleEnabled ? `scheduled ${batch.scheduleFrequency}` : 'manual only'} · {batch.gatheringTypeId ? 'assigned to a gathering' : 'no gathering assignment'} · new people were added as {batch.defaultPeopleType.replace('_', ' ')}.
                               </p>
-                              {batch.lastSyncAt && (
-                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                  Last run {new Date(batch.lastSyncAt).toLocaleString()}{batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}.
-                                </p>
-                              )}
+                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Last run {batch.lastSyncAt ? `${new Date(batch.lastSyncAt).toLocaleString()}${batch.lastSyncResult ? `: ${formatLastSyncResult(batch.lastSyncResult)}` : ''}` : 'Never run'}.
+                              </p>
                             </div>
-                            <button type="button" onClick={() => setLegacyBatchPendingDelete(batch)} className="shrink-0 text-sm underline text-red-600 dark:text-red-400">Delete</button>
+                            <button type="button" onClick={() => { setLegacyBatchPendingDelete(batch); setLegacyBatchDeleteError(null); }} className="shrink-0 text-sm underline text-red-600 dark:text-red-400">Delete</button>
                           </div>
                         </li>
                       ))}
@@ -720,14 +724,15 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
 
       <Modal
         isOpen={legacyBatchPendingDelete !== null}
-        onClose={() => setLegacyBatchPendingDelete(null)}
+        onClose={() => { if (!legacyBatchDeleting) { setLegacyBatchPendingDelete(null); setLegacyBatchDeleteError(null); } }}
       >
         <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Delete retired legacy batch?</h3>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">This permanently removes the old batch records. People already imported and gathering assignments already created will remain.</p>
+          {legacyBatchDeleteError && <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{legacyBatchDeleteError}</p>}
           <div className="mt-6 flex gap-3">
-            <button type="button" onClick={() => setLegacyBatchPendingDelete(null)} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">Cancel</button>
-            <button type="button" onClick={() => void deleteLegacyBatch()} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700">Delete retired batch</button>
+            <button type="button" disabled={legacyBatchDeleting} onClick={() => { setLegacyBatchPendingDelete(null); setLegacyBatchDeleteError(null); }} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50">Cancel</button>
+            <button type="button" disabled={legacyBatchDeleting} onClick={() => void deleteLegacyBatch()} className="flex-1 inline-flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:opacity-50">{legacyBatchDeleting ? 'Deleting retired batch…' : 'Delete retired batch'}</button>
           </div>
         </div>
       </Modal>

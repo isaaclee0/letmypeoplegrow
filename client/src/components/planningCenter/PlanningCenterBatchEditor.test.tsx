@@ -53,7 +53,7 @@ describe('PlanningCenterBatchEditor', () => {
     fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('This legacy batch has been retired. Reload the page to view or delete it.');
+    expect((await screen.findByRole('alert')).textContent).toBe('This legacy batch has been retired. Reload the page to view or delete it.');
   });
   it('blocks schedule changes while a source review is pending', async () => {
     renderEditor({ ...batch, draftSource: { ...batch.source!, externalId: 'list-2' }, needsSourceReview: true });
