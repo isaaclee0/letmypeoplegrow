@@ -169,6 +169,7 @@ function knownFamily(person, people, families) {
     if (externalId(member?.familyId) === id) memberIds.add(externalId(member?.id));
   }
   memberIds.delete(externalId(person?.id));
+  if (!family && memberIds.size === 0) return { state: 'unavailable' };
   const otherMembers = sortedMembers(people, memberIds);
   return {
     state: 'known',

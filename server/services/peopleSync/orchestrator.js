@@ -574,6 +574,10 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
           continue;
         }
         eligible.add(id);
+        // A person may have appeared as household-only context in an
+        // earlier source. Once a source owns them as a member, the member
+        // snapshot is authoritative for both matching and review display.
+        contextPeopleById.delete(id);
         seenMemberExternalIds.add(id);
         ineligibleMemberPeopleById.delete(id);
         if (!memberPeopleById.has(id)) {

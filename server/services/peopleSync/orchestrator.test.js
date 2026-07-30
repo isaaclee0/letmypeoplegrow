@@ -319,6 +319,25 @@ test('household context can corroborate a member match but never becomes eligibl
   assert.deepEqual([...presence[0][2]], ['member']);
 });
 
+test('an eligible member displaces an earlier context-only copy in the review directory', async () => {
+  const staleContext = person('shared', { firstName: 'Stale', lastName: 'Context', familyId: null });
+  const currentMember = person('shared', { firstName: 'Current', lastName: 'Member', familyId: null });
+  const { deps } = makeDeps({
+    batches: [batch({ id: 1, source: source('first') }), batch({ id: 2, source: source('second') })],
+    fetchSourceSnapshot: async ({ sourceExternalId }) => sourceExternalId === 'first'
+      ? sourceSnapshot(source('first'), {
+        people: [person('first-member')], memberExternalIds: ['first-member'], contextPeople: [staleContext],
+      })
+      : sourceSnapshot(source('second'), { people: [currentMember], memberExternalIds: ['shared'] }),
+  });
+
+  const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+
+  assert.deepEqual(review.plan.people.external.shared, {
+    firstName: 'Current', lastName: 'Member', family: { state: 'none' },
+  });
+});
+
 test('review signs durable match context and returns a family-aware directory without exposing raw people', async () => {
   const member = person('ext-1', { firstName: 'Alex', lastName: 'Smith', familyId: 'house-1' });
   const context = person('ext-2', { firstName: 'Jamie', lastName: 'Smith', familyId: 'house-1' });
@@ -375,29 +394,51 @@ test('review signs durable match context and returns a family-aware directory wi
   assert.equal(review.plan.people.local['10'].matchEligible, false);
 });
 
-test('reviewed apply rebuilds signed review context before token verification', async () => {
-  const member = person('ext-1', { firstName: 'Alex', lastName: 'Smith', familyId: null });
+test('reviewed apply rejects a rebuilt context when holds, exclusions, candidates, or create data change', async () => {
+  let reviewState = {
+    exclusions: [{ externalPersonId: 'ext-1', individualId: 9 }],
+    holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }],
+  };
+  let fetches = 0;
   let signedDigest;
-  const { deps } = makeDeps({
-    localIndividuals: [{ id: 7, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true }],
-    matchReviewState: { exclusions: [], holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }] },
-    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), { people: [member], memberExternalIds: ['ext-1'] }),
+  const { deps, applied } = makeDeps({
+    localIndividuals: [
+      { id: 7, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+      { id: 8, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+      { id: 9, firstName: 'Alex', lastName: 'Smith', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
+    ],
+    matchReviewState: undefined,
+    fetchSourceSnapshot: async () => {
+      fetches += 1;
+      return sourceSnapshot(source('group-1'), {
+        people: [person('ext-1', { firstName: 'Alex', lastName: 'Smith', familyId: fetches === 1 ? 'house-old' : 'house-new' })],
+        memberExternalIds: ['ext-1'],
+      });
+    },
     extra: {
+      listMatchReviewState: async () => reviewState,
       digestPlan: (plan) => {
         assert.equal(plan.reviewContext?.version, 2);
         return digestPlan(plan);
       },
       createReviewToken: ({ planDigest }) => { signedDigest = planDigest; return `review:${planDigest}`; },
-      verifyReviewToken: (token, { planDigest }) => ({ ok: token === `review:${planDigest}` && planDigest === signedDigest }),
+      verifyReviewToken: (token, { planDigest }) => token === `review:${planDigest}` && planDigest === signedDigest
+        ? { ok: true }
+        : { ok: false, code: 'SYNC_PLAN_STALE' },
     },
   });
 
   const review = await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
-  const result = await applyReviewed({
-    churchId: 'church-a', provider: 'elvanto', reviewToken: review.reviewToken, selections: {}, userId: 1,
-  }, deps);
+  reviewState = {
+    exclusions: [{ externalPersonId: 'ext-1', individualId: 7 }, { externalPersonId: 'ext-1', individualId: 9 }],
+    holds: [],
+  };
 
-  assert.equal(result.status, 'applied');
+  await assert.rejects(
+    applyReviewed({ churchId: 'church-a', provider: 'elvanto', reviewToken: review.reviewToken, selections: {}, userId: 1 }, deps),
+    { code: 'SYNC_PLAN_STALE' }
+  );
+  assert.equal(applied.length, 0);
 });
 
 test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-fetch presence', async () => {
@@ -709,6 +750,8 @@ test('scheduled source sync is full-only, ignores legacy watermarks, persists pr
   assert.ok(events.indexOf('presence') > events.indexOf('apply'));
   assert.equal(finished[0].externalWatermark, null);
   assert.equal(finished[0].sourceProvenance.length, 1);
+  assert.equal(Object.hasOwn(result, 'plan'), false);
+  assert.equal(Object.hasOwn(result, 'decisionContractVersion'), false);
 });
 
 test('previewAuthoritySwitch remains review-only and validates sources before staging mutations', async () => {

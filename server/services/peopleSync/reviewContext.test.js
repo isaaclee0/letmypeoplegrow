@@ -66,6 +66,7 @@ test('builds a lean family directory with explicit household availability and ma
       { id: 'ext-4', firstName: 'Drew', lastName: 'Smith', familyId: 'house-1' },
       { id: 'ext-5', firstName: 'No', lastName: 'Household', familyId: null },
       { id: 'ext-6', firstName: 'Unknown', lastName: 'Household' },
+      { id: 'ext-7', firstName: 'Missing', lastName: 'Household', familyId: 'missing-household' },
     ],
     externalFamilies: [{ id: 'house-1', name: 'Smith Household', memberExternalIds: ['ext-4', 'ext-3', 'ext-2', 'ext-1'] }],
     localPeople: [
@@ -73,6 +74,7 @@ test('builds a lean family directory with explicit household availability and ma
       { id: 8, firstName: 'Jamie', lastName: 'Smith', familyId: 11 },
       { id: 9, firstName: 'No', lastName: 'Family', familyId: null },
       { id: 10, firstName: 'Unknown', lastName: 'Family' },
+      { id: 11, firstName: 'Missing', lastName: 'Family', familyId: 99 },
     ],
     localFamilies: [{ id: 11, familyName: 'Local Smiths' }],
     reviewContext: { manualCandidateIndividualIds: [7, 9] },
@@ -92,6 +94,7 @@ test('builds a lean family directory with explicit household availability and ma
   });
   assert.deepEqual(directory.external['ext-5'].family, { state: 'none' });
   assert.deepEqual(directory.external['ext-6'].family, { state: 'unavailable' });
+  assert.deepEqual(directory.external['ext-7'].family, { state: 'unavailable' });
   assert.deepEqual(directory.local['7'], {
     firstName: 'Alex', lastName: 'Smith', matchEligible: true,
     family: {
@@ -102,6 +105,7 @@ test('builds a lean family directory with explicit household availability and ma
   assert.equal(directory.local['8'].matchEligible, false);
   assert.deepEqual(directory.local['9'].family, { state: 'none' });
   assert.deepEqual(directory.local['10'].family, { state: 'unavailable' });
+  assert.deepEqual(directory.local['11'].family, { state: 'unavailable' });
   assert.equal(JSON.stringify(directory).includes('hidden@example.test'), false);
   assert.equal(JSON.stringify(directory).includes('+6100'), false);
 });
