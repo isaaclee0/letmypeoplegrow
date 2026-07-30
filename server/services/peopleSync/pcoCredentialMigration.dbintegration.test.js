@@ -3,12 +3,16 @@ const assert = require('node:assert/strict');
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const connectionStore = require('./connectionStore');
+const authority = require('./authority');
+const pcoSync = require('../planningCenterSync');
 const {
   PCO_RECONNECT_REQUIRED,
   getOrMigrateCredentials,
   migrateLegacyCredentials,
   ensureFreshCredentials,
   getValidCredentials,
+  replaceConnection,
+  disconnectConnection,
 } = require('./pcoCredentialMigration');
 
 async function withCredentialKey(callback) {
@@ -283,6 +287,154 @@ test('concurrent forced getValidCredentials calls share one refresh for a church
     assert.equal(refreshCalls, 1);
     assert.equal(first.accessToken, 'new-access');
     assert.equal(second.accessToken, 'new-access');
+  }));
+});
+
+test('an expired credential preserves transient token-endpoint outcomes instead of requesting reconnect', async () => {
+  // Catches ensureFreshCredentials flattening the token endpoint's 429,
+  // outage, or transport outcome into null/SYNC_SOURCE_AUTH.
+  const scenarios = [
+    { response: async () => ({ status: 429, data: {} }), code: 'SYNC_SOURCE_RATE_LIMIT' },
+    { response: async () => ({ status: 503, data: {} }), code: 'SYNC_SOURCE_CHECK_FAILED' },
+    { response: async () => { throw new Error('socket reset'); }, code: 'SYNC_SOURCE_CHECK_FAILED' },
+  ];
+
+  for (const scenario of scenarios) {
+    await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+      await connectionStore.upsertConnection({
+        churchId,
+        provider: 'planning_center',
+        authType: 'oauth',
+        credentials: { accessToken: 'expired-access', refreshToken: 'stored-refresh', expiresAt: Date.now() - 1000 },
+      });
+
+      await assert.rejects(
+        () => getValidCredentials(
+          churchId,
+          (refreshToken) => pcoSync.requestPcoTokenRefresh(refreshToken, scenario.response)
+        ),
+        (error) => error.code === scenario.code && error.code !== 'SYNC_SOURCE_AUTH'
+      );
+    }));
+  }
+});
+
+test('a deferred old refresh cannot overwrite a successful OAuth reconnect', async () => {
+  // Catches the refresh response for an old rotating refresh token winning
+  // the persistence race after an admin has completed a new OAuth flow.
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: Date.now() - 1000 },
+    });
+
+    let releaseRefresh;
+    let signalRefreshStarted;
+    const refreshStarted = new Promise((resolve) => { signalRefreshStarted = resolve; });
+    const refresh = ensureFreshCredentials(
+      churchId,
+      await connectionStore.getCredentials(churchId, 'planning_center'),
+      async () => {
+        signalRefreshStarted();
+        await new Promise((resolve) => { releaseRefresh = resolve; });
+        return { accessToken: 'late-old-access', refreshToken: 'late-old-refresh', expiresAt: Date.now() + 7200_000 };
+      }
+    );
+    await refreshStarted;
+
+    const reconnect = replaceConnection({
+      churchId,
+      credentials: { accessToken: 'oauth-access', refreshToken: 'oauth-refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+      metadata: { accountName: 'Reconnected Church' },
+    });
+    // Give a non-serialized/CAS implementation ample opportunity to commit
+    // reconnect before the deliberately late old refresh resolves.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseRefresh();
+    await Promise.all([refresh, reconnect]);
+
+    const stored = await connectionStore.getCredentials(churchId, 'planning_center');
+    assert.equal(stored.accessToken, 'oauth-access');
+    assert.equal(stored.refreshToken, 'oauth-refresh');
+  }));
+});
+
+test('a deferred old refresh cannot resurrect credentials after disconnect', async () => {
+  // Catches a refresh that began before disconnect re-inserting the deleted
+  // integration_connections row when its network response arrives later.
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials: { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: Date.now() - 1000 },
+    });
+
+    let releaseRefresh;
+    let signalRefreshStarted;
+    const refreshStarted = new Promise((resolve) => { signalRefreshStarted = resolve; });
+    const refresh = ensureFreshCredentials(
+      churchId,
+      await connectionStore.getCredentials(churchId, 'planning_center'),
+      async () => {
+        signalRefreshStarted();
+        await new Promise((resolve) => { releaseRefresh = resolve; });
+        return { accessToken: 'late-access', refreshToken: 'late-refresh', expiresAt: Date.now() + 7200_000 };
+      }
+    );
+    await refreshStarted;
+
+    const disconnect = disconnectConnection(churchId);
+    // If disconnect is not serialized, let its deletion finish before the
+    // late refresh response is released so the regression would resurrect.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseRefresh();
+    await Promise.all([refresh, disconnect]);
+
+    assert.equal(await connectionStore.getConnection(churchId, 'planning_center'), null);
+    assert.equal(await countLegacyRows(churchId), 0);
+  }));
+});
+
+test('disconnect racing reviewed PCO activation cannot leave active authority without credentials', async () => {
+  // Catches the disconnect check/delete running outside the church transaction
+  // used by reviewed authority activation.
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await replaceConnection({
+      churchId,
+      credentials: { accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 7200_000 },
+      connectedBy: null,
+    });
+    await Database.queryForChurch(
+      churchId,
+      `UPDATE people_sync_settings
+          SET authority_provider = 'none', pending_authority_provider = 'planning_center'
+        WHERE church_id = ?`,
+      [churchId]
+    );
+
+    let releaseActivation;
+    let signalActivationStarted;
+    const activationStarted = new Promise((resolve) => { signalActivationStarted = resolve; });
+    const activation = Database.transactionForChurch(churchId, async (conn) => {
+      signalActivationStarted();
+      await new Promise((resolve) => { releaseActivation = resolve; });
+      return authority.commitAuthoritySwitchWithConnection(conn, churchId, 'planning_center');
+    });
+    await activationStarted;
+
+    const disconnect = disconnectConnection(churchId);
+    releaseActivation();
+    await activation;
+    await assert.rejects(disconnect, (error) => error.code === 'PCO_AUTHORITY_CONNECTION_REQUIRED');
+
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'planning_center', pending: null });
+    assert.ok(await connectionStore.getConnection(churchId, 'planning_center'));
   }));
 });
 

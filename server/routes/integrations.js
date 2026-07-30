@@ -9,6 +9,7 @@ const { searchPcoPeople } = require('../services/planningCenter/peopleSearch');
 const { hasLinkedPeople, notLinkedResponse } = require('../services/planningCenter/checkinGate');
 const webSocketService = require('../services/websocket');
 const connectionStore = require('../services/peopleSync/connectionStore');
+const pcoCredentialMigration = require('../services/peopleSync/pcoCredentialMigration');
 const {
   INTEGRATION_CREDENTIALS_KEY_INVALID,
   INTEGRATION_CREDENTIAL_DECRYPT_FAILED,
@@ -18,7 +19,6 @@ const { createElvantoRouter } = require('./integrations/elvanto');
 const { createPlanningCenterPeopleSyncRouter } = require('./integrations/planningCenterPeopleSync');
 const { createSourceBuilderRouter } = require('./integrations/sourceBuilder');
 const { resolveVisibleSource } = require('../services/peopleSync/sourceSelection');
-const authority = require('../services/peopleSync/authority');
 
 const router = express.Router();
 
@@ -1002,10 +1002,8 @@ router.get('/planning-center/callback', async (req, res) => {
       logger.warn('PCO connect-time account name lookup failed:', e.message);
     }
 
-    await connectionStore.upsertConnection({
+    await pcoCredentialMigration.replaceConnection({
       churchId: connectChurchId,
-      provider: 'planning_center',
-      authType: 'oauth',
       credentials: {
         accessToken: tokenResponse.access_token,
         refreshToken: tokenResponse.refresh_token,
@@ -1036,31 +1034,16 @@ router.get('/planning-center/callback', async (req, res) => {
 router.post('/planning-center/disconnect', async (req, res) => {
   try {
     const churchId = req.user.church_id;
-    const activeAuthority = await authority.getAuthority(churchId);
-    if (activeAuthority.active === 'planning_center') {
-      return res.status(409).json({
-        error: 'Planning Center is your authoritative people source. Choose another source before disconnecting.',
-      });
-    }
-
     // Church-wide, not scoped to the clicking admin — the connection isn't
     // "theirs" any more than any other admin's, and status/connect are already
     // church-wide (see getChurchPlanningCenterTokens), so disconnect must be too
     // or a non-connecting admin's click would silently no-op.
-    await connectionStore.disconnectConnection(churchId, 'planning_center');
-
-    // Belt-and-suspenders: also clear any legacy (pre-Task-10) per-admin
-    // tokens. This matters even after the migration to integration_connections
-    // — without it, a church that never had its legacy tokens read (so they
-    // were never migrated/deleted, see pcoCredentialMigration.js) could have
-    // its connection "resurrected" by those stale rows the next time
-    // getTokensForChurch runs, right after the admin explicitly disconnected.
-    await Database.query(`
-      DELETE FROM user_preferences
-      WHERE church_id = ? AND preference_key = 'planning_center_tokens'
-    `, [churchId]);
+    await pcoCredentialMigration.disconnectConnection(churchId);
     res.json({ success: true, message: 'Planning Center disconnected successfully.' });
   } catch (error) {
+    if (error instanceof pcoCredentialMigration.PcoAuthorityConnectionRequiredError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     console.error('Disconnect Planning Center error:', error);
     res.status(500).json({ error: 'Failed to disconnect Planning Center.' });
   }

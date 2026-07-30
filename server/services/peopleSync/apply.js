@@ -500,6 +500,24 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // the pending provider changed after review, the switch fails and every
     // person/link/family/gathering mutation above rolls back with it.
     if (activateAuthority) {
+      // A source can be previewed, then disconnected before reviewed apply.
+      // Validate PCO credential existence inside this same reconciliation /
+      // authority transaction so that stale review can never leave active
+      // Planning Center authority with no usable connection row.
+      if (provider === 'planning_center') {
+        const connections = await conn.query(
+          `SELECT 1 AS present
+             FROM integration_connections
+            WHERE church_id = ? AND provider = 'planning_center'
+            LIMIT 1`,
+          [churchId]
+        );
+        if (!connections.length) {
+          const error = new Error('A Planning Center connection is required before it can become the people authority');
+          error.code = 'SYNC_NOT_CONNECTED';
+          throw error;
+        }
+      }
       await authority.commitAuthoritySwitchWithConnection(conn, churchId, provider);
     }
 

@@ -41,6 +41,38 @@ class PcoReconnectRequiredError extends Error {
   }
 }
 
+class PcoAuthorityConnectionRequiredError extends Error {
+  constructor() {
+    super('Planning Center is your authoritative people source or is pending authority review. Choose another source before disconnecting.');
+    this.name = 'PcoAuthorityConnectionRequiredError';
+    this.code = 'PCO_AUTHORITY_CONNECTION_REQUIRED';
+    this.status = 409;
+  }
+}
+
+// Every Planning Center credential mutation for a church uses this queue:
+// legacy migration, OAuth replacement, refresh persistence, and disconnect.
+// Refresh tokens rotate, so ordering only refresh-vs-refresh is insufficient:
+// a late response for the old token must not overwrite a newer OAuth connect
+// or reinsert a row an admin just deleted.
+const credentialMutationQueues = new Map();
+
+async function withCredentialMutation(churchId, operation) {
+  const previous = credentialMutationQueues.get(churchId) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  credentialMutationQueues.set(churchId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (credentialMutationQueues.get(churchId) === current) {
+      credentialMutationQueues.delete(churchId);
+    }
+  }
+}
+
 function parseLegacyTokens(raw) {
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -80,7 +112,13 @@ function credentialFingerprint(credentials) {
 // nothing is written or deleted in that case, leaving the ambiguous legacy
 // data intact for a human (an explicit reconnect writes a definitive fresh
 // row directly, sidestepping the ambiguity).
-async function migrateLegacyCredentials(churchId) {
+async function migrateLegacyCredentialsUnlocked(churchId) {
+  // Another serialized mutation may have installed a definitive OAuth
+  // connection while this migration was waiting. Never replace it with a
+  // legacy per-user value.
+  const existing = await connectionStore.getCredentials(churchId, 'planning_center');
+  if (existing) return existing;
+
   const rows = await Database.queryForChurch(
     churchId,
     `SELECT user_id, preference_value FROM user_preferences
@@ -117,6 +155,12 @@ async function migrateLegacyCredentials(churchId) {
   );
 
   return credentials;
+}
+
+async function migrateLegacyCredentials(churchId) {
+  return withCredentialMutation(churchId, () =>
+    Database.transactionForChurch(churchId, () => migrateLegacyCredentialsUnlocked(churchId))
+  );
 }
 
 // Single read entry point: prefer the encrypted church connection; fall back
@@ -178,32 +222,55 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh, { f
 
   if (refreshInFlight.has(churchId)) return refreshInFlight.get(churchId);
 
-  const promise = (async () => {
-    const fresh = await requestRefresh(credentials.refreshToken);
+  const promise = withCredentialMutation(churchId, async () => {
+    // Re-read after acquiring the mutation queue. If OAuth reconnect or
+    // disconnect won the queue while this caller was waiting, the original
+    // credentials are stale and must never be refreshed/persisted.
+    const currentCredentials = await Database.transactionForChurch(churchId, () =>
+      connectionStore.getCredentials(churchId, 'planning_center')
+    );
+    if (!currentCredentials) return null;
+    if (credentialFingerprint(currentCredentials) !== credentialFingerprint(credentials)) {
+      return currentCredentials;
+    }
+
+    const fresh = await requestRefresh(currentCredentials.refreshToken);
     if (!fresh || !fresh.accessToken) {
       // Refresh failed (e.g. refresh token revoked). If the access token is
       // already past its real expiry there's nothing usable left; otherwise
       // hand back what we have so a caller mid-flight can still use it until
       // it's actually rejected by PCO.
-      const trulyExpired = credentials.expiresAt && Date.now() >= credentials.expiresAt;
-      return trulyExpired ? null : credentials;
+      const trulyExpired = currentCredentials.expiresAt && Date.now() >= currentCredentials.expiresAt;
+      return trulyExpired ? null : currentCredentials;
     }
     const refreshed = {
       accessToken: fresh.accessToken,
-      refreshToken: fresh.refreshToken || credentials.refreshToken,
+      refreshToken: fresh.refreshToken || currentCredentials.refreshToken,
       expiresAt: fresh.expiresAt,
     };
-    const { connectedBy, metadata } = await readPreservedConnectionFields(churchId);
-    await connectionStore.upsertConnection({
-      churchId,
-      provider: 'planning_center',
-      authType: 'oauth',
-      credentials: refreshed,
-      connectedBy,
-      metadata,
+    return Database.transactionForChurch(churchId, async () => {
+      // Cross-process CAS: another server process may have reconnected or
+      // disconnected this church while the network refresh was in flight.
+      // Re-read inside the write transaction and persist only if the exact
+      // credential generation we refreshed is still current.
+      const latestCredentials = await connectionStore.getCredentials(churchId, 'planning_center');
+      if (!latestCredentials) return null;
+      if (credentialFingerprint(latestCredentials) !== credentialFingerprint(currentCredentials)) {
+        return latestCredentials;
+      }
+
+      const { connectedBy, metadata } = await readPreservedConnectionFields(churchId);
+      await connectionStore.upsertConnection({
+        churchId,
+        provider: 'planning_center',
+        authType: 'oauth',
+        credentials: refreshed,
+        connectedBy,
+        metadata,
+      });
+      return refreshed;
     });
-    return refreshed;
-  })();
+  });
 
   refreshInFlight.set(churchId, promise);
   try {
@@ -211,6 +278,54 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh, { f
   } finally {
     refreshInFlight.delete(churchId);
   }
+}
+
+// OAuth callback write. Kept here so reconnect participates in the same
+// per-church mutation order as an already-running refresh.
+async function replaceConnection({ churchId, credentials, connectedBy, metadata = {} }) {
+  return withCredentialMutation(churchId, () =>
+    Database.transactionForChurch(churchId, () => connectionStore.upsertConnection({
+      churchId,
+      provider: 'planning_center',
+      authType: 'oauth',
+      credentials,
+      connectedBy,
+      metadata,
+    }))
+  );
+}
+
+// Disconnect checks active AND pending authority in the same church
+// transaction that deletes credentials. The transaction shares the database
+// lock with reviewed authority activation, so either disconnect wins before
+// activation or activation wins and disconnect is rejected; active PCO can
+// never be committed without a connection because of this race.
+async function disconnectConnection(churchId) {
+  return withCredentialMutation(churchId, () => Database.transactionForChurch(churchId, async (conn) => {
+    const [authority] = await conn.query(
+      `SELECT authority_provider, pending_authority_provider
+         FROM people_sync_settings
+        WHERE church_id = ?
+        LIMIT 1`,
+      [churchId]
+    );
+    if (authority?.authority_provider === 'planning_center' ||
+        authority?.pending_authority_provider === 'planning_center') {
+      throw new PcoAuthorityConnectionRequiredError();
+    }
+
+    const result = await conn.query(
+      `DELETE FROM integration_connections
+        WHERE church_id = ? AND provider = 'planning_center'`,
+      [churchId]
+    );
+    await conn.query(
+      `DELETE FROM user_preferences
+        WHERE church_id = ? AND preference_key = 'planning_center_tokens'`,
+      [churchId]
+    );
+    return result.affectedRows > 0;
+  }));
 }
 
 // Convenience: read-or-migrate, then ensure freshness. The one call most
@@ -228,4 +343,7 @@ module.exports = {
   migrateLegacyCredentials,
   ensureFreshCredentials,
   getValidCredentials,
+  replaceConnection,
+  disconnectConnection,
+  PcoAuthorityConnectionRequiredError,
 };

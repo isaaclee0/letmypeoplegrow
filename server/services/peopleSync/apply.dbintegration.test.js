@@ -240,6 +240,39 @@ test('authority activation and reconciliation share one transaction', async () =
   });
 });
 
+test('Planning Center authority activation requires a connection in the reconciliation transaction', async () => {
+  // Catches a reviewed authority apply committing people mutations and PCO
+  // authority after the church connection was disconnected.
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
+       VALUES (?, 'none', 'planning_center')
+       ON CONFLICT(church_id) DO UPDATE SET
+         authority_provider = 'none', pending_authority_provider = 'planning_center'`,
+      [churchId]
+    );
+    const plan = emptyPlan({
+      provider: 'planning_center',
+      addPeople: [{
+        id: 'addPeople:pco-atomic', externalPersonId: 'pco-atomic', firstName: 'Atomic', lastName: 'PCO',
+        isChild: false, familyId: null, peopleType: 'regular',
+      }],
+    });
+
+    await assert.rejects(
+      applyPeopleSyncPlan({ churchId, provider: 'planning_center', plan, activateAuthority: true }),
+      /Planning Center connection/i
+    );
+
+    assert.deepEqual(await counts(churchId), { individuals: 0, families: 0, links: 0 });
+    const [settings] = await Database.query(
+      `SELECT authority_provider, pending_authority_provider FROM people_sync_settings WHERE church_id = ?`,
+      [churchId]
+    );
+    assert.deepEqual(settings, { authority_provider: 'none', pending_authority_provider: 'planning_center' });
+  });
+});
+
 test('managed field updates ignore an isChild change whose externalValue is null', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId, { firstName: 'Old' });

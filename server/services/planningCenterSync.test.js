@@ -58,7 +58,7 @@ test('withPlanningCenterSourceToken force-refreshes once after a source 401', as
   }
 });
 
-test('withPlanningCenterSourceToken converts a thrown forced refresh to a safe source authentication error', async () => {
+test('withPlanningCenterSourceToken keeps an unexpected forced-refresh failure transient', async () => {
   const originalGetAccessTokenForChurch = pcoSync.getAccessTokenForChurch;
   const tokenCalls = [];
   let sourceReadAttempts = 0;
@@ -74,13 +74,66 @@ test('withPlanningCenterSourceToken converts a thrown forced refresh to a safe s
         sourceReadAttempts++;
         throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
       }),
-      (error) => error instanceof PcoSourceError && error.code === 'SYNC_SOURCE_AUTH'
+      (error) => error instanceof PcoSourceError && error.code === 'SYNC_SOURCE_CHECK_FAILED'
     );
     assert.equal(sourceReadAttempts, 1);
     assert.deepEqual(tokenCalls, [{}, { forceRefresh: true }]);
   } finally {
     pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
   }
+});
+
+test('withPlanningCenterSourceToken preserves a rate-limited token refresh outcome', async () => {
+  const originalGetAccessTokenForChurch = pcoSync.getAccessTokenForChurch;
+  pcoSync.getAccessTokenForChurch = async (_churchId, options) => {
+    if (options?.forceRefresh) {
+      throw new PcoSourceError('token endpoint rate limited', 'SYNC_SOURCE_RATE_LIMIT', { status: 429 });
+    }
+    return 'old-access';
+  };
+
+  try {
+    await assert.rejects(
+      () => pcoSync.withPlanningCenterSourceToken('church-a', async () => {
+        throw new PcoSourceError('rejected', 'SYNC_SOURCE_AUTH', { status: 401 });
+      }),
+      (error) => error instanceof PcoSourceError &&
+        error.code === 'SYNC_SOURCE_RATE_LIMIT' && error.details.status === 429
+    );
+  } finally {
+    pcoSync.getAccessTokenForChurch = originalGetAccessTokenForChurch;
+  }
+});
+
+test('token refresh classifies endpoint rate limits, outages, and transport failures as transient', async () => {
+  const cases = [
+    { label: 'rate limit', request: async () => ({ status: 429, data: {} }), code: 'SYNC_SOURCE_RATE_LIMIT', status: 429 },
+    { label: 'server outage', request: async () => ({ status: 503, data: {} }), code: 'SYNC_SOURCE_CHECK_FAILED', status: 503 },
+    { label: 'transport failure', request: async () => { throw new Error('socket reset'); }, code: 'SYNC_SOURCE_CHECK_FAILED', status: undefined },
+  ];
+
+  for (const scenario of cases) {
+    await assert.rejects(
+      () => pcoSync.requestPcoTokenRefresh('expired-refresh', scenario.request),
+      (error) => {
+        assert.equal(error instanceof PcoSourceError, true, scenario.label);
+        assert.equal(error.code, scenario.code, scenario.label);
+        assert.equal(error.details.status, scenario.status, scenario.label);
+        return true;
+      }
+    );
+  }
+});
+
+test('token refresh classifies an invalid grant as rejected credentials', async () => {
+  await assert.rejects(
+    () => pcoSync.requestPcoTokenRefresh('revoked-refresh', async () => ({
+      status: 400,
+      data: { error: 'invalid_grant', error_description: 'The refresh token was revoked' },
+    })),
+    (error) => error instanceof PcoSourceError &&
+      error.code === 'SYNC_SOURCE_AUTH' && error.details.status === 400
+  );
 });
 
 test('withPlanningCenterSourceToken does not rotate credentials for a lookalike 401 error', async () => {

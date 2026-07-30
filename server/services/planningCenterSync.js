@@ -160,14 +160,46 @@ function pcoEnv(suffix) {
 // mutex and the encrypted persistence) rather than that module reaching back
 // into HTTPS itself — keeps all HTTP/PCO-wire-format concerns in this file,
 // and avoids a circular require between the two modules.
-async function requestPcoTokenRefresh(refreshTokenValue) {
-  const response = await httpsPost('https://api.planningcenteronline.com/oauth/token', {
-    grant_type: 'refresh_token',
-    refresh_token: refreshTokenValue,
-    client_id: pcoEnv('CLIENT_ID'),
-    client_secret: pcoEnv('CLIENT_SECRET'),
-  });
-  if (response.status !== 200 || !response.data || !response.data.access_token) return null;
+async function requestPcoTokenRefresh(refreshTokenValue, request = httpsPost) {
+  let response;
+  try {
+    response = await request('https://api.planningcenteronline.com/oauth/token', {
+      grant_type: 'refresh_token',
+      refresh_token: refreshTokenValue,
+      client_id: pcoEnv('CLIENT_ID'),
+      client_secret: pcoEnv('CLIENT_SECRET'),
+    });
+  } catch (_) {
+    throw new PcoSourceError(
+      'Planning Center token refresh could not reach the provider',
+      'SYNC_SOURCE_CHECK_FAILED',
+      {}
+    );
+  }
+
+  const status = response?.status;
+  const oauthError = response?.data && typeof response.data === 'object' ? response.data.error : null;
+  if (status !== 200 || !response?.data?.access_token) {
+    if (oauthError === 'invalid_grant' || oauthError === 'invalid_token') {
+      throw new PcoSourceError(
+        'Planning Center rejected the stored refresh credential',
+        'SYNC_SOURCE_AUTH',
+        { status }
+      );
+    }
+    if (status === 429) {
+      throw new PcoSourceError(
+        'Planning Center token refresh was rate limited',
+        'SYNC_SOURCE_RATE_LIMIT',
+        { status }
+      );
+    }
+    throw new PcoSourceError(
+      'Planning Center token refresh is temporarily unavailable',
+      'SYNC_SOURCE_CHECK_FAILED',
+      { status }
+    );
+  }
   return {
     accessToken: response.data.access_token,
     refreshToken: response.data.refresh_token || null,
@@ -239,8 +271,13 @@ async function withPlanningCenterSourceToken(churchId, operation) {
   let refreshedToken;
   try {
     refreshedToken = await module.exports.getAccessTokenForChurch(churchId, { forceRefresh: true });
-  } catch (_) {
-    throw sourceAuthenticationError();
+  } catch (error) {
+    if (error instanceof PcoSourceError) throw error;
+    throw new PcoSourceError(
+      'Planning Center token refresh could not be completed',
+      'SYNC_SOURCE_CHECK_FAILED',
+      {}
+    );
   }
   if (!refreshedToken) throw sourceAuthenticationError();
 
@@ -449,5 +486,6 @@ module.exports = {
   recordBatchSyncResult, toLegacyPcoBatchDto,
   getPlanningCenterTokens, ensureValidPlanningCenterTokens,
   getTokensForChurch, validatePlanningCenterToken,
+  requestPcoTokenRefresh,
   PCO_RECONNECT_REQUIRED,
 };

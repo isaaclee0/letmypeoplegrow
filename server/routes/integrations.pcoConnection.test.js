@@ -249,3 +249,22 @@ test('PCO disconnect is blocked while Planning Center is the authority provider'
     assert.ok(await connectionStore.getConnection(churchId, 'planning_center'));
   });
 });
+
+test('PCO disconnect is blocked while Planning Center authority is pending review', async () => {
+  // Catches deleting the credential after authority preview but before its
+  // reviewed reconciliation is atomically applied and activated.
+  await withRouteChurchDb(async ({ churchId, app }) => {
+    await seedPcoConnection(churchId);
+    await Database.query(
+      `UPDATE people_sync_settings
+          SET authority_provider = 'none', pending_authority_provider = 'planning_center'
+        WHERE church_id = ?`,
+      [churchId]
+    );
+
+    const response = await app.request('/api/integrations/planning-center/disconnect', { method: 'POST' });
+    assert.equal(response.status, 409);
+    assert.match(response.body.error, /authority|source/i);
+    assert.ok(await connectionStore.getConnection(churchId, 'planning_center'));
+  });
+});
