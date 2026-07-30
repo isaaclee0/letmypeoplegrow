@@ -61,6 +61,21 @@ describe('PlanningCenterBatchEditor', () => {
     expect(screen.getByLabelText('Runs automatically')).toBeDisabled();
     expect(screen.getByText('Scheduled runs are blocked until you complete a full review.')).toBeInTheDocument();
   });
+  it('presents automatic gathering removal as a styled switch with a warning dialog', async () => {
+    renderEditor();
+    await waitFor(() => expect(gatheringsAPI.getAll).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'new' } });
+
+    const toggle = screen.getByRole('switch', { name: 'Automatically remove people from this gathering' });
+    expect(toggle).toHaveClass('relative', 'inline-flex');
+    expect(toggle.querySelector('span')).toHaveClass('rounded-full', 'bg-white');
+
+    fireEvent.click(toggle);
+    const dialog = screen.getByRole('dialog', { name: 'Enable automatic removal for this batch?' });
+    expect(dialog).toHaveTextContent('People who stop matching this batch will be removed from its gathering.');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable automatic removal' }));
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+  });
   it('makes the partial-save boundary clear if the source draft fails', async () => {
     vi.mocked(integrationsAPI.updatePlanningCenterSyncBatch).mockResolvedValue({ data: { batch } }); vi.mocked(peopleSyncAPI.saveSourceDraft).mockRejectedValue({ response: { data: { error: 'Source unavailable.' } } }); renderEditor(); fireEvent.change(screen.getByLabelText('People source'), { target: { value: 'list-2' } }); fireEvent.click(screen.getByRole('button', { name: 'Save batch' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Batch settings were saved, but people source draft was not: Source unavailable.');

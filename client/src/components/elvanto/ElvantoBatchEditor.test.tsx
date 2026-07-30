@@ -78,4 +78,19 @@ describe('ElvantoBatchEditor source drafts', () => {
     await waitFor(() => expect(elvantoSyncAPI.updateBatch).toHaveBeenCalled());
     expect(peopleSyncAPI.saveSourceDraft).not.toHaveBeenCalled();
   });
+
+  it('presents automatic gathering removal as a styled switch with a warning dialog', () => {
+    renderEditor();
+    fireEvent.change(screen.getByLabelText('Gathering assignment'), { target: { value: 'new' } });
+
+    const toggle = screen.getByRole('switch', { name: 'Automatically remove people from this gathering' });
+    expect(toggle).toHaveClass('relative', 'inline-flex');
+    expect(toggle.querySelector('span')).toHaveClass('rounded-full', 'bg-white');
+
+    fireEvent.click(toggle);
+    const dialog = screen.getByRole('dialog', { name: 'Enable automatic removal for this batch?' });
+    expect(dialog).toHaveTextContent('People who stop matching this batch will be removed from its gathering.');
+    fireEvent.click(screen.getByRole('button', { name: 'Enable automatic removal' }));
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+  });
 });
