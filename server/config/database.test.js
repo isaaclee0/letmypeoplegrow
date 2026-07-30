@@ -410,6 +410,58 @@ test('getChurchDb migrates an existing PCO database to generic provenance and ba
   });
 });
 
+test('Elvanto batch names align to their active or initial-review source during restart migration', async () => {
+  // Catches a startup alignment that either retains stale custom names or lets
+  // a replacement draft override an existing active Elvanto source.
+  await withTestChurchDb(async (churchId) => {
+    const db = Database.getChurchDb(churchId);
+    const active = db.prepare(`INSERT INTO people_sync_batches
+      (church_id, provider, name, enabled, source_kind, source_external_id, source_name,
+       draft_source_kind, draft_source_external_id, draft_source_name, schedule_enabled)
+      VALUES (?, 'elvanto', 'Custom active', 1, 'elvanto_group', 'members', 'Members',
+              'elvanto_group', 'youth', 'Youth', 1)`).run(churchId);
+    const initial = db.prepare(`INSERT INTO people_sync_batches
+      (church_id, provider, name, enabled, draft_source_kind, draft_source_external_id, draft_source_name)
+      VALUES (?, 'elvanto', 'Custom initial', 0, 'elvanto_category', 'regulars', 'Regulars')`).run(churchId);
+    const sourceLess = db.prepare(`INSERT INTO people_sync_batches
+      (church_id, provider, name, enabled)
+      VALUES (?, 'elvanto', 'Unresolved', 0)`).run(churchId);
+
+    const batchIds = [Number(active.lastInsertRowid), Number(initial.lastInsertRowid), Number(sourceLess.lastInsertRowid)];
+    const selectBatches = (database) => database.prepare(`SELECT id, name, enabled, schedule_enabled,
+      source_kind, source_external_id, source_name,
+      draft_source_kind, draft_source_external_id, draft_source_name
+      FROM people_sync_batches WHERE id IN (?, ?, ?) ORDER BY id`).all(...batchIds);
+    const expectedBatches = [
+      {
+        id: batchIds[0], name: 'Members', enabled: 1, schedule_enabled: 1,
+        source_kind: 'elvanto_group', source_external_id: 'members', source_name: 'Members',
+        draft_source_kind: 'elvanto_group', draft_source_external_id: 'youth', draft_source_name: 'Youth',
+      },
+      {
+        id: batchIds[1], name: 'Regulars', enabled: 0, schedule_enabled: 0,
+        source_kind: null, source_external_id: null, source_name: null,
+        draft_source_kind: 'elvanto_category', draft_source_external_id: 'regulars', draft_source_name: 'Regulars',
+      },
+      {
+        id: batchIds[2], name: 'Unresolved', enabled: 0, schedule_enabled: 0,
+        source_kind: null, source_external_id: null, source_name: null,
+        draft_source_kind: null, draft_source_external_id: null, draft_source_name: null,
+      },
+    ];
+
+    Database.closeAll();
+    Database.initialize();
+    const firstStartup = Database.getChurchDb(churchId);
+    assert.deepStrictEqual(selectBatches(firstStartup), expectedBatches);
+
+    Database.closeAll();
+    Database.initialize();
+    const secondStartup = Database.getChurchDb(churchId);
+    assert.deepStrictEqual(selectBatches(secondStartup), expectedBatches);
+  });
+});
+
 test('getChurchDb migrates an existing generic scheduled PCO batch once without undoing a later explicit disable', async () => {
   // Catches migration inference that either ignores already-generic scheduled
   // batches or runs on every restart and silently defeats reviewed authority

@@ -232,6 +232,25 @@ function backfillProviderNeutralSync(db, churchId) {
     WHERE church_id = ? AND provider = 'planning_center' AND legacy_provider_batch_id IS NOT NULL`
   ).run(churchId);
 
+  db.prepare(`UPDATE people_sync_batches
+    SET name = CASE
+          WHEN source_external_id IS NOT NULL THEN source_name
+          WHEN source_external_id IS NULL AND draft_source_external_id IS NOT NULL THEN draft_source_name
+          ELSE name
+        END,
+        updated_at = CASE
+          WHEN name <> CASE
+            WHEN source_external_id IS NOT NULL THEN source_name
+            WHEN source_external_id IS NULL AND draft_source_external_id IS NOT NULL THEN draft_source_name
+            ELSE name
+          END THEN datetime('now') ELSE updated_at END
+    WHERE church_id = ? AND provider = 'elvanto'
+      AND CASE
+        WHEN source_external_id IS NOT NULL THEN source_name
+        WHEN source_external_id IS NULL AND draft_source_external_id IS NOT NULL THEN draft_source_name
+        ELSE name
+      END IS NOT NULL`).run(churchId);
+
   // Existing PCO schedules ran unattended before provider-neutral authority
   // was introduced. Infer that authority once so a deployment cannot silently
   // halt them. The migration marker is essential: after this one-time upgrade,
