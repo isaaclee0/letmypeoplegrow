@@ -157,7 +157,7 @@ test('buildReviewMessage contains no raw payload shape and reflects only nonzero
     ambiguousPeople: 1, familyConflicts: 0, unmatchedLocalRegulars: 2, renameFamily: 0,
   });
   assert.match(message, /Planning Center/);
-  assert.match(message, /1 ambiguous match\b/);
+  assert.match(message, /1 person match\b/);
   assert.match(message, /2 unmatched local regulars/);
   assert.equal(/family conflict|family rename/.test(message), false);
 });

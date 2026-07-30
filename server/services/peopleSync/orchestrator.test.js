@@ -441,6 +441,40 @@ test('reviewed apply rejects a rebuilt context when holds, exclusions, candidate
   assert.equal(applied.length, 0);
 });
 
+test('unattended sync holds an unmatched persisted identity for review without creating it and notifies once', async () => {
+  const notifications = [];
+  const { deps, applied, finished } = makeDeps({
+    matchReviewState: {
+      exclusions: [],
+      holds: [{ externalPersonId: 'held-unmatched', reason: 'deferred' }],
+    },
+    fetchSourceSnapshot: async () => sourceSnapshot(source('group-1'), {
+      people: [person('held-unmatched', { firstName: 'New', lastName: 'Person' })],
+      memberExternalIds: ['held-unmatched'],
+    }),
+    extra: {
+      notifyReviewRequired: async (input) => { notifications.push(input); return { notified: true }; },
+    },
+  });
+
+  const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
+
+  assert.equal(result.status, 'review_required');
+  assert.equal(result.counts.ambiguousPeople, 1);
+  assert.deepEqual(applied[0].plan.addPeople, []);
+  assert.deepEqual(applied[0].plan.ambiguousPeople, [{
+    id: 'ambiguousPeople:held-unmatched:review_deferred',
+    externalPersonId: 'held-unmatched',
+    candidateIndividualIds: [],
+    reason: 'review_deferred',
+  }]);
+  assert.equal(finished[0].status, 'review_required');
+  assert.deepEqual(notifications, [{
+    churchId: 'church-a', provider: 'elvanto', runId: 1,
+    counts: { ambiguousPeople: 1, familyConflicts: 0, renameFamily: 0, unmatchedLocalRegulars: 0 },
+  }]);
+});
+
 test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-fetch presence', async () => {
   const matchingInputs = [];
   const terminal = person('archived', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' });

@@ -65,7 +65,7 @@ function pluralize(count, singular, plural) {
 function buildReviewMessage(provider, counts) {
   const label = providerLabel(provider);
   const parts = [];
-  if (counts.ambiguousPeople) parts.push(pluralize(counts.ambiguousPeople, 'ambiguous match', 'ambiguous matches'));
+  if (counts.ambiguousPeople) parts.push(pluralize(counts.ambiguousPeople, 'person match', 'person matches'));
   if (counts.familyConflicts) parts.push(pluralize(counts.familyConflicts, 'family conflict', 'family conflicts'));
   if (counts.unmatchedLocalRegulars) {
     parts.push(pluralize(counts.unmatchedLocalRegulars, 'unmatched local regular', 'unmatched local regulars'));

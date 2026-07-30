@@ -157,33 +157,51 @@ test('GET /settings forwards the requesting admin\'s own church_id, not a hardco
 test('POST /people-authority/preview forwards church_id and the requested provider', async () => {
   const calls = [];
   await withServer({
-    previewAuthoritySwitch: async (args) => { calls.push(args); return { runId: 1, reviewToken: 'tok', summary: {}, plan: {} }; },
+    previewAuthoritySwitch: async (args) => {
+      calls.push(args);
+      return { runId: 1, reviewToken: 'tok', decisionContractVersion: 2, summary: {}, plan: {} };
+    },
   }, { user: ADMIN_USER }, async (base) => {
-    const { status } = await requestJson(`${base}/people-authority/preview`, { method: 'POST', body: { provider: 'elvanto' } });
+    const { status, body } = await requestJson(`${base}/people-authority/preview`, { method: 'POST', body: { provider: 'elvanto' } });
     assert.equal(status, 200);
+    assert.equal(body.decisionContractVersion, 2);
   });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].churchId, ADMIN_USER.church_id);
   assert.equal(calls[0].provider, 'elvanto');
 });
 
-test('POST /people-authority/apply forwards churchId, provider, reviewToken, selections, and the acting user id', async () => {
+test('POST /people-authority/apply forwards legacy and v2 selections verbatim with the acting user id', async () => {
   const calls = [];
   await withServer({
     applyReviewed: async (args) => { calls.push(args); return { runId: 1, status: 'applied', applied: {}, summary: {} }; },
   }, { user: ADMIN_USER }, async (base) => {
-    const { status } = await requestJson(`${base}/people-authority/apply`, {
+    const legacy = await requestJson(`${base}/people-authority/apply`, {
       method: 'POST',
       body: { provider: 'elvanto', reviewToken: 'tok-1', selections: { skipExternalPersonIds: ['p1'] } },
     });
-    assert.equal(status, 200);
+    assert.equal(legacy.status, 200);
+    const v2 = await requestJson(`${base}/people-authority/apply`, {
+      method: 'POST',
+      body: {
+        provider: 'elvanto', reviewToken: 'tok-2',
+        selections: { decisionContractVersion: 2, identityDecisions: { p1: { outcome: 'create' } } },
+      },
+    });
+    assert.equal(v2.status, 200);
   });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0].churchId, ADMIN_USER.church_id);
   assert.equal(calls[0].provider, 'elvanto');
   assert.equal(calls[0].reviewToken, 'tok-1');
   assert.deepEqual(calls[0].selections, { skipExternalPersonIds: ['p1'] });
   assert.equal(calls[0].userId, ADMIN_USER.id);
+  assert.equal(calls[1].reviewToken, 'tok-2');
+  assert.deepEqual(calls[1].selections, {
+    decisionContractVersion: 2,
+    identityDecisions: { p1: { outcome: 'create' } },
+  });
+  assert.equal(calls[1].userId, ADMIN_USER.id);
 });
 
 test('POST /people-authority/disable forwards church_id', async () => {

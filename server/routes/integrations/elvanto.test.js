@@ -119,3 +119,43 @@ test('batch creation rejects unknown local-rule fields', async () => {
     assert.equal(response.status, 400);
   });
 });
+
+test('batch plan passes the v2 decision contract and apply forwards legacy and v2 selections verbatim', async () => {
+  const applyCalls = [];
+  await withServer({
+    buildReview: async () => ({ runId: 4, reviewToken: 'elvanto-review', decisionContractVersion: 2, summary: {}, plan: {} }),
+    applyReviewed: async (input) => { applyCalls.push(input); return { runId: 4, status: 'applied', applied: {}, summary: {} }; },
+  }, async (base) => {
+    const plan = await request(`${base}/sync-batches/4/plan`, undefined, 'GET');
+    assert.equal(plan.status, 200);
+    assert.equal(plan.body.decisionContractVersion, 2);
+
+    const legacy = await request(`${base}/sync-batches/4/apply`, {
+      reviewToken: 'elvanto-review', selections: { skipExternalPersonIds: ['old-person'] },
+    });
+    assert.equal(legacy.status, 200);
+
+    const v2 = await request(`${base}/sync-batches/4/apply`, {
+      reviewToken: 'elvanto-review',
+      selections: {
+        decisionContractVersion: 2,
+        identityDecisions: { 'external-person': { outcome: 'defer' } },
+      },
+    });
+    assert.equal(v2.status, 200);
+  });
+  assert.deepEqual(applyCalls, [
+    {
+      churchId: 'churcha1', provider: 'elvanto', batchId: 4, reviewToken: 'elvanto-review',
+      selections: { skipExternalPersonIds: ['old-person'] }, userId: 1,
+    },
+    {
+      churchId: 'churcha1', provider: 'elvanto', batchId: 4, reviewToken: 'elvanto-review',
+      selections: {
+        decisionContractVersion: 2,
+        identityDecisions: { 'external-person': { outcome: 'defer' } },
+      },
+      userId: 1,
+    },
+  ]);
+});

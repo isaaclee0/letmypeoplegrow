@@ -31,22 +31,26 @@ async function withServer(deps, fn) {
   }
 }
 
-test('GET batch plan returns an orchestrator review token without applying', async () => {
+test('GET batch plan passes the decision contract version through without applying', async () => {
   const calls = [];
   let applyCalls = 0;
   await withServer({
-    buildReview: async (args) => { calls.push(args); return { runId: 4, reviewToken: 'pco-review', summary: {}, plan: {}, snapshot: {} }; },
+    buildReview: async (args) => {
+      calls.push(args);
+      return { runId: 4, reviewToken: 'pco-review', decisionContractVersion: 2, summary: {}, plan: {}, snapshot: {} };
+    },
     applyReviewed: async () => { applyCalls++; },
   }, async (base) => {
     const response = await requestJson(`${base}/sync-batches/12/plan`);
     assert.equal(response.status, 200);
     assert.equal(response.body.reviewToken, 'pco-review');
+    assert.equal(response.body.decisionContractVersion, 2);
   });
   assert.deepEqual(calls, [{ churchId: 'pcoch1', provider: 'planning_center', batchId: 12, trigger: 'manual' }]);
   assert.equal(applyCalls, 0);
 });
 
-test('POST batch apply rejects a direct blind apply and forwards the reviewed token on approval', async () => {
+test('POST batch apply rejects a direct blind apply and forwards legacy and v2 selections verbatim', async () => {
   const calls = [];
   await withServer({
     buildReview: async () => ({}),
@@ -57,15 +61,36 @@ test('POST batch apply rejects a direct blind apply and forwards the reviewed to
     assert.equal(blind.body.code, 'SYNC_REVIEW_TOKEN_REQUIRED');
     assert.equal(calls.length, 0);
 
+    const legacySelections = { skipExternalPersonIds: ['pco-1'] };
+    const legacy = await requestJson(`${base}/sync-batches/12/apply`, {
+      method: 'POST', body: { reviewToken: 'pco-review', selections: legacySelections },
+    });
+    assert.equal(legacy.status, 200);
+
+    const v2Selections = {
+      decisionContractVersion: 2,
+      identityDecisions: { 'pco-1': { outcome: 'defer', excludeIndividualId: 12 } },
+    };
     const reviewed = await requestJson(`${base}/sync-batches/12/apply`, {
-      method: 'POST', body: { reviewToken: 'pco-review', selections: { skipExternalPersonIds: ['pco-1'] } },
+      method: 'POST', body: { reviewToken: 'pco-review', selections: v2Selections },
     });
     assert.equal(reviewed.status, 200);
   });
-  assert.deepEqual(calls, [{
-    churchId: 'pcoch1', provider: 'planning_center', batchId: 12,
-    reviewToken: 'pco-review', selections: { skipExternalPersonIds: ['pco-1'] }, userId: 9,
-  }]);
+  assert.deepEqual(calls, [
+    {
+      churchId: 'pcoch1', provider: 'planning_center', batchId: 12,
+      reviewToken: 'pco-review', selections: { skipExternalPersonIds: ['pco-1'] }, userId: 9,
+    },
+    {
+      churchId: 'pcoch1', provider: 'planning_center', batchId: 12,
+      reviewToken: 'pco-review',
+      selections: {
+        decisionContractVersion: 2,
+        identityDecisions: { 'pco-1': { outcome: 'defer', excludeIndividualId: 12 } },
+      },
+      userId: 9,
+    },
+  ]);
 });
 
 test('plan and apply reject unsafe batch identifiers before invoking orchestration', async () => {
