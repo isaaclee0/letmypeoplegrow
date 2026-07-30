@@ -68,12 +68,12 @@ test('getPlanningCenterSyncStats returns zeros, not an error, for a church with 
 // pcoSync.createBatch/updateBatch (generic people_sync_batches, dual-written
 // to the legacy planning_center_sync_batches table), but the request-body
 // validation and defaulting in routes/integrations.js are untouched by that
-// refactor. These pin exactly the "old client compatibility" contract:
-// gatheringAutoRemoveEnabled is not a required field, and a request that
-// omits it entirely must still resolve to `false` rather than being rejected.
+// refactor. These preserve compatibility for gatheringAutoRemoveEnabled:
+// it is not required, and an omitted value resolves to `false` rather than
+// rejecting the request. The batch name is instead derived from the resolved
+// provider-owned source and must not be client writable.
 function validBatchBody(overrides = {}) {
   return {
-    name: 'Test Batch',
     sourceKind: 'planning_center_list',
     sourceExternalId: 'list-1',
     defaultPeopleType: 'regular',
@@ -89,6 +89,10 @@ test('validateBatchBody accepts a body that omits gatheringAutoRemoveEnabled ent
   const body = validBatchBody();
   assert.strictEqual('gatheringAutoRemoveEnabled' in body, false);
   assert.strictEqual(validateBatchBody(body), null);
+});
+
+test('validateBatchBody rejects a client-supplied batch name', () => {
+  assert.strictEqual(validateBatchBody(validBatchBody({ name: 'Client override' })), 'Unknown Planning Center batch field.');
 });
 
 test('resolveGatheringAutoRemoveEnabled defaults to false when an old client omits the field', () => {

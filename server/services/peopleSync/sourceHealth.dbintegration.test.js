@@ -43,7 +43,7 @@ async function notificationsFor(churchId, userId) {
   );
 }
 
-test('a successful active-source read refreshes display metadata and clears health errors without changing revision', async () => {
+test('a successful modern Planning Center List refreshes the derived batch name and health metadata without changing revision', async () => {
   await withTestChurchDb(async (churchId) => {
     const batch = await seedActiveBatch(churchId);
     await recordActiveSourceFailure({
@@ -59,6 +59,7 @@ test('a successful active-source read refreshes display metadata and clears heal
     const updated = await getBatch(churchId, 'planning_center', batch.id);
 
     assert.equal(result.updated, true);
+    assert.equal(updated.name, 'Sunday Gathering');
     assert.deepEqual(updated.source, observed);
     assert.equal(updated.sourceRevision, batch.sourceRevision);
     assert.equal(updated.sourceStatus, 'available');
@@ -67,7 +68,7 @@ test('a successful active-source read refreshes display metadata and clears heal
   });
 });
 
-test('a stable-ID rename changes no active source identity or draft state', async () => {
+test('a stable-ID List rename changes the derived batch name but no active source identity or draft state', async () => {
   await withTestChurchDb(async (churchId) => {
     const batch = await seedActiveBatch(churchId);
     const draft = await saveSourceDraft({
@@ -81,6 +82,7 @@ test('a stable-ID rename changes no active source identity or draft state', asyn
     });
     const updated = await getBatch(churchId, 'planning_center', batch.id);
 
+    assert.equal(updated.name, 'Sunday Service');
     assert.deepEqual(updated.source, renamed);
     assert.equal(updated.sourceRevision, batch.sourceRevision);
     assert.deepEqual(updated.draftSource, REPLACEMENT_SOURCE);
@@ -116,7 +118,7 @@ test('a missing active source notifies exactly active admins once and never expo
     assert.equal(updated.sourceStatusErrorCode, 'SYNC_SOURCE_UNAVAILABLE');
     assert.deepEqual(notices, [{
       title: 'Planning Center sync source missing',
-      message: 'The source “Sunday Attendance” for batch “Members” is no longer available. Select a replacement in Settings → Integrations.',
+      message: 'The source “Sunday Attendance” for batch “Sunday Attendance” is no longer available. Select a replacement in Settings → Integrations.',
       notification_type: 'system',
     }]);
     assert.equal((await notificationsFor(churchId, coordinator)).length, 0);

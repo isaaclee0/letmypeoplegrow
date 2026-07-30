@@ -394,7 +394,7 @@ async function createBatch(churchId, input) {
   const generic = await batchRepository.createBatch({
     churchId,
     provider: 'planning_center',
-    name: input.name,
+    name: input.initialDraftSource.name,
     enabled: true,
     defaultPeopleType: input.defaultPeopleType,
     gatheringTypeId: input.gatheringTypeId || null,
@@ -419,7 +419,6 @@ async function updateBatch(churchId, batchId, input) {
     churchId,
     provider: 'planning_center',
     batchId,
-    name: input.name,
     defaultPeopleType: input.defaultPeopleType,
     gatheringTypeId: input.gatheringTypeId || null,
     gatheringAutoRemoveEnabled: !!input.gatheringAutoRemoveEnabled,

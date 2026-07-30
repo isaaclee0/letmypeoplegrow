@@ -1308,7 +1308,7 @@ router.get('/planning-center/checkins/availability', async (req, res) => {
 const PCO_PEOPLE_TYPES = ['regular', 'local_visitor', 'traveller_visitor'];
 const PCO_BATCH_FREQUENCIES = ['daily', 'weekly', 'monthly'];
 const PCO_SOURCE_CREATE_FIELDS = new Set([
-  'name', 'sourceKind', 'sourceExternalId', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'sourceKind', 'sourceExternalId', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
   'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
 ]);
 
@@ -1342,8 +1342,7 @@ function validateAllowedFields(body, allowed, message) {
 function validateBatchBody(body) {
   const sourceFieldError = validateAllowedFields(body, PCO_SOURCE_CREATE_FIELDS, 'Unknown Planning Center batch field.');
   if (sourceFieldError) return sourceFieldError;
-  const { name, sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
-  if (typeof name !== 'string' || !name.trim()) return 'name is required.';
+  const { sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (sourceKind !== 'planning_center_list' || typeof sourceExternalId !== 'string' || !sourceExternalId.trim()) return 'A Planning Center source is required.';
   if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
   const gatheringError = validateGatheringTypeId(gatheringTypeId);
@@ -1354,7 +1353,7 @@ function validateBatchBody(body) {
 }
 
 const PCO_BATCH_SETTINGS_FIELDS = new Set([
-  'name', 'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
+  'defaultPeopleType', 'gatheringTypeId', 'gatheringAutoRemoveEnabled',
   'scheduleEnabled', 'scheduleFrequency', 'scheduleDay',
 ]);
 function validateBatchSettingsUpdate(body) {
@@ -1362,8 +1361,7 @@ function validateBatchSettingsUpdate(body) {
   for (const key of Object.keys(body)) {
     if (!PCO_BATCH_SETTINGS_FIELDS.has(key)) return 'Updates may only change batch settings.';
   }
-  const { name, defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
-  if (typeof name !== 'string' || !name.trim()) return 'name is required.';
+  const { defaultPeopleType, gatheringTypeId, gatheringAutoRemoveEnabled, scheduleEnabled, scheduleFrequency, scheduleDay } = body;
   if (!PCO_PEOPLE_TYPES.includes(defaultPeopleType)) return 'defaultPeopleType must be one of regular, local_visitor, traveller_visitor.';
   const gatheringError = validateGatheringTypeId(gatheringTypeId);
   if (gatheringError) return gatheringError;
@@ -1419,11 +1417,11 @@ router.post('/planning-center/sync-batches', async (req, res) => {
     const err = validateBatchBody(req.body);
     if (err) return res.status(400).json({ error: err });
     const churchId = req.user.church_id;
-    const { name, sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+    const { sourceKind, sourceExternalId, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
     const source = await resolveVisibleSource({ churchId, provider: 'planning_center', sourceKind, sourceExternalId });
     const batch = await pcoSync.createBatch(churchId, {
-      name: name.trim(), initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
+      initialDraftSource: { kind: source.kind, externalId: source.externalId, name: source.name },
       defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
     });
@@ -1447,10 +1445,10 @@ router.put('/planning-center/sync-batches/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Sync batch not found.' });
     const err = validateBatchSettingsUpdate(req.body);
     if (err) return res.status(400).json({ error: err });
-    const { name, defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
+    const { defaultPeopleType, gatheringTypeId, scheduleEnabled, scheduleFrequency, scheduleDay } = req.body;
     const gatheringAutoRemoveEnabled = resolveGatheringAutoRemoveEnabled(req.body);
     const settings = {
-      name: name.trim(), defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
+      defaultPeopleType, gatheringTypeId: gatheringTypeId || null, gatheringAutoRemoveEnabled,
       scheduleEnabled, scheduleFrequency, scheduleDay,
     };
     const batch = await pcoSync.updateBatch(churchId, batchId, settings);

@@ -145,21 +145,86 @@ test('source draft promotion is compare-and-swap guarded and clears the reviewed
   });
 });
 
-test('active source health updates are exact church/provider/source compare-and-swap writes', async () => {
+test('promoting a modern Planning Center source draft derives the batch name from the reviewed List', async () => {
   await withTestChurchDb(async (churchId) => {
-    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE });
+    const members = { kind: 'planning_center_list', externalId: 'members', name: 'Members' };
+    const youth = { kind: 'planning_center_list', externalId: 'youth', name: 'Youth' };
+    const batch = await createBatch({ churchId, provider: 'planning_center', name: 'Members', initialDraftSource: members });
     const conn = Database.getChurchDb(churchId);
+    await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: batch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(members),
+    });
+    const draft = await saveSourceDraft({ churchId, provider: 'planning_center', batchId: batch.id, source: youth });
+
+    const promoted = await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: batch.id,
+      expectedBaseRevision: draft.draftSourceBaseRevision,
+      expectedDraftDigest: digestSourceIdentity(youth),
+    });
+
+    assert.equal(promoted.name, 'Youth');
+    assert.equal(promoted.source.name, 'Youth');
+  });
+});
+
+test('active source health updates derive modern Planning Center names but retain Elvanto names', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const pcoSource = { kind: 'planning_center_list', externalId: 'members', name: 'Members' };
+    const pcoBatch = await createBatch({ churchId, provider: 'planning_center', name: 'Members', initialDraftSource: pcoSource });
+    const legacyRow = await Database.query(
+      `INSERT INTO planning_center_sync_batches (church_id, name, membership_allowlist, field_filters)
+       VALUES (?, 'Retired custom name', '[]', '[]')`,
+      [churchId],
+    );
+    const retiredPco = await createBatch({ churchId, provider: 'planning_center', name: 'Retired custom name', initialDraftSource: { ...pcoSource, externalId: 'retired' } });
+    const batch = await createBatch({ churchId, provider: 'elvanto', name: 'Independent Elvanto name', initialDraftSource: ELVANTO_SOURCE });
+    const conn = Database.getChurchDb(churchId);
+    await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: pcoBatch.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(pcoSource),
+    });
+    await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: retiredPco.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity({ ...pcoSource, externalId: 'retired' }),
+    });
+    await updateBatch({
+      churchId, provider: 'planning_center', batchId: retiredPco.id,
+      name: 'Retired custom name', legacyProviderBatchId: legacyRow.insertId,
+    });
+    assert.equal((await getBatch(churchId, 'planning_center', retiredPco.id)).legacyProviderBatchId, legacyRow.insertId);
     await promoteSourceDraftWithConnection(conn, {
       churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
       expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
     });
+
+    const pco = await recordActiveSourceHealthWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: pcoBatch.id, expectedSource: pcoSource,
+      sourceName: 'Members renamed', sourceStatus: 'available', checkedAt: '2026-07-29T01:00:00.000Z', errorCode: null,
+    });
+    assert.equal(pco.updated, true);
+    const updatedPco = await getBatch(churchId, 'planning_center', pcoBatch.id);
+    assert.equal(updatedPco.name, 'Members renamed');
+    assert.equal(updatedPco.source.name, 'Members renamed');
+
+    const retired = await recordActiveSourceHealthWithConnection(conn, {
+      churchId, provider: 'planning_center', batchId: retiredPco.id,
+      expectedSource: { ...pcoSource, externalId: 'retired' },
+      sourceName: 'Retired List renamed', sourceStatus: 'available', checkedAt: '2026-07-29T01:00:00.000Z', errorCode: null,
+    });
+    assert.equal(retired.updated, true);
+    const updatedRetired = await getBatch(churchId, 'planning_center', retiredPco.id);
+    assert.equal(updatedRetired.name, 'Retired custom name');
+    assert.equal(updatedRetired.source.name, 'Retired List renamed');
 
     const first = await recordActiveSourceHealthWithConnection(conn, {
       churchId, provider: 'elvanto', batchId: batch.id, expectedSource: ELVANTO_SOURCE,
       sourceName: 'Renamed members', sourceStatus: 'available', checkedAt: '2026-07-29T01:00:00.000Z', errorCode: null,
     });
     assert.equal(first.updated, true);
-    assert.deepEqual((await getBatch(churchId, 'elvanto', batch.id)).source, { ...ELVANTO_SOURCE, name: 'Renamed members' });
+    const updatedElvanto = await getBatch(churchId, 'elvanto', batch.id);
+    assert.equal(updatedElvanto.name, 'Independent Elvanto name');
+    assert.deepEqual(updatedElvanto.source, { ...ELVANTO_SOURCE, name: 'Renamed members' });
 
     const rejected = await recordActiveSourceHealthWithConnection(conn, {
       churchId, provider: 'planning_center', batchId: batch.id, expectedSource: ELVANTO_SOURCE,

@@ -158,6 +158,7 @@ async function promoteSourceDraftWithConnection(conn, {
   }
   const result = await write(`UPDATE people_sync_batches
     SET source_kind = draft_source_kind, source_external_id = draft_source_external_id, source_name = draft_source_name,
+        name = CASE WHEN provider = 'planning_center' THEN draft_source_name ELSE name END,
         source_revision = source_revision + 1, draft_source_kind = NULL, draft_source_external_id = NULL,
         draft_source_name = NULL, draft_source_base_revision = NULL, draft_source_updated_at = NULL,
         source_status = 'unknown', source_status_checked_at = NULL, source_status_error_code = NULL,
@@ -220,7 +221,7 @@ async function recordActiveSourceHealthWithConnection(conn, {
   const write = async (sql, params) => typeof conn.query === 'function'
     ? await conn.query(sql, params)
     : conn.prepare(sql).run(...params);
-  const row = await readOne(`SELECT id, name, source_kind, source_external_id, source_name, source_status
+  const row = await readOne(`SELECT id, name, legacy_provider_batch_id, source_kind, source_external_id, source_name, source_status
     FROM people_sync_batches WHERE id = ? AND church_id = ? AND provider = ?`, [batchId, churchId, provider]);
   if (!row || row.source_kind !== expectedSource.kind || row.source_external_id !== expectedSource.externalId) {
     return { updated: false, priorSourceStatus: null, batchName: null, sourceName: null };
@@ -228,9 +229,13 @@ async function recordActiveSourceHealthWithConnection(conn, {
 
   const nextSourceName = sourceName ?? row.source_name;
   const result = await write(`UPDATE people_sync_batches
-    SET source_name = ?, source_status = ?, source_status_checked_at = ?, source_status_error_code = ?
+    SET name = CASE
+          WHEN provider = 'planning_center' AND legacy_provider_batch_id IS NULL THEN ?
+          ELSE name
+        END,
+        source_name = ?, source_status = ?, source_status_checked_at = ?, source_status_error_code = ?
     WHERE id = ? AND church_id = ? AND provider = ? AND source_kind = ? AND source_external_id = ?`, [
-    nextSourceName, sourceStatus, checkedAt, errorCode,
+    nextSourceName, nextSourceName, sourceStatus, checkedAt, errorCode,
     batchId, churchId, provider, expectedSource.kind, expectedSource.externalId,
   ]);
   if ((result.affectedRows ?? result.changes) !== 1) {

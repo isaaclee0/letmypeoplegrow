@@ -9,7 +9,18 @@ const Database = require('../config/database');
 const { withTestChurchDb } = require('../test-helpers/testChurchDb');
 const pcoSync = require('../services/planningCenterSync');
 const batchRepository = require('../services/peopleSync/batchRepository');
+const connectionStore = require('../services/peopleSync/connectionStore');
+const providerRegistry = require('../services/peopleSync/providerRegistry');
 const integrationsRouter = require('./integrations');
+
+process.env.INTEGRATION_CREDENTIALS_KEY = process.env.INTEGRATION_CREDENTIALS_KEY || Buffer.alloc(32, 11).toString('base64');
+providerRegistry.registerProvider('planning_center', {
+  provider: 'planning_center',
+  validateConnection: async () => ({ valid: true }),
+  listSources: async () => [{ kind: 'planning_center_list', externalId: 'list-1', name: 'Members' }],
+  fetchSourceSnapshot: async () => ({ provider: 'planning_center', complete: true, people: [], memberExternalIds: [] }),
+  isLifecycleEligible: () => true,
+});
 
 async function withRouteChurchDb(run) {
   return withTestChurchDb(async () => {
@@ -56,36 +67,36 @@ async function startApp(churchId) {
   };
 }
 
-function settings(name) {
+function settings() {
   return {
-    name, defaultPeopleType: 'local_visitor', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
+    defaultPeopleType: 'local_visitor', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
     scheduleEnabled: true, scheduleFrequency: 'monthly', scheduleDay: 15,
   };
 }
 
-function sourceCreateBody(name, overrides = {}) {
+function sourceCreateBody(overrides = {}) {
   return {
-    ...settings(name), sourceKind: 'planning_center_list', sourceExternalId: 'list-1',
+    ...settings(), sourceKind: 'planning_center_list', sourceExternalId: 'list-1',
     ...overrides,
   };
 }
 
 async function createSourceBatch(churchId) {
   return pcoSync.createBatch(churchId, {
-    name: 'Source members', initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
+    initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
     defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
     scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
   });
 }
 
-test('PCO source-era PUT accepts settings only and never creates legacy compatibility rows', async () => {
+test('PCO source-era PUT retains the trusted List name while updating settings without legacy compatibility rows', async () => {
   await withRouteChurchDb(async (churchId) => {
     const batch = await createSourceBatch(churchId);
     const app = await startApp(churchId);
     try {
-      const response = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, { method: 'PUT', body: settings('Renamed members') });
+      const response = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, { method: 'PUT', body: settings() });
       assert.equal(response.status, 200);
-      assert.equal(response.body.batch.name, 'Renamed members');
+      assert.equal(response.body.batch.name, 'Members');
       const legacy = await Database.query('SELECT * FROM planning_center_sync_batches WHERE church_id = ?', [churchId]);
       assert.deepEqual(legacy, []);
     } finally {
@@ -122,7 +133,7 @@ test('retired legacy PCO batches cannot be updated and delete both batch rows wi
     const app = await startApp(churchId);
     try {
       const put = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: settings('Attempted update'),
+        method: 'PUT', body: settings(),
       });
       assert.equal(put.status, 409);
       assert.deepEqual(put.body, {
@@ -155,26 +166,47 @@ test('retired legacy PCO batches cannot be updated and delete both batch rows wi
   });
 });
 
-test('PCO source POST rejects invalid schedule ranges, unsafe gathering IDs, unknown fields, and wrong field types', async () => {
+test('PCO source POST rejects invalid schedule ranges, unsafe gathering IDs, client names, unknown fields, and wrong field types', async () => {
   await withRouteChurchDb(async (churchId) => {
     const app = await startApp(churchId);
     try {
       const invalidBodies = [
-        sourceCreateBody('Weekly 7', { scheduleFrequency: 'weekly', scheduleDay: 7 }),
-        sourceCreateBody('Monthly 0', { scheduleFrequency: 'monthly', scheduleDay: 0 }),
-        sourceCreateBody('Zero gathering', { gatheringTypeId: 0 }),
-        sourceCreateBody('Negative gathering', { gatheringTypeId: -1 }),
-        sourceCreateBody('Unsafe gathering', { gatheringTypeId: Number.MAX_SAFE_INTEGER + 1 }),
-        sourceCreateBody('Fraction gathering', { gatheringTypeId: 1.5 }),
-        sourceCreateBody('Wrong auto remove', { gatheringAutoRemoveEnabled: 'false' }),
-        { ...sourceCreateBody('Unknown'), unexpected: true },
-        { ...sourceCreateBody('Smuggled'), unexpectedNestedRule: { branches: [] } },
+        sourceCreateBody({ scheduleFrequency: 'weekly', scheduleDay: 7 }),
+        sourceCreateBody({ scheduleFrequency: 'monthly', scheduleDay: 0 }),
+        sourceCreateBody({ gatheringTypeId: 0 }),
+        sourceCreateBody({ gatheringTypeId: -1 }),
+        sourceCreateBody({ gatheringTypeId: Number.MAX_SAFE_INTEGER + 1 }),
+        sourceCreateBody({ gatheringTypeId: 1.5 }),
+        sourceCreateBody({ gatheringAutoRemoveEnabled: 'false' }),
+        sourceCreateBody({ name: 'Client override' }),
+        { ...sourceCreateBody(), unexpected: true },
+        { ...sourceCreateBody(), unexpectedNestedRule: { branches: [] } },
       ];
       for (const body of invalidBodies) {
         const response = await app.request('/api/integrations/planning-center/sync-batches', { method: 'POST', body });
-        assert.equal(response.status, 400, body.name);
+        assert.equal(response.status, 400, JSON.stringify(body));
       }
       assert.equal((await pcoSync.listBatches(churchId)).length, 0);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test('PCO source POST derives the batch name from the server-resolved List', async () => {
+  await withRouteChurchDb(async (churchId) => {
+    await connectionStore.upsertConnection({
+      churchId, provider: 'planning_center', authType: 'oauth', credentials: { accessToken: 'test-token' },
+    });
+    const app = await startApp(churchId);
+    try {
+      const response = await app.request('/api/integrations/planning-center/sync-batches', {
+        method: 'POST', body: sourceCreateBody(),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.batch.name, 'Members');
+      assert.equal(response.body.batch.draftSource.name, 'Members');
     } finally {
       await app.close();
     }
@@ -187,10 +219,10 @@ test('PCO source POST accepts valid boundaries before server-side source resolut
     const app = await startApp(churchId);
     try {
       const weekly = await app.request('/api/integrations/planning-center/sync-batches', {
-        method: 'POST', body: sourceCreateBody('Weekly boundary', { scheduleFrequency: 'weekly', scheduleDay: 0, gatheringTypeId: null }),
+        method: 'POST', body: sourceCreateBody({ scheduleFrequency: 'weekly', scheduleDay: 0, gatheringTypeId: null }),
       });
       const monthly = await app.request('/api/integrations/planning-center/sync-batches', {
-        method: 'POST', body: sourceCreateBody('Monthly boundary', { scheduleFrequency: 'monthly', scheduleDay: 31, gatheringTypeId: gathering.insertId }),
+        method: 'POST', body: sourceCreateBody({ scheduleFrequency: 'monthly', scheduleDay: 31, gatheringTypeId: gathering.insertId }),
       });
       assert.equal(weekly.status, 409);
       assert.equal(monthly.status, 409);
@@ -220,16 +252,16 @@ test('PCO source-era PUT rejects malformed and unknown input', async () => {
     const app = await startApp(churchId);
     try {
       const malformed = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: { ...settings('Bad schedule'), scheduleDay: '15' },
+        method: 'PUT', body: { ...settings(), scheduleDay: '15' },
       });
       assert.equal(malformed.status, 400);
       const smuggled = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: { ...settings('Smuggled'), unexpectedNestedRule: { branches: [] } },
+        method: 'PUT', body: { ...settings(), name: 'Client override' },
       });
       assert.equal(smuggled.status, 400);
       assert.match(smuggled.body.error, /only change batch settings/i);
       const unchanged = await pcoSync.getBatch(churchId, batch.id);
-      assert.equal(unchanged.name, 'Source members');
+      assert.equal(unchanged.name, 'Members');
     } finally {
       await app.close();
     }
@@ -254,7 +286,7 @@ test('PCO PUT rejects malformed batch identifiers before database lookup', async
 test('PCO source-era PUT rejects unknown payloads and scopes missing batches to the church', async () => {
   await withRouteChurchDb(async (churchId) => {
     const batch = await pcoSync.createBatch(churchId, {
-      name: 'Source members', initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
+      initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
       defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
       scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
     });
@@ -266,7 +298,7 @@ test('PCO source-era PUT rejects unknown payloads and scopes missing batches to 
     let otherBatch;
     for (let index = 0; index < 3; index += 1) {
       otherBatch = await pcoSync.createBatch(otherChurchId, {
-        name: `Other ${index}`, initialDraftSource: { kind: 'planning_center_list', externalId: `list-${index}`, name: 'Members' },
+        initialDraftSource: { kind: 'planning_center_list', externalId: `list-${index}`, name: 'Members' },
         defaultPeopleType: 'regular', gatheringTypeId: null, gatheringAutoRemoveEnabled: false,
         scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
       });
@@ -275,7 +307,7 @@ test('PCO source-era PUT rejects unknown payloads and scopes missing batches to 
     try {
       const updated = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
         method: 'PUT',
-        body: { ...settings('Legacy updated'), unexpectedNestedRule: { enabled: true } },
+        body: { ...settings(), name: 'Client override' },
       });
       assert.equal(updated.status, 400);
       assert.match(updated.body.error, /only change batch settings/i);
@@ -294,7 +326,7 @@ test('PCO source-era settings update never fetches a roster or claims existing g
   await withRouteChurchDb(async (churchId) => {
     const gathering = await Database.query('INSERT INTO gathering_types (church_id, name) VALUES (?, ?)', [churchId, 'Sunday']);
     const batch = await pcoSync.createBatch(churchId, {
-      name: 'Source batch', initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
+      initialDraftSource: { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' },
       defaultPeopleType: 'regular', gatheringTypeId: gathering.insertId, gatheringAutoRemoveEnabled: false,
       scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1,
     });
@@ -304,7 +336,7 @@ test('PCO source-era settings update never fetches a roster or claims existing g
     const app = await startApp(churchId);
     try {
       const response = await app.request(`/api/integrations/planning-center/sync-batches/${batch.id}`, {
-        method: 'PUT', body: { ...settings('Updated source batch'), gatheringTypeId: gathering.insertId, gatheringAutoRemoveEnabled: true },
+        method: 'PUT', body: { ...settings(), gatheringTypeId: gathering.insertId, gatheringAutoRemoveEnabled: true },
       });
       assert.equal(response.status, 200);
       assert.equal(rosterFetches, 0);
