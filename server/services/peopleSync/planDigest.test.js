@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
 const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
 
@@ -199,6 +200,36 @@ test('review token is bound to church, provider, batch, and plan digest', () => 
     assert.deepEqual(verifyReviewToken(token, { ...expected, planDigest: digestPlan(plan({ archive: [{ id: 'archive:e1:1' }] })) }), {
       ok: false, code: 'SYNC_PLAN_STALE',
     });
+  });
+}));
+
+test('separate reviews of the same plan receive distinct one-time token identities', () => withSecret('review-secret', () => {
+  atUnixSecond(2_000_000_000, () => {
+    const planDigest = digestPlan(plan());
+    const context = {
+      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest, expiresInSeconds: 900,
+    };
+    const first = createReviewToken(context);
+    const second = createReviewToken(context);
+
+    assert.notEqual(first, second);
+    assert.equal(verifyReviewToken(first, context).ok, true);
+    assert.equal(verifyReviewToken(second, context).ok, true);
+  });
+}));
+
+test('tokens issued immediately before the one-time identity rollout remain verifiable', () => withSecret('review-secret', () => {
+  atUnixSecond(2_000_000_000, () => {
+    const expected = {
+      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: digestPlan(plan()),
+    };
+    const payloadPart = Buffer.from(JSON.stringify({
+      ...expected,
+      exp: 2_000_000_900,
+    })).toString('base64url');
+    const signature = crypto.createHmac('sha256', 'review-secret').update(payloadPart).digest('base64url');
+
+    assert.equal(verifyReviewToken(`${payloadPart}.${signature}`, expected).ok, true);
   });
 }));
 

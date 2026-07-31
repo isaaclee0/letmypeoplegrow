@@ -2,6 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import MatchDecisionCard from './MatchDecisionCard';
 import { personDisplayName } from './PersonIdentitySummary';
 import {
+  isRefreshOnlyReviewError,
+  peopleSyncErrorCode,
+  peopleSyncErrorMessage,
+} from './apiError';
+import {
   buildSyncSelections,
   incompleteIdentityExternalIds,
   initializeIdentityDecisions,
@@ -25,7 +30,28 @@ const MATCH_REASON_COPY: Record<string, string> = {
   review_deferred: 'Previously left for review',
 };
 
+const ARCHIVE_REASON_COPY: Record<string, string> = {
+  confirmed_missing_full_sync: 'Missing from two complete provider syncs',
+  provider_state_archived: 'Archived in the provider',
+  provider_state_deceased: 'Marked deceased in the provider',
+  contact_excluded: 'No longer included because provider contacts are excluded',
+  no_longer_eligible: 'No longer eligible for the configured source',
+};
+
 const providerLabel = (provider: SyncProvider) => provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
+
+function archiveReasonLabel(reason: string): string {
+  if (ARCHIVE_REASON_COPY[reason]) return ARCHIVE_REASON_COPY[reason];
+  if (!reason.includes('_')) return reason;
+  const words = reason.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function snapshotTimeLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unavailable';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
 
 export interface CandidateSearchRenderProps {
   action: AmbiguousPersonAction;
@@ -38,6 +64,7 @@ interface SyncReviewProps {
   onRefresh: () => void | Promise<void>;
   onApply: (reviewToken: string, selections: PeopleSyncSelections) => void | Promise<void>;
   applying: boolean;
+  interactionDisabled?: boolean;
   renderCandidateSearch?: (props: CandidateSearchRenderProps) => React.ReactNode;
   renderCandidateLabel?: (action: AmbiguousPersonAction, candidateId: number) => React.ReactNode;
   resolveAmbiguousArchiveIndividualId?: (action: AmbiguousPersonAction) => number | undefined;
@@ -101,22 +128,6 @@ function stateForReview(review: PeopleSyncReview): SyncSelectionState {
 
 function displayName(person: { firstName: string; lastName: string } | undefined): string {
   return `${person?.firstName || ''} ${person?.lastName || ''}`.trim();
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  return (error as { code?: string }).code
-    || (error as { response?: { data?: { code?: string } } }).response?.data?.code;
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error !== null) {
-    const responseText = (error as { response?: { data?: { error?: string; message?: string } } }).response?.data;
-    if (responseText?.error) return responseText.error;
-    if (responseText?.message) return responseText.message;
-  }
-  return 'Failed to apply sync.';
 }
 
 function Section({ title, count, children, tone = 'neutral', open = false }: {
@@ -293,6 +304,7 @@ export default function SyncReview({
   onRefresh,
   onApply,
   applying,
+  interactionDisabled = false,
   renderCandidateSearch,
   renderCandidateLabel,
   resolveAmbiguousArchiveIndividualId,
@@ -374,7 +386,10 @@ export default function SyncReview({
     }
   };
 
-  const stale = errorCode(applyError) === 'SYNC_PLAN_STALE' || errorCode(applyError) === 'STALE_REVIEW';
+  const refreshOnlyError = isRefreshOnlyReviewError(applyError);
+  const refreshOnlyCode = peopleSyncErrorCode(applyError);
+  const reviewExpired = refreshOnlyCode === 'SYNC_REVIEW_EXPIRED';
+  const reviewAlreadyApplied = refreshOnlyCode === 'SYNC_REVIEW_ALREADY_APPLIED';
   const manualChoices = Object.entries(state.identityDecisions || {})
     .filter(([, decision]) => decision?.outcome === 'link')
     .map(([externalId, decision]) => ({
@@ -433,7 +448,8 @@ export default function SyncReview({
   const allPlannedArchivesAccepted = !requireAllPlannedArchivesAccepted
     || effectiveArchive.every((action) => state.acceptedArchiveIds.has(action.individualId));
   const applyDisabled = applying
-    || stale
+    || interactionDisabled
+    || refreshOnlyError
     || malformedV2
     || incompleteExternalIds.length > 0
     || collisions.length > 0
@@ -446,15 +462,36 @@ export default function SyncReview({
   const gatheringCount = effectiveAddToGathering.length + effectiveRemoveFromGathering.length;
   const destructiveCount = effectiveArchive.length + effectiveRemoveFromGathering.length + plan.renameFamily.length;
   const skippedCount = plan.skipped.length + plan.unmatchedLocalRegulars.length + deferredExternalIds.length;
+  const fetchedAt = review.snapshot?.fetchedAt || plan.snapshot?.fetchedAt || null;
+  const allClear = Object.keys(reviewContext?.identities || {}).length === 0
+    && plan.linkPeople.length === 0
+    && plan.linkFamilies.length === 0
+    && plan.addPeople.length === 0
+    && plan.addFamilies.length === 0
+    && plan.updateManagedFields.length === 0
+    && plan.promoteToRegular.length === 0
+    && plan.demoteToLocalVisitor.length === 0
+    && plan.archive.length === 0
+    && plan.reactivate.length === 0
+    && plan.moveFamily.length === 0
+    && plan.renameFamily.length === 0
+    && plan.addToGathering.length === 0
+    && plan.removeFromGathering.length === 0
+    && plan.ambiguousPeople.length === 0
+    && plan.familyConflicts.length === 0;
 
   return (
     <div className="space-y-5 text-gray-900 dark:text-gray-100">
+      <fieldset disabled={applying || interactionDisabled} className="contents">
       <header className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 className="text-lg font-semibold text-gray-950 dark:text-white">{providerLabel(provider)} sync review</h3>
             <p className="mt-1 max-w-2xl text-sm text-gray-600 dark:text-gray-300">
               Compare people and household context, then confirm the changes you want to apply.
+            </p>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              Source snapshot: {fetchedAt ? <time dateTime={fetchedAt}>{snapshotTimeLabel(fetchedAt)}</time> : 'Unavailable'}
             </p>
           </div>
           <ApplyControls applying={applying} disabled={applyDisabled} onApply={() => void submit()} onRefresh={onRefresh} />
@@ -468,6 +505,12 @@ export default function SyncReview({
           <SummaryCard label="Destructive changes" count={destructiveCount} tone={destructiveCount > 0 ? 'amber' : 'neutral'} />
         </div>
       </header>
+
+      {allClear && (
+        <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-200">
+          No roster changes are planned in this review.
+        </p>
+      )}
 
       {unmatchedCoverageCount > 0 && (
         <div className="rounded-lg border border-gray-200 bg-stone-50 p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
@@ -580,7 +623,7 @@ export default function SyncReview({
             <li key={action.id}>
               <label className="flex items-start gap-2">
                 <input type="checkbox" aria-label={`Archive ${localPerson(action.individualId)}`} checked={state.acceptedArchiveIds.has(action.individualId)} onChange={() => toggleArchive(action.individualId)} className="mt-0.5" />
-                <span><span className="block font-medium">Archive {localPerson(action.individualId)}</span><span className="text-xs text-amber-800 dark:text-amber-200">{action.reason}</span></span>
+                <span><span className="block font-medium">Archive {localPerson(action.individualId)}</span><span className="text-xs text-amber-800 dark:text-amber-200">{archiveReasonLabel(action.reason)}</span></span>
               </label>
             </li>
           ))}
@@ -619,10 +662,17 @@ export default function SyncReview({
 
       {applyError && (
         <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200">
-          {stale ? (
+          {refreshOnlyError ? (
             <>
-              <p className="font-medium">This review is out of date.</p>
+              <p className="font-medium">
+                {reviewExpired
+                  ? 'This review has expired.'
+                  : reviewAlreadyApplied
+                    ? 'This review has already been applied.'
+                    : 'This review is out of date.'}
+              </p>
               <p className="mt-1">At least one choice may no longer be available. Refresh the plan and review the affected people again.</p>
+              <p className="mt-1">{peopleSyncErrorMessage(applyError, 'Refresh the plan before applying.')}</p>
               {manualChoices.length > 0 && (
                 <ul className="mt-2 list-disc pl-5">
                   {manualChoices.map((choice) => <li key={`${choice.external}-${choice.local}`}>{choice.external} → {choice.local}</li>)}
@@ -630,7 +680,7 @@ export default function SyncReview({
               )}
               <button type="button" className="mt-3 font-semibold underline underline-offset-2" onClick={() => void onRefresh()}>Refresh plan</button>
             </>
-          ) : errorText(applyError)}
+          ) : peopleSyncErrorMessage(applyError, 'Failed to apply sync.')}
         </div>
       )}
 
@@ -638,6 +688,7 @@ export default function SyncReview({
         <p className="text-xs text-gray-500 dark:text-gray-400">Nothing is changed until you apply this review.</p>
         <ApplyControls applying={applying} disabled={applyDisabled} onApply={() => void submit()} onRefresh={onRefresh} />
       </footer>
+      </fieldset>
     </div>
   );
 }

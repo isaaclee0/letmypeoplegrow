@@ -6,6 +6,7 @@ const {
   PEOPLE_SOURCE_LOCKED,
   getAuthority,
   beginAuthoritySwitch,
+  cancelAuthoritySwitch,
   commitAuthoritySwitch,
   disableAuthority,
   getManagedLinks,
@@ -70,6 +71,19 @@ test('a later switch replaces the pending switch and disabling clears active and
     await beginAuthoritySwitch(churchId, 'elvanto');
     await disableAuthority(churchId);
     assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+  });
+});
+
+test('authority preview cancellation is scoped to the exact pending intent', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await beginAuthoritySwitch(churchId, 'elvanto', 'preview-old');
+    await beginAuthoritySwitch(churchId, 'elvanto', 'preview-new');
+
+    const staleCancel = await cancelAuthoritySwitch(churchId, 'elvanto', 'preview-old');
+    assert.deepEqual(staleCancel, { active: 'none', pending: 'elvanto' });
+
+    const exactCancel = await cancelAuthoritySwitch(churchId, 'elvanto', 'preview-new');
+    assert.deepEqual(exactCancel, { active: 'none', pending: null });
   });
 });
 

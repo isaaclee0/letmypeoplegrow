@@ -119,11 +119,17 @@ function normalizeFamilyMembers(membersByFamily) {
 function buildDurableLinks(existingLinks, externalById, localById) {
   const claimsByExternal = new Map();
   const claimsByLocal = new Map();
+  const reservedLocalIds = new Set();
 
   for (const link of existingLinks || []) {
     const externalPersonId = stableString(link?.externalPersonId);
     const individualId = Number(link?.individualId);
-    if (!externalById.has(externalPersonId) || !Number.isInteger(individualId)) continue;
+    if (!Number.isInteger(individualId)) continue;
+    // A provider link remains an identity claim even while its external person
+    // is absent from this source snapshot. Reserve the local side before
+    // limiting durable-link resolution to externals the matcher can report.
+    if (localById.has(individualId)) reservedLocalIds.add(individualId);
+    if (!externalById.has(externalPersonId)) continue;
     if (!claimsByExternal.has(externalPersonId)) claimsByExternal.set(externalPersonId, new Set());
     if (!claimsByLocal.has(individualId)) claimsByLocal.set(individualId, new Set());
     claimsByExternal.get(externalPersonId).add(individualId);
@@ -133,12 +139,8 @@ function buildDurableLinks(existingLinks, externalById, localById) {
   const validByExternal = new Map();
   const conflictedByExternal = new Map();
   const staleByExternal = new Map();
-  const reservedLocalIds = new Set();
 
   for (const [externalPersonId, individualIds] of claimsByExternal) {
-    for (const individualId of individualIds) {
-      if (localById.has(individualId)) reservedLocalIds.add(individualId);
-    }
     const claimIds = [...individualIds].sort((a, b) => a - b);
     const candidateIndividualIds = claimIds.filter((individualId) => localById.has(individualId));
     const staleLinkedIndividualIds = claimIds.filter((individualId) => !localById.has(individualId));

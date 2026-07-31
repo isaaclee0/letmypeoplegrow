@@ -64,13 +64,16 @@ function assertResolvableList(resource, expectedExternalId) {
   return dto;
 }
 
-function mapIncluded(included, fieldDataById, primaryContacts, contextById, memberIds) {
+function mapIncluded(included, fieldDataById, primaryContacts, householdNames, contextById, memberIds) {
   for (const resource of Array.isArray(included) ? included : []) {
     if (!resource || typeof resource !== 'object') continue;
     if (resource.type === 'FieldDatum' && resource.id) {
       fieldDataById.set(resource.id, resource);
-    } else if (resource.type === 'Household' && resource.id && resource.attributes && resource.attributes.primary_contact_id) {
-      primaryContacts.set(resource.id, resource.attributes.primary_contact_id);
+    } else if (resource.type === 'Household' && resource.id) {
+      const attributes = resource.attributes || {};
+      const name = String(attributes.name ?? '').trim();
+      if (name) householdNames.set(resource.id, name);
+      if (attributes.primary_contact_id) primaryContacts.set(resource.id, attributes.primary_contact_id);
     }
   }
   for (const resource of Array.isArray(included) ? included : []) {
@@ -96,6 +99,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
   const contextById = new Map();
   const memberIds = new Set();
   const primaryContacts = new Map();
+  const householdNames = new Map();
   const memberUrl = `${API}/lists/${encodeURIComponent(sourceExternalId)}/people?per_page=100&include=households.people,field_data`;
 
   await client.getAll(memberUrl, async (envelope) => {
@@ -108,7 +112,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
       }
       memberIds.add(id);
     }
-    mapIncluded(envelope.included, fieldDataById, primaryContacts, contextById, memberIds);
+    mapIncluded(envelope.included, fieldDataById, primaryContacts, householdNames, contextById, memberIds);
     for (const resource of pageMembers) {
       const id = String(resource.id).trim();
       membersById.set(id, projectPerson(resource, fieldDataById));
@@ -133,7 +137,7 @@ async function fetchPlanningCenterSourceSnapshot(options = {}) {
     memberExternalIds: [...memberIds].sort(),
     people,
     contextPeople,
-    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts),
+    families: projectPcoHouseholds([...memberRawPeople, ...contextRawPeople], primaryContacts, householdNames),
   };
 }
 

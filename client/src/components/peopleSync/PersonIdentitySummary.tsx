@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PeopleSyncPersonDisplay } from './types';
+import type { PeopleSyncFamilyDisplay, PeopleSyncPersonDisplay } from './types';
 
 interface PersonIdentitySummaryProps {
   label: string;
@@ -8,6 +8,10 @@ interface PersonIdentitySummaryProps {
 
 export function personDisplayName(person: Pick<PeopleSyncPersonDisplay, 'firstName' | 'lastName'> | undefined): string {
   return `${person?.firstName || ''} ${person?.lastName || ''}`.trim() || 'Name unavailable';
+}
+
+export function personFamilyDisplay(person: PeopleSyncPersonDisplay): PeopleSyncFamilyDisplay {
+  return person.family ?? { state: 'unavailable' };
 }
 
 export default function PersonIdentitySummary({ label, person }: PersonIdentitySummaryProps) {
@@ -20,7 +24,7 @@ export default function PersonIdentitySummary({ label, person }: PersonIdentityS
     );
   }
 
-  const family = person.family;
+  const family = personFamilyDisplay(person);
   const previewMembers = family.state === 'known' ? family.members.slice(0, 3) : [];
   const hiddenCount = family.state === 'known'
     ? Math.max(0, family.totalOtherMembers - previewMembers.length)

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { peopleSyncAPI } from '../../services/api';
 import PeopleSourceControl from './PeopleSourceControl';
@@ -8,6 +8,7 @@ import type { PeopleSyncPlan, PeopleSyncReview, PeopleSyncSettings, SyncProvider
 vi.mock('../../services/api', () => ({
   peopleSyncAPI: {
     previewAuthority: vi.fn(),
+    cancelAuthorityPreview: vi.fn(),
     applyAuthority: vi.fn(),
     disableAuthority: vi.fn(),
   },
@@ -74,6 +75,7 @@ const review: PeopleSyncReview = {
     ambiguousPeople: 0, familyConflicts: 0, unmatchedLocalRegulars: 0, skipped: 0,
   },
   authority: { active: 'planning_center', pending: 'elvanto' },
+  authorityPreviewId: 'authority-preview-1',
 };
 
 const initialSettings: PeopleSyncSettings = {
@@ -118,7 +120,12 @@ function Harness({
 }
 
 describe('PeopleSourceControl', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockResolvedValue({
+      data: { success: true, authority: { active: 'none', pending: null } },
+    });
+  });
 
   it('reflects only the persisted authority in its checked state', () => {
     render(<Harness provider="elvanto" initialAuthority="elvanto" />);
@@ -346,6 +353,34 @@ describe('PeopleSourceControl', () => {
     expect(within(applyError).getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
   });
 
+  it('preserves nested expired-review details through the authority wrapper', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.applyAuthority).mockRejectedValue(Object.assign(
+      new Error('Request failed with status code 409'),
+      {
+        code: 'ERR_BAD_REQUEST',
+        response: {
+          data: {
+            code: 'SYNC_REVIEW_EXPIRED',
+            message: 'This authority review expired on the server.',
+          },
+        },
+      },
+    ));
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+
+    const applyError = await screen.findByRole('alert');
+    expect(applyError).toHaveTextContent('This review has expired.');
+    expect(applyError).toHaveTextContent('This authority review expired on the server.');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
+  });
+
   it('reverses provider names when switching from Elvanto to Planning Center', () => {
     render(<Harness provider="planning_center" initialAuthority="elvanto" />);
 
@@ -356,16 +391,149 @@ describe('PeopleSourceControl', () => {
   });
 
   it('cancels an authority review without changing persisted state', async () => {
+    let resolveCancel!: (value: { data: { success: true; authority: { active: 'none'; pending: null } } }) => void;
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockImplementation(() => new Promise((resolve) => { resolveCancel = resolve; }));
     render(<Harness initialAuthority="none" />);
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     await screen.findByText('Elvanto sync review');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
 
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-1',
+    ));
+    expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeDisabled();
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+
+    await act(async () => resolveCancel({ data: { success: true, authority: { active: 'none', pending: null } } }));
     expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' })).not.toBeChecked();
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
+  });
+
+  it('disables review actions while refreshing and cannot apply the old review', async () => {
+    let resolveRefresh!: (value: { data: { success: true } & PeopleSyncReview }) => void;
+    vi.mocked(peopleSyncAPI.previewAuthority)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
+
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    screen.getAllByRole('button', { name: 'Refresh plan' }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeDisabled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
+
+    await act(async () => resolveRefresh({
+      data: { ...review, success: true, reviewToken: 'refreshed-review', authorityPreviewId: 'authority-preview-2' },
+    }));
+    expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeEnabled();
+  });
+
+  it('never re-enables the old review when a refresh fails after its intent may have changed', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('refresh failed');
+    expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
+    expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-1',
+    ));
+  });
+
+  it('keeps the newest review when an older preview response arrives late', async () => {
+    let resolveOlder!: (value: { data: { success: true } & PeopleSyncReview }) => void;
+    let resolveNewest!: (value: { data: { success: true } & PeopleSyncReview }) => void;
+    vi.mocked(peopleSyncAPI.previewAuthority)
+      .mockResolvedValueOnce({ data: { success: true, ...review } })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewest = resolve; }));
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    const refreshButtons = screen.getAllByRole('button', { name: 'Refresh plan' });
+    act(() => {
+      refreshButtons[0].click();
+      refreshButtons[1].click();
+    });
+    expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledTimes(3);
+
+    const newestPlan = {
+      ...review.plan,
+      people: {
+        ...review.plan.people!,
+        external: {
+          ...review.plan.people!.external,
+          'e-1': { ...review.plan.people!.external['e-1'], firstName: 'Newest' },
+        },
+      },
+    };
+    await act(async () => resolveNewest({
+      data: {
+        ...review,
+        success: true,
+        reviewToken: 'newest-review',
+        authorityPreviewId: 'authority-preview-newest',
+        plan: newestPlan,
+      },
+    }));
+    expect(screen.getAllByText('Newest Smith').length).toBeGreaterThan(0);
+
+    const olderPlan = {
+      ...review.plan,
+      people: {
+        ...review.plan.people!,
+        external: {
+          ...review.plan.people!.external,
+          'e-1': { ...review.plan.people!.external['e-1'], firstName: 'Older' },
+        },
+      },
+    };
+    await act(async () => resolveOlder({
+      data: {
+        ...review,
+        success: true,
+        reviewToken: 'older-review',
+        authorityPreviewId: 'authority-preview-older',
+        plan: olderPlan,
+      },
+    }));
+    expect(screen.queryAllByText('Older Smith')).toHaveLength(0);
+    expect(screen.getAllByText('Newest Smith').length).toBeGreaterThan(0);
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-older',
+    ));
+  });
+
+  it('dismisses a mixed-rollout review locally without an unscoped cancel request', async () => {
+    const { authorityPreviewId: _authorityPreviewId, ...reviewWithoutIntent } = review;
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...reviewWithoutIntent } });
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+
+    expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
+    expect(peopleSyncAPI.cancelAuthorityPreview).not.toHaveBeenCalled();
   });
 
   it('confirms before disabling the active provider and refreshes persisted state', async () => {

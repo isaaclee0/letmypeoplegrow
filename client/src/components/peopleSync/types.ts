@@ -394,7 +394,10 @@ export type PeopleSyncFamilyDisplay =
 // `matchEligible` is only present for local people; selections are still
 // constrained by the separately signed review context.
 export interface PeopleSyncPersonDisplay extends PeopleSyncPersonName {
-  family: PeopleSyncFamilyDisplay;
+  // Older/mixed-version review responses may omit presentation-only family
+  // context. Consumers must render that as unavailable rather than assuming
+  // the optional display enrichment is present.
+  family?: PeopleSyncFamilyDisplay;
   matchEligible?: boolean;
 }
 
@@ -494,6 +497,9 @@ export interface PeopleSyncCoverage {
 export interface PeopleSyncReview {
   runId: number;
   reviewToken: string;
+  // Present on authority-switch previews. Cancellation uses this opaque
+  // intent ID so an older UI cannot clear a newer pending switch.
+  authorityPreviewId?: string | null;
   decisionContractVersion?: 2;
   summary: PeopleSyncPlanSummary;
   plan: PeopleSyncPlan;

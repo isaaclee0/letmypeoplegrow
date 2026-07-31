@@ -106,6 +106,7 @@ function createReviewToken(context) {
     provider: context.provider,
     batchId: context.batchId,
     planDigest: context.planDigest,
+    jti: crypto.randomBytes(16).toString('base64url'),
     exp: Math.floor(Date.now() / 1000) + context.expiresInSeconds,
   };
   const payloadPart = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -122,11 +123,15 @@ function validExpected(expected) {
 function validPayload(payload) {
   if (!isPlainObject(payload)) return false;
   const keys = Object.keys(payload).sort();
-  if (keys.join(',') !== 'batchId,churchId,exp,planDigest,provider') return false;
+  const keyList = keys.join(',');
+  const hasOneTimeIdentity = keyList === 'batchId,churchId,exp,jti,planDigest,provider';
+  const isLegacyPayload = keyList === 'batchId,churchId,exp,planDigest,provider';
+  if (!hasOneTimeIdentity && !isLegacyPayload) return false;
   return typeof payload.churchId === 'string' && payload.churchId.length > 0 &&
     typeof payload.provider === 'string' && payload.provider.length > 0 &&
     (payload.batchId === null || typeof payload.batchId === 'string' || Number.isSafeInteger(payload.batchId)) &&
     typeof payload.planDigest === 'string' && /^[a-f0-9]{64}$/.test(payload.planDigest) &&
+    (isLegacyPayload || (typeof payload.jti === 'string' && /^[A-Za-z0-9_-]{22}$/.test(payload.jti))) &&
     Number.isSafeInteger(payload.exp) && payload.exp >= 0;
 }
 

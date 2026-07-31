@@ -46,6 +46,33 @@ test('uses an existing durable link before considering a conflicting name', () =
   });
 });
 
+test('reserves provider-linked locals when their external identities are absent from the source snapshot', () => {
+  const result = matchPeople(input({
+    externalPeople: [
+      external('current-regular', 'Alex', 'Regular'),
+      external('current-visitor', 'Vera', 'Visitor'),
+      external('current-archived', 'Arnie', 'Archived'),
+    ],
+    localPeople: [
+      local(1, 'Alex', 'Regular'),
+      local(2, 'Vera', 'Visitor', { peopleType: 'local_visitor' }),
+      local(3, 'Arnie', 'Archived', { isActive: false }),
+    ],
+    existingLinks: [
+      { externalPersonId: 'absent-regular', individualId: 1 },
+      { externalPersonId: 'absent-visitor', individualId: 2 },
+      { externalPersonId: 'absent-archived', individualId: 3 },
+    ],
+  }));
+
+  assert.deepEqual(result.linked, []);
+  assert.deepEqual(result.matches, []);
+  assert.deepEqual(result.visitorMatches, []);
+  assert.deepEqual(result.archivedMatches, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(result.unmatchedExternalIds, ['current-archived', 'current-regular', 'current-visitor']);
+});
+
 test('an exclusion removes only the exact candidate pair', () => {
   const result = matchPeople(input({
     externalPeople: [external('ext-1', 'Alex', 'Smith')],

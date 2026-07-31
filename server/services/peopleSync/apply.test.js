@@ -144,8 +144,9 @@ test('skipExternalPersonIds must reference an addition actually offered in the p
   assert.equal(accepted.skipExternalPersonIds.has('ext-1'), true);
 });
 
-test('acceptArchiveIndividualIds must reference an unmatched local regular or an ambiguous candidate', () => {
+test('acceptArchiveIndividualIds must reference a planned archive, unmatched local regular, or ambiguous candidate', () => {
   const plan = emptyPlan({
+    archive: [{ id: 'archive:ext-2:6', externalPersonId: 'ext-2', individualId: 6 }],
     unmatchedLocalRegulars: [{ id: 'unmatchedLocalRegulars:7', individualId: 7 }],
     ambiguousPeople: [{ id: 'ambiguousPeople:ext-1:x', externalPersonId: 'ext-1', candidateIndividualIds: [3, 4] }],
   });
@@ -153,8 +154,8 @@ test('acceptArchiveIndividualIds must reference an unmatched local regular or an
     () => validateSelections(plan, { acceptArchiveIndividualIds: [999] }),
     /not surfaced for review in this plan/i
   );
-  const accepted = validateSelections(plan, { acceptArchiveIndividualIds: [7, 4] });
-  assert.deepEqual([...accepted.acceptedArchiveIndividualIds].sort(), [4, 7]);
+  const accepted = validateSelections(plan, { acceptArchiveIndividualIds: [7, 4, 6] });
+  assert.deepEqual([...accepted.acceptedArchiveIndividualIds].sort(), [4, 6, 7]);
 });
 
 test('an accepted archive cannot collide with an accepted link for the same individual', () => {

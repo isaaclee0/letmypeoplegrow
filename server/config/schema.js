@@ -123,6 +123,29 @@ CREATE TABLE IF NOT EXISTS people_sync_match_holds (
 CREATE INDEX IF NOT EXISTS idx_people_sync_match_holds_lookup
   ON people_sync_match_holds(church_id, provider, external_person_id);
 
+CREATE TABLE IF NOT EXISTS people_sync_review_applications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  review_token_digest TEXT NOT NULL,
+  plan_digest TEXT NOT NULL,
+  applied_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, review_token_digest),
+  FOREIGN KEY (applied_by) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_sync_review_applications_lookup
+  ON people_sync_review_applications(church_id, provider, created_at);
+
+CREATE TABLE IF NOT EXISTS people_sync_authority_preview_intents (
+  church_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  authority_preview_id TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(church_id, provider, authority_preview_id)
+);
+
 CREATE TABLE IF NOT EXISTS people_sync_migration_issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT NOT NULL,

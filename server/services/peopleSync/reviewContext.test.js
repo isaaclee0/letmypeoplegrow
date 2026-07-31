@@ -27,7 +27,9 @@ test('signs every reviewable identity with deterministic selections and fresh cr
     eligibleByBatch: new Map([[1, new Set(['ext-1', 'ext-2'])], [2, new Set(['ext-1'])]]),
   });
 
-  assert.deepEqual(context, {
+  const { localIdentityDigest, ...reviewContract } = context;
+  assert.match(localIdentityDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(reviewContract, {
     version: 2,
     manualCandidateIndividualIds: [7, 8, 9],
     identities: {
@@ -112,4 +114,72 @@ test('builds a lean family directory with explicit household availability and ma
   assert.deepEqual(directory.local['12'].family, { state: 'unavailable' });
   assert.equal(JSON.stringify(directory).includes('hidden@example.test'), false);
   assert.equal(JSON.stringify(directory).includes('+6100'), false);
+});
+
+test('binds local names, family context, and provider-link eligibility without exposing the local records', () => {
+  const base = {
+    plan: {
+      linkPeople: [{ externalPersonId: 'ext-1', individualId: 7 }],
+      ambiguousPeople: [],
+      addPeople: [],
+    },
+    externalPeople: [{ id: 'ext-1', firstName: 'Alex', lastName: 'Smith', child: false, familyId: null }],
+    localPeople: [
+      { id: 7, firstName: 'Private Alex', lastName: 'Smith', familyId: 11, peopleType: 'regular', isChild: false, isActive: true },
+      { id: 8, firstName: 'Private Jamie', lastName: 'Smith', familyId: 11, peopleType: 'regular', isChild: false, isActive: true },
+    ],
+    localFamilies: [
+      { id: 11, familyName: 'Smith Household' },
+      { id: 12, familyName: 'Empty Household' },
+    ],
+    personLinks: [],
+  };
+
+  const original = buildReviewContext(base);
+  const renamed = buildReviewContext({
+    ...base,
+    localPeople: base.localPeople.map((person) => person.id === 7 ? { ...person, firstName: 'Private Alec' } : person),
+  });
+  const movedFamily = buildReviewContext({
+    ...base,
+    localPeople: base.localPeople.map((person) => person.id === 7 ? { ...person, familyId: null } : person),
+  });
+  const newlyLinked = buildReviewContext({
+    ...base,
+    personLinks: [{ externalPersonId: 'other-ext', individualId: 8 }],
+  });
+  const linkedMissingCountChanged = buildReviewContext({
+    ...base,
+    personLinks: [{ externalPersonId: 'other-ext', individualId: 8, missingFullSyncCount: 1 }],
+  });
+  const renamedEmptyFamily = buildReviewContext({
+    ...base,
+    localFamilies: base.localFamilies.map((family) => family.id === 12
+      ? { ...family, familyName: 'Renamed Empty Household' }
+      : family),
+  });
+  const contactOnlyChange = buildReviewContext({
+    ...base,
+    localPeople: base.localPeople.map((person) => ({ ...person, email: 'private@example.test' })),
+  });
+  const exclusionAdded = buildReviewContext({
+    ...base,
+    exclusions: [{ externalPersonId: 'ext-1', individualId: 7 }],
+  });
+  const holdAdded = buildReviewContext({
+    ...base,
+    holds: [{ externalPersonId: 'ext-1', reason: 'deferred' }],
+  });
+
+  assert.match(original.localIdentityDigest, /^[a-f0-9]{64}$/);
+  assert.notEqual(renamed.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(movedFamily.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(newlyLinked.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(linkedMissingCountChanged.localIdentityDigest, newlyLinked.localIdentityDigest);
+  assert.notEqual(renamedEmptyFamily.localIdentityDigest, original.localIdentityDigest);
+  assert.equal(contactOnlyChange.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(exclusionAdded.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(holdAdded.localIdentityDigest, original.localIdentityDigest);
+  assert.equal(JSON.stringify(original).includes('Smith Household'), false);
+  assert.equal(JSON.stringify(original).includes('Private Alex'), false);
 });

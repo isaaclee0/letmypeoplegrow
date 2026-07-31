@@ -1,9 +1,12 @@
+const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const linkRepository = require('./linkRepository');
 const matchReviewRepository = require('./matchReviewRepository');
 const authority = require('./authority');
 const batchRepository = require('./batchRepository');
 const { BUCKETS } = require('./plan');
+const { buildLocalIdentityDigest } = require('./reviewContext');
+const { digestPlan } = require('./planDigest');
 const {
   validateDestructiveSelections,
   validateIdentityDecisions,
@@ -39,6 +42,96 @@ function toPositiveInt(value, label) {
   const id = Number(value);
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error(`${label} must be a valid positive integer ID`);
   return id;
+}
+
+function reviewedApplyError(code, message, status = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+async function claimReviewedApplyWithConnection(conn, {
+  churchId, provider, reviewToken, planDigest, userId,
+}) {
+  const reviewTokenDigest = crypto.createHash('sha256').update(reviewToken).digest('hex');
+  const result = await conn.query(
+    `INSERT INTO people_sync_review_applications
+       (church_id, provider, review_token_digest, plan_digest, applied_by)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(church_id, provider, review_token_digest) DO NOTHING`,
+    [churchId, provider, reviewTokenDigest, planDigest, userId || null]
+  );
+  if (result.affectedRows !== 1) {
+    throw reviewedApplyError(
+      'SYNC_REVIEW_ALREADY_APPLIED',
+      'This review has already been applied. Refresh before applying another sync.'
+    );
+  }
+}
+
+async function assertLocalIdentityContextWithConnection(conn, churchId, provider, reviewContext) {
+  const expected = reviewContext?.localIdentityDigest;
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)) {
+    throw reviewedApplyError('SYNC_REVIEW_INVALID', 'This review is missing its local identity context.', 400);
+  }
+  const [individualRows, familyRows, linkRows, exclusionRows, holdRows] = await Promise.all([
+    conn.query(
+      `SELECT id, first_name, last_name, people_type, family_id, is_child, is_active
+         FROM individuals WHERE church_id = ? ORDER BY id`,
+      [churchId]
+    ),
+    conn.query(
+      `SELECT id, family_name FROM families WHERE church_id = ? ORDER BY id`,
+      [churchId]
+    ),
+    conn.query(
+      `SELECT external_person_id, individual_id, missing_full_sync_count FROM external_person_links
+        WHERE church_id = ? AND provider = ? ORDER BY id`,
+      [churchId, provider]
+    ),
+    conn.query(
+      `SELECT external_person_id, individual_id FROM people_sync_match_exclusions
+        WHERE church_id = ? AND provider = ? ORDER BY external_person_id, individual_id`,
+      [churchId, provider]
+    ),
+    conn.query(
+      `SELECT external_person_id, reason FROM people_sync_match_holds
+        WHERE church_id = ? AND provider = ? ORDER BY external_person_id`,
+      [churchId, provider]
+    ),
+  ]);
+  const actual = buildLocalIdentityDigest({
+    localPeople: individualRows.map((row) => ({
+      id: Number(row.id),
+      firstName: row.first_name,
+      lastName: row.last_name,
+      peopleType: row.people_type,
+      familyId: row.family_id === null || row.family_id === undefined ? null : Number(row.family_id),
+      isChild: !!row.is_child,
+      isActive: !!row.is_active,
+    })),
+    localFamilies: familyRows.map((row) => ({ id: Number(row.id), familyName: row.family_name })),
+    personLinks: linkRows.map((row) => ({
+      externalPersonId: row.external_person_id,
+      individualId: Number(row.individual_id),
+      missingFullSyncCount: Number(row.missing_full_sync_count),
+    })),
+    exclusions: exclusionRows.map((row) => ({
+      externalPersonId: row.external_person_id,
+      individualId: Number(row.individual_id),
+    })),
+    holds: holdRows.map((row) => ({
+      externalPersonId: row.external_person_id,
+      reason: row.reason,
+    })),
+  });
+  if (actual !== expected) {
+    throw reviewedApplyError(
+      'SYNC_PLAN_STALE',
+      'A local person or family changed after this review was built. Refresh the review before applying.'
+    );
+  }
 }
 
 // The returned result object shares summarizePlan's bucket KEYS, but each
@@ -192,6 +285,21 @@ function planWithSuppressedSuggestions(plan, accepted) {
   return filtered;
 }
 
+function planWithReviewedArchiveSelections(plan, accepted, reviewedApply) {
+  // Unattended sync applies the server-computed lifecycle plan as-is. A
+  // human-reviewed apply is different: every destructive archive surfaced
+  // in the review must be opted into explicitly. Contract v2 is itself a
+  // reviewed decision contract, including in lower-level callers/tests that
+  // do not provide the route-owned review-token wrapper.
+  if (!reviewedApply && accepted.contractVersion !== 2) return plan;
+  return {
+    ...plan,
+    archive: asArray(plan.archive).filter((action) =>
+      accepted.acceptedArchiveIndividualIds.has(action.individualId)
+    ),
+  };
+}
+
 // Defense in depth: Task 6's plan.js already refuses to generate managed
 // mutations for a person/family locked by a DIFFERENT active authority (see
 // plan.js's `canManage`/`activeAuthority` gating). This re-checks the same
@@ -242,7 +350,17 @@ async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveInd
  * projection) are NOT this function's concern — they belong outside/after
  * the critical transaction, in whichever caller wires up that provider.
  */
-async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, userId, activateAuthority = false, sourcePromotion = null }) {
+async function applyPeopleSyncPlan({
+  churchId,
+  provider,
+  plan,
+  selections = {},
+  userId,
+  activateAuthority = false,
+  authorityPreviewId = null,
+  sourcePromotion = null,
+  reviewedApply = null,
+}) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
   if (!plan || typeof plan !== 'object') throw new Error('A plan is required to apply');
@@ -250,10 +368,47 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     throw new Error(`Plan was computed for provider "${plan.provider}", not "${provider}"`);
   }
 
-  const accepted = validateSelections(plan, selections);
-
   return Database.transactionForChurch(churchId, async (conn) => {
-    const applicablePlan = planWithSuppressedSuggestions(plan, accepted);
+    if (reviewedApply) {
+      const currentPlanDigest = digestPlan(plan);
+      if (currentPlanDigest !== reviewedApply.planDigest) {
+        throw reviewedApplyError('SYNC_PLAN_STALE', 'The reviewed plan changed before it could be applied.');
+      }
+      const verification = reviewedApply.verifyReviewToken?.(reviewedApply.reviewToken, {
+        churchId,
+        provider,
+        batchId: reviewedApply.batchId ?? null,
+        planDigest: currentPlanDigest,
+      });
+      if (!verification?.ok) {
+        const code = verification?.code || 'SYNC_REVIEW_INVALID';
+        throw reviewedApplyError(
+          code,
+          code === 'SYNC_REVIEW_EXPIRED'
+            ? 'This review has expired; fetch a fresh review before applying.'
+            : code === 'SYNC_PLAN_STALE'
+              ? 'The reviewed plan is out of date; fetch a fresh review before applying.'
+              : 'This review token is invalid.',
+          code === 'SYNC_REVIEW_INVALID' ? 400 : 409
+        );
+      }
+    }
+    const accepted = validateSelections(plan, selections);
+    if (reviewedApply) {
+      await claimReviewedApplyWithConnection(conn, {
+        churchId,
+        provider,
+        reviewToken: reviewedApply.reviewToken,
+        planDigest: reviewedApply.planDigest,
+        userId,
+      });
+      await assertLocalIdentityContextWithConnection(conn, churchId, provider, plan.reviewContext);
+    }
+    const applicablePlan = planWithReviewedArchiveSelections(
+      planWithSuppressedSuggestions(plan, accepted),
+      accepted,
+      reviewedApply
+    );
     await enforceAuthorityLock(churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 
     const result = emptyResult();
@@ -433,6 +588,14 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
     // 7. Archive: plan-driven (lifecycle/presence based) plus any extra
     // individuals the reviewer explicitly chose to archive instead of
     // linking/leaving unmatched.
+    // Keep the RAW reviewed plan IDs separate from the applicable actions.
+    // A v2 rejection can suppress a plan archive together with the rejected
+    // suggested match; an explicit acceptance of that original planned ID
+    // must not then be reinterpreted as an ad-hoc archive and bypass the
+    // suppression below.
+    const reviewedPlanArchiveIndividualIds = new Set(
+      asArray(plan.archive).map((action) => action.individualId)
+    );
     for (const action of asArray(applicablePlan.archive)) {
       await conn.query(
         `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
@@ -441,6 +604,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
       result.archive++;
     }
     for (const individualId of accepted.acceptedArchiveIndividualIds) {
+      if (reviewedPlanArchiveIndividualIds.has(individualId)) continue;
       await conn.query(
         `UPDATE individuals SET is_active = 0, updated_at = datetime('now') WHERE id = ? AND church_id = ?`,
         [individualId, churchId]
@@ -547,16 +711,6 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
           churchId, provider, externalPersonId, reason, userId,
         });
       }
-      for (const action of linkActions) {
-        await matchReviewRepository.deleteHoldWithConnection(conn, {
-          churchId, provider, externalPersonId: action.externalPersonId,
-        });
-      }
-      for (const externalPersonId of newIndividualIdByExternal.keys()) {
-        await matchReviewRepository.deleteHoldWithConnection(conn, {
-          churchId, provider, externalPersonId,
-        });
-      }
       for (const exclusion of accepted.exclusionsToAdd) {
         await matchReviewRepository.upsertExclusionWithConnection(conn, {
           churchId, provider, ...exclusion, userId,
@@ -567,6 +721,16 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
           churchId, provider, ...exclusion,
         });
       }
+    }
+    for (const action of linkActions) {
+      await matchReviewRepository.deleteHoldWithConnection(conn, {
+        churchId, provider, externalPersonId: action.externalPersonId,
+      });
+    }
+    for (const externalPersonId of newIndividualIdByExternal.keys()) {
+      await matchReviewRepository.deleteHoldWithConnection(conn, {
+        churchId, provider, externalPersonId,
+      });
     }
 
     if (sourcePromotion) {
@@ -600,7 +764,7 @@ async function applyPeopleSyncPlan({ churchId, provider, plan, selections = {}, 
           throw error;
         }
       }
-      await authority.commitAuthoritySwitchWithConnection(conn, churchId, provider);
+      await authority.commitAuthoritySwitchWithConnection(conn, churchId, provider, authorityPreviewId);
     }
 
     return result;

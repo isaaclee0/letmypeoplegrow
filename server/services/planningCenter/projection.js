@@ -82,14 +82,11 @@ function toNormalizedPcoPerson(pcoPerson) {
 }
 
 // Projects PCO Households (as seen via each projected person's householdId,
-// plus the household->primary-contact map already collected in
-// fetchAllPcoPeople) into the normalized family shape. Not yet consumed by
-// any current PCO code path — it exists so a provider-neutral snapshot has
-// something structurally reasonable to return for `families` ahead of the
-// generic engine's family-matching support (Task 5/6 do not implement family
-// actions yet; see plan.js's addFamilies/linkFamilies/moveFamily/renameFamily
-// buckets, which are currently always empty).
-function projectPcoHouseholds(people, householdPrimaryContacts) {
+// plus metadata collected during the source read) into the provider-neutral
+// family shape used by matching and the lean review directory. Only the
+// household name and identity/member references cross this boundary; raw
+// Household attributes remain in the discarded provider page.
+function projectPcoHouseholds(people, householdPrimaryContacts, householdNames) {
   const memberIdsByHousehold = new Map();
   for (const person of people || []) {
     if (!person || !person.householdId) continue;
@@ -97,11 +94,16 @@ function projectPcoHouseholds(people, householdPrimaryContacts) {
     memberIdsByHousehold.get(person.householdId).push(person.id);
   }
   const primaryContacts = householdPrimaryContacts instanceof Map ? householdPrimaryContacts : new Map();
-  const families = [...memberIdsByHousehold.entries()].map(([householdId, memberExternalIds]) => ({
-    id: householdId,
-    memberExternalIds: [...memberExternalIds].sort(),
-    primaryContactExternalId: primaryContacts.get(householdId) || null,
-  }));
+  const names = householdNames instanceof Map ? householdNames : new Map();
+  const families = [...memberIdsByHousehold.entries()].map(([householdId, memberExternalIds]) => {
+    const name = String(names.get(householdId) ?? '').trim();
+    return {
+      id: householdId,
+      ...(name ? { name } : {}),
+      memberExternalIds: [...memberExternalIds].sort(),
+      primaryContactExternalId: primaryContacts.get(householdId) || null,
+    };
+  });
   return families.sort((a, b) => a.id.localeCompare(b.id));
 }
 

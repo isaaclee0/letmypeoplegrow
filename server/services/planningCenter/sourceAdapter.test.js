@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { listPlanningCenterSources, fetchPlanningCenterSourceSnapshot } = require('./sourceAdapter');
+const { buildReviewDirectory } = require('../peopleSync/reviewContext');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
 const response = (status, data, headers) => ({ status, data, headers });
@@ -52,7 +53,9 @@ test('fetches every List member page while keeping household-only context separa
       data: [person('p1', { fieldDataIds: ['fd1'] })],
       included: [
         { type: 'FieldDatum', id: 'fd1', attributes: { value: 'Soprano' }, relationships: { field_definition: { data: { id: 'choir' } } } },
-        { type: 'Household', id: 'h1', attributes: { primary_contact_id: 'p1' } },
+        { type: 'Household', id: 'h1', attributes: {
+          name: 'Lovelace Household', primary_contact_id: 'p1', contact_email: 'hidden@example.test',
+        } },
         person('p2', { firstName: 'Grace', lastName: 'Hopper', fieldDataIds: ['fd2'] }),
         { type: 'FieldDatum', id: 'fd2', attributes: { value: 'Context value' }, relationships: { field_definition: { data: { id: 'context-field' } } } },
       ],
@@ -60,7 +63,7 @@ test('fetches every List member page while keeping household-only context separa
     })],
     ['https://api.planningcenteronline.com/people/v2/lists/42/people?page=2', response(200, {
       data: [person('p3', { firstName: 'Lin', lastName: 'Q', householdId: 'h2' })],
-      included: [{ type: 'Household', id: 'h2', attributes: { primary_contact_id: 'p3' } }],
+      included: [{ type: 'Household', id: 'h2', attributes: { name: 'Q Household', primary_contact_id: 'p3' } }],
       links: { next: null },
     })],
   ]);
@@ -84,9 +87,18 @@ test('fetches every List member page while keeping household-only context separa
   assert.equal(snapshot.people[0].attributes.fieldValues.choir[0], 'Soprano');
   assert.equal(snapshot.contextPeople[0].attributes.fieldValues['context-field'][0], 'Context value');
   assert.deepEqual(snapshot.families, [
-    { id: 'h1', memberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' },
-    { id: 'h2', memberExternalIds: ['p3'], primaryContactExternalId: 'p3' },
+    { id: 'h1', name: 'Lovelace Household', memberExternalIds: ['p1', 'p2'], primaryContactExternalId: 'p1' },
+    { id: 'h2', name: 'Q Household', memberExternalIds: ['p3'], primaryContactExternalId: 'p3' },
   ]);
+  const directory = buildReviewDirectory({
+    externalPeople: [...snapshot.people, ...snapshot.contextPeople],
+    externalFamilies: snapshot.families,
+  });
+  assert.deepEqual(directory.external.p1.family, {
+    state: 'known', name: 'Lovelace Household',
+    members: [{ firstName: 'Grace', lastName: 'Hopper' }], totalOtherMembers: 1,
+  });
+  assert.equal(JSON.stringify(directory).includes('hidden@example.test'), false);
   assert.ok(calls.every((call) => call.method === 'GET'));
   assert.ok(calls.every((call) => !call.url.includes('/run')));
   assert.deepEqual(calls.map((call) => call.url), [

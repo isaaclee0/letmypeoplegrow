@@ -24,6 +24,7 @@ function positiveInteger(value, label) {
 }
 
 function validateDestructiveSelections(plan, selections, claimedIndividualIds = new Set()) {
+  const plannedArchiveIds = new Set(asArray(plan.archive).map((action) => action.individualId));
   const unmatchedLocalIds = new Set(asArray(plan.unmatchedLocalRegulars).map((action) => action.individualId));
   const renameById = new Map(asArray(plan.renameFamily).map((action) => [action.id, action]));
 
@@ -35,7 +36,7 @@ function validateDestructiveSelections(plan, selections, claimedIndividualIds = 
     }
     const inAmbiguousCandidates = asArray(plan.ambiguousPeople)
       .some((action) => (action.candidateIndividualIds || []).includes(individualId));
-    if (!unmatchedLocalIds.has(individualId) && !inAmbiguousCandidates) {
+    if (!plannedArchiveIds.has(individualId) && !unmatchedLocalIds.has(individualId) && !inAmbiguousCandidates) {
       throw new Error(`Cannot archive an individual not surfaced for review in this plan: ${individualId}`);
     }
     if (claimedIndividualIds.has(individualId)) {

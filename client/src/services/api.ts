@@ -981,6 +981,12 @@ export const peopleSyncAPI = {
       { timeout: 120000 },
     ),
 
+  cancelAuthorityPreview: (provider: SyncProvider, authorityPreviewId: string) =>
+    api.post<{ success: true; authority: PeopleSyncAuthorityState }>(
+      '/integrations/people-sync/people-authority/cancel',
+      { provider, authorityPreviewId },
+    ),
+
   // `selections` defaults to {} to match applyReviewed's own server-side
   // default (every field is read defensively via asArray/asRecord there), so
   // an authority-switch apply with nothing left to review doesn't force

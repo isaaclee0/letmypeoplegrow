@@ -6,7 +6,11 @@ const { applyPeopleSyncPlan } = require('./apply');
 const { BUCKETS } = require('./plan');
 const batchRepository = require('./batchRepository');
 const matchReviewRepository = require('./matchReviewRepository');
+const { buildReviewContext } = require('./reviewContext');
+const { createReviewToken, digestPlan, verifyReviewToken } = require('./planDigest');
 const { digestSourceIdentity } = require('./sourceModel');
+
+process.env.SYNC_REVIEW_SECRET = process.env.SYNC_REVIEW_SECRET || 'apply-db-integration-test-secret';
 
 // Minimal, self-documenting empty plan shape — every bucket applyPeopleSyncPlan
 // reads, so tests only need to override the buckets that matter for that
@@ -42,6 +46,19 @@ function v2Plan(identities, overrides = {}) {
 
 function v2Selections(identityDecisions) {
   return { decisionContractVersion: 2, identityDecisions };
+}
+
+function reviewedApply(churchId, provider, plan, batchId = null) {
+  const planDigest = digestPlan(plan);
+  const reviewToken = createReviewToken({
+    churchId, provider, batchId, planDigest, expiresInSeconds: 1800,
+  });
+  return {
+    reviewToken,
+    planDigest,
+    batchId,
+    verifyReviewToken,
+  };
 }
 
 async function seedIndividual(churchId, overrides = {}) {
@@ -540,6 +557,457 @@ test('an accepted ambiguous selection is applied as a manual link', async () => 
     const [link] = await Database.query('SELECT individual_id, link_source FROM external_person_links WHERE church_id = ?', [churchId]);
     assert.equal(link.individual_id, candidateB);
     assert.equal(link.link_source, 'manual');
+  });
+});
+
+test('a legacy ambiguous resolution clears the durable hold in the link transaction', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await matchReviewRepository.upsertHold({
+      churchId, provider: 'elvanto', externalPersonId: 'ext-legacy', reason: 'deferred',
+    });
+
+    await applyPeopleSyncPlan({
+      churchId,
+      provider: 'elvanto',
+      plan: emptyPlan({
+        ambiguousPeople: [{
+          id: 'ambiguousPeople:ext-legacy:x',
+          externalPersonId: 'ext-legacy',
+          candidateIndividualIds: [individualId],
+          reason: 'review_deferred',
+        }],
+      }),
+      selections: { ambiguous: { 'ext-legacy': individualId } },
+    });
+
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [], holds: [],
+    });
+  });
+});
+
+test('a planned v2 archive can be explicitly accepted without applying or counting it twice', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const plan = v2Plan({}, {
+      archive: [{
+        id: `archive:ext-1:${individualId}`,
+        externalPersonId: 'ext-1',
+        individualId,
+        reason: 'confirmed_missing_full_sync',
+      }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId,
+      provider: 'elvanto',
+      plan,
+      selections: {
+        ...v2Selections({}),
+        acceptArchiveIndividualIds: [individualId],
+      },
+    });
+
+    assert.equal(result.archive, 1);
+    const [person] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?',
+      [churchId, individualId]
+    );
+    assert.equal(person.is_active, 0);
+  });
+});
+
+test('a planned v2 archive is not applied unless the reviewer explicitly accepts it', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const plan = v2Plan({}, {
+      archive: [{
+        id: `archive:ext-1:${individualId}`,
+        externalPersonId: 'ext-1',
+        individualId,
+        reason: 'confirmed_missing_full_sync',
+      }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId,
+      provider: 'elvanto',
+      plan,
+      selections: v2Selections({}),
+    });
+
+    assert.equal(result.archive, 0);
+    const [person] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?',
+      [churchId, individualId]
+    );
+    assert.equal(person.is_active, 1);
+  });
+});
+
+test('a reviewed legacy payload also requires explicit acceptance for a planned archive', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const plan = emptyPlan({
+      archive: [{
+        id: `archive:ext-legacy:${individualId}`,
+        externalPersonId: 'ext-legacy',
+        individualId,
+        reason: 'confirmed_missing_full_sync',
+      }],
+    });
+    plan.reviewContext = buildReviewContext({
+      plan,
+      localPeople: [{
+        id: individualId,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        familyId: null,
+        peopleType: 'regular',
+        isChild: false,
+        isActive: true,
+      }],
+      localFamilies: [],
+      personLinks: [],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId,
+      provider: 'elvanto',
+      plan,
+      selections: {},
+      reviewedApply: reviewedApply(churchId, 'elvanto', plan),
+    });
+
+    assert.equal(result.archive, 0);
+    const [person] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?',
+      [churchId, individualId]
+    );
+    assert.equal(person.is_active, 1);
+  });
+});
+
+test('accepting a planned archive cannot bypass v2 rejected-suggestion suppression', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const plan = v2Plan({
+      'ext-1': reviewIdentity({
+        suggestedIndividualId: individualId,
+        candidateIndividualIds: [individualId],
+      }),
+    }, {
+      linkPeople: [{
+        id: 'linkPeople:ext-1', externalPersonId: 'ext-1', individualId, reviewRequired: false,
+      }],
+      archive: [{
+        id: `archive:ext-1:${individualId}`,
+        externalPersonId: 'ext-1',
+        individualId,
+        reason: 'confirmed_missing_full_sync',
+      }],
+    });
+
+    const result = await applyPeopleSyncPlan({
+      churchId,
+      provider: 'elvanto',
+      plan,
+      selections: {
+        ...v2Selections({
+          'ext-1': { outcome: 'defer', excludeIndividualId: individualId },
+        }),
+        acceptArchiveIndividualIds: [individualId],
+      },
+    });
+
+    assert.equal(result.archive, 0);
+    const [person] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?',
+      [churchId, individualId]
+    );
+    assert.equal(person.is_active, 1);
+  });
+});
+
+test('one review token cannot concurrently apply conflicting identity decisions', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstIndividualId = await seedIndividual(churchId, { firstName: 'First' });
+    const secondIndividualId = await seedIndividual(churchId, { firstName: 'Second' });
+    const localPeople = [
+      { id: firstIndividualId, firstName: 'First', lastName: 'Lovelace', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+      { id: secondIndividualId, firstName: 'Second', lastName: 'Lovelace', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+    ];
+    const plan = emptyPlan({
+      ambiguousPeople: [{
+        id: 'ambiguousPeople:ext-race:duplicate_name',
+        externalPersonId: 'ext-race',
+        candidateIndividualIds: [firstIndividualId, secondIndividualId],
+        reason: 'duplicate_name',
+      }],
+    });
+    plan.reviewContext = buildReviewContext({
+      plan,
+      externalPeople: [{ id: 'ext-race', firstName: 'External', lastName: 'Person', child: false, familyId: null }],
+      localPeople,
+      localFamilies: [],
+      personLinks: [],
+    });
+    const review = reviewedApply(churchId, 'elvanto', plan);
+
+    const results = await Promise.allSettled([
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan, reviewedApply: review,
+        selections: v2Selections({ 'ext-race': { outcome: 'link', individualId: firstIndividualId } }),
+      }),
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan, reviewedApply: review,
+        selections: v2Selections({ 'ext-race': { outcome: 'link', individualId: secondIndividualId } }),
+      }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    assert.equal(rejected?.reason?.code, 'SYNC_REVIEW_ALREADY_APPLIED');
+    const links = await Database.query(
+      `SELECT external_person_id, individual_id FROM external_person_links
+        WHERE church_id = ? AND provider = 'elvanto'`,
+      [churchId]
+    );
+    assert.equal(links.length, 1);
+    assert.equal(['ext-race'].includes(links[0].external_person_id), true);
+    assert.equal([firstIndividualId, secondIndividualId].includes(Number(links[0].individual_id)), true);
+  });
+});
+
+test('distinct concurrent reviews cannot overwrite a newly committed hold or exclusion', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const localPeople = [{
+      id: individualId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      familyId: null,
+      peopleType: 'regular',
+      isChild: false,
+      isActive: true,
+    }];
+    const plan = emptyPlan({
+      ambiguousPeople: [{
+        id: 'ambiguousPeople:ext-review-race:single_candidate',
+        externalPersonId: 'ext-review-race',
+        candidateIndividualIds: [individualId],
+        reason: 'single_candidate',
+      }],
+    });
+    plan.reviewContext = buildReviewContext({
+      plan,
+      externalPeople: [{
+        id: 'ext-review-race', firstName: 'External', lastName: 'Person', child: false, familyId: null,
+      }],
+      localPeople,
+      localFamilies: [],
+      personLinks: [],
+      exclusions: [],
+      holds: [],
+    });
+    const rejectingReview = reviewedApply(churchId, 'elvanto', plan);
+    const acceptingReview = reviewedApply(churchId, 'elvanto', plan);
+    assert.notEqual(rejectingReview.reviewToken, acceptingReview.reviewToken);
+
+    const results = await Promise.allSettled([
+      applyPeopleSyncPlan({
+        churchId,
+        provider: 'elvanto',
+        plan,
+        reviewedApply: rejectingReview,
+        selections: v2Selections({
+          'ext-review-race': { outcome: 'defer', excludeIndividualId: individualId },
+        }),
+      }),
+      applyPeopleSyncPlan({
+        churchId,
+        provider: 'elvanto',
+        plan,
+        reviewedApply: acceptingReview,
+        selections: v2Selections({ 'ext-review-race': { outcome: 'accept' } }),
+      }),
+    ]);
+
+    assert.equal(results[0].status, 'fulfilled');
+    assert.equal(results[1].status, 'rejected');
+    assert.equal(results[1].reason.code, 'SYNC_PLAN_STALE');
+    assert.equal((await counts(churchId)).links, 0);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, 'elvanto'), {
+      exclusions: [{ externalPersonId: 'ext-review-race', individualId }],
+      holds: [{ externalPersonId: 'ext-review-race', reason: 'pair_rejected' }],
+    });
+    const claims = await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
+      [churchId]
+    );
+    assert.equal(claims.length, 1);
+  });
+});
+
+test('a reviewed apply fails stale after a local rename or family move and rolls back its token claim', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const reviewedFamilyId = await seedFamily(churchId, 'Reviewed Household');
+    const otherFamilyId = await seedFamily(churchId, 'Other Household');
+    const individualId = await seedIndividual(churchId, {
+      firstName: 'Reviewed', lastName: 'Person', familyId: reviewedFamilyId,
+    });
+    const localPeople = [{
+      id: individualId,
+      firstName: 'Reviewed',
+      lastName: 'Person',
+      familyId: reviewedFamilyId,
+      peopleType: 'regular',
+      isChild: false,
+      isActive: true,
+    }];
+    const plan = emptyPlan();
+    plan.reviewContext = buildReviewContext({
+      plan,
+      localPeople,
+      localFamilies: [
+        { id: reviewedFamilyId, familyName: 'Reviewed Household' },
+        { id: otherFamilyId, familyName: 'Other Household' },
+      ],
+      personLinks: [],
+    });
+    const review = reviewedApply(churchId, 'elvanto', plan);
+
+    await Database.query(
+      `UPDATE individuals SET first_name = 'Renamed' WHERE church_id = ? AND id = ?`,
+      [churchId, individualId]
+    );
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE'
+    );
+
+    await Database.query(
+      `UPDATE individuals SET first_name = 'Reviewed', family_id = ? WHERE church_id = ? AND id = ?`,
+      [otherFamilyId, churchId, individualId]
+    );
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE'
+    );
+
+    const claimsAfterFailures = await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
+      [churchId]
+    );
+    assert.deepEqual(claimsAfterFailures, []);
+
+    await Database.query(
+      'UPDATE individuals SET family_id = ? WHERE church_id = ? AND id = ?',
+      [reviewedFamilyId, churchId, individualId]
+    );
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
+    });
+    const claimsAfterSuccess = await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
+      [churchId]
+    );
+    assert.equal(claimsAfterSuccess.length, 1);
+  });
+});
+
+test('a reviewed apply fails stale when a durable link missing counter changes', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId, {
+      firstName: 'Reviewed', lastName: 'Person',
+    });
+    await Database.query(
+      `INSERT INTO external_person_links
+         (church_id, provider, external_person_id, individual_id, link_source, missing_full_sync_count)
+       VALUES (?, 'elvanto', 'ext-missing', ?, 'matched', 1)`,
+      [churchId, individualId]
+    );
+    const plan = emptyPlan();
+    plan.reviewContext = buildReviewContext({
+      plan,
+      localPeople: [{
+        id: individualId,
+        firstName: 'Reviewed',
+        lastName: 'Person',
+        familyId: null,
+        peopleType: 'regular',
+        isChild: false,
+        isActive: true,
+      }],
+      localFamilies: [],
+      personLinks: [{
+        externalPersonId: 'ext-missing',
+        individualId,
+        missingFullSyncCount: 1,
+      }],
+    });
+    const review = reviewedApply(churchId, 'elvanto', plan);
+
+    await Database.query(
+      `UPDATE external_person_links
+          SET missing_full_sync_count = 0
+        WHERE church_id = ? AND provider = 'elvanto' AND external_person_id = 'ext-missing'`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE'
+    );
+    const claims = await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
+      [churchId]
+    );
+    assert.deepEqual(claims, []);
+  });
+});
+
+test('a failed reviewed apply rolls back its one-time token claim', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await Database.query(
+      `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
+       VALUES (?, 'none', 'planning_center')
+       ON CONFLICT(church_id) DO UPDATE SET pending_authority_provider = 'planning_center'`,
+      [churchId]
+    );
+    const plan = v2Plan({}, { provider: 'planning_center' });
+    plan.reviewContext.localIdentityDigest = buildReviewContext({
+      plan,
+      localPeople: [],
+      localFamilies: [],
+      personLinks: [],
+    }).localIdentityDigest;
+    const review = reviewedApply(churchId, 'planning_center', plan);
+
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId,
+        provider: 'planning_center',
+        plan,
+        selections: v2Selections({}),
+        reviewedApply: review,
+        activateAuthority: true,
+      }),
+      /connection is required/i
+    );
+
+    const claims = await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
+      [churchId]
+    );
+    assert.deepEqual(claims, []);
   });
 });
 

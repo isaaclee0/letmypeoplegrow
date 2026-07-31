@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { desiredPeopleType } = require('./plan');
 
 const DECISION_CONTRACT_VERSION = 2;
@@ -130,6 +131,13 @@ function buildReviewContext(input = {}) {
   return {
     version: DECISION_CONTRACT_VERSION,
     manualCandidateIndividualIds: eligibleManualIds(input.localPeople, input.personLinks),
+    localIdentityDigest: buildLocalIdentityDigest({
+      localPeople: input.localPeople,
+      localFamilies: input.localFamilies,
+      personLinks: input.personLinks,
+      exclusions: input.exclusions,
+      holds: input.holds,
+    }),
     identities,
   };
 }
@@ -197,6 +205,69 @@ function buildDirectoryEntries(people, families, { local = false, reviewContext 
     }));
 }
 
+function buildLocalIdentityDigest({
+  localPeople = [],
+  localFamilies = [],
+  personLinks = [],
+  exclusions = [],
+  holds = [],
+} = {}) {
+  const manualCandidateIndividualIds = eligibleManualIds(localPeople, personLinks);
+  const directory = buildDirectoryEntries(localPeople, localFamilies, {
+    local: true,
+    reviewContext: { manualCandidateIndividualIds },
+  });
+  const peopleById = new Map((localPeople || []).map((person) => [individualId(person?.id), person]));
+  const people = Object.keys(directory).map(Number).sort((left, right) => left - right).map((id) => {
+    const person = peopleById.get(id) || {};
+    return {
+      id,
+      firstName: text(person.firstName),
+      lastName: text(person.lastName),
+      family: directory[String(id)].family,
+      peopleType: text(person.peopleType),
+      isChild: typeof person.isChild === 'boolean' ? person.isChild : null,
+      isActive: typeof person.isActive === 'boolean' ? person.isActive : null,
+      matchEligible: directory[String(id)].matchEligible === true,
+    };
+  });
+  const familiesById = new Map();
+  for (const family of localFamilies || []) {
+    const id = individualId(family?.id);
+    if (id !== null && !familiesById.has(id)) familiesById.set(id, family);
+  }
+  const families = [...familiesById.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([id, family]) => ({ id, familyName: text(family?.familyName ?? family?.name) }));
+  const providerLinks = (personLinks || [])
+    .map((link) => ({
+      externalPersonId: externalId(link?.externalPersonId),
+      individualId: individualId(link?.individualId),
+      missingFullSyncCount: Number(link?.missingFullSyncCount ?? 0),
+    }))
+    .filter((link) => link.externalPersonId !== null && link.individualId !== null)
+    .sort((left, right) => compareText(left.externalPersonId, right.externalPersonId) ||
+      left.individualId - right.individualId);
+  const durableExclusions = (exclusions || [])
+    .map((exclusion) => ({
+      externalPersonId: externalId(exclusion?.externalPersonId),
+      individualId: individualId(exclusion?.individualId),
+    }))
+    .filter((exclusion) => exclusion.externalPersonId !== null && exclusion.individualId !== null)
+    .sort((left, right) => compareText(left.externalPersonId, right.externalPersonId) ||
+      left.individualId - right.individualId);
+  const durableHolds = (holds || [])
+    .map((hold) => ({
+      externalPersonId: externalId(hold?.externalPersonId),
+      reason: text(hold?.reason),
+    }))
+    .filter((hold) => hold.externalPersonId !== null && hold.reason.length > 0)
+    .sort((left, right) => compareText(left.externalPersonId, right.externalPersonId) ||
+      compareText(left.reason, right.reason));
+  const contract = { people, families, providerLinks, durableExclusions, durableHolds };
+  return crypto.createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+}
+
 function buildReviewDirectory({ externalPeople = [], externalFamilies = [], localPeople = [], localFamilies = [], reviewContext = {} } = {}) {
   return {
     external: buildDirectoryEntries(externalPeople, externalFamilies),
@@ -206,6 +277,7 @@ function buildReviewDirectory({ externalPeople = [], externalFamilies = [], loca
 
 module.exports = {
   DECISION_CONTRACT_VERSION,
+  buildLocalIdentityDigest,
   buildReviewContext,
   buildReviewDirectory,
 };

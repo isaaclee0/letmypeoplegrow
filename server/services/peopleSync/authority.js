@@ -10,6 +10,12 @@ function assertAuthorityProvider(provider) {
   }
 }
 
+function assertAuthorityPreviewId(authorityPreviewId) {
+  if (typeof authorityPreviewId !== 'string' || authorityPreviewId.length === 0 || authorityPreviewId.length > 200) {
+    throw new Error('A valid authority preview ID is required');
+  }
+}
+
 async function getAuthority(churchId) {
   const rows = await Database.queryForChurch(
     churchId,
@@ -25,8 +31,9 @@ async function getAuthority(churchId) {
   };
 }
 
-async function beginAuthoritySwitch(churchId, provider) {
+async function beginAuthoritySwitch(churchId, provider, authorityPreviewId = null) {
   assertAuthorityProvider(provider);
+  if (authorityPreviewId !== null) assertAuthorityPreviewId(authorityPreviewId);
   return Database.transactionForChurch(churchId, async (conn) => {
     await conn.query(
       `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
@@ -44,6 +51,23 @@ async function beginAuthoritySwitch(churchId, provider) {
          FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
       [churchId]
     );
+    if (row?.pending_authority_provider && authorityPreviewId !== null) {
+      await conn.query(
+        `INSERT INTO people_sync_authority_preview_intents
+           (church_id, provider, authority_preview_id)
+         VALUES (?, ?, ?)
+         ON CONFLICT(church_id) DO UPDATE SET
+           provider = excluded.provider,
+           authority_preview_id = excluded.authority_preview_id,
+           updated_at = datetime('now')`,
+        [churchId, provider, authorityPreviewId]
+      );
+    } else {
+      await conn.query(
+        'DELETE FROM people_sync_authority_preview_intents WHERE church_id = ?',
+        [churchId]
+      );
+    }
     return {
       active: row?.authority_provider || 'none',
       pending: row?.pending_authority_provider || null,
@@ -51,8 +75,55 @@ async function beginAuthoritySwitch(churchId, provider) {
   });
 }
 
-async function commitAuthoritySwitchWithConnection(conn, churchId, provider) {
+async function getAuthorityPreviewIntent(churchId) {
+  const [row] = await Database.queryForChurch(
+    churchId,
+    `SELECT provider, authority_preview_id
+       FROM people_sync_authority_preview_intents
+      WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  return row ? { provider: row.provider, authorityPreviewId: row.authority_preview_id } : null;
+}
+
+async function cancelAuthoritySwitch(churchId, provider, authorityPreviewId) {
   assertAuthorityProvider(provider);
+  assertAuthorityPreviewId(authorityPreviewId);
+  return Database.transactionForChurch(churchId, async (conn) => {
+    const [intent] = await conn.query(
+      `SELECT provider, authority_preview_id
+         FROM people_sync_authority_preview_intents
+        WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    if (intent?.provider === provider && intent?.authority_preview_id === authorityPreviewId) {
+      await conn.query(
+        `UPDATE people_sync_settings
+            SET pending_authority_provider = NULL, updated_at = datetime('now')
+          WHERE church_id = ? AND pending_authority_provider = ?`,
+        [churchId, provider]
+      );
+      await conn.query(
+        `DELETE FROM people_sync_authority_preview_intents
+          WHERE church_id = ? AND provider = ? AND authority_preview_id = ?`,
+        [churchId, provider, authorityPreviewId]
+      );
+    }
+    const [row] = await conn.query(
+      `SELECT authority_provider, pending_authority_provider
+         FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    return {
+      active: row?.authority_provider || 'none',
+      pending: row?.pending_authority_provider || null,
+    };
+  });
+}
+
+async function commitAuthoritySwitchWithConnection(conn, churchId, provider, authorityPreviewId = null) {
+  assertAuthorityProvider(provider);
+  if (authorityPreviewId !== null) assertAuthorityPreviewId(authorityPreviewId);
   const rows = await conn.query(
     `SELECT pending_authority_provider
        FROM people_sync_settings
@@ -62,6 +133,17 @@ async function commitAuthoritySwitchWithConnection(conn, churchId, provider) {
   );
   if (rows[0]?.pending_authority_provider !== provider) {
     throw new Error(`No pending authority switch for provider: ${provider}`);
+  }
+  if (authorityPreviewId !== null) {
+    const [intent] = await conn.query(
+      `SELECT provider, authority_preview_id
+         FROM people_sync_authority_preview_intents
+        WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    if (intent?.provider !== provider || intent?.authority_preview_id !== authorityPreviewId) {
+      throw new Error(`Authority preview changed before commit: ${provider}`);
+    }
   }
   const result = await conn.query(
     `UPDATE people_sync_settings
@@ -73,6 +155,10 @@ async function commitAuthoritySwitchWithConnection(conn, churchId, provider) {
   if (result.affectedRows !== 1) {
     throw new Error(`Pending authority switch changed before commit: ${provider}`);
   }
+  await conn.query(
+    'DELETE FROM people_sync_authority_preview_intents WHERE church_id = ?',
+    [churchId]
+  );
   return { active: provider, pending: null };
 }
 
@@ -91,6 +177,10 @@ async function disableAuthority(churchId) {
          authority_provider = 'none',
          pending_authority_provider = NULL,
          updated_at = datetime('now')`,
+      [churchId]
+    );
+    await conn.query(
+      'DELETE FROM people_sync_authority_preview_intents WHERE church_id = ?',
       [churchId]
     );
     return { active: 'none', pending: null };
@@ -185,6 +275,8 @@ module.exports = {
   PEOPLE_SOURCE_LOCKED,
   getAuthority,
   beginAuthoritySwitch,
+  getAuthorityPreviewIntent,
+  cancelAuthoritySwitch,
   commitAuthoritySwitchWithConnection,
   commitAuthoritySwitch,
   disableAuthority,

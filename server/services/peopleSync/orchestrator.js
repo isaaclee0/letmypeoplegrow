@@ -50,6 +50,7 @@
 //     COMPLETE FULL source set only.
 'use strict';
 
+const { randomUUID } = require('node:crypto');
 const logger = require('../../config/logger');
 const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
@@ -172,6 +173,8 @@ const defaultDeps = {
   getSyncSettings: defaultGetSyncSettings,
   getAuthority: authority.getAuthority,
   beginAuthoritySwitch: authority.beginAuthoritySwitch,
+  getAuthorityPreviewIntent: authority.getAuthorityPreviewIntent,
+  cancelAuthoritySwitch: authority.cancelAuthoritySwitch,
   startRun: runRepository.startRun,
   finishRun: runRepository.finishRun,
   failRun: runRepository.failRun,
@@ -736,6 +739,7 @@ async function runPipelineBody({
     plan,
     externalPeople,
     localPeople: individuals,
+    localFamilies: families,
     personLinks,
     exclusions: matchReviewState?.exclusions || [],
     holds: matchReviewState?.holds || [],
@@ -813,10 +817,28 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
 // same transaction as the reviewed reconciliation.
 // Always review-only — never applies anything, never touches presence
 // counters.
-async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {}) {
+function assertAuthorityPreviewActive(signal) {
+  if (signal?.aborted) {
+    throw new OrchestratorError(
+      'SYNC_ROUTE_TIMEOUT',
+      'The authority preview was cancelled after its request timed out.',
+      503
+    );
+  }
+}
+
+async function previewAuthoritySwitch({
+  churchId,
+  provider,
+  authorityPreviewId = randomUUID(),
+  signal = null,
+} = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
   assertProvider(provider);
+  if (typeof authorityPreviewId !== 'string' || authorityPreviewId.length === 0 || authorityPreviewId.length > 200) {
+    throw new OrchestratorError('SYNC_AUTHORITY_PREVIEW_INVALID', 'A valid authority preview ID is required', 400);
+  }
 
   // Validate preconditions BEFORE staging the switch: if the church isn't
   // connected, has no enabled batches, etc., we must not leave
@@ -827,17 +849,29 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
   // state — it does NOT always set pending to `provider` (e.g. re-previewing
   // the CURRENT active authority clears pending back to null; see
   // authority.js). Never assume/echo `provider` here.
-  const authorityState = await deps.beginAuthoritySwitch(churchId, provider);
-
-  const run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
+  let authorityState = null;
+  let stagedThisPreview = false;
+  let run = null;
   try {
+    // A route timeout can win while loadPreconditions is still completing.
+    // Check on both sides of beginAuthoritySwitch so every ordering is safe:
+    // canceled-before-stage never stages; canceled-during-stage enters the
+    // catch below and conditionally removes only this exact intent.
+    assertAuthorityPreviewActive(signal);
+    authorityState = await deps.beginAuthoritySwitch(churchId, provider, authorityPreviewId);
+    stagedThisPreview = authorityState.pending === provider;
+    assertAuthorityPreviewActive(signal);
+    run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
+    assertAuthorityPreviewActive(signal);
     const body = await runPipelineBody({
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
       authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
+    assertAuthorityPreviewActive(signal);
 
     body.plan.sourceContext = reviewedSourceContext(pre.batches, null, body.sourceProvenance);
+    if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId: null, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -847,6 +881,7 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       churchId, provider, runId: run.id, status: 'review_required',
       counts: countsFromPlan(body.plan), externalWatermark: null, sourceProvenance: body.sourceProvenance,
     });
+    assertAuthorityPreviewActive(signal);
 
     return {
       runId: run.id,
@@ -857,9 +892,19 @@ async function previewAuthoritySwitch({ churchId, provider } = {}, overrides = {
       plan: sanitizePlanForReview(body.plan, body.externalPeople, body.individuals, body.snapshot.families, body.families),
       snapshot: { fetchedAt: body.plan.snapshot.fetchedAt, mode: body.plan.snapshot.mode },
       authority: authorityState,
+      authorityPreviewId: stagedThisPreview ? authorityPreviewId : null,
     };
   } catch (err) {
-    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    if (run) await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
+    if (stagedThisPreview) {
+      try {
+        await deps.cancelAuthoritySwitch(churchId, provider, authorityPreviewId);
+      } catch (cancelErr) {
+        logger.warn(
+          `peopleSync orchestrator: failed to clear authority preview ${authorityPreviewId} for church ${churchId}: ${cancelErr.message}`
+        );
+      }
+    }
     throw err;
   }
 }
@@ -903,6 +948,12 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const isAuthoritySwitch = pre.authorityState.pending === provider;
+  const pendingAuthorityIntent = isAuthoritySwitch
+    ? await deps.getAuthorityPreviewIntent(churchId)
+    : null;
+  const authorityPreviewId = pendingAuthorityIntent?.provider === provider
+    ? pendingAuthorityIntent.authorityPreviewId
+    : null;
   const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
   const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
   const trigger = isAuthoritySwitch ? 'authority_switch' : 'manual';
@@ -925,6 +976,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     });
 
     body.plan.sourceContext = reviewedSourceContext(pre.batches, batchId, body.sourceProvenance);
+    if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
     if (!verification.ok) {
@@ -943,6 +995,13 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
       activateAuthority: isAuthoritySwitch,
+      authorityPreviewId,
+      reviewedApply: {
+        reviewToken,
+        planDigest,
+        batchId,
+        verifyReviewToken: deps.verifyReviewToken,
+      },
       sourcePromotion: reviewedBatch?.draftSource ? {
         batchId: reviewedBatch.id,
         expectedBaseRevision: reviewedBatch.draftSourceBaseRevision,
@@ -950,8 +1009,18 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       } : null,
     });
   } catch (err) {
-    await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
-    throw err;
+    const reviewCodes = new Set([
+      'SYNC_REVIEW_INVALID', 'SYNC_REVIEW_EXPIRED', 'SYNC_PLAN_STALE', 'SYNC_REVIEW_ALREADY_APPLIED',
+    ]);
+    const reportedError = !(err instanceof OrchestratorError) && reviewCodes.has(err?.code)
+      ? new OrchestratorError(
+        err.code,
+        err.message || reviewTokenErrorMessage(err.code),
+        Number.isInteger(err.status) ? err.status : reviewTokenErrorStatus(err.code)
+      )
+      : err;
+    await safeFailRun(deps, { churchId, provider, runId: run.id, error: reportedError });
+    throw reportedError;
   }
 
   // 9. persist full-fetch presence at most once. applyReviewed always

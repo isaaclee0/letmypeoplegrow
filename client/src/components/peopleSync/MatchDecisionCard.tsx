@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import PersonIdentitySummary, { personDisplayName } from './PersonIdentitySummary';
+import PersonIdentitySummary, { personDisplayName, personFamilyDisplay } from './PersonIdentitySummary';
 import type {
   IdentityDecision,
   IdentityReviewEntry,
@@ -22,8 +22,9 @@ interface MatchDecisionCardProps {
 const providerLabel = (provider: SyncProvider) => provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
 
 function searchableText(person: PeopleSyncPersonDisplay): string {
-  const familyText = person.family.state === 'known'
-    ? [person.family.name, ...person.family.members.flatMap((member) => [member.firstName, member.lastName])].join(' ')
+  const family = personFamilyDisplay(person);
+  const familyText = family.state === 'known'
+    ? [family.name, ...family.members.flatMap((member) => [member.firstName, member.lastName])].join(' ')
     : '';
   return `${person.firstName} ${person.lastName} ${familyText}`.toLocaleLowerCase();
 }
@@ -93,8 +94,7 @@ export default function MatchDecisionCard({
       .map(([id, person]) => ({ id: Number(id), person }))
       .filter(({ id }) => Number.isSafeInteger(id))
       .filter(({ person }) => !needle || searchableText(person).includes(needle))
-      .sort((left, right) => personDisplayName(left.person).localeCompare(personDisplayName(right.person)))
-      .slice(0, 12);
+      .sort((left, right) => personDisplayName(left.person).localeCompare(personDisplayName(right.person)));
   }, [directory.local, query]);
 
   const updateWithExclusion = (next: IdentityDecision, checked: boolean) => {

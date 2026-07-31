@@ -93,7 +93,7 @@ test('GET /settings rejects a missing identity with 401', async () => {
 // silently skipped ensureChurchIsolation's own check (meant only to exempt
 // the real /api/auth/* login routes). Renamed to /people-authority/* to
 // kill this collision.
-for (const path of ['/people-authority/preview', '/people-authority/disable', '/settings', '/runs']) {
+for (const path of ['/people-authority/preview', '/people-authority/cancel', '/people-authority/disable', '/settings', '/runs']) {
   test(`an invalid church_id is rejected on ${path} (mounted directly, no parent router involved)`, async () => {
     await withServer({}, { user: INVALID_CHURCH_ADMIN }, async (base) => {
       const isPost = path.startsWith('/people-authority');
@@ -157,6 +157,7 @@ test('GET /settings forwards the requesting admin\'s own church_id, not a hardco
 test('POST /people-authority/preview forwards church_id and the requested provider', async () => {
   const calls = [];
   await withServer({
+    createAuthorityPreviewId: () => 'preview-route-1',
     previewAuthoritySwitch: async (args) => {
       calls.push(args);
       return { runId: 1, reviewToken: 'tok', decisionContractVersion: 2, summary: {}, plan: {} };
@@ -169,6 +170,26 @@ test('POST /people-authority/preview forwards church_id and the requested provid
   assert.equal(calls.length, 1);
   assert.equal(calls[0].churchId, ADMIN_USER.church_id);
   assert.equal(calls[0].provider, 'elvanto');
+  assert.equal(calls[0].authorityPreviewId, 'preview-route-1');
+  assert.equal(calls[0].signal.aborted, false);
+});
+
+test('POST /people-authority/cancel conditionally clears the exact provider preview intent', async () => {
+  const calls = [];
+  await withServer({
+    cancelAuthoritySwitch: async (...args) => {
+      calls.push(args);
+      return { active: 'none', pending: null };
+    },
+  }, { user: ADMIN_USER }, async (base) => {
+    const { status, body } = await requestJson(`${base}/people-authority/cancel`, {
+      method: 'POST',
+      body: { provider: 'elvanto', authorityPreviewId: 'preview-cancel-1' },
+    });
+    assert.equal(status, 200);
+    assert.deepEqual(body.authority, { active: 'none', pending: null });
+  });
+  assert.deepEqual(calls, [[ADMIN_USER.church_id, 'elvanto', 'preview-cancel-1']]);
 });
 
 test('POST /people-authority/apply forwards legacy and v2 selections verbatim with the acting user id', async () => {
@@ -307,6 +328,7 @@ test('GET /runs maps source-selection, review, availability, completeness, auth,
     'SYNC_SOURCE_INCOMPLETE',
     'SYNC_SOURCE_AUTH',
     'SYNC_SOURCE_RATE_LIMIT',
+    'SYNC_REVIEW_ALREADY_APPLIED',
   ];
   await withServer({
     listAllRecentRuns: async () => codes.map((errorCode, index) => ({
@@ -538,12 +560,24 @@ function neverResolvesForTimeoutTest() {
   return new Promise(() => {}); // deliberately never settles
 }
 
-test('POST /people-authority/preview times out with a safe 503 rather than hanging forever on a stuck previewAuthoritySwitch call', async () => {
-  await withServer({ routeTimeoutMs: 20, previewAuthoritySwitch: neverResolvesForTimeoutTest }, { user: ADMIN_USER }, async (base) => {
+test('POST /people-authority/preview times out safely and conditionally clears its background intent', async () => {
+  const cancellations = [];
+  let previewSignal;
+  await withServer({
+    routeTimeoutMs: 20,
+    createAuthorityPreviewId: () => 'preview-timeout-1',
+    previewAuthoritySwitch: ({ signal }) => {
+      previewSignal = signal;
+      return neverResolvesForTimeoutTest();
+    },
+    cancelAuthoritySwitch: async (...args) => { cancellations.push(args); return { active: 'none', pending: null }; },
+  }, { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/people-authority/preview`, { method: 'POST', body: { provider: 'elvanto' } });
     assert.equal(status, 503);
     assert.equal(body.code, 'SYNC_ROUTE_TIMEOUT');
   });
+  assert.equal(previewSignal.aborted, true);
+  assert.deepEqual(cancellations, [[ADMIN_USER.church_id, 'elvanto', 'preview-timeout-1']]);
 });
 
 test('POST /people-authority/apply times out with a safe 503 rather than hanging forever on a stuck applyReviewed call', async () => {

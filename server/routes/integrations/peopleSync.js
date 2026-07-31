@@ -18,6 +18,7 @@
 // free `.message`/`.status`/`.code` (see orchestrator.js), and anything
 // else is logged server-side and reported as a generic 500.
 const express = require('express');
+const { randomUUID } = require('node:crypto');
 const logger = require('../../config/logger');
 const Database = require('../../config/database');
 const { requireRole } = require('../../middleware/auth');
@@ -236,6 +237,7 @@ const RUN_ERROR_MESSAGES = {
   SYNC_TRIGGER_INVALID: 'An invalid run trigger was used.',
   SYNC_REVIEW_INVALID: 'The review token was invalid.',
   SYNC_REVIEW_EXPIRED: 'The review had expired.',
+  SYNC_REVIEW_ALREADY_APPLIED: 'The review had already been applied.',
   SYNC_PLAN_STALE: 'The reviewed plan was out of date.',
   SYNC_SELECTIONS_INVALID: 'The submitted selections were invalid.',
   SYNC_BATCH_REQUIRED: 'A batch was required for this run.',
@@ -271,6 +273,8 @@ const defaultDeps = {
   updateSettings: defaultUpdateSettings,
   getAuthority: authority.getAuthority,
   disableAuthority: authority.disableAuthority,
+  cancelAuthoritySwitch: authority.cancelAuthoritySwitch,
+  createAuthorityPreviewId: randomUUID,
   previewAuthoritySwitch: orchestrator.previewAuthoritySwitch,
   applyReviewed: orchestrator.applyReviewed,
   listAllRecentRuns: defaultListAllRecentRuns,
@@ -372,20 +376,59 @@ function createPeopleSyncRouter(overrides = {}) {
   // depend on) is the safe fix; see the regression test in
   // peopleSync.test.js that pins this directly against the sub-router.
   router.post('/people-authority/preview', async (req, res) => {
+    const provider = req.body && req.body.provider;
+    const authorityPreviewId = deps.createAuthorityPreviewId();
+    const abortController = new AbortController();
     try {
-      const provider = req.body && req.body.provider;
       // previewAuthoritySwitch forces a full paginated roster snapshot —
       // exactly the "many sequential network calls in one request" shape
       // routeTimeout.js's withTimeout exists for (see its own header note).
-      // No bookkeeping runs after this call other than formatting the
-      // response, so racing the call alone (unlike elvanto.js's run-now,
-      // which must race its OWN post-call bookkeeping too) is sufficient.
+      // The route-owned signal and exact-ID cleanup below cover the losing
+      // background promise when the deadline wins this race.
       const result = await withTimeout(
-        deps.previewAuthoritySwitch({ churchId: req.user.church_id, provider }), deps.routeTimeoutMs
+        deps.previewAuthoritySwitch({
+          churchId: req.user.church_id, provider, authorityPreviewId,
+          signal: abortController.signal,
+        }), deps.routeTimeoutMs
       );
       res.json({ success: true, ...result });
     } catch (err) {
+      if (err?.code === 'SYNC_ROUTE_TIMEOUT') {
+        // The timed-out provider reads keep running, so let that background
+        // orchestration observe cancellation before or immediately after it
+        // stages this exact authority-preview intent.
+        abortController.abort();
+      }
+      if (err?.code === 'SYNC_ROUTE_TIMEOUT' && RUN_PROVIDERS.includes(provider)) {
+        try {
+          await deps.cancelAuthoritySwitch(req.user.church_id, provider, authorityPreviewId);
+        } catch (cancelErr) {
+          logger.warn(`people-sync authority preview cleanup failed: ${cancelErr.message}`);
+        }
+      }
       respondWithError(res, err, 'people-sync POST /people-authority/preview');
+    }
+  });
+
+  router.post('/people-authority/cancel', async (req, res) => {
+    try {
+      const provider = req.body && req.body.provider;
+      const authorityPreviewId = req.body && req.body.authorityPreviewId;
+      if (!RUN_PROVIDERS.includes(provider) || typeof authorityPreviewId !== 'string' || authorityPreviewId.length === 0) {
+        throw new OrchestratorError(
+          'SYNC_AUTHORITY_PREVIEW_INVALID',
+          'A provider and authority preview ID are required.',
+          400
+        );
+      }
+      const result = await deps.cancelAuthoritySwitch(
+        req.user.church_id,
+        provider,
+        authorityPreviewId
+      );
+      res.json({ success: true, authority: result });
+    } catch (err) {
+      respondWithError(res, err, 'people-sync POST /people-authority/cancel');
     }
   });
 

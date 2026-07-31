@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { peopleSyncAPI } from '../../services/api';
 import Modal from '../Modal';
 import SyncReview from './SyncReview';
+import { peopleSyncErrorMessage, toPeopleSyncDisplayError } from './apiError';
 import type {
   PeopleSyncReview,
   PeopleSyncSelections,
@@ -14,6 +15,7 @@ type SourceControlState =
   | 'previewing'
   | 'reviewing'
   | 'applying'
+  | 'cancelling'
   | 'apply_refresh_pending'
   | 'refreshing_after_apply'
   | 'disabling'
@@ -29,34 +31,6 @@ export interface PeopleSourceControlProps {
 
 const providerName = (provider: SyncProvider) =>
   provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
-
-const errorMessage = (cause: unknown, fallback: string) => {
-  if (
-    typeof cause === 'object'
-    && cause !== null
-    && 'response' in cause
-    && typeof cause.response === 'object'
-    && cause.response !== null
-    && 'data' in cause.response
-    && typeof cause.response.data === 'object'
-    && cause.response.data !== null
-    && 'error' in cause.response.data
-    && typeof cause.response.data.error === 'string'
-  ) {
-    return cause.response.data.error;
-  }
-  return cause instanceof Error ? cause.message : fallback;
-};
-
-const displayError = (cause: unknown, fallback: string) => {
-  const error = new Error(errorMessage(cause, fallback)) as Error & { code?: string };
-  if (typeof cause === 'object' && cause !== null) {
-    const codedCause = cause as { code?: unknown; response?: { data?: { code?: unknown } } };
-    const code = codedCause.code ?? codedCause.response?.data?.code;
-    if (typeof code === 'string') error.code = code;
-  }
-  return error;
-};
 
 export default function PeopleSourceControl({
   provider,
@@ -78,6 +52,8 @@ export default function PeopleSourceControl({
   const progressRef = useRef<HTMLParagraphElement>(null);
   const reviewRegionRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
+  const previewGenerationRef = useRef(0);
+  const activeReviewTokenRef = useRef<string | null>(null);
   const dialogWasOpen = useRef(false);
   const restoreSwitchOnDialogClose = useRef(true);
   const continueFocusPending = useRef(false);
@@ -123,6 +99,8 @@ export default function PeopleSourceControl({
   useEffect(() => {
     const awaitingApplyRefresh = state === 'apply_refresh_pending' || state === 'refreshing_after_apply';
     if (awaitingApplyRefresh && pendingProvider && settings.authorityProvider === pendingProvider) {
+      previewGenerationRef.current += 1;
+      activeReviewTokenRef.current = null;
       setPendingReview(null);
       setPendingProvider(null);
       setError(null);
@@ -130,18 +108,45 @@ export default function PeopleSourceControl({
     }
   }, [pendingProvider, settings.authorityProvider, state]);
 
+  const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: PeopleSyncReview) => {
+    if (!discardedReview.authorityPreviewId) return;
+    void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
+      discardedProvider,
+      discardedReview.authorityPreviewId,
+    )).catch(() => undefined);
+  };
+
   const preview = async (nextProvider: SyncProvider) => {
     if (!connections[nextProvider] || !hasEnabledBatch || nextProvider === settings.authorityProvider) return;
+    const generation = ++previewGenerationRef.current;
+    const previousReview = pendingReview;
+    activeReviewTokenRef.current = null;
     setState('previewing');
     setError(null);
     setPendingProvider(nextProvider);
     try {
       const response = await peopleSyncAPI.previewAuthority(nextProvider);
+      if (generation !== previewGenerationRef.current) {
+        discardSupersededPreview(nextProvider, response.data);
+        return;
+      }
+      activeReviewTokenRef.current = response.data.reviewToken;
       setPendingReview(response.data);
       setState('reviewing');
     } catch (cause) {
-      setError(errorMessage(cause, 'Failed to preview the authority change.'));
-      setState('error');
+      if (generation !== previewGenerationRef.current) return;
+      setError(peopleSyncErrorMessage(cause, 'Failed to preview the authority change.'));
+      if (previousReview) {
+        // A refresh may already have replaced the previous server-side
+        // intent before failing. Fail closed: retire that old exact intent
+        // if it still exists, and never re-enable its now-uncertain token.
+        discardSupersededPreview(nextProvider, previousReview);
+        setPendingReview(null);
+        setPendingProvider(null);
+        setState('error');
+      } else {
+        setState('error');
+      }
     }
   };
 
@@ -151,25 +156,31 @@ export default function PeopleSourceControl({
     try {
       await onRefresh();
     } catch (refreshCause) {
-      const detail = errorMessage(refreshCause, 'Refresh failed.');
+      const detail = peopleSyncErrorMessage(refreshCause, 'Refresh failed.');
       setError(`The authority change was applied, but its status could not be refreshed: ${detail}`);
       setState('apply_refresh_pending');
       return;
     }
+    activeReviewTokenRef.current = null;
     setPendingReview(null);
     setPendingProvider(null);
     setState('idle');
   };
 
   const apply = async (reviewToken: string, selections: PeopleSyncSelections) => {
-    if (!pendingProvider) return;
+    if (!pendingProvider || activeReviewTokenRef.current !== reviewToken) return;
+    const generation = ++previewGenerationRef.current;
+    activeReviewTokenRef.current = null;
     setState('applying');
     setError(null);
     try {
       await peopleSyncAPI.applyAuthority(pendingProvider, reviewToken, selections);
     } catch (cause) {
-      setState('reviewing');
-      throw displayError(cause, 'Failed to apply the authority change.');
+      if (generation === previewGenerationRef.current) {
+        activeReviewTokenRef.current = reviewToken;
+        setState('reviewing');
+      }
+      throw toPeopleSyncDisplayError(cause, 'Failed to apply the authority change.');
     }
     await refreshAfterApply();
   };
@@ -187,7 +198,7 @@ export default function PeopleSourceControl({
       setDisableMutationSucceeded(false);
       setState('idle');
     } catch (cause) {
-      const detail = errorMessage(cause, 'Refresh failed.');
+      const detail = peopleSyncErrorMessage(cause, 'Refresh failed.');
       setError(`The people source was disabled, but its status could not be refreshed: ${detail}`);
       setState('error');
     }
@@ -199,7 +210,7 @@ export default function PeopleSourceControl({
     try {
       await peopleSyncAPI.disableAuthority();
     } catch (cause) {
-      setError(errorMessage(cause, 'Failed to disable the people source.'));
+      setError(peopleSyncErrorMessage(cause, 'Failed to disable the people source.'));
       setState('error');
       return;
     }
@@ -207,11 +218,38 @@ export default function PeopleSourceControl({
     await refreshAfterDisable();
   };
 
-  const cancelReview = () => {
+  const clearReview = () => {
+    activeReviewTokenRef.current = null;
     setPendingProvider(null);
     setPendingReview(null);
     setError(null);
     setState('idle');
+  };
+
+  const cancelReview = async () => {
+    if (!pendingProvider || !pendingReview || state === 'previewing' || state === 'applying' || state === 'cancelling') return;
+    const providerToCancel = pendingProvider;
+    const reviewToCancel = pendingReview;
+    const generation = ++previewGenerationRef.current;
+    activeReviewTokenRef.current = null;
+    setError(null);
+
+    if (!reviewToCancel.authorityPreviewId) {
+      clearReview();
+      return;
+    }
+
+    setState('cancelling');
+    try {
+      await peopleSyncAPI.cancelAuthorityPreview(providerToCancel, reviewToCancel.authorityPreviewId);
+    } catch (cause) {
+      if (generation !== previewGenerationRef.current) return;
+      activeReviewTokenRef.current = reviewToCancel.reviewToken;
+      setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
+      setState('reviewing');
+      return;
+    }
+    if (generation === previewGenerationRef.current) clearReview();
   };
 
   const summary = pendingReview?.summary;
@@ -225,6 +263,7 @@ export default function PeopleSourceControl({
   const busy = state === 'previewing'
     || state === 'reviewing'
     || state === 'applying'
+    || state === 'cancelling'
     || state === 'disabling'
     || pendingReview !== null;
   const prerequisite = checked
@@ -366,8 +405,9 @@ export default function PeopleSourceControl({
                 onRefresh={refreshPreview}
                 onApply={apply}
                 applying={state === 'applying'}
+                interactionDisabled={state === 'previewing' || state === 'cancelling'}
               />
-              <button type="button" onClick={cancelReview} disabled={state === 'applying'} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
+              <button type="button" onClick={() => void cancelReview()} disabled={state === 'previewing' || state === 'applying' || state === 'cancelling'} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
                 Cancel authority change
               </button>
             </>

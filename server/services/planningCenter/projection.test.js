@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { projectPerson } = require('./projection');
+const { projectPerson, projectPcoHouseholds } = require('./projection');
 
 test('projectPerson maps attributes and first household id', () => {
   const raw = {
@@ -139,4 +139,22 @@ test('projectPerson: passedBackgroundCheck is null (not false) when PCO has no b
   };
   const projected = projectPerson(raw, new Map());
   assert.strictEqual(projected.passedBackgroundCheck, null);
+});
+
+test('projectPcoHouseholds retains the provider household name in its lean family projection', () => {
+  const families = projectPcoHouseholds(
+    [
+      { id: 'p2', householdId: 'h1' },
+      { id: 'p1', householdId: 'h1' },
+    ],
+    new Map([['h1', 'p1']]),
+    new Map([['h1', '  Lovelace Household  ']])
+  );
+
+  assert.deepStrictEqual(families, [{
+    id: 'h1',
+    name: 'Lovelace Household',
+    memberExternalIds: ['p1', 'p2'],
+    primaryContactExternalId: 'p1',
+  }]);
 });

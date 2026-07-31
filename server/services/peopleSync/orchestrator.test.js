@@ -370,9 +370,11 @@ test('review signs durable match context and returns a family-aware directory wi
   assert.deepEqual(matchInputs[0].excludedPairs, new Set(['ext-1\u00009']));
   assert.deepEqual(matchInputs[0].heldExternalIds, new Set(['ext-1']));
   assert.equal(review.decisionContractVersion, 2);
+  assert.match(signedPlan.reviewContext.localIdentityDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(signedPlan.reviewContext, {
     version: 2,
     manualCandidateIndividualIds: [7, 8, 9],
+    localIdentityDigest: signedPlan.reviewContext.localIdentityDigest,
     identities: {
       'ext-1': {
         suggestedIndividualId: null,
@@ -771,7 +773,32 @@ test('reviewed apply sends source promotion CAS data and records member-only ful
     batchId: 1, expectedBaseRevision: 6, expectedDraftDigest: digestSourceIdentity(draft),
   });
   assert.equal(Object.hasOwn(applied[0], 'filterPromotion'), false);
+  assert.equal(applied[0].reviewedApply.reviewToken, 'review-token');
+  assert.match(applied[0].reviewedApply.planDigest, /^[a-f0-9]{64}$/);
   assert.equal(presence.length, 1);
+});
+
+test('a one-time review replay remains a typed refreshable failure and is recorded on the run', async () => {
+  const replayError = Object.assign(
+    new Error('This review has already been applied. Refresh before applying another sync.'),
+    { code: 'SYNC_REVIEW_ALREADY_APPLIED', status: 409 }
+  );
+  const { deps, failed } = makeDeps({
+    extra: {
+      applyPeopleSyncPlan: async () => { throw replayError; },
+    },
+  });
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: 'review-token', selections: {}, userId: 5,
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_REVIEW_ALREADY_APPLIED' && error.status === 409
+  );
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].errorCode, 'SYNC_REVIEW_ALREADY_APPLIED');
 });
 
 test('scheduled source sync is full-only, ignores legacy watermarks, persists provenance, and records presence once after apply', async () => {
@@ -796,18 +823,103 @@ test('previewAuthoritySwitch remains review-only and validates sources before st
       { id: 51, firstName: 'Una', lastName: 'Matched', peopleType: 'regular', familyId: null, isChild: false, isActive: true },
     ],
     extra: {
-      beginAuthoritySwitch: async () => { begins += 1; return { active: 'none', pending: 'elvanto' }; },
+      beginAuthoritySwitch: async (_churchId, _provider, previewId) => {
+        begins += 1;
+        assert.equal(previewId, 'preview-1');
+        return { active: 'none', pending: 'elvanto' };
+      },
       matchPeople: () => ({
         linked: [], matches: [], ambiguous: [], unmatchedExternalIds: [], unmatchedLocalIds: [51], visitorMatches: [], archivedMatches: [],
       }),
     },
   });
-  const review = await previewAuthoritySwitch({ churchId: 'church-a', provider: 'elvanto' }, deps);
+  const review = await previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-1',
+  }, deps);
   assert.equal(begins, 1);
   assert.equal(review.authority.pending, 'elvanto');
+  assert.equal(review.authorityPreviewId, 'preview-1');
   assert.deepEqual(review.coverage, {
     unmatchedActiveLocalRegulars: 1,
   });
   assert.equal(applied.length, 0);
   assert.equal(presence.length, 0);
+});
+
+test('a failed authority preview conditionally cancels only the intent it staged', async () => {
+  const cancellations = [];
+  const { deps } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    extra: {
+      beginAuthoritySwitch: async () => ({ active: 'none', pending: 'elvanto' }),
+      cancelAuthoritySwitch: async (...args) => { cancellations.push(args); },
+      startRun: async () => { throw new Error('run storage unavailable'); },
+    },
+  });
+
+  await assert.rejects(
+    previewAuthoritySwitch({
+      churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-failed',
+    }, deps),
+    /run storage unavailable/
+  );
+  assert.deepEqual(cancellations, [['church-a', 'elvanto', 'preview-failed']]);
+});
+
+test('a timed-out authority preview cannot stage after slow preconditions finish', async () => {
+  const controller = new AbortController();
+  let begins = 0;
+  let releaseBatches;
+  const batchesReady = new Promise((resolve) => { releaseBatches = resolve; });
+  const { deps } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    extra: {
+      listBatches: async () => batchesReady,
+      beginAuthoritySwitch: async () => {
+        begins += 1;
+        return { active: 'none', pending: 'elvanto' };
+      },
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-timeout-before-stage',
+    signal: controller.signal,
+  }, deps);
+  controller.abort();
+  releaseBatches([batch()]);
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.equal(begins, 0);
+});
+
+test('a timeout racing authority staging cancels its exact intent after begin completes', async () => {
+  const controller = new AbortController();
+  const cancellations = [];
+  let releaseBegin;
+  const beginReady = new Promise((resolve) => { releaseBegin = resolve; });
+  let markBeginEntered;
+  const beginEntered = new Promise((resolve) => { markBeginEntered = resolve; });
+  const { deps } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    extra: {
+      beginAuthoritySwitch: async () => {
+        markBeginEntered();
+        await beginReady;
+        return { active: 'none', pending: 'elvanto' };
+      },
+      cancelAuthoritySwitch: async (...args) => { cancellations.push(args); },
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-timeout-during-stage',
+    signal: controller.signal,
+  }, deps);
+  await beginEntered;
+  controller.abort();
+  releaseBegin();
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(cancellations, [['church-a', 'elvanto', 'preview-timeout-during-stage']]);
 });

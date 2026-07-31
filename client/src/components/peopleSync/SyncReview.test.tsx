@@ -178,6 +178,66 @@ describe('SyncReview v2 identity review', () => {
     expect(screen.getByText('Household information unavailable')).toBeInTheDocument();
   });
 
+  it('treats omitted family display data as unavailable instead of crashing', () => {
+    const base = singleIdentityReview();
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      people: {
+        external: {
+          'ext-auto': {
+            ...base.plan.people!.external['ext-auto'],
+            family: undefined as never,
+          },
+        },
+        local: {
+          ...base.plan.people!.local,
+          '7': {
+            ...base.plan.people!.local['7'],
+            family: undefined as never,
+          },
+        },
+      },
+    };
+
+    render(<SyncReview provider="planning_center" review={{ ...base, plan }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(screen.getAllByText('Household information unavailable').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders every sorted local search result without silently truncating eligible people', async () => {
+    const user = userEvent.setup();
+    const base = singleIdentityReview();
+    const additionalPeople = Object.fromEntries(Array.from({ length: 13 }, (_, index) => {
+      const id = 100 + index;
+      return [String(id), {
+        firstName: 'Candidate',
+        lastName: String(index + 1).padStart(2, '0'),
+        matchEligible: true,
+        family: { state: 'none' as const },
+      }];
+    }));
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      people: {
+        ...base.plan.people!,
+        local: {
+          ...base.plan.people!.local,
+          ...additionalPeople,
+          '999': { firstName: 'Zulu', lastName: 'Last', matchEligible: true, family: { state: 'none' } },
+        },
+      },
+      reviewContext: {
+        ...base.plan.reviewContext!,
+        manualCandidateIndividualIds: [7, 8, 9, ...Array.from({ length: 13 }, (_, index) => 100 + index), 999],
+      },
+    };
+    render(<SyncReview provider="planning_center" review={{ ...base, plan }} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    await user.click(screen.getByRole('radio', { name: 'Choose someone else' }));
+
+    expect(screen.getByRole('button', { name: 'Select Zulu Last' })).toBeEnabled();
+  });
+
   it('uses the signed manual-candidate allow-list even when display metadata says a person is eligible', async () => {
     const user = userEvent.setup();
     const review = v2Review();
@@ -313,6 +373,56 @@ describe('SyncReview v2 identity review', () => {
     expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeDisabled();
   });
 
+  it('prefers nested server error details and makes an expired review refresh-only', async () => {
+    const user = userEvent.setup();
+    const expiredError = Object.assign(new Error('Request failed with status code 409'), {
+      code: 'ERR_BAD_REQUEST',
+      response: {
+        data: {
+          code: 'SYNC_REVIEW_EXPIRED',
+          message: 'This review expired on the server. Fetch a fresh review.',
+        },
+      },
+    });
+    const onApply = vi.fn().mockRejectedValue(expiredError);
+    const onRefresh = vi.fn();
+    render(<SyncReview provider="planning_center" review={singleIdentityReview()} onRefresh={onRefresh} onApply={onApply} applying={false} />);
+
+    await user.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This review has expired.');
+    expect(alert).toHaveTextContent('This review expired on the server. Fetch a fresh review.');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    await user.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    expect(onApply).toHaveBeenCalledTimes(1);
+    await user.click(within(alert).getByRole('button', { name: 'Refresh plan' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes an already-applied review refresh-only instead of offering the same token again', async () => {
+    const user = userEvent.setup();
+    const replayError = Object.assign(new Error('Request failed with status code 409'), {
+      response: {
+        data: {
+          code: 'SYNC_REVIEW_ALREADY_APPLIED',
+          error: 'This review has already been applied. Refresh before applying another sync.',
+        },
+      },
+    });
+    const onApply = vi.fn().mockRejectedValue(replayError);
+    const onRefresh = vi.fn();
+    render(<SyncReview provider="planning_center" review={singleIdentityReview()} onRefresh={onRefresh} onApply={onApply} applying={false} />);
+
+    await user.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This review has already been applied.');
+    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    await user.click(within(alert).getByRole('button', { name: 'Refresh plan' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed when a response declares v2 without a valid signed review context', () => {
     const base = v2Review();
     const malformed = { ...base, plan: { ...base.plan, reviewContext: undefined } };
@@ -321,6 +431,66 @@ describe('SyncReview v2 identity review', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
     screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
     expect(screen.queryByText('Decide later')).not.toBeInTheDocument();
+  });
+
+  it('shows snapshot time and a concise all-clear when no roster changes are planned', () => {
+    const plan: PeopleSyncPlan = {
+      ...emptyBuckets(),
+      provider: 'planning_center',
+      authoritative: true,
+      snapshot: { fetchedAt: '2026-07-25T09:00:00.000Z', mode: 'full' },
+      people: { external: {}, local: {} },
+      reviewContext: { version: 2, manualCandidateIndividualIds: [], identities: {} },
+    };
+    const emptyReview: PeopleSyncReview = {
+      runId: 30,
+      reviewToken: 'empty-review',
+      decisionContractVersion: 2,
+      summary: summaryFor(plan),
+      plan,
+      snapshot: plan.snapshot,
+    };
+    const { container } = render(<SyncReview provider="planning_center" review={emptyReview} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} />);
+
+    expect(container.querySelector('time[datetime="2026-07-25T09:00:00.000Z"]')).not.toBeNull();
+    expect(screen.getByText('No roster changes are planned in this review.')).toBeInTheDocument();
+  });
+
+  it('humanizes planned archive reasons and submits exact PCO v2 archive selections', async () => {
+    const user = userEvent.setup();
+    const base = singleIdentityReview();
+    const plan: PeopleSyncPlan = {
+      ...base.plan,
+      archive: [{
+        id: 'archive:missing:8',
+        externalPersonId: 'missing-person',
+        individualId: 8,
+        reason: 'confirmed_missing_full_sync',
+        missingFullSyncCount: 2,
+      }],
+    };
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="planning_center"
+      review={{ ...base, plan, summary: summaryFor(plan) }}
+      onRefresh={vi.fn()}
+      onApply={onApply}
+      applying={false}
+      requireAllPlannedArchivesAccepted
+    />);
+
+    expect(screen.getByText('Missing from two complete provider syncs')).toBeInTheDocument();
+    expect(screen.queryByText('confirmed_missing_full_sync')).not.toBeInTheDocument();
+    const apply = screen.getAllByRole('button', { name: 'Apply sync' })[0];
+    expect(apply).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
+    await user.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+    expect(onApply).toHaveBeenCalledWith('review-token', expect.objectContaining({
+      decisionContractVersion: 2,
+      acceptArchiveIndividualIds: [8],
+    }));
   });
 
   it.each([
