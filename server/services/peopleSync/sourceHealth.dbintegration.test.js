@@ -28,6 +28,17 @@ async function seedActiveBatch(churchId, source = ACTIVE_SOURCE) {
   return getBatch(churchId, 'planning_center', batch.id);
 }
 
+async function seedActiveElvantoBatch(churchId) {
+  const batch = await createBatch({
+    churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE,
+  });
+  await promoteSourceDraftWithConnection(Database.getChurchDb(churchId), {
+    churchId, provider: 'elvanto', batchId: batch.id, expectedBaseRevision: 1,
+    expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
+  });
+  return getBatch(churchId, 'elvanto', batch.id);
+}
+
 test('a successful Elvanto source refresh derives the batch name from the observed source name', async () => {
   await withTestChurchDb(async (churchId) => {
     const batch = await createBatch({
@@ -223,6 +234,58 @@ test('an abort inside missing-health persistence rolls back both health and admi
 
     await assert.rejects(update, (error) => error?.code === 'SYNC_ROUTE_TIMEOUT');
     assert.equal((await getBatch(churchId, 'planning_center', batch.id)).sourceStatus, 'unknown');
+    assert.deepEqual(await notificationsFor(churchId, adminId), []);
+  });
+});
+
+test('a stale Elvanto connection generation cannot publish available source health', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await seedActiveElvantoBatch(churchId);
+    await Database.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', 2)`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      recordActiveSourceAvailable({
+        churchId,
+        provider: 'elvanto',
+        batchId: batch.id,
+        expectedSource: ELVANTO_SOURCE,
+        observedSource: ELVANTO_SOURCE,
+        checkedAt: '2026-07-29T01:00:00.000Z',
+        connectionExpectation: { generation: 1 },
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+    );
+    assert.equal((await getBatch(churchId, 'elvanto', batch.id)).sourceStatus, 'unknown');
+  });
+});
+
+test('a stale Elvanto connection generation cannot publish missing health or notifications', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await seedActiveElvantoBatch(churchId);
+    const adminId = await seedUser(churchId, { label: 'stale-elvanto-health' });
+    await Database.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', 5)`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      recordActiveSourceFailure({
+        churchId,
+        provider: 'elvanto',
+        batchId: batch.id,
+        expectedSource: ELVANTO_SOURCE,
+        code: 'SYNC_SOURCE_UNAVAILABLE',
+        checkedAt: '2026-07-29T01:00:00.000Z',
+        connectionExpectation: { generation: 4 },
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+    );
+    assert.equal((await getBatch(churchId, 'elvanto', batch.id)).sourceStatus, 'unknown');
     assert.deepEqual(await notificationsFor(churchId, adminId), []);
   });
 });

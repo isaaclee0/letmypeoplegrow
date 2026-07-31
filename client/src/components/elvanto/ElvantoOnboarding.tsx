@@ -4,7 +4,7 @@ import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchE
 import SyncReview from '../peopleSync/SyncReview';
 import type { PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
 import {
-  cancelAuthorityPreviewUntilSuccess,
+  cancelAuthorityPreviewWithRetry,
   type AuthorityPreviewCancellation,
 } from '../peopleSync/authorityPreviewCancellation';
 
@@ -47,13 +47,16 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
 
   const cancelExactAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
-    const cancellation = cancelAuthorityPreviewUntilSuccess(preview);
-    void cancellation.then(() => {
-      if (ownedAuthorityPreviewRef.current?.provider === preview.provider
-        && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
-        ownedAuthorityPreviewRef.current = null;
-      }
-    });
+    const cancellation = cancelAuthorityPreviewWithRetry(preview);
+    void cancellation.then(
+      () => {
+        if (ownedAuthorityPreviewRef.current?.provider === preview.provider
+          && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
+          ownedAuthorityPreviewRef.current = null;
+        }
+      },
+      () => undefined,
+    );
     return cancellation;
   };
 

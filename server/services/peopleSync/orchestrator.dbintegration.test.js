@@ -8,6 +8,7 @@ const providerRegistry = require('./providerRegistry');
 const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const runRepository = require('./runRepository');
+const linkRepository = require('./linkRepository');
 const authority = require('./authority');
 const { digestSourceIdentity } = require('./sourceModel');
 
@@ -588,6 +589,12 @@ test('reviewed apply rejects an Elvanto account replacement during its provider 
     const review = await orchestrator.buildReview({
       churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
     });
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET source_status = 'error', source_status_error_code = 'SYNC_SOURCE_INCOMPLETE'
+        WHERE id = ? AND church_id = ?`,
+      [batch.id, churchId]
+    );
 
     const fetchEntered = deferred();
     const releaseFetch = deferred();
@@ -603,8 +610,15 @@ test('reviewed apply rejects an Elvanto account replacement during its provider 
     await replaceElvantoConnectionGeneration(churchId, 5, 'replacement-account-key');
     releaseFetch.resolve();
 
-    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    await assert.rejects(
+      applying,
+      (error) => error instanceof orchestrator.OrchestratorError &&
+        error.code === 'SYNC_PLAN_STALE' && error.status === 409
+    );
     assert.equal(await countPeople(churchId), 0);
+    const health = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
+    assert.equal(health.sourceStatus, 'error');
+    assert.equal(health.sourceStatusErrorCode, 'SYNC_SOURCE_INCOMPLETE');
   });
 });
 
@@ -631,6 +645,102 @@ test('unattended apply rejects an Elvanto account replacement during its provide
 
     await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
     assert.equal(await countPeople(churchId), 0);
+    assert.equal((await batchRepository.getBatch(churchId, 'elvanto', batch.id)).sourceStatus, 'unknown');
+  });
+});
+
+test('a failed old-account fetch cannot publish missing source health or notifications after reconnect', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await replaceElvantoConnectionGeneration(churchId, 21, 'old-account-key');
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    await Database.query(
+      `INSERT INTO users (church_id, email, role, first_name, last_name, is_active)
+       VALUES (?, ?, 'admin', 'Stale', 'Health', 1)`,
+      [churchId, `stale-health-${Math.random().toString(36).slice(2)}@example.com`]
+    );
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios = new Map([['members', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      throw Object.assign(new Error('old account no longer sees source'), { code: 'SYNC_SOURCE_UNAVAILABLE' });
+    }]]);
+
+    const review = orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+    await fetchEntered.promise;
+    await replaceElvantoConnectionGeneration(churchId, 22, 'replacement-account-key');
+    releaseFetch.resolve();
+
+    await assert.rejects(review, (error) => error.code === 'SYNC_SOURCE_UNAVAILABLE');
+    assert.equal((await batchRepository.getBatch(churchId, 'elvanto', batch.id)).sourceStatus, 'unknown');
+    const notices = await Database.query(
+      `SELECT id FROM notifications WHERE church_id = ? AND notification_type = 'system'`,
+      [churchId]
+    );
+    assert.equal(notices.length, 0);
+  });
+});
+
+test('reviewed post-apply presence ignores an old-account snapshot after reconnect', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await replaceElvantoConnectionGeneration(churchId, 31, 'old-account-key');
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const individualId = await seedIndividual(churchId, { firstName: 'Existing' });
+    await linkPerson(churchId, 'missing-person', individualId);
+    scenarios = new Map([['members', snapshot(selected, { people: [], memberExternalIds: [] })]]);
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+    let presenceCalls = 0;
+
+    const result = await orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+    }, {
+      recordFullFetchPresence: async (...args) => {
+        presenceCalls += 1;
+        await replaceElvantoConnectionGeneration(churchId, 32, 'replacement-account-key');
+        return linkRepository.recordFullFetchPresence(...args);
+      },
+    });
+
+    assert.equal(result.status, 'applied');
+    assert.equal(presenceCalls, 1);
+    assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
+  });
+});
+
+test('unattended post-apply presence ignores an old-account snapshot after reconnect', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await replaceElvantoConnectionGeneration(churchId, 41, 'old-account-key');
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const individualId = await seedIndividual(churchId, { firstName: 'Existing' });
+    await linkPerson(churchId, 'missing-person', individualId);
+    scenarios = new Map([['members', snapshot(selected, { people: [], memberExternalIds: [] })]]);
+    let presenceCalls = 0;
+
+    const result = await orchestrator.runUnattended({
+      churchId, provider: 'elvanto', batchId: batch.id,
+    }, {
+      recordFullFetchPresence: async (...args) => {
+        presenceCalls += 1;
+        await replaceElvantoConnectionGeneration(churchId, 42, 'replacement-account-key');
+        return linkRepository.recordFullFetchPresence(...args);
+      },
+    });
+
+    assert.equal(result.status, 'applied');
+    assert.equal(presenceCalls, 1);
+    assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
   });
 });
 

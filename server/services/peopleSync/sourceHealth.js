@@ -3,6 +3,7 @@
 const Database = require('../../config/database');
 const { normalizeProviderSource } = require('./sourceModel');
 const { recordActiveSourceHealthWithConnection } = require('./batchRepository');
+const { assertConnectionGenerationWithConnection } = require('./connectionStore');
 
 const PROVIDER_LABELS = Object.freeze({ planning_center: 'Planning Center', elvanto: 'Elvanto' });
 const SAFE_FAILURE_CODES = new Set([
@@ -75,9 +76,12 @@ function createSourceHealth(overrides = {}) {
     ((churchId, callback) => Database.transactionForChurch(churchId, callback));
   const recordHealth = overrides.recordActiveSourceHealthWithConnection ||
     recordActiveSourceHealthWithConnection;
+  const assertConnectionGeneration = overrides.assertConnectionGenerationWithConnection ||
+    assertConnectionGenerationWithConnection;
 
   async function recordActiveSourceAvailable({
-    churchId, provider, batchId, expectedSource, observedSource, checkedAt, signal = null,
+    churchId, provider, batchId, expectedSource, observedSource, checkedAt,
+    connectionExpectation = null, signal = null,
   }) {
     const expected = normalizeSource(provider, expectedSource);
     const observed = normalizeSource(provider, observedSource);
@@ -89,6 +93,12 @@ function createSourceHealth(overrides = {}) {
       // church lock. Every later check is still inside this transaction, so
       // an abort while a write is awaited throws before COMMIT and rolls back.
       assertPreviewActive(signal);
+      if (connectionExpectation) {
+        await assertConnectionGeneration(conn, {
+          churchId, provider, expectedGeneration: connectionExpectation.generation,
+        });
+        assertPreviewActive(signal);
+      }
       const result = await recordHealth(conn, {
         churchId, provider, batchId, expectedSource: expected, sourceName: observed.name,
         sourceStatus: 'available', checkedAt: time, errorCode: null,
@@ -101,7 +111,8 @@ function createSourceHealth(overrides = {}) {
   }
 
   async function recordActiveSourceFailure({
-    churchId, provider, batchId, expectedSource, code, checkedAt, signal = null,
+    churchId, provider, batchId, expectedSource, code, checkedAt,
+    connectionExpectation = null, signal = null,
   }) {
     const expected = normalizeSource(provider, expectedSource);
     const time = checkedTime(checkedAt);
@@ -110,6 +121,12 @@ function createSourceHealth(overrides = {}) {
 
     return transactionForChurch(churchId, async (conn) => {
       assertPreviewActive(signal);
+      if (connectionExpectation) {
+        await assertConnectionGeneration(conn, {
+          churchId, provider, expectedGeneration: connectionExpectation.generation,
+        });
+        assertPreviewActive(signal);
+      }
       const result = await recordHealth(conn, {
         churchId, provider, batchId, expectedSource: expected, sourceName: null,
         sourceStatus, checkedAt: time, errorCode,

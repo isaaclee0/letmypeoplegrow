@@ -4,7 +4,7 @@ import Modal from '../Modal';
 import SyncReview from './SyncReview';
 import { peopleSyncErrorMessage, toPeopleSyncDisplayError } from './apiError';
 import {
-  cancelAuthorityPreviewUntilSuccess,
+  cancelAuthorityPreviewWithRetry,
   type AuthorityPreviewCancellation,
 } from './authorityPreviewCancellation';
 import type {
@@ -64,13 +64,16 @@ export default function PeopleSourceControl({
   const continueFocusPending = useRef(false);
 
   const retireAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
-    const cancellation = cancelAuthorityPreviewUntilSuccess(preview);
-    void cancellation.then(() => {
-      if (ownedAuthorityPreviewRef.current?.provider === preview.provider
-        && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
-        ownedAuthorityPreviewRef.current = null;
-      }
-    });
+    const cancellation = cancelAuthorityPreviewWithRetry(preview);
+    void cancellation.then(
+      () => {
+        if (ownedAuthorityPreviewRef.current?.provider === preview.provider
+          && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
+          ownedAuthorityPreviewRef.current = null;
+        }
+      },
+      () => undefined,
+    );
     return cancellation;
   };
 

@@ -91,6 +91,13 @@ api.interceptors.response.use(
     
     // Handle 401 errors with token refresh
     if (error.response?.status === 401) {
+      // A provider credential rejection is not an expired LMPG session.
+      // Preserve the original typed error so the integration UI can direct
+      // the admin to reconnect; refreshing/replaying would repeat a provider
+      // fetch or apply and could replace this guidance with a login redirect.
+      if (error.response?.data?.code === 'SYNC_SOURCE_AUTH') {
+        return Promise.reject(error);
+      }
       const originalRequest = error.config;
       const requestUrl = originalRequest.url;
       
@@ -985,6 +992,7 @@ export const peopleSyncAPI = {
     api.post<{ success: true; authority: PeopleSyncAuthorityState }>(
       '/integrations/people-sync/people-authority/cancel',
       { provider, authorityPreviewId },
+      { timeout: 5000 },
     ),
 
   // `selections` defaults to {} to match applyReviewed's own server-side

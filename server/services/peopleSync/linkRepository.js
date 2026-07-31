@@ -1,4 +1,5 @@
 const Database = require('../../config/database');
+const connectionStore = require('./connectionStore');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const LINK_SOURCES = new Set(['matched', 'created', 'manual', 'legacy_backfill']);
@@ -163,6 +164,7 @@ async function markPeopleSeen(churchId, provider, seenExternalIds) {
 
 async function recordFullFetchPresence(churchId, provider, seenExternalIds, {
   complete, ignoredExternalIds = new Set(), authorityExpectation = null, sourceExpectations = null,
+  connectionExpectation = null,
 } = {}) {
   assertProvider(provider);
   if (complete !== true) throw new Error('Refusing missing-person accounting for an incomplete full fetch');
@@ -177,6 +179,11 @@ async function recordFullFetchPresence(churchId, provider, seenExternalIds, {
       const batchRepository = require('./batchRepository');
       await batchRepository.assertSourceExpectationsWithConnection(conn, {
         churchId, provider, expectations: sourceExpectations,
+      });
+    }
+    if (connectionExpectation) {
+      await connectionStore.assertConnectionGenerationWithConnection(conn, {
+        churchId, provider, expectedGeneration: connectionExpectation.generation,
       });
     }
     const links = await conn.query(`SELECT id, external_person_id, individual_id, missing_full_sync_count

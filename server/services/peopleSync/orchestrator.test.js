@@ -172,6 +172,7 @@ test('target review substitutes only the target draft source while other enabled
     { sourceKind: 'elvanto_group', sourceExternalId: 'active-3' },
   ]);
   assert.deepEqual(availableHealth.map((entry) => entry.batchId), [3], 'a successful draft read must not overwrite active-source health');
+  assert.deepEqual(availableHealth[0].connectionExpectation, { generation: 17 });
 });
 
 test('enabled sources are fetched sequentially', async () => {
@@ -703,7 +704,7 @@ test('source age is never a run gate', async () => {
 
 test('each later scheduled attempt resolves a missing source again and can recover', async () => {
   let fetches = 0;
-  const { deps } = makeDeps({
+  const { deps, failedHealth } = makeDeps({
     batches: [batch({ sourceStatus: 'missing', sourceStatusCheckedAt: '2026-07-28T00:00:00.000Z' })],
     fetchSourceSnapshot: async () => {
       fetches += 1;
@@ -715,6 +716,7 @@ test('each later scheduled attempt resolves a missing source again and can recov
   const recovered = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1 }, deps);
   assert.equal(recovered.status, 'applied');
   assert.equal(fetches, 2);
+  assert.deepEqual(failedHealth[0].connectionExpectation, { generation: 17 });
 });
 
 test('unattended Planning Center auth exhaustion records a safe source error and leaves the roster untouched', async () => {
@@ -782,6 +784,26 @@ test('review digest binds sorted source identity, revision, draft identity, and 
   assert.ok(digested.sourceContext.snapshots.every((item) => /^[a-f0-9]{64}$/.test(item.snapshotDigest)));
 });
 
+test('Planning Center review source context omits the Elvanto-only connection generation', async () => {
+  let digested;
+  const planningCenterSource = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
+  const { deps } = makeDeps({
+    batches: [batch({ provider: 'planning_center', source: planningCenterSource })],
+    authorityState: { active: 'planning_center', pending: null },
+    fetchSourceSnapshot: async () => sourceSnapshot(planningCenterSource, { provider: 'planning_center' }),
+    extra: {
+      getConnectionGeneration: async () => { throw new Error('Planning Center must not read an Elvanto generation'); },
+      digestPlan: (plan) => { digested = structuredClone(plan); return 'a'.repeat(64); },
+    },
+  });
+
+  await buildReview({
+    churchId: 'church-a', provider: 'planning_center', batchId: 1, trigger: 'manual',
+  }, deps);
+
+  assert.equal(Object.hasOwn(digested.sourceContext, 'connectionGeneration'), false);
+});
+
 test('reviewed apply sends source promotion CAS data and records member-only full presence once', async () => {
   const draft = source('draft');
   const reviewed = batch({ source: source('active'), sourceRevision: 6, draftSource: draft, draftSourceBaseRevision: 6 });
@@ -818,6 +840,7 @@ test('reviewed apply sends source promotion CAS data and records member-only ful
     draftSourceBaseRevision: null,
     selectedSource: 'active',
   }]);
+  assert.deepEqual(presence[0][3].connectionExpectation, { generation: 17 });
 });
 
 test('legacy authority apply requires no owned intent and guards presence against the committed stance', async () => {
@@ -905,6 +928,7 @@ test('scheduled source sync is full-only, ignores legacy watermarks, persists pr
   }]);
   assert.deepEqual(presence[0][3].authorityExpectation, applied[0].authorityExpectation);
   assert.deepEqual(presence[0][3].sourceExpectations, applied[0].sourceExpectations);
+  assert.deepEqual(presence[0][3].connectionExpectation, { generation: 17 });
   assert.ok(events.indexOf('presence') > events.indexOf('apply'));
   assert.equal(finished[0].externalWatermark, null);
   assert.equal(finished[0].sourceProvenance.length, 1);

@@ -215,11 +215,15 @@ function effectiveReviewBatches(batches, batchId) {
   });
 }
 
-function reviewedSourceContext(batches, batchId, sourceProvenance, connectionGeneration) {
+function connectionExpectationFor(provider, connectionGeneration) {
+  return provider === 'elvanto' ? { generation: connectionGeneration } : null;
+}
+
+function reviewedSourceContext(provider, batches, batchId, sourceProvenance, connectionGeneration) {
   const batch = batchId === null || batchId === undefined ? null
     : batches.find((candidate) => String(candidate.id) === String(batchId));
   return {
-    connectionGeneration,
+    ...(provider === 'elvanto' ? { connectionGeneration } : {}),
     activeRevision: batch ? batch.sourceRevision : null,
     draftDigest: batch?.draftSource ? digestSourceIdentity(batch.draftSource) : null,
     snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => {
@@ -507,6 +511,14 @@ function sourceUnavailable(provider) {
   return new OrchestratorError('SYNC_SOURCE_UNAVAILABLE', `${provider} source is unavailable`, 502);
 }
 
+function staleConnectionGeneration() {
+  return new OrchestratorError(
+    'SYNC_PLAN_STALE',
+    'The provider connection changed after this reconciliation started. Refresh and try again.',
+    409
+  );
+}
+
 function personId(person) {
   const id = person?.id === null || person?.id === undefined ? '' : String(person.id);
   return id || null;
@@ -544,7 +556,10 @@ async function recordSourceFailureSafely(deps, input) {
   }
 }
 
-async function acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps, signal = null }) {
+async function acquireSourceSet({
+  churchId, provider, batches, settings, credentials, adapter, deps,
+  connectionExpectation = null, signal = null,
+}) {
   const eligibleByBatch = new Map();
   const seenMemberExternalIds = new Set();
   const memberPeopleById = new Map();
@@ -664,7 +679,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         await deps.recordActiveSourceAvailable({
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           observedSource: sourceSnapshot.source, checkedAt: sourceSnapshot.fetchedAt,
-          signal,
+          connectionExpectation, signal,
         });
       }
     } catch (error) {
@@ -673,12 +688,15 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       // update active-source health or emit its missing-source transition.
       assertAuthorityPreviewActive(signal);
       const failure = error?.code ? error : sourceIncomplete(provider);
+      if (failure.code === 'SYNC_PLAN_STALE') {
+        throw failure instanceof OrchestratorError ? failure : staleConnectionGeneration();
+      }
       if (activeRead) {
         assertAuthorityPreviewActive(signal);
         await recordSourceFailureSafely(deps, {
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           code: failure.code, checkedAt: new Date().toISOString(),
-          signal,
+          connectionExpectation, signal,
         });
       }
       throw failure;
@@ -721,10 +739,12 @@ function memberOnlyMatcherResult(result, memberIds) {
 
 async function runPipelineBody({
   churchId, provider, trigger, authoritative, activeAuthority,
-  batches, settings, credentials, adapter, deps, signal = null,
+  batches, settings, credentials, adapter, deps, connectionExpectation = null, signal = null,
 }) {
   // 4. Fetch every provider-owned source sequentially and build one member union.
-  const acquired = await acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps, signal });
+  const acquired = await acquireSourceSet({
+    churchId, provider, batches, settings, credentials, adapter, deps, connectionExpectation, signal,
+  });
   const { snapshot } = acquired;
   assertAuthorityPreviewActive(signal);
 
@@ -819,6 +839,7 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const authoritative = pre.authorityState.active === provider;
   const activeAuthority = pre.authorityState.active;
@@ -828,11 +849,11 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
     const body = await runPipelineBody({
       churchId, provider, trigger, mode: 'full', watermark: undefined,
       authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps,
+      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
     });
 
     body.plan.sourceContext = reviewedSourceContext(
-      pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
     );
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
@@ -897,6 +918,7 @@ async function previewAuthoritySwitch({
   // pending_authority_provider set with no review token ever issued — that
   // would be confusing, lingering state for a preview that never happened.
   const pre = await loadPreconditions({ churchId, provider, batchId: null, deps });
+  const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   // beginAuthoritySwitch is the source of truth for the resulting pending
   // state — it does NOT always set pending to `provider` (e.g. re-previewing
   // the CURRENT active authority clears pending back to null; see
@@ -918,12 +940,12 @@ async function previewAuthoritySwitch({
     const body = await runPipelineBody({
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
       authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps, signal,
+      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation, signal,
     });
     assertAuthorityPreviewActive(signal);
 
     body.plan.sourceContext = reviewedSourceContext(
-      pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
     );
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
@@ -1000,6 +1022,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   const reviewBatches = effectiveReviewBatches(pre.batches, batchId);
   const isAuthoritySwitch = pre.authorityState.pending === provider;
   const pendingAuthorityIntent = isAuthoritySwitch
@@ -1037,11 +1060,11 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     body = await runPipelineBody({
       churchId, provider, trigger, mode: 'full', watermark: undefined,
       authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps,
+      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
     });
 
     body.plan.sourceContext = reviewedSourceContext(
-      pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
     );
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
@@ -1075,9 +1098,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       } : null,
       authorityExpectation,
       sourceExpectations,
-      connectionExpectation: pre.connectionGeneration === null
-        ? null
-        : { generation: pre.connectionGeneration },
+      connectionExpectation,
       requireConnection: true,
     });
   } catch (err) {
@@ -1105,6 +1126,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
       authorityExpectation: postApplyAuthorityExpectation,
       sourceExpectations: postApplySourceExpectations,
+      connectionExpectation,
     });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
@@ -1153,6 +1175,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   }
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
   if (pre.authorityState.active !== provider) {
     throw new OrchestratorError(
       'SYNC_AUTHORITY_MISMATCH',
@@ -1191,11 +1214,11 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     body = await runPipelineBody({
       churchId, provider, trigger,
       authoritative: true, activeAuthority: provider, batches: unattendedBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps,
+      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
     });
 
     body.plan.sourceContext = reviewedSourceContext(
-      pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+      provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
     );
 
     // 8. apply safe unattended actions (no selections — ambiguous/conflict/
@@ -1204,9 +1227,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections: {}, userId: null,
       authorityExpectation, sourceExpectations,
-      connectionExpectation: pre.connectionGeneration === null
-        ? null
-        : { generation: pre.connectionGeneration },
+      connectionExpectation,
       requireConnection: true,
     });
   } catch (err) {
@@ -1218,7 +1239,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   try {
     await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
       complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
-      authorityExpectation, sourceExpectations,
+      authorityExpectation, sourceExpectations, connectionExpectation,
     });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);

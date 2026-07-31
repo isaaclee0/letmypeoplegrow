@@ -218,6 +218,28 @@ describe('ElvantoOnboarding authority review lifecycle', () => {
     expect(screen.getByRole('button', { name: 'Use Elvanto as source of truth' })).toBeInTheDocument();
   });
 
+  it('keeps failed exact cancellation recoverable in the onboarding review', async () => {
+    const terminalFailure = {
+      response: { status: 403, data: { error: 'The onboarding cancellation could not be confirmed.' } },
+    };
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...authorityReview } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockRejectedValueOnce(terminalFailure)
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    render(<AuthorityHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByRole('region', { name: 'Elvanto onboarding authority review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The onboarding cancellation could not be confirmed.');
+    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('region', { name: 'Elvanto onboarding authority review' })).not.toBeInTheDocument();
+  });
+
   it('exact-cancels an accepted authority preview when onboarding unmounts', async () => {
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...authorityReview } });
     const { unmount } = render(<AuthorityHarness />);

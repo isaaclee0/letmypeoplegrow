@@ -415,6 +415,28 @@ describe('PeopleSourceControl', () => {
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
   });
 
+  it('restores an actionable review after bounded exact cancellation fails and can recover', async () => {
+    const terminalFailure = {
+      response: { status: 403, data: { error: 'The cancellation could not be confirmed.' } },
+    };
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockRejectedValueOnce(terminalFailure)
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The cancellation could not be confirmed.');
+    expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
+  });
+
   it('exact-cancels an accepted authority preview when the control unmounts', async () => {
     vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
     const { unmount } = render(<Harness initialAuthority="none" />);

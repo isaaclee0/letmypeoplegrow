@@ -144,6 +144,29 @@ test('full-fetch presence rejects a changed authority stance before updating cou
   });
 });
 
+test('full-fetch presence rejects a changed Elvanto connection generation before updating counters', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await upsertPersonLink({
+      churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created',
+    });
+    await Database.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', 8)`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      recordFullFetchPresence(churchId, 'elvanto', new Set(), {
+        complete: true,
+        connectionExpectation: { generation: 7 },
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+    );
+    assert.equal((await listPersonLinks(churchId, 'elvanto'))[0].missingFullSyncCount, 0);
+  });
+});
+
 test('a full-presence write rolls back every earlier counter update when a later write aborts', async () => {
   await withTestChurchDb(async (churchId) => {
     const firstIndividualId = await seedIndividual(churchId, 'First');
