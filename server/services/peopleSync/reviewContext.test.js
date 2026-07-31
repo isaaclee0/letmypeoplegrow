@@ -144,6 +144,19 @@ test('binds local names, family context, and provider-link eligibility without e
     ...base,
     localPeople: base.localPeople.map((person) => person.id === 7 ? { ...person, familyId: null } : person),
   });
+  const equivalentFamilyInput = {
+    ...base,
+    localPeople: [base.localPeople[0]],
+    localFamilies: [
+      { id: 11, familyName: 'Smith Household' },
+      { id: 12, familyName: 'Smith Household' },
+    ],
+  };
+  const equivalentFamilyBaseline = buildReviewContext(equivalentFamilyInput);
+  const movedBetweenEquivalentFamilies = buildReviewContext({
+    ...equivalentFamilyInput,
+    localPeople: [{ ...equivalentFamilyInput.localPeople[0], familyId: 12 }],
+  });
   const newlyLinked = buildReviewContext({
     ...base,
     personLinks: [{ externalPersonId: 'other-ext', individualId: 8 }],
@@ -174,6 +187,11 @@ test('binds local names, family context, and provider-link eligibility without e
   assert.match(original.localIdentityDigest, /^[a-f0-9]{64}$/);
   assert.notEqual(renamed.localIdentityDigest, original.localIdentityDigest);
   assert.notEqual(movedFamily.localIdentityDigest, original.localIdentityDigest);
+  assert.notEqual(
+    movedBetweenEquivalentFamilies.localIdentityDigest,
+    equivalentFamilyBaseline.localIdentityDigest,
+    'the exact local family ID must be signed even when both rendered family summaries are identical'
+  );
   assert.notEqual(newlyLinked.localIdentityDigest, original.localIdentityDigest);
   assert.notEqual(linkedMissingCountChanged.localIdentityDigest, newlyLinked.localIdentityDigest);
   assert.notEqual(renamedEmptyFamily.localIdentityDigest, original.localIdentityDigest);

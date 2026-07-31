@@ -122,6 +122,7 @@ function makeDeps({
     getAuthority: async () => authorityState,
     getUnattendedProviderEnabled: async () => true,
     beginAuthoritySwitch: async () => ({ active: authorityState.active, pending: 'elvanto' }),
+    cancelAuthoritySwitch: async () => ({ active: authorityState.active, pending: null }),
     startRun: async (input) => { events.push('startRun'); return { id: nextRunId++, ...input }; },
     finishRun: async (input) => { events.push('finishRun'); finished.push(input); return input; },
     failRun: async (input) => { events.push('failRun'); failed.push(input); return input; },
@@ -756,7 +757,10 @@ test('review digest binds sorted source identity, revision, draft identity, and 
   assert.equal(digested.sourceContext.activeRevision, 9);
   assert.equal(digested.sourceContext.draftDigest, digestSourceIdentity(draft));
   assert.deepEqual(digested.sourceContext.snapshots.map((item) => item.batchId), [3, 20]);
-  assert.deepEqual(Object.keys(digested.sourceContext.snapshots[0]).sort(), ['batchId', 'snapshotDigest', 'sourceExternalId', 'sourceKind']);
+  assert.deepEqual(Object.keys(digested.sourceContext.snapshots[0]).sort(), [
+    'batchId', 'snapshotDigest', 'sourceExternalId', 'sourceKind', 'sourceRevision',
+  ]);
+  assert.deepEqual(digested.sourceContext.snapshots.map((item) => item.sourceRevision), [4, 9]);
   assert.ok(digested.sourceContext.snapshots.every((item) => /^[a-f0-9]{64}$/.test(item.snapshotDigest)));
 });
 
@@ -772,10 +776,50 @@ test('reviewed apply sends source promotion CAS data and records member-only ful
   assert.deepEqual(applied[0].sourcePromotion, {
     batchId: 1, expectedBaseRevision: 6, expectedDraftDigest: digestSourceIdentity(draft),
   });
+  assert.deepEqual(applied[0].authorityExpectation, { active: 'elvanto', pending: null });
+  assert.deepEqual(applied[0].sourceExpectations, [{
+    batchId: 1,
+    sourceRevision: 6,
+    activeSourceDigest: digestSourceIdentity(source('active')),
+    draftSourceDigest: digestSourceIdentity(draft),
+    draftSourceBaseRevision: 6,
+    selectedSource: 'draft',
+  }]);
+  assert.equal(applied[0].requireConnection, true);
   assert.equal(Object.hasOwn(applied[0], 'filterPromotion'), false);
   assert.equal(applied[0].reviewedApply.reviewToken, 'review-token');
   assert.match(applied[0].reviewedApply.planDigest, /^[a-f0-9]{64}$/);
   assert.equal(presence.length, 1);
+  assert.deepEqual(presence[0][3].authorityExpectation, { active: 'elvanto', pending: null });
+  assert.deepEqual(presence[0][3].sourceExpectations, [{
+    batchId: 1,
+    sourceRevision: 7,
+    activeSourceDigest: digestSourceIdentity(draft),
+    draftSourceDigest: null,
+    draftSourceBaseRevision: null,
+    selectedSource: 'active',
+  }]);
+});
+
+test('legacy authority apply requires no owned intent and guards presence against the committed stance', async () => {
+  const { deps, applied, presence } = makeDeps({
+    authorityState: { active: 'none', pending: 'elvanto' },
+    extra: {
+      getAuthorityPreviewIntent: async () => null,
+    },
+  });
+
+  await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    reviewToken: 'legacy-review-token', selections: {}, userId: 5,
+  }, deps);
+
+  assert.equal(applied[0].activateAuthority, true);
+  assert.equal(applied[0].authorityPreviewId, null);
+  assert.deepEqual(applied[0].authorityExpectation, {
+    active: 'none', pending: 'elvanto', authorityPreviewId: null,
+  });
+  assert.deepEqual(presence[0][3].authorityExpectation, { active: 'elvanto', pending: null });
 });
 
 test('a one-time review replay remains a typed refreshable failure and is recorded on the run', async () => {
@@ -801,13 +845,46 @@ test('a one-time review replay remains a typed refreshable failure and is record
   assert.equal(failed[0].errorCode, 'SYNC_REVIEW_ALREADY_APPLIED');
 });
 
+test('a connection removed before transactional apply remains a typed safe failure', async () => {
+  const disconnected = Object.assign(
+    new Error('A usable Elvanto connection is required to apply this reconciliation.'),
+    { code: 'SYNC_NOT_CONNECTED', status: 409 }
+  );
+  const { deps, failed } = makeDeps({
+    extra: {
+      applyPeopleSyncPlan: async () => { throw disconnected; },
+    },
+  });
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: 'review-token', selections: {}, userId: 5,
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_NOT_CONNECTED' && error.status === 409
+  );
+  assert.equal(failed[0].errorCode, 'SYNC_NOT_CONNECTED');
+});
+
 test('scheduled source sync is full-only, ignores legacy watermarks, persists provenance, and records presence once after apply', async () => {
-  const { deps, events, finished, presence } = makeDeps({ batches: [batch({ lastExternalWatermark: 'legacy-watermark' })] });
+  const { deps, events, finished, presence, applied } = makeDeps({ batches: [batch({ lastExternalWatermark: 'legacy-watermark' })] });
   const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: false }, deps);
 
   assert.equal(result.fetchMode, 'full');
   assert.equal(result.externalWatermark, null);
   assert.equal(presence.length, 1);
+  assert.deepEqual(applied[0].authorityExpectation, { active: 'elvanto', pending: null });
+  assert.deepEqual(applied[0].sourceExpectations, [{
+    batchId: 1,
+    sourceRevision: 2,
+    activeSourceDigest: digestSourceIdentity(source('group-1', 'Members')),
+    draftSourceDigest: null,
+    draftSourceBaseRevision: null,
+    selectedSource: 'active',
+  }]);
+  assert.deepEqual(presence[0][3].authorityExpectation, applied[0].authorityExpectation);
+  assert.deepEqual(presence[0][3].sourceExpectations, applied[0].sourceExpectations);
   assert.ok(events.indexOf('presence') > events.indexOf('apply'));
   assert.equal(finished[0].externalWatermark, null);
   assert.equal(finished[0].sourceProvenance.length, 1);
@@ -922,4 +999,65 @@ test('a timeout racing authority staging cancels its exact intent after begin co
 
   await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
   assert.deepEqual(cancellations, [['church-a', 'elvanto', 'preview-timeout-during-stage']]);
+});
+
+test('a cancelled source fetch cannot record available health or continue planning', async () => {
+  const controller = new AbortController();
+  let releaseFetch;
+  let markFetchEntered;
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  const fetchEntered = new Promise((resolve) => { markFetchEntered = resolve; });
+  const cancellations = [];
+  const { deps, availableHealth, failedHealth, plans } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async ({ signal }) => {
+      assert.equal(signal, controller.signal);
+      markFetchEntered();
+      await fetchGate;
+      return sourceSnapshot(source('group-1', 'Members'));
+    },
+    extra: {
+      cancelAuthoritySwitch: async (...args) => { cancellations.push(args); },
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-cancelled-fetch',
+    signal: controller.signal,
+  }, deps);
+  await fetchEntered;
+  controller.abort();
+  releaseFetch();
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(availableHealth, []);
+  assert.deepEqual(failedHealth, []);
+  assert.deepEqual(plans, []);
+  assert.deepEqual(cancellations, [['church-a', 'elvanto', 'preview-cancelled-fetch']]);
+});
+
+test('a cancelled failing source fetch cannot record missing health', async () => {
+  const controller = new AbortController();
+  let rejectFetch;
+  let markFetchEntered;
+  const fetchEntered = new Promise((resolve) => { markFetchEntered = resolve; });
+  const { deps, availableHealth, failedHealth } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async () => {
+      markFetchEntered();
+      return new Promise((_resolve, reject) => { rejectFetch = reject; });
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-cancelled-error',
+    signal: controller.signal,
+  }, deps);
+  await fetchEntered;
+  controller.abort();
+  rejectFetch(new Error('provider failed after caller left'));
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.deepEqual(availableHealth, []);
+  assert.deepEqual(failedHealth, []);
 });

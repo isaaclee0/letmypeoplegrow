@@ -580,6 +580,44 @@ test('POST /people-authority/preview times out safely and conditionally clears i
   assert.deepEqual(cancellations, [[ADMIN_USER.church_id, 'elvanto', 'preview-timeout-1']]);
 });
 
+test('disconnecting the preview request aborts its pipeline and conditionally clears its exact intent', async () => {
+  const cancellations = [];
+  let markPreviewEntered;
+  const previewEntered = new Promise((resolve) => { markPreviewEntered = resolve; });
+  let markAborted;
+  const aborted = new Promise((resolve) => { markAborted = resolve; });
+
+  await withServer({
+    routeTimeoutMs: 1000,
+    createAuthorityPreviewId: () => 'preview-disconnect-1',
+    previewAuthoritySwitch: ({ signal }) => new Promise((_resolve, reject) => {
+      markPreviewEntered();
+      signal.addEventListener('abort', () => {
+        markAborted();
+        reject(new OrchestratorError('SYNC_ROUTE_TIMEOUT', 'cancelled', 503));
+      }, { once: true });
+    }),
+    cancelAuthoritySwitch: async (...args) => { cancellations.push(args); return { active: 'none', pending: null }; },
+  }, { user: ADMIN_USER }, async (base) => {
+    const target = new URL(`${base}/people-authority/preview`);
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    request.on('error', () => {});
+    request.end(JSON.stringify({ provider: 'elvanto' }));
+    await previewEntered;
+    request.destroy();
+    await aborted;
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  assert.deepEqual(cancellations, [[ADMIN_USER.church_id, 'elvanto', 'preview-disconnect-1']]);
+});
+
 test('POST /people-authority/apply times out with a safe 503 rather than hanging forever on a stuck applyReviewed call', async () => {
   await withServer({ routeTimeoutMs: 20, applyReviewed: neverResolvesForTimeoutTest }, { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/people-authority/apply`, { method: 'POST', body: { provider: 'elvanto', reviewToken: 't' } });

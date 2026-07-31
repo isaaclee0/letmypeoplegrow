@@ -6,6 +6,7 @@ const { digestSourceIdentity } = require('./sourceModel');
 const {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
+  assertSourceExpectationsWithConnection,
 } = require('./batchRepository');
 
 const PCO_SOURCE = { kind: 'planning_center_list', externalId: '42', name: 'Sunday Attendance' };
@@ -67,6 +68,45 @@ test('saving a source draft captures the active revision and a normal draft can 
     const discarded = await discardSourceDraft(churchId, 'elvanto', batch.id);
     assert.equal(discarded.draftSource, null);
     assert.equal(discarded.needsSourceReview, false);
+  });
+});
+
+test('source generation expectations bind the complete enabled batch set', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const first = await createBatch({
+      churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE,
+    });
+    const secondSource = { kind: 'elvanto_group', externalId: 'youth', name: 'Youth' };
+    const second = await createBatch({
+      churchId, provider: 'elvanto', name: 'Youth', initialDraftSource: secondSource,
+    });
+    const conn = Database.getChurchDb(churchId);
+    const firstActive = await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'elvanto', batchId: first.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(ELVANTO_SOURCE),
+    });
+    await promoteSourceDraftWithConnection(conn, {
+      churchId, provider: 'elvanto', batchId: second.id, expectedBaseRevision: 1,
+      expectedDraftDigest: digestSourceIdentity(secondSource),
+    });
+
+    await Database.transactionForChurch(churchId, async (transactionConnection) => {
+      await assert.rejects(
+        assertSourceExpectationsWithConnection(transactionConnection, {
+          churchId,
+          provider: 'elvanto',
+          expectations: [{
+            batchId: firstActive.id,
+            sourceRevision: firstActive.sourceRevision,
+            activeSourceDigest: digestSourceIdentity(firstActive.source),
+            draftSourceDigest: null,
+            draftSourceBaseRevision: null,
+            selectedSource: 'active',
+          }],
+        }),
+        (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+      );
+    });
   });
 });
 

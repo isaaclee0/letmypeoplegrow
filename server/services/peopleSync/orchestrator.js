@@ -220,10 +220,37 @@ function reviewedSourceContext(batches, batchId, sourceProvenance) {
   return {
     activeRevision: batch ? batch.sourceRevision : null,
     draftDigest: batch?.draftSource ? digestSourceIdentity(batch.draftSource) : null,
-    snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => ({
-      batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest,
-    })).sort((left, right) => Number(left.batchId) - Number(right.batchId)),
+    snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => {
+      const sourceBatch = batches.find((candidate) => String(candidate.id) === String(sourceBatchId));
+      return {
+        batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest,
+        sourceRevision: sourceBatch?.sourceRevision ?? null,
+      };
+    }).sort((left, right) => Number(left.batchId) - Number(right.batchId)),
   };
+}
+
+function sourceExpectationsFor(batches) {
+  return batches.map((batch) => ({
+    batchId: batch.id,
+    sourceRevision: batch.sourceRevision,
+    activeSourceDigest: batch.source ? digestSourceIdentity(batch.source) : null,
+    draftSourceDigest: batch.draftSource ? digestSourceIdentity(batch.draftSource) : null,
+    draftSourceBaseRevision: batch.draftSourceBaseRevision ?? null,
+    selectedSource: batch.effectiveSourceIsDraft ? 'draft' : 'active',
+  })).sort((left, right) => Number(left.batchId) - Number(right.batchId));
+}
+
+function sourceExpectationsAfterReviewedApply(expectations, reviewedBatch) {
+  if (!reviewedBatch?.draftSource) return expectations;
+  return expectations.map((expectation) => expectation.batchId === reviewedBatch.id ? {
+    ...expectation,
+    sourceRevision: expectation.sourceRevision + 1,
+    activeSourceDigest: expectation.draftSourceDigest,
+    draftSourceDigest: null,
+    draftSourceBaseRevision: null,
+    selectedSource: 'active',
+  } : expectation);
 }
 
 function groupMembersByFamily(people) {
@@ -507,7 +534,7 @@ async function recordSourceFailureSafely(deps, input) {
   }
 }
 
-async function acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps }) {
+async function acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps, signal = null }) {
   const eligibleByBatch = new Map();
   const seenMemberExternalIds = new Set();
   const memberPeopleById = new Map();
@@ -518,6 +545,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
   const sourceProvenance = [];
 
   for (const batch of batches) {
+    assertAuthorityPreviewActive(signal);
     const selectedSource = batch.effectiveSource ?? batch.source;
     if (!selectedSource) {
       throw new OrchestratorError('SYNC_SOURCE_SELECTION_REQUIRED', `Batch ${batch.id} needs a sync source selection`, 409);
@@ -530,7 +558,9 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         credentials,
         sourceKind: selectedSource.kind,
         sourceExternalId: selectedSource.externalId,
+        signal,
       });
+      assertAuthorityPreviewActive(signal);
       const providerRefreshedAt = sourceSnapshot?.providerRefreshedAt ?? sourceSnapshot?.source?.providerRefreshedAt ?? null;
       if (!sourceSnapshot || sourceSnapshot.provider !== provider ||
           !sourceSnapshot.source || typeof sourceSnapshot.source !== 'object' || Array.isArray(sourceSnapshot.source)) {
@@ -620,14 +650,20 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
       sourceProvenance.push(provenanceEntry);
 
       if (activeRead) {
+        assertAuthorityPreviewActive(signal);
         await deps.recordActiveSourceAvailable({
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           observedSource: sourceSnapshot.source, checkedAt: sourceSnapshot.fetchedAt,
         });
       }
     } catch (error) {
+      // Cancellation wins over a provider result or provider failure. In
+      // particular, a request that no longer owns this preview must not
+      // update active-source health or emit its missing-source transition.
+      assertAuthorityPreviewActive(signal);
       const failure = error?.code ? error : sourceIncomplete(provider);
       if (activeRead) {
+        assertAuthorityPreviewActive(signal);
         await recordSourceFailureSafely(deps, {
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           code: failure.code, checkedAt: new Date().toISOString(),
@@ -673,11 +709,12 @@ function memberOnlyMatcherResult(result, memberIds) {
 
 async function runPipelineBody({
   churchId, provider, trigger, authoritative, activeAuthority,
-  batches, settings, credentials, adapter, deps,
+  batches, settings, credentials, adapter, deps, signal = null,
 }) {
   // 4. Fetch every provider-owned source sequentially and build one member union.
-  const acquired = await acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps });
+  const acquired = await acquireSourceSet({ churchId, provider, batches, settings, credentials, adapter, deps, signal });
   const { snapshot } = acquired;
+  assertAuthorityPreviewActive(signal);
 
   // 5. load local state/links and existing missing counters
   const [individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState] = await Promise.all([
@@ -688,6 +725,7 @@ async function runPipelineBody({
     deps.listGatheringMemberships(churchId),
     deps.listMatchReviewState(churchId, provider),
   ]);
+  assertAuthorityPreviewActive(signal);
 
   const linkedExternalIds = new Set(personLinks.map((link) => String(link.externalPersonId)));
   const matchingPeople = [...acquired.matchingPeople];
@@ -866,7 +904,7 @@ async function previewAuthoritySwitch({
     const body = await runPipelineBody({
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
       authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps,
+      credentials: pre.credentials, adapter: pre.adapter, deps, signal,
     });
     assertAuthorityPreviewActive(signal);
 
@@ -957,6 +995,17 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   const authoritative = isAuthoritySwitch ? true : pre.authorityState.active === provider;
   const activeAuthority = isAuthoritySwitch ? provider : pre.authorityState.active;
   const trigger = isAuthoritySwitch ? 'authority_switch' : 'manual';
+  const authorityExpectation = {
+    active: pre.authorityState.active,
+    pending: pre.authorityState.pending,
+    ...(isAuthoritySwitch ? { authorityPreviewId } : {}),
+  };
+  const sourceExpectations = sourceExpectationsFor(reviewBatches);
+  const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
+  const postApplyAuthorityExpectation = isAuthoritySwitch
+    ? { active: provider, pending: null }
+    : authorityExpectation;
+  const postApplySourceExpectations = sourceExpectationsAfterReviewedApply(sourceExpectations, reviewedBatch);
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
@@ -991,7 +1040,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 
     // 8. apply — the last step that may still cause this run to be
     // recorded as failed.
-    const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections, userId,
       activateAuthority: isAuthoritySwitch,
@@ -1007,16 +1055,21 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
         expectedBaseRevision: reviewedBatch.draftSourceBaseRevision,
         expectedDraftDigest: digestSourceIdentity(reviewedBatch.draftSource),
       } : null,
+      authorityExpectation,
+      sourceExpectations,
+      requireConnection: true,
     });
   } catch (err) {
-    const reviewCodes = new Set([
+    const transactionalCodes = new Set([
       'SYNC_REVIEW_INVALID', 'SYNC_REVIEW_EXPIRED', 'SYNC_PLAN_STALE', 'SYNC_REVIEW_ALREADY_APPLIED',
+      'SYNC_NOT_CONNECTED',
     ]);
-    const reportedError = !(err instanceof OrchestratorError) && reviewCodes.has(err?.code)
+    const reportedError = !(err instanceof OrchestratorError) && transactionalCodes.has(err?.code)
       ? new OrchestratorError(
         err.code,
         err.message || reviewTokenErrorMessage(err.code),
-        Number.isInteger(err.status) ? err.status : reviewTokenErrorStatus(err.code)
+        Number.isInteger(err.status) ? err.status
+          : err.code === 'SYNC_NOT_CONNECTED' ? 409 : reviewTokenErrorStatus(err.code)
       )
       : err;
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: reportedError });
@@ -1029,6 +1082,8 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   try {
     await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
       complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
+      authorityExpectation: postApplyAuthorityExpectation,
+      sourceExpectations: postApplySourceExpectations,
     });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
@@ -1099,6 +1154,9 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     throw new OrchestratorError('SYNC_SOURCE_SELECTION_REQUIRED', 'Every enabled batch needs a sync source before unattended sync can run', 409);
   }
   const mode = 'full';
+  const unattendedBatches = effectiveReviewBatches(pre.batches, null);
+  const authorityExpectation = { active: pre.authorityState.active, pending: pre.authorityState.pending };
+  const sourceExpectations = sourceExpectationsFor(unattendedBatches);
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: mode });
 
@@ -1111,14 +1169,17 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   try {
     body = await runPipelineBody({
       churchId, provider, trigger,
-      authoritative: true, activeAuthority: provider, batches: effectiveReviewBatches(pre.batches, null), settings: pre.settings,
+      authoritative: true, activeAuthority: provider, batches: unattendedBatches, settings: pre.settings,
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
     // 8. apply safe unattended actions (no selections — ambiguous/conflict/
     // rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
-    applyResult = await deps.applyPeopleSyncPlan({ churchId, provider, plan: body.plan, selections: {}, userId: null });
+    applyResult = await deps.applyPeopleSyncPlan({
+      churchId, provider, plan: body.plan, selections: {}, userId: null,
+      authorityExpectation, sourceExpectations, requireConnection: true,
+    });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });
     throw err;
@@ -1128,6 +1189,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   try {
     await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
       complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
+      authorityExpectation, sourceExpectations,
     });
   } catch (presenceErr) {
     logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);

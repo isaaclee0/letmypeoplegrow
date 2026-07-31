@@ -5,6 +5,11 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
 const { createElvantoRouter } = require('./elvanto');
+const {
+  ElvantoAuthorityConnectionRequiredError,
+  ElvantoConnectionStaleError,
+} = require('../../services/elvanto/legacyCredential');
+const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 
@@ -17,6 +22,10 @@ function buildServer(overrides = {}, user = ADMIN) {
     getCredentials: async () => null,
     getConnection: async () => null,
     upsertConnection: async () => null,
+    replaceConnection: async ({ churchId, credentials, validateConnection }) => {
+      const validation = await validateConnection({ churchId, credentials });
+      return { validation, status: { provider: 'elvanto', connectionStatus: 'connected' } };
+    },
     disconnectConnection: async () => true,
     markValidated: async () => null,
     deleteLegacyPreferences: async () => {},
@@ -158,4 +167,106 @@ test('batch plan passes the v2 decision contract and apply forwards legacy and v
       userId: 1,
     },
   ]);
+});
+
+test('disconnect delegates one guarded church mutation without disabling authority separately', async () => {
+  const calls = [];
+  await withServer({
+    getAuthority: async () => { throw new Error('route must not inspect authority outside the guarded service'); },
+    disableAuthority: async () => { throw new Error('disconnect must not auto-disable authority'); },
+    deleteLegacyPreferences: async () => { throw new Error('legacy deletion belongs in the guarded service transaction'); },
+    disconnectConnection: async (...args) => { calls.push(args); return true; },
+  }, async (base) => {
+    const response = await request(`${base}/disconnect`, {});
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { success: true, disconnected: true });
+  });
+  assert.deepEqual(calls, [['churcha1']]);
+});
+
+test('disconnect returns the typed authority conflict as a safe 409', async () => {
+  await withServer({
+    disconnectConnection: async () => { throw new ElvantoAuthorityConnectionRequiredError(); },
+  }, async (base) => {
+    const response = await request(`${base}/disconnect`, {});
+    assert.equal(response.status, 409);
+    assert.equal(response.body.code, 'ELVANTO_AUTHORITY_CONNECTION_REQUIRED');
+    assert.equal(response.body.error.includes('authoritative people source'), true);
+  });
+});
+
+test('connect validates and replaces through the serialized credential service', async () => {
+  let replacementInput;
+  await withServer({
+    upsertConnection: async () => { throw new Error('route must not write credentials directly'); },
+    replaceConnection: async (input) => {
+      replacementInput = input;
+      const validation = await input.validateConnection({
+        churchId: input.churchId,
+        credentials: input.credentials,
+      });
+      return {
+        validation,
+        status: { provider: 'elvanto', connectionStatus: 'connected' },
+      };
+    },
+  }, async (base) => {
+    const response = await request(`${base}/connect`, { apiKey: 'replacement-key' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.status, { provider: 'elvanto', connectionStatus: 'connected' });
+  });
+
+  assert.equal(replacementInput.churchId, 'churcha1');
+  assert.deepEqual(replacementInput.credentials, { apiKey: 'replacement-key' });
+  assert.equal(replacementInput.connectedBy, 1);
+  assert.equal(typeof replacementInput.validateConnection, 'function');
+});
+
+test('connect returns a stale replacement race as a safe 409', async () => {
+  await withServer({
+    replaceConnection: async () => { throw new ElvantoConnectionStaleError(); },
+  }, async (base) => {
+    const response = await request(`${base}/connect`, { apiKey: 'replacement-key' });
+    assert.equal(response.status, 409);
+    assert.deepEqual(response.body, {
+      error: 'The Elvanto connection changed while it was being verified. Refresh and try again.',
+      code: 'ELVANTO_CONNECTION_STALE',
+    });
+  });
+});
+
+test('connect maps the real exported Elvanto auth code to invalid caller input', async () => {
+  await withServer({
+    replaceConnection: async () => {
+      throw new ElvantoError('provider rejected credential', ELVANTO_AUTH, {});
+    },
+  }, async (base) => {
+    const response = await request(`${base}/connect`, { apiKey: 'rejected-key' });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.code, ELVANTO_AUTH);
+    assert.equal(response.body.error.includes('Invalid API key'), true);
+    assert.equal(JSON.stringify(response.body).includes('rejected-key'), false);
+  });
+});
+
+test('status classifies the real exported Elvanto auth code as an invalid stored key', async () => {
+  let validationState;
+  await withServer({
+    getOrMigrateCredentials: async () => ({ apiKey: 'stored-key' }),
+    adapter: {
+      validateConnection: async () => {
+        throw new ElvantoError('provider rejected credential', ELVANTO_AUTH, {});
+      },
+    },
+    markValidated: async (_churchId, _provider, state) => { validationState = state; },
+  }, async (base) => {
+    const response = await request(`${base}/status`, undefined, 'GET');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.connected, false);
+    assert.equal(response.body.error.includes('invalid'), true);
+  });
+  assert.deepEqual(validationState, {
+    connectionStatus: 'invalid',
+    lastErrorCode: ELVANTO_AUTH,
+  });
 });

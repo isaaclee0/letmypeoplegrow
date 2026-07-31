@@ -161,12 +161,24 @@ async function markPeopleSeen(churchId, provider, seenExternalIds) {
   });
 }
 
-async function recordFullFetchPresence(churchId, provider, seenExternalIds, { complete, ignoredExternalIds = new Set() } = {}) {
+async function recordFullFetchPresence(churchId, provider, seenExternalIds, {
+  complete, ignoredExternalIds = new Set(), authorityExpectation = null, sourceExpectations = null,
+} = {}) {
   assertProvider(provider);
   if (complete !== true) throw new Error('Refusing missing-person accounting for an incomplete full fetch');
   if (!(seenExternalIds instanceof Set)) throw new Error('Seen external IDs must be a Set');
   if (!(ignoredExternalIds instanceof Set)) throw new Error('Ignored external IDs must be a Set');
   return Database.transaction(async (conn) => {
+    if (authorityExpectation) {
+      const authority = require('./authority');
+      await authority.assertAuthorityExpectationWithConnection(conn, churchId, authorityExpectation);
+    }
+    if (sourceExpectations) {
+      const batchRepository = require('./batchRepository');
+      await batchRepository.assertSourceExpectationsWithConnection(conn, {
+        churchId, provider, expectations: sourceExpectations,
+      });
+    }
     const links = await conn.query(`SELECT id, external_person_id, individual_id, missing_full_sync_count
       FROM external_person_links WHERE church_id = ? AND provider = ?`, [churchId, provider]);
     const missingCandidates = [];

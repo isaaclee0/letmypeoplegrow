@@ -1,4 +1,4 @@
-import React, { useReducer, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
@@ -38,6 +38,37 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const [batchApplyCommitted, setBatchApplyCommitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const authorityPreviewGenerationRef = useRef(0);
+  const activeAuthorityReviewTokenRef = useRef<string | null>(null);
+  const ownedAuthorityPreviewRef = useRef<{ provider: 'elvanto'; authorityPreviewId: string } | null>(null);
+
+  useEffect(() => () => {
+    authorityPreviewGenerationRef.current += 1;
+    activeAuthorityReviewTokenRef.current = null;
+    const ownedPreview = ownedAuthorityPreviewRef.current;
+    ownedAuthorityPreviewRef.current = null;
+    if (ownedPreview) {
+      void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
+        ownedPreview.provider,
+        ownedPreview.authorityPreviewId,
+      )).catch(() => undefined);
+    }
+  }, []);
+
+  const cancelExactAuthorityPreview = (preview: { provider: 'elvanto'; authorityPreviewId: string }) => {
+    if (ownedAuthorityPreviewRef.current?.authorityPreviewId === preview.authorityPreviewId) {
+      ownedAuthorityPreviewRef.current = null;
+    }
+    void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
+      preview.provider,
+      preview.authorityPreviewId,
+    )).catch(() => undefined);
+  };
+
+  const discardAuthorityPreviewResponse = (discardedReview: PeopleSyncReview) => {
+    if (!discardedReview.authorityPreviewId) return;
+    cancelExactAuthorityPreview({ provider: 'elvanto', authorityPreviewId: discardedReview.authorityPreviewId });
+  };
 
   const loadSetup = async () => {
     setBusy(true);
@@ -142,27 +173,92 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   };
 
   const previewAuthority = async () => {
+    const generation = ++authorityPreviewGenerationRef.current;
+    const previousPreview = ownedAuthorityPreviewRef.current;
+    activeAuthorityReviewTokenRef.current = null;
     setAuthorityStarted(true);
     setBusy(true);
     setError(null);
     try {
       const response = await peopleSyncAPI.previewAuthority('elvanto');
+      if (generation !== authorityPreviewGenerationRef.current) {
+        discardAuthorityPreviewResponse(response.data);
+        return;
+      }
+      if (previousPreview
+        && previousPreview.authorityPreviewId !== response.data.authorityPreviewId) {
+        cancelExactAuthorityPreview(previousPreview);
+      }
+      ownedAuthorityPreviewRef.current = response.data.authorityPreviewId
+        ? { provider: 'elvanto', authorityPreviewId: response.data.authorityPreviewId }
+        : null;
+      activeAuthorityReviewTokenRef.current = response.data.reviewToken;
       setAuthorityReview(response.data);
     } catch (cause) {
+      if (generation !== authorityPreviewGenerationRef.current) return;
+      if (previousPreview) cancelExactAuthorityPreview(previousPreview);
+      setAuthorityReview(null);
       setError(errorMessage(cause, 'Failed to prepare the Elvanto authority review.'));
     } finally {
-      setBusy(false);
+      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
     }
   };
 
   const applyAuthority = async (reviewToken: string, selections: PeopleSyncSelections) => {
+    if (activeAuthorityReviewTokenRef.current !== reviewToken) return;
+    const generation = ++authorityPreviewGenerationRef.current;
+    activeAuthorityReviewTokenRef.current = null;
     setBusy(true);
     try {
       await peopleSyncAPI.applyAuthority('elvanto', reviewToken, selections);
+      if (generation !== authorityPreviewGenerationRef.current) return;
+      ownedAuthorityPreviewRef.current = null;
+      setAuthorityReview(null);
       onContinueToGatherings();
+    } catch (cause) {
+      if (generation === authorityPreviewGenerationRef.current) {
+        activeAuthorityReviewTokenRef.current = reviewToken;
+      }
+      throw cause;
     } finally {
-      setBusy(false);
+      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
     }
+  };
+
+  const cancelAuthorityReview = async () => {
+    if (busy || !authorityReview) return;
+    const generation = ++authorityPreviewGenerationRef.current;
+    const previewToCancel = ownedAuthorityPreviewRef.current;
+    const reviewToken = activeAuthorityReviewTokenRef.current;
+    activeAuthorityReviewTokenRef.current = null;
+    setBusy(true);
+    setError(null);
+
+    if (!previewToCancel) {
+      setAuthorityReview(null);
+      setAuthorityStarted(false);
+      setBusy(false);
+      return;
+    }
+
+    ownedAuthorityPreviewRef.current = null;
+    try {
+      await peopleSyncAPI.cancelAuthorityPreview(
+        previewToCancel.provider,
+        previewToCancel.authorityPreviewId,
+      );
+    } catch (cause) {
+      if (generation !== authorityPreviewGenerationRef.current) return;
+      ownedAuthorityPreviewRef.current = previewToCancel;
+      activeAuthorityReviewTokenRef.current = reviewToken;
+      setError(errorMessage(cause, 'Failed to cancel the Elvanto authority review.'));
+      return;
+    } finally {
+      if (generation === authorityPreviewGenerationRef.current) setBusy(false);
+    }
+    if (generation !== authorityPreviewGenerationRef.current) return;
+    setAuthorityReview(null);
+    setAuthorityStarted(false);
   };
 
   if (step === 'elvanto-connect') {
@@ -252,10 +348,13 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         {authorityReview && (
           <div role="region" aria-label="Elvanto onboarding authority review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} />
+            <SyncReview provider="elvanto" review={authorityReview} onRefresh={previewAuthority} onApply={applyAuthority} applying={busy} interactionDisabled={busy} />
+            <button type="button" onClick={() => void cancelAuthorityReview()} disabled={busy} className="mt-3 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50">
+              Cancel authority change
+            </button>
           </div>
         )}
-        {error && <button type="button" onClick={() => void previewAuthority()} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500">Refresh authority review</button>}
+        {error && <button type="button" onClick={() => void previewAuthority()} disabled={busy} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50">Refresh authority review</button>}
       </>}
     </section>
   );

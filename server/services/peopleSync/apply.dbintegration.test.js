@@ -111,6 +111,15 @@ async function setAuthority(churchId, provider) {
   );
 }
 
+async function seedConnectionRow(churchId, provider) {
+  await Database.query(
+    `INSERT INTO integration_connections
+       (church_id, provider, auth_type, credential_ciphertext, credential_nonce, credential_auth_tag)
+     VALUES (?, ?, 'api_key', 'test-ciphertext', 'test-nonce', 'test-tag')`,
+    [churchId, provider]
+  );
+}
+
 async function counts(churchId) {
   const [individuals] = await Database.query('SELECT COUNT(*) AS n FROM individuals WHERE church_id = ?', [churchId]);
   const [families] = await Database.query('SELECT COUNT(*) AS n FROM families WHERE church_id = ?', [churchId]);
@@ -250,6 +259,7 @@ test('a forced link collision rolls back every newly created person and family f
 
 test('authority activation and reconciliation share one transaction', async () => {
   await withTestChurchDb(async (churchId) => {
+    await seedConnectionRow(churchId, 'elvanto');
     await Database.query(
       `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
        VALUES (?, 'none', 'planning_center')
@@ -315,6 +325,75 @@ test('Planning Center authority activation requires a connection in the reconcil
       [churchId]
     );
     assert.deepEqual(settings, { authority_provider: 'none', pending_authority_provider: 'planning_center' });
+  });
+});
+
+test('an apply transaction rejects an authoritative plan after its authority stance was disabled', async () => {
+  // Catches a long provider fetch retaining the old authoritative stance and
+  // committing an archive after the church disabled that authority.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await setAuthority(churchId, 'elvanto');
+    const plan = emptyPlan({
+      archive: [{ id: 'archive:stale-authority', externalPersonId: 'ext-1', individualId, reason: 'provider_state_archived' }],
+    });
+
+    await setAuthority(churchId, 'none');
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider: 'elvanto', plan,
+        authorityExpectation: { active: 'elvanto', pending: null },
+      }),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+
+    const [individual] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]
+    );
+    assert.equal(individual.is_active, 1);
+  });
+});
+
+test('an apply transaction rejects an old active-source generation after concurrent promotion', async () => {
+  // Catches the no-original-draft path applying archive/presence decisions
+  // from a source generation that another reviewed apply already superseded.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    const batchId = await seedSyncBatch(churchId, 'elvanto');
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET source_kind = 'elvanto_group', source_external_id = 'old-source', source_name = 'Old source',
+              source_revision = 4, enabled = 1
+        WHERE church_id = ? AND id = ?`,
+      [churchId, batchId]
+    );
+    const expected = [{
+      batchId,
+      sourceRevision: 4,
+      activeSourceDigest: digestSourceIdentity({ kind: 'elvanto_group', externalId: 'old-source' }),
+      draftSourceDigest: null,
+      draftSourceBaseRevision: null,
+      selectedSource: 'active',
+    }];
+    const plan = emptyPlan({
+      archive: [{ id: 'archive:old-source', externalPersonId: 'ext-1', individualId, reason: 'missing_confirmed' }],
+    });
+
+    await Database.query(
+      `UPDATE people_sync_batches
+          SET source_external_id = 'new-source', source_name = 'New source', source_revision = 5
+        WHERE church_id = ? AND id = ?`,
+      [churchId, batchId]
+    );
+    await assert.rejects(
+      applyPeopleSyncPlan({ churchId, provider: 'elvanto', plan, sourceExpectations: expected }),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+
+    const [individual] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]
+    );
+    assert.equal(individual.is_active, 1);
   });
 });
 

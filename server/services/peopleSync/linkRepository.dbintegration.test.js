@@ -121,6 +121,29 @@ test('complete full fetches increment missing counters and seen people reset the
   });
 });
 
+test('full-fetch presence rejects a changed authority stance before updating counters', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await upsertPersonLink({
+      churchId, provider: 'elvanto', externalPersonId: 'elvanto-1', individualId, linkSource: 'created',
+    });
+    await Database.query(
+      `UPDATE people_sync_settings SET authority_provider = 'none', pending_authority_provider = NULL
+        WHERE church_id = ?`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      recordFullFetchPresence(churchId, 'elvanto', new Set(), {
+        complete: true,
+        authorityExpectation: { active: 'elvanto', pending: null },
+      }),
+      (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
+    );
+    assert.equal((await listPersonLinks(churchId, 'elvanto'))[0].missingFullSyncCount, 0);
+  });
+});
+
 test('a full-presence write rolls back every earlier counter update when a later write aborts', async () => {
   await withTestChurchDb(async (churchId) => {
     const firstIndividualId = await seedIndividual(churchId, 'First');

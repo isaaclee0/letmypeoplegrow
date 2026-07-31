@@ -415,6 +415,45 @@ describe('PeopleSourceControl', () => {
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
   });
 
+  it('exact-cancels an accepted authority preview when the control unmounts', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    const { unmount } = render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+
+    unmount();
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-1',
+    ));
+  });
+
+  it('exact-cancels a preview that resolves after the control unmounts', async () => {
+    let resolvePreview!: (value: { data: { success: true } & PeopleSyncReview }) => void;
+    vi.mocked(peopleSyncAPI.previewAuthority).mockImplementation(() => new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
+    const { unmount } = render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    await waitFor(() => expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledWith('elvanto'));
+    unmount();
+    await act(async () => resolvePreview({
+      data: {
+        ...review,
+        success: true,
+        authorityPreviewId: 'authority-preview-after-unmount',
+      },
+    }));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledWith(
+      'elvanto',
+      'authority-preview-after-unmount',
+    ));
+  });
+
   it('disables review actions while refreshing and cannot apply the old review', async () => {
     let resolveRefresh!: (value: { data: { success: true } & PeopleSyncReview }) => void;
     vi.mocked(peopleSyncAPI.previewAuthority)
@@ -521,6 +560,46 @@ describe('PeopleSourceControl', () => {
       'elvanto',
       'authority-preview-older',
     ));
+  });
+
+  it('requires every planned Planning Center archive to be accepted before authority apply', async () => {
+    const planningCenterPlan: PeopleSyncPlan = {
+      ...plan,
+      provider: 'planning_center',
+      people: {
+        ...plan.people!,
+        local: {
+          ...plan.people!.local,
+          '8': { firstName: 'Taylor', lastName: 'Reed', matchEligible: true, family: { state: 'none' } },
+        },
+      },
+      archive: [{
+        id: 'archive:missing:8',
+        externalPersonId: 'missing-person',
+        individualId: 8,
+        reason: 'confirmed_missing_full_sync',
+        missingFullSyncCount: 2,
+      }],
+    };
+    const planningCenterReview: PeopleSyncReview = {
+      ...review,
+      authority: { active: 'none', pending: 'planning_center' },
+      authorityPreviewId: 'planning-center-preview',
+      plan: planningCenterPlan,
+      summary: { ...review.summary, archive: 1 },
+    };
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...planningCenterReview } });
+    render(<Harness provider="planning_center" initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
+    expect(await screen.findByRole('region', { name: 'Planning Center authority review' })).toBeInTheDocument();
+
+    const apply = screen.getAllByRole('button', { name: 'Apply sync' })[0];
+    fireEvent.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
+    expect(apply).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Archive Taylor Reed' }));
+    expect(apply).toBeEnabled();
   });
 
   it('dismisses a mixed-rollout review locally without an unscoped cancel request', async () => {

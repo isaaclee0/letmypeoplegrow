@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS integration_connections (
 );
 CREATE INDEX IF NOT EXISTS idx_integration_connections_church ON integration_connections(church_id);
 
+-- Durable mutation generations preserve disconnect ordering even when no
+-- credential row exists. This is intentionally separate from the encrypted
+-- connection row so a no-op disconnect still leaves a cross-process CAS
+-- tombstone for a provider validation that began earlier.
+CREATE TABLE IF NOT EXISTS integration_connection_generations (
+  church_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('planning_center', 'elvanto')),
+  generation INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0),
+  updated_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (church_id, provider)
+);
+
 CREATE TABLE IF NOT EXISTS external_person_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   church_id TEXT NOT NULL,

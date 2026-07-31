@@ -64,22 +64,24 @@ function isPlainObject(value) {
 // ─── Settings (people_sync_settings) ────────────────────────────────────────
 
 async function defaultGetSettings(churchId) {
-  const rows = await Database.queryForChurch(
-    churchId,
-    `SELECT authority_provider, pending_authority_provider, elvanto_include_contacts,
-            elvanto_align_people_type, full_reconciliation_frequency, full_reconciliation_day
-       FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
-    [churchId]
-  );
-  const row = rows[0] || {};
-  return {
-    authorityProvider: row.authority_provider || 'none',
-    pendingAuthorityProvider: row.pending_authority_provider || null,
-    elvantoIncludeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
-    elvantoAlignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
-    fullReconciliationFrequency: row.full_reconciliation_frequency || 'weekly',
-    fullReconciliationDay: Number.isInteger(row.full_reconciliation_day) ? row.full_reconciliation_day : 1,
-  };
+  return Database.transactionForChurch(churchId, async (conn) => {
+    const authorityState = await authority.getAuthorityWithConnection(conn, churchId);
+    const rows = await conn.query(
+      `SELECT elvanto_include_contacts, elvanto_align_people_type,
+              full_reconciliation_frequency, full_reconciliation_day
+         FROM people_sync_settings WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    const row = rows[0] || {};
+    return {
+      authorityProvider: authorityState.active,
+      pendingAuthorityProvider: authorityState.pending,
+      elvantoIncludeContacts: row.elvanto_include_contacts === undefined ? true : !!row.elvanto_include_contacts,
+      elvantoAlignPeopleType: row.elvanto_align_people_type === undefined ? true : !!row.elvanto_align_people_type,
+      fullReconciliationFrequency: row.full_reconciliation_frequency || 'weekly',
+      fullReconciliationDay: Number.isInteger(row.full_reconciliation_day) ? row.full_reconciliation_day : 1,
+    };
+  });
 }
 
 // Day range depends on the RESULTING frequency (existing or newly-supplied
@@ -379,6 +381,24 @@ function createPeopleSyncRouter(overrides = {}) {
     const provider = req.body && req.body.provider;
     const authorityPreviewId = deps.createAuthorityPreviewId();
     const abortController = new AbortController();
+    let cleanupPromise = null;
+    const cleanupPreview = () => {
+      if (!cleanupPromise && RUN_PROVIDERS.includes(provider)) {
+        cleanupPromise = Promise.resolve(
+          deps.cancelAuthoritySwitch(req.user.church_id, provider, authorityPreviewId)
+        ).catch((cancelErr) => {
+          logger.warn(`people-sync authority preview cleanup failed: ${cancelErr.message}`);
+        });
+      }
+      return cleanupPromise || Promise.resolve();
+    };
+    const handleDisconnect = () => {
+      if (res.writableEnded) return;
+      abortController.abort();
+      void cleanupPreview();
+    };
+    req.once('aborted', handleDisconnect);
+    res.once('close', handleDisconnect);
     try {
       // previewAuthoritySwitch forces a full paginated roster snapshot —
       // exactly the "many sequential network calls in one request" shape
@@ -400,13 +420,13 @@ function createPeopleSyncRouter(overrides = {}) {
         abortController.abort();
       }
       if (err?.code === 'SYNC_ROUTE_TIMEOUT' && RUN_PROVIDERS.includes(provider)) {
-        try {
-          await deps.cancelAuthoritySwitch(req.user.church_id, provider, authorityPreviewId);
-        } catch (cancelErr) {
-          logger.warn(`people-sync authority preview cleanup failed: ${cancelErr.message}`);
-        }
+        await cleanupPreview();
       }
+      if (req.aborted || res.destroyed) return;
       respondWithError(res, err, 'people-sync POST /people-authority/preview');
+    } finally {
+      req.removeListener('aborted', handleDisconnect);
+      res.removeListener('close', handleDisconnect);
     }
   });
 

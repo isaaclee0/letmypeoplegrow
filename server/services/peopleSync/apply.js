@@ -310,8 +310,8 @@ function planWithReviewedArchiveSelections(plan, accepted, reviewedApply) {
 // are exempt: tracking which external IDs correspond to a person across
 // multiple providers is authority-agnostic — only mutating that person's
 // own fields/lifecycle/family is restricted to the current authority.
-async function enforceAuthorityLock(churchId, provider, plan, acceptedArchiveIndividualIds) {
-  const authorityState = await authority.getAuthority(churchId);
+async function enforceAuthorityLock(conn, churchId, provider, plan, acceptedArchiveIndividualIds) {
+  const authorityState = await authority.getAuthorityWithConnection(conn, churchId);
   if (authorityState.active === 'none' || authorityState.active === provider) return;
 
   const touchedIndividualIds = collectTouchedIndividualIds(plan, acceptedArchiveIndividualIds);
@@ -360,6 +360,9 @@ async function applyPeopleSyncPlan({
   authorityPreviewId = null,
   sourcePromotion = null,
   reviewedApply = null,
+  authorityExpectation = null,
+  sourceExpectations = null,
+  requireConnection = false,
 }) {
   assertProvider(provider);
   if (!churchId) throw new Error('A churchId is required to apply a people-sync plan');
@@ -369,6 +372,29 @@ async function applyPeopleSyncPlan({
   }
 
   return Database.transactionForChurch(churchId, async (conn) => {
+    if (authorityExpectation) {
+      await authority.assertAuthorityExpectationWithConnection(conn, churchId, authorityExpectation);
+    }
+    if (sourceExpectations) {
+      await batchRepository.assertSourceExpectationsWithConnection(conn, {
+        churchId, provider, expectations: sourceExpectations,
+      });
+    }
+    if (requireConnection || activateAuthority) {
+      const connections = await conn.query(
+        `SELECT connection_status
+           FROM integration_connections
+          WHERE church_id = ? AND provider = ?
+          LIMIT 1`,
+        [churchId, provider]
+      );
+      if (!connections.length || connections[0].connection_status === 'invalid') {
+        throw reviewedApplyError(
+          'SYNC_NOT_CONNECTED',
+          `A usable ${provider === 'planning_center' ? 'Planning Center' : 'Elvanto'} connection is required to apply this reconciliation.`
+        );
+      }
+    }
     if (reviewedApply) {
       const currentPlanDigest = digestPlan(plan);
       if (currentPlanDigest !== reviewedApply.planDigest) {
@@ -409,7 +435,7 @@ async function applyPeopleSyncPlan({
       accepted,
       reviewedApply
     );
-    await enforceAuthorityLock(churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
+    await enforceAuthorityLock(conn, churchId, provider, applicablePlan, accepted.acceptedArchiveIndividualIds);
 
     const result = emptyResult();
 
@@ -746,24 +772,6 @@ async function applyPeopleSyncPlan({
     // the pending provider changed after review, the switch fails and every
     // person/link/family/gathering mutation above rolls back with it.
     if (activateAuthority) {
-      // A source can be previewed, then disconnected before reviewed apply.
-      // Validate PCO credential existence inside this same reconciliation /
-      // authority transaction so that stale review can never leave active
-      // Planning Center authority with no usable connection row.
-      if (provider === 'planning_center') {
-        const connections = await conn.query(
-          `SELECT 1 AS present
-             FROM integration_connections
-            WHERE church_id = ? AND provider = 'planning_center'
-            LIMIT 1`,
-          [churchId]
-        );
-        if (!connections.length) {
-          const error = new Error('A Planning Center connection is required before it can become the people authority');
-          error.code = 'SYNC_NOT_CONNECTED';
-          throw error;
-        }
-      }
       await authority.commitAuthoritySwitchWithConnection(conn, churchId, provider, authorityPreviewId);
     }
 

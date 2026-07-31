@@ -224,6 +224,7 @@ function buildLocalIdentityDigest({
       id,
       firstName: text(person.firstName),
       lastName: text(person.lastName),
+      familyId: individualId(person.familyId),
       family: directory[String(id)].family,
       peopleType: text(person.peopleType),
       isChild: typeof person.isChild === 'boolean' ? person.isChild : null,

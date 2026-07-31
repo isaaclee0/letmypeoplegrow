@@ -121,6 +121,16 @@ async function missingCounts(churchId) {
   return Object.fromEntries(rows.map((row) => [row.external_person_id, Number(row.missing_full_sync_count)]));
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 test('unattended sync requires reviewed source intent before run creation, then accepts a reviewed empty source', async () => {
   await withTestChurchDb(async (churchId) => {
     scenarios = new Map([['members', snapshot(source('members', 'Members'))]]);
@@ -450,6 +460,100 @@ test('authority preview remains pending until its source reconciliation applies'
     assert.equal(applied.status, 'applied');
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'elvanto', pending: null });
     assert.equal(await countPeople(churchId), 1);
+  });
+});
+
+test('reviewed apply rejects a fetched plan when authority is disabled during the provider read', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const current = snapshot(selected, { people: [person('late-person')], memberExternalIds: ['late-person'] });
+    scenarios = new Map([['members', current]]);
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('members', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return current;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+    });
+    await fetchEntered.promise;
+    await authority.disableAuthority(churchId);
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    assert.equal(await countPeople(churchId), 0);
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: null });
+  });
+});
+
+test('unattended apply rejects a fetched plan when authority is disabled during the provider read', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const current = snapshot(selected, { people: [person('late-person')], memberExternalIds: ['late-person'] });
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios = new Map([['members', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return current;
+    }]]);
+
+    const applying = orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
+    await fetchEntered.promise;
+    await authority.disableAuthority(churchId);
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    assert.equal(await countPeople(churchId), 0);
+    assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: null });
+  });
+});
+
+test('reviewed apply rejects an active-source generation promoted during the provider read', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId);
+    const oldSource = source('members-old', 'Old members');
+    const batch = await reviewedBatch(churchId, oldSource);
+    const current = snapshot(oldSource, { people: [person('late-person')], memberExternalIds: ['late-person'] });
+    scenarios = new Map([['members-old', current]]);
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('members-old', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return current;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+    });
+    await fetchEntered.promise;
+    const changed = await batchRepository.saveSourceDraft({
+      churchId, provider: 'elvanto', batchId: batch.id, source: source('members-new', 'New members'),
+    });
+    await promoteInitialSource(churchId, changed);
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    assert.equal(await countPeople(churchId), 0);
+    const reloaded = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
+    assert.equal(reloaded.source.externalId, 'members-new');
   });
 });
 

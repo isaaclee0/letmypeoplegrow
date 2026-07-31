@@ -25,15 +25,13 @@
 // server/index.js for where registerBuiltInProviders() is actually called.
 const express = require('express');
 const logger = require('../../config/logger');
-const Database = require('../../config/database');
 const { requireRole } = require('../../middleware/auth');
 const { ensureChurchIsolation } = require('../../middleware/churchIsolation');
 const connectionStore = require('../../services/peopleSync/connectionStore');
 const batchRepository = require('../../services/peopleSync/batchRepository');
-const authority = require('../../services/peopleSync/authority');
 const orchestrator = require('../../services/peopleSync/orchestrator');
 const { createElvantoAdapter } = require('../../services/elvanto/adapter');
-const { ElvantoError } = require('../../services/elvanto/httpClient');
+const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
 const legacyCredential = require('../../services/elvanto/legacyCredential');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 const { resolveVisibleSource } = require('../../services/peopleSync/sourceSelection');
@@ -142,39 +140,16 @@ function extractBatchFields(body) {
 
 // ─── Default (production) collaborators ─────────────────────────────────────
 
-// Church-scoped (not per-admin, unlike the pre-Task-16 disconnect handler's
-// own per-user delete) belt-and-suspenders cleanup: clears the specific
-// legacy `elvanto_api_key` row this module migrates from, AND any other
-// elvanto-prefixed preference row (e.g. a stale `elvanto_integration` OAuth
-// remnant from an even older version of this integration) — mirroring the
-// pre-Task-16 handler's own `LIKE 'elvanto%'` breadth, which this rewrite
-// had narrowed to just the one key it actively reads. Nothing in this
-// codebase currently reads an `elvanto_integration` row, so there is no
-// "resurrection" risk from leaving it behind, but a church that still has
-// one would otherwise export it in cleartext via church takeout (see
-// routes/takeout.js's REDACT_PREFERENCE_KEYS, widened alongside this).
-async function defaultDeleteLegacyPreferences(churchId) {
-  await Database.queryForChurch(
-    churchId,
-    `DELETE FROM user_preferences WHERE church_id = ? AND preference_key LIKE 'elvanto%'`,
-    [churchId]
-  );
-}
-
 const defaultAdapter = createElvantoAdapter();
 
 const defaultDeps = {
   adapter: defaultAdapter,
   routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   getConnection: connectionStore.getConnection,
-  getCredentials: connectionStore.getCredentials,
-  upsertConnection: connectionStore.upsertConnection,
-  disconnectConnection: connectionStore.disconnectConnection,
   markValidated: connectionStore.markValidated,
   getOrMigrateCredentials: legacyCredential.getOrMigrateCredentials,
-  deleteLegacyPreferences: defaultDeleteLegacyPreferences,
-  getAuthority: authority.getAuthority,
-  disableAuthority: authority.disableAuthority,
+  replaceConnection: legacyCredential.replaceConnection,
+  disconnectConnection: legacyCredential.disconnectConnection,
   listBatches: batchRepository.listBatches,
   getBatch: batchRepository.getBatch,
   createBatch: batchRepository.createBatch,
@@ -202,11 +177,17 @@ const defaultDeps = {
 //   - anything else: logged in full server-side, reported as a generic,
 //     credential-free 500 — never the raw message.
 const ELVANTO_ERROR_STATUS = {
+  [ELVANTO_AUTH]: 401,
   ELVANTO_AUTH: 401,
   ELVANTO_UNAVAILABLE: 503,
   ELVANTO_RESPONSE: 502,
   ELVANTO_PAGINATION: 502,
 };
+
+function isElvantoAuthError(err) {
+  return err instanceof ElvantoError &&
+    (err.code === ELVANTO_AUTH || err.code === 'ELVANTO_AUTH');
+}
 
 function respondWithError(res, err, { context, logLabel } = {}) {
   if (err?.code === 'SYNC_SOURCE_UNAVAILABLE') {
@@ -219,7 +200,7 @@ function respondWithError(res, err, { context, logLabel } = {}) {
     return res.status(err.status || 400).json({ error: err.message, code: err.code });
   }
   if (err instanceof ElvantoError) {
-    if (err.code === 'ELVANTO_AUTH') {
+    if (isElvantoAuthError(err)) {
       // A submitted replacement key (connect) failing validation is the
       // CALLER's bad input -> 400; a stored key later failing (any other
       // context: status/metadata/batch plan/apply/run-now) means the
@@ -237,6 +218,12 @@ function respondWithError(res, err, { context, logLabel } = {}) {
   if (err instanceof legacyCredential.ElvantoReconnectRequiredError ||
       (err && err.code === legacyCredential.ELVANTO_RECONNECT_REQUIRED)) {
     return res.status(409).json({ error: err.message, code: err.code });
+  }
+  if (err instanceof legacyCredential.ElvantoAuthorityConnectionRequiredError ||
+      err instanceof legacyCredential.ElvantoConnectionStaleError ||
+      err?.code === legacyCredential.ELVANTO_AUTHORITY_CONNECTION_REQUIRED ||
+      err?.code === legacyCredential.ELVANTO_CONNECTION_STALE) {
+    return res.status(err.status || 409).json({ error: err.message, code: err.code });
   }
   logger.error(`${logLabel}: ${err && err.message}`, { stack: err && err.stack });
   return res.status(500).json({ error: 'An unexpected error occurred.' });
@@ -283,7 +270,7 @@ function createElvantoRouter(overrides = {}) {
           (validation && validation.metadata && validation.metadata.connectionLabel) || 'Connected via API key';
         return res.json({ configured: true, connected: true, elvantoAccount: label });
       } catch (err) {
-        if (err instanceof ElvantoError && err.code === 'ELVANTO_AUTH') {
+        if (isElvantoAuthError(err)) {
           await deps.markValidated(churchId, PROVIDER, { connectionStatus: 'invalid', lastErrorCode: err.code });
           return res.json({ configured: true, connected: false, elvantoAccount: null, error: 'API key is invalid or expired' });
         }
@@ -309,17 +296,17 @@ function createElvantoRouter(overrides = {}) {
     const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
     if (!apiKey) return res.status(400).json({ error: 'API key is required.' });
     try {
-      // Validate-before-replace: if validateConnection throws, we never
-      // reach upsertConnection below — any previously-connected credential
-      // for this church is left completely untouched.
-      const validation = await withTimeout(
-        deps.adapter.validateConnection({ churchId, credentials: { apiKey } }), deps.routeTimeoutMs
-      );
-      await deps.upsertConnection({
-        churchId, provider: PROVIDER, authType: 'api_key',
-        credentials: { apiKey }, connectedBy: req.user.id, metadata: (validation && validation.metadata) || {},
+      // The credential service snapshots and CAS-checks the connection
+      // generation around this slow provider call. A concurrent disconnect
+      // therefore wins instead of being undone by a late validation result.
+      const { status } = await deps.replaceConnection({
+        churchId,
+        credentials: { apiKey },
+        connectedBy: req.user.id,
+        validateConnection: (input) => withTimeout(
+          deps.adapter.validateConnection(input), deps.routeTimeoutMs
+        ),
       });
-      const status = await deps.getConnection(churchId, PROVIDER);
       res.json({ success: true, status });
     } catch (err) {
       respondWithError(res, err, { context: 'connect', logLabel: 'elvanto POST /connect' });
@@ -329,21 +316,10 @@ function createElvantoRouter(overrides = {}) {
   router.post('/disconnect', async (req, res) => {
     const churchId = req.user.church_id;
     try {
-      // If Elvanto is currently the active people-sync authority, release
-      // that FIRST — links/batches are left in place (disableAuthority only
-      // touches people_sync_settings.authority_provider) — before deleting
-      // the credential itself.
-      const authorityState = await deps.getAuthority(churchId);
-      if (authorityState.active === PROVIDER) {
-        await deps.disableAuthority(churchId);
-      }
-      const disconnected = await deps.disconnectConnection(churchId, PROVIDER);
-      // Belt-and-suspenders: also clear any legacy (pre-Task-16) per-admin
-      // API key rows, mirroring Planning Center's own disconnect route —
-      // without this, a church whose legacy row was never read (so never
-      // migrated/deleted) could have its connection "resurrected" by that
-      // stale row the next time getOrMigrateCredentials runs.
-      await deps.deleteLegacyPreferences(churchId);
+      // Authority gating plus encrypted and legacy credential deletion are
+      // one church transaction in the credential service. Active or pending
+      // authority is rejected; disconnect never silently disables it.
+      const disconnected = await deps.disconnectConnection(churchId);
       res.json({ success: true, disconnected });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto POST /disconnect' });

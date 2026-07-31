@@ -6,7 +6,9 @@ const {
   PEOPLE_SOURCE_LOCKED,
   getAuthority,
   beginAuthoritySwitch,
+  getAuthorityPreviewIntent,
   cancelAuthoritySwitch,
+  commitAuthoritySwitchWithConnection,
   commitAuthoritySwitch,
   disableAuthority,
   getManagedLinks,
@@ -30,6 +32,16 @@ async function linkPerson(churchId, individualId, provider, externalPersonId) {
        (church_id, provider, external_person_id, individual_id, link_source)
      VALUES (?, ?, ?, ?, 'matched')`,
     [churchId, provider, externalPersonId, individualId]
+  );
+}
+
+async function seedConnectedProvider(churchId, provider = 'elvanto') {
+  await Database.query(
+    `INSERT INTO integration_connections
+       (church_id, provider, auth_type, credential_ciphertext,
+        credential_nonce, credential_auth_tag, connection_status)
+     VALUES (?, ?, 'api_key', 'ciphertext', 'nonce', 'tag', 'connected')`,
+    [churchId, provider]
   );
 }
 
@@ -76,6 +88,7 @@ test('a later switch replaces the pending switch and disabling clears active and
 
 test('authority preview cancellation is scoped to the exact pending intent', async () => {
   await withTestChurchDb(async (churchId) => {
+    await seedConnectedProvider(churchId);
     await beginAuthoritySwitch(churchId, 'elvanto', 'preview-old');
     await beginAuthoritySwitch(churchId, 'elvanto', 'preview-new');
 
@@ -84,6 +97,95 @@ test('authority preview cancellation is scoped to the exact pending intent', asy
 
     const exactCancel = await cancelAuthoritySwitch(churchId, 'elvanto', 'preview-new');
     assert.deepEqual(exactCancel, { active: 'none', pending: null });
+  });
+});
+
+test('expired owned authority previews are cleared before authority is read', async () => {
+  // Catches an abandoned preview permanently changing how later ordinary
+  // reviews are planned and applied after its signed review token has expired.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnectedProvider(churchId);
+    await beginAuthoritySwitch(churchId, 'elvanto', 'expired-preview');
+    await Database.query(
+      `UPDATE people_sync_authority_preview_intents
+          SET updated_at = datetime('now', '-31 minutes')
+        WHERE church_id = ?`,
+      [churchId]
+    );
+
+    assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+    assert.equal(await getAuthorityPreviewIntent(churchId), null);
+  });
+});
+
+test('fresh owned and legacy pending authority switches are not cleared as abandoned previews', async () => {
+  // Catches expiry cleanup that broadly clears every pending switch instead
+  // of only the expired intent it owns.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnectedProvider(churchId);
+    await beginAuthoritySwitch(churchId, 'elvanto', 'fresh-preview');
+    assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: 'elvanto' });
+    assert.deepEqual(await getAuthorityPreviewIntent(churchId), {
+      provider: 'elvanto', authorityPreviewId: 'fresh-preview',
+    });
+
+    await disableAuthority(churchId);
+    await beginAuthoritySwitch(churchId, 'planning_center');
+    assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: 'planning_center' });
+    assert.equal(await getAuthorityPreviewIntent(churchId), null);
+  });
+});
+
+test('legacy null-ID commit cannot consume a newer exact authority preview intent', async () => {
+  // Catches the compatibility path skipping intent validation and deleting a
+  // newer browser-owned preview that staged after the legacy review began.
+  await withTestChurchDb(async (churchId) => {
+    await beginAuthoritySwitch(churchId, 'elvanto');
+    await seedConnectedProvider(churchId);
+    await beginAuthoritySwitch(churchId, 'elvanto', 'newer-preview');
+
+    await assert.rejects(
+      commitAuthoritySwitch(churchId, 'elvanto'),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+    assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: 'elvanto' });
+    assert.deepEqual(await getAuthorityPreviewIntent(churchId), {
+      provider: 'elvanto', authorityPreviewId: 'newer-preview',
+    });
+  });
+});
+
+test('an exact authority preview mismatch is a typed stale-plan failure', async () => {
+  // Catches exact-intent races escaping as generic 500 errors that leave the
+  // client presenting an unsafe apply retry instead of refresh-only recovery.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnectedProvider(churchId);
+    await beginAuthoritySwitch(churchId, 'elvanto', 'current-preview');
+
+    await assert.rejects(
+      Database.transactionForChurch(churchId, (conn) =>
+        commitAuthoritySwitchWithConnection(conn, churchId, 'elvanto', 'older-preview')
+      ),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+    assert.deepEqual(await getAuthorityPreviewIntent(churchId), {
+      provider: 'elvanto', authorityPreviewId: 'current-preview',
+    });
+  });
+});
+
+test('an exact authority preview cannot stage after its provider connection was removed', async () => {
+  // The provider fetch may have loaded credentials before another request
+  // disconnects. Staging must recheck the connection in the same transaction
+  // as the pending authority write so disconnect-first cannot leave a usable
+  // review intent backed by removed credentials.
+  await withTestChurchDb(async (churchId) => {
+    await assert.rejects(
+      beginAuthoritySwitch(churchId, 'elvanto', 'preview-after-disconnect'),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+    assert.deepEqual(await getAuthority(churchId), { active: 'none', pending: null });
+    assert.equal(await getAuthorityPreviewIntent(churchId), null);
   });
 });
 

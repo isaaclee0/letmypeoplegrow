@@ -54,9 +54,26 @@ export default function PeopleSourceControl({
   const errorRef = useRef<HTMLParagraphElement>(null);
   const previewGenerationRef = useRef(0);
   const activeReviewTokenRef = useRef<string | null>(null);
+  const ownedAuthorityPreviewRef = useRef<{
+    provider: SyncProvider;
+    authorityPreviewId: string;
+  } | null>(null);
   const dialogWasOpen = useRef(false);
   const restoreSwitchOnDialogClose = useRef(true);
   const continueFocusPending = useRef(false);
+
+  useEffect(() => () => {
+    previewGenerationRef.current += 1;
+    activeReviewTokenRef.current = null;
+    const ownedPreview = ownedAuthorityPreviewRef.current;
+    ownedAuthorityPreviewRef.current = null;
+    if (ownedPreview) {
+      void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
+        ownedPreview.provider,
+        ownedPreview.authorityPreviewId,
+      )).catch(() => undefined);
+    }
+  }, []);
 
   useEffect(() => {
     const dialogOpen = confirmSwitch || confirmDisable;
@@ -101,6 +118,7 @@ export default function PeopleSourceControl({
     if (awaitingApplyRefresh && pendingProvider && settings.authorityProvider === pendingProvider) {
       previewGenerationRef.current += 1;
       activeReviewTokenRef.current = null;
+      ownedAuthorityPreviewRef.current = null;
       setPendingReview(null);
       setPendingProvider(null);
       setError(null);
@@ -110,6 +128,10 @@ export default function PeopleSourceControl({
 
   const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: PeopleSyncReview) => {
     if (!discardedReview.authorityPreviewId) return;
+    if (ownedAuthorityPreviewRef.current?.provider === discardedProvider
+      && ownedAuthorityPreviewRef.current.authorityPreviewId === discardedReview.authorityPreviewId) {
+      ownedAuthorityPreviewRef.current = null;
+    }
     void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
       discardedProvider,
       discardedReview.authorityPreviewId,
@@ -131,6 +153,9 @@ export default function PeopleSourceControl({
         return;
       }
       activeReviewTokenRef.current = response.data.reviewToken;
+      ownedAuthorityPreviewRef.current = response.data.authorityPreviewId
+        ? { provider: nextProvider, authorityPreviewId: response.data.authorityPreviewId }
+        : null;
       setPendingReview(response.data);
       setState('reviewing');
     } catch (cause) {
@@ -182,6 +207,8 @@ export default function PeopleSourceControl({
       }
       throw toPeopleSyncDisplayError(cause, 'Failed to apply the authority change.');
     }
+    if (generation !== previewGenerationRef.current) return;
+    ownedAuthorityPreviewRef.current = null;
     await refreshAfterApply();
   };
 
@@ -220,6 +247,7 @@ export default function PeopleSourceControl({
 
   const clearReview = () => {
     activeReviewTokenRef.current = null;
+    ownedAuthorityPreviewRef.current = null;
     setPendingProvider(null);
     setPendingReview(null);
     setError(null);
@@ -239,12 +267,18 @@ export default function PeopleSourceControl({
       return;
     }
 
+    const ownedPreview = ownedAuthorityPreviewRef.current;
+    if (ownedPreview?.provider === providerToCancel
+      && ownedPreview.authorityPreviewId === reviewToCancel.authorityPreviewId) {
+      ownedAuthorityPreviewRef.current = null;
+    }
     setState('cancelling');
     try {
       await peopleSyncAPI.cancelAuthorityPreview(providerToCancel, reviewToCancel.authorityPreviewId);
     } catch (cause) {
       if (generation !== previewGenerationRef.current) return;
       activeReviewTokenRef.current = reviewToCancel.reviewToken;
+      ownedAuthorityPreviewRef.current = ownedPreview;
       setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
       setState('reviewing');
       return;
@@ -406,6 +440,7 @@ export default function PeopleSourceControl({
                 onApply={apply}
                 applying={state === 'applying'}
                 interactionDisabled={state === 'previewing' || state === 'cancelling'}
+                requireAllPlannedArchivesAccepted={pendingProvider === 'planning_center'}
               />
               <button type="button" onClick={() => void cancelReview()} disabled={state === 'previewing' || state === 'applying' || state === 'cancelling'} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
                 Cancel authority change

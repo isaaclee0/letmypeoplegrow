@@ -3,6 +3,7 @@ const Database = require('../../config/database');
 const PEOPLE_SOURCE_LOCKED = 'PEOPLE_SOURCE_LOCKED';
 const AUTHORITY_PROVIDERS = new Set(['planning_center', 'elvanto']);
 const PROVIDER_LABELS = { planning_center: 'Planning Center', elvanto: 'Elvanto' };
+const AUTHORITY_PREVIEW_TTL_SECONDS = 30 * 60;
 
 function assertAuthorityProvider(provider) {
   if (!AUTHORITY_PROVIDERS.has(provider)) {
@@ -16,9 +17,46 @@ function assertAuthorityPreviewId(authorityPreviewId) {
   }
 }
 
-async function getAuthority(churchId) {
-  const rows = await Database.queryForChurch(
-    churchId,
+function staleAuthorityPreview(message) {
+  const error = new Error(message);
+  error.code = 'SYNC_PLAN_STALE';
+  error.status = 409;
+  return error;
+}
+
+async function clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId) {
+  const [expired] = await conn.query(
+    `SELECT provider, authority_preview_id, updated_at
+       FROM people_sync_authority_preview_intents
+      WHERE church_id = ?
+        AND datetime(updated_at) <= datetime('now', ?)
+      LIMIT 1`,
+    [churchId, `-${AUTHORITY_PREVIEW_TTL_SECONDS} seconds`]
+  );
+  if (!expired) return false;
+
+  const removed = await conn.query(
+    `DELETE FROM people_sync_authority_preview_intents
+      WHERE church_id = ? AND provider = ? AND authority_preview_id = ?
+        AND updated_at = ?`,
+    [churchId, expired.provider, expired.authority_preview_id, expired.updated_at]
+  );
+  if (removed.affectedRows !== 1) return false;
+
+  // The intent owns only its matching pending stance. An inconsistent/newer
+  // pending provider must never be cleared by expiry cleanup for this row.
+  await conn.query(
+    `UPDATE people_sync_settings
+        SET pending_authority_provider = NULL, updated_at = datetime('now')
+      WHERE church_id = ? AND pending_authority_provider = ?`,
+    [churchId, expired.provider]
+  );
+  return true;
+}
+
+async function getAuthorityWithConnection(conn, churchId) {
+  await clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId);
+  const rows = await conn.query(
     `SELECT authority_provider, pending_authority_provider
        FROM people_sync_settings
       WHERE church_id = ?
@@ -31,10 +69,64 @@ async function getAuthority(churchId) {
   };
 }
 
+async function assertAuthorityExpectationWithConnection(conn, churchId, expectation) {
+  if (!expectation || typeof expectation !== 'object' || Array.isArray(expectation)) {
+    throw new Error('An authority expectation is required');
+  }
+  const expectedActive = expectation.active || 'none';
+  const expectedPending = expectation.pending || null;
+  if (expectedActive !== 'none') assertAuthorityProvider(expectedActive);
+  if (expectedPending !== null) assertAuthorityProvider(expectedPending);
+
+  const current = await getAuthorityWithConnection(conn, churchId);
+  if (current.active !== expectedActive || current.pending !== expectedPending) {
+    throw staleAuthorityPreview('The people-sync authority changed after this reconciliation started. Refresh and try again.');
+  }
+
+  if (Object.hasOwn(expectation, 'authorityPreviewId')) {
+    const expectedPreviewId = expectation.authorityPreviewId;
+    if (expectedPreviewId !== null) assertAuthorityPreviewId(expectedPreviewId);
+    const [intent] = await conn.query(
+      `SELECT provider, authority_preview_id
+         FROM people_sync_authority_preview_intents
+        WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    const matches = expectedPreviewId === null
+      ? !intent
+      : intent?.provider === expectedPending && intent?.authority_preview_id === expectedPreviewId;
+    if (!matches) {
+      throw staleAuthorityPreview('The authority preview changed after this reconciliation started. Refresh and try again.');
+    }
+  }
+  return current;
+}
+
+async function getAuthority(churchId) {
+  return Database.transactionForChurch(churchId, (conn) =>
+    getAuthorityWithConnection(conn, churchId)
+  );
+}
+
 async function beginAuthoritySwitch(churchId, provider, authorityPreviewId = null) {
   assertAuthorityProvider(provider);
   if (authorityPreviewId !== null) assertAuthorityPreviewId(authorityPreviewId);
   return Database.transactionForChurch(churchId, async (conn) => {
+    await clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId);
+    if (authorityPreviewId !== null) {
+      const [connection] = await conn.query(
+        `SELECT connection_status
+           FROM integration_connections
+          WHERE church_id = ? AND provider = ?
+          LIMIT 1`,
+        [churchId, provider]
+      );
+      if (!connection || connection.connection_status === 'invalid') {
+        throw staleAuthorityPreview(
+          `The ${PROVIDER_LABELS[provider]} connection changed before the authority preview could be staged. Reconnect and refresh the review.`
+        );
+      }
+    }
     await conn.query(
       `INSERT INTO people_sync_settings (church_id, authority_provider, pending_authority_provider)
        VALUES (?, 'none', ?)
@@ -76,20 +168,23 @@ async function beginAuthoritySwitch(churchId, provider, authorityPreviewId = nul
 }
 
 async function getAuthorityPreviewIntent(churchId) {
-  const [row] = await Database.queryForChurch(
-    churchId,
-    `SELECT provider, authority_preview_id
-       FROM people_sync_authority_preview_intents
-      WHERE church_id = ? LIMIT 1`,
-    [churchId]
-  );
-  return row ? { provider: row.provider, authorityPreviewId: row.authority_preview_id } : null;
+  return Database.transactionForChurch(churchId, async (conn) => {
+    await clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId);
+    const [row] = await conn.query(
+      `SELECT provider, authority_preview_id
+         FROM people_sync_authority_preview_intents
+        WHERE church_id = ? LIMIT 1`,
+      [churchId]
+    );
+    return row ? { provider: row.provider, authorityPreviewId: row.authority_preview_id } : null;
+  });
 }
 
 async function cancelAuthoritySwitch(churchId, provider, authorityPreviewId) {
   assertAuthorityProvider(provider);
   assertAuthorityPreviewId(authorityPreviewId);
   return Database.transactionForChurch(churchId, async (conn) => {
+    await clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId);
     const [intent] = await conn.query(
       `SELECT provider, authority_preview_id
          FROM people_sync_authority_preview_intents
@@ -124,6 +219,7 @@ async function cancelAuthoritySwitch(churchId, provider, authorityPreviewId) {
 async function commitAuthoritySwitchWithConnection(conn, churchId, provider, authorityPreviewId = null) {
   assertAuthorityProvider(provider);
   if (authorityPreviewId !== null) assertAuthorityPreviewId(authorityPreviewId);
+  await clearExpiredAuthorityPreviewIntentWithConnection(conn, churchId);
   const rows = await conn.query(
     `SELECT pending_authority_provider
        FROM people_sync_settings
@@ -132,18 +228,17 @@ async function commitAuthoritySwitchWithConnection(conn, churchId, provider, aut
     [churchId]
   );
   if (rows[0]?.pending_authority_provider !== provider) {
-    throw new Error(`No pending authority switch for provider: ${provider}`);
+    throw staleAuthorityPreview(`No current pending authority switch exists for provider: ${provider}`);
   }
-  if (authorityPreviewId !== null) {
-    const [intent] = await conn.query(
-      `SELECT provider, authority_preview_id
-         FROM people_sync_authority_preview_intents
-        WHERE church_id = ? LIMIT 1`,
-      [churchId]
-    );
-    if (intent?.provider !== provider || intent?.authority_preview_id !== authorityPreviewId) {
-      throw new Error(`Authority preview changed before commit: ${provider}`);
-    }
+  const [intent] = await conn.query(
+    `SELECT provider, authority_preview_id
+       FROM people_sync_authority_preview_intents
+      WHERE church_id = ? LIMIT 1`,
+    [churchId]
+  );
+  if (authorityPreviewId === null ? !!intent
+    : intent?.provider !== provider || intent?.authority_preview_id !== authorityPreviewId) {
+    throw staleAuthorityPreview(`Authority preview changed before commit: ${provider}`);
   }
   const result = await conn.query(
     `UPDATE people_sync_settings
@@ -153,12 +248,15 @@ async function commitAuthoritySwitchWithConnection(conn, churchId, provider, aut
     [provider, churchId, provider]
   );
   if (result.affectedRows !== 1) {
-    throw new Error(`Pending authority switch changed before commit: ${provider}`);
+    throw staleAuthorityPreview(`Pending authority switch changed before commit: ${provider}`);
   }
-  await conn.query(
-    'DELETE FROM people_sync_authority_preview_intents WHERE church_id = ?',
-    [churchId]
-  );
+  if (authorityPreviewId !== null) {
+    await conn.query(
+      `DELETE FROM people_sync_authority_preview_intents
+        WHERE church_id = ? AND provider = ? AND authority_preview_id = ?`,
+      [churchId, provider, authorityPreviewId]
+    );
+  }
   return { active: provider, pending: null };
 }
 
@@ -273,6 +371,10 @@ function lockedResponse(provider, action = 'change this person') {
 
 module.exports = {
   PEOPLE_SOURCE_LOCKED,
+  AUTHORITY_PREVIEW_TTL_SECONDS,
+  clearExpiredAuthorityPreviewIntentWithConnection,
+  getAuthorityWithConnection,
+  assertAuthorityExpectationWithConnection,
   getAuthority,
   beginAuthoritySwitch,
   getAuthorityPreviewIntent,

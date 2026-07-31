@@ -51,6 +51,56 @@ function toBatch(row) {
   };
 }
 
+function staleSourceExpectation(message = 'A sync source changed after this reconciliation started. Refresh and try again.') {
+  const error = new Error(message);
+  error.code = 'SYNC_PLAN_STALE';
+  error.status = 409;
+  return error;
+}
+
+async function assertSourceExpectationsWithConnection(conn, {
+  churchId, provider, expectations,
+}) {
+  assertProvider(provider);
+  if (!Array.isArray(expectations) || expectations.length === 0) {
+    throw new Error('At least one source expectation is required');
+  }
+  const rows = await conn.query(
+    `SELECT * FROM people_sync_batches
+      WHERE church_id = ? AND provider = ? AND enabled = 1
+      ORDER BY id`,
+    [churchId, provider]
+  );
+  if (rows.length !== expectations.length) throw staleSourceExpectation();
+  const rowsById = new Map(rows.map((row) => [Number(row.id), row]));
+  const seenBatchIds = new Set();
+  for (const expectation of expectations) {
+    const batchId = Number(expectation?.batchId);
+    if (!Number.isSafeInteger(batchId) || batchId <= 0 || seenBatchIds.has(batchId)) {
+      throw new Error('Source expectations must contain unique positive batch IDs');
+    }
+    seenBatchIds.add(batchId);
+    if (!Number.isSafeInteger(expectation.sourceRevision) || expectation.sourceRevision < 1 ||
+        !['active', 'draft'].includes(expectation.selectedSource)) {
+      throw new Error('Invalid source expectation');
+    }
+
+    const row = rowsById.get(batchId);
+    const current = toBatch(row);
+    const currentActiveDigest = current?.source ? digestSourceIdentity(current.source) : null;
+    const currentDraftDigest = current?.draftSource ? digestSourceIdentity(current.draftSource) : null;
+    if (!current || !current.enabled ||
+        current.sourceRevision !== expectation.sourceRevision ||
+        currentActiveDigest !== (expectation.activeSourceDigest ?? null) ||
+        currentDraftDigest !== (expectation.draftSourceDigest ?? null) ||
+        current.draftSourceBaseRevision !== (expectation.draftSourceBaseRevision ?? null) ||
+        (expectation.selectedSource === 'active' && !current.source) ||
+        (expectation.selectedSource === 'draft' && !current.draftSource)) {
+      throw staleSourceExpectation();
+    }
+  }
+}
+
 async function getBatch(churchId, provider, batchId) {
   assertProvider(provider);
   const rows = await Database.queryForChurch(churchId, `SELECT * FROM people_sync_batches
@@ -280,4 +330,5 @@ async function recordBatchResult({ churchId, provider, batchId, trigger, fetchMo
 module.exports = {
   listBatches, listEnabledBatches, getBatch, createBatch, updateBatch, deleteBatch, recordBatchResult,
   saveSourceDraft, discardSourceDraft, promoteSourceDraftWithConnection, recordActiveSourceHealthWithConnection,
+  assertSourceExpectationsWithConnection,
 };

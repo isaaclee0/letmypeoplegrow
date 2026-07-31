@@ -21,6 +21,7 @@
 // the encrypted integration_connections row for that church.
 const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
+const { getAuthorityWithConnection } = require('./authority');
 
 const PCO_RECONNECT_REQUIRED = 'PCO_RECONNECT_REQUIRED';
 
@@ -315,15 +316,8 @@ async function replaceConnection({ churchId, credentials, connectedBy, metadata 
 // never be committed without a connection because of this race.
 async function disconnectConnection(churchId) {
   return withCredentialMutation(churchId, () => Database.transactionForChurch(churchId, async (conn) => {
-    const [authority] = await conn.query(
-      `SELECT authority_provider, pending_authority_provider
-         FROM people_sync_settings
-        WHERE church_id = ?
-        LIMIT 1`,
-      [churchId]
-    );
-    if (authority?.authority_provider === 'planning_center' ||
-        authority?.pending_authority_provider === 'planning_center') {
+    const authority = await getAuthorityWithConnection(conn, churchId);
+    if (authority.active === 'planning_center' || authority.pending === 'planning_center') {
       throw new PcoAuthorityConnectionRequiredError();
     }
 

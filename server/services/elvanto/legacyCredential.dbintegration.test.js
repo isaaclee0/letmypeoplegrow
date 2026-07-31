@@ -6,10 +6,14 @@ const connectionStore = require('../peopleSync/connectionStore');
 const {
   ELVANTO_RECONNECT_REQUIRED,
   ELVANTO_VALIDATION_UNAVAILABLE,
+  ELVANTO_AUTHORITY_CONNECTION_REQUIRED,
+  ELVANTO_CONNECTION_STALE,
   getOrMigrateCredentials,
   migrateLegacyCredentials,
+  replaceConnection,
+  disconnectConnection,
 } = require('./legacyCredential');
-const { ElvantoError } = require('./httpClient');
+const { ElvantoError, ELVANTO_AUTH } = require('./httpClient');
 
 async function withCredentialKey(callback) {
   const previous = process.env.INTEGRATION_CREDENTIALS_KEY;
@@ -58,15 +62,39 @@ async function countConnectionRows(churchId) {
   return rows[0].n;
 }
 
+async function seedConnection(churchId, apiKey = 'stored-key') {
+  await connectionStore.upsertConnection({
+    churchId,
+    provider: 'elvanto',
+    authType: 'api_key',
+    credentials: { apiKey },
+    connectedBy: null,
+  });
+}
+
+async function setAuthority(churchId, { active = 'none', pending = null }) {
+  await Database.queryForChurch(
+    churchId,
+    `UPDATE people_sync_settings
+        SET authority_provider = ?, pending_authority_provider = ?
+      WHERE church_id = ?`,
+    [active, pending, churchId]
+  );
+}
+
 function okValidator() {
   return async () => ({ ok: true, metadata: { connectionLabel: 'Connected via API key' } });
 }
 
+function loadIndependentCredentialService() {
+  const modulePath = require.resolve('./legacyCredential');
+  delete require.cache[modulePath];
+  return require(modulePath);
+}
+
 function rejectingValidator() {
   return async () => {
-    const err = new Error('Elvanto rejected the request credentials (status 401).');
-    err.code = 'ELVANTO_AUTH';
-    throw err;
+    throw new ElvantoError('Elvanto rejected the request credentials (status 401).', ELVANTO_AUTH, {});
   };
 }
 
@@ -173,12 +201,12 @@ test('a validator that throws is treated the same as an explicit ok:false (not m
   }));
 });
 
-test('a genuine ELVANTO_AUTH failure is still treated as "not migrated" (null), not thrown', async () => {
+test('the exported Elvanto auth failure is treated as "not migrated" (null), not transient unavailability', async () => {
   await withCredentialKey(() => withTestChurchDb(async (churchId) => {
     const adminId = await insertAdmin(churchId, 'admin@example.test');
     await seedLegacyKey(churchId, adminId, 'revoked-key');
 
-    const validateConnection = async () => { throw new ElvantoError('rejected', 'ELVANTO_AUTH', {}); };
+    const validateConnection = async () => { throw new ElvantoError('rejected', ELVANTO_AUTH, {}); };
     const credentials = await getOrMigrateCredentials(churchId, { validateConnection });
     assert.equal(credentials, null);
     assert.equal(await countConnectionRows(churchId), 0);
@@ -278,5 +306,259 @@ test('no response-shaped value from this module ever carries a key prefix or len
       const serialized = JSON.stringify({ message: err.message, code: err.code });
       assert.equal(/key-alpha-secret-value|key-beta-secret-value/.test(serialized), false);
     }
+  }));
+});
+
+test('disconnect rejects an active Elvanto authority without deleting credentials', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId, { active: 'elvanto' });
+
+    await assert.rejects(disconnectConnection(churchId), (error) => {
+      assert.equal(error.code, ELVANTO_AUTHORITY_CONNECTION_REQUIRED);
+      assert.equal(error.status, 409);
+      return true;
+    });
+
+    assert.equal(await countConnectionRows(churchId), 1);
+  }));
+});
+
+test('disconnect rejects a pending Elvanto authority without deleting credentials', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await setAuthority(churchId, { pending: 'elvanto' });
+
+    await assert.rejects(disconnectConnection(churchId), (error) => {
+      assert.equal(error.code, ELVANTO_AUTHORITY_CONNECTION_REQUIRED);
+      assert.equal(error.status, 409);
+      return true;
+    });
+
+    assert.equal(await countConnectionRows(churchId), 1);
+  }));
+});
+
+test('disconnect atomically removes the encrypted connection and every legacy Elvanto preference', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedConnection(churchId);
+    await seedLegacyKey(churchId, adminId, 'legacy-key');
+    await Database.queryForChurch(
+      churchId,
+      `INSERT INTO user_preferences (user_id, preference_key, preference_value, church_id)
+       VALUES (?, 'elvanto_integration', '{}', ?)`,
+      [adminId, churchId]
+    );
+
+    assert.equal(await disconnectConnection(churchId), true);
+    assert.equal(await countConnectionRows(churchId), 0);
+    const legacy = await Database.queryForChurch(
+      churchId,
+      `SELECT preference_key FROM user_preferences
+        WHERE church_id = ? AND preference_key LIKE 'elvanto%'`,
+      [churchId]
+    );
+    assert.deepEqual(legacy, []);
+  }));
+});
+
+test('a legacy-preference deletion failure rolls back the encrypted connection deletion', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedConnection(churchId);
+    await seedLegacyKey(churchId, adminId, 'legacy-key');
+    await Database.queryForChurch(churchId, `
+      CREATE TRIGGER reject_elvanto_preference_delete
+      BEFORE DELETE ON user_preferences
+      WHEN OLD.preference_key LIKE 'elvanto%'
+      BEGIN
+        SELECT RAISE(ABORT, 'test delete failure');
+      END
+    `);
+
+    await assert.rejects(disconnectConnection(churchId), /test delete failure/);
+    assert.equal(await countConnectionRows(churchId), 1);
+    assert.equal(await countLegacyRows(churchId), 1);
+  }));
+});
+
+test('a deferred legacy validation cannot resurrect credentials after disconnect', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedLegacyKey(churchId, adminId, 'legacy-key');
+
+    let releaseValidation;
+    let signalValidationStarted;
+    const validationStarted = new Promise((resolve) => { signalValidationStarted = resolve; });
+    const migration = migrateLegacyCredentials(churchId, {
+      validateConnection: async () => {
+        signalValidationStarted();
+        await new Promise((resolve) => { releaseValidation = resolve; });
+        return { ok: true, metadata: {} };
+      },
+    });
+    await validationStarted;
+
+    const disconnected = await disconnectConnection(churchId);
+    assert.equal(disconnected, false);
+    releaseValidation();
+    assert.equal(await migration, null);
+
+    assert.equal(await countConnectionRows(churchId), 0);
+    assert.equal(await countLegacyRows(churchId), 0);
+  }));
+});
+
+test('a deferred replacement validation cannot restore a connection deleted after it began', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId, 'old-key');
+
+    let releaseValidation;
+    let signalValidationStarted;
+    const validationStarted = new Promise((resolve) => { signalValidationStarted = resolve; });
+    const replacement = replaceConnection({
+      churchId,
+      credentials: { apiKey: 'new-key' },
+      connectedBy: null,
+      validateConnection: async () => {
+        signalValidationStarted();
+        await new Promise((resolve) => { releaseValidation = resolve; });
+        return { ok: true, metadata: {} };
+      },
+    });
+    await validationStarted;
+
+    assert.equal(await disconnectConnection(churchId), true);
+    releaseValidation();
+    await assert.rejects(replacement, (error) => {
+      assert.equal(error.code, ELVANTO_CONNECTION_STALE);
+      assert.equal(error.status, 409);
+      return true;
+    });
+
+    assert.equal(await countConnectionRows(churchId), 0);
+  }));
+});
+
+test('a deferred replacement from legacy-only state cannot outlive deletion of that legacy generation', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedLegacyKey(churchId, adminId, 'legacy-key');
+
+    let releaseValidation;
+    let signalValidationStarted;
+    const validationStarted = new Promise((resolve) => { signalValidationStarted = resolve; });
+    const replacement = replaceConnection({
+      churchId,
+      credentials: { apiKey: 'new-key' },
+      connectedBy: adminId,
+      validateConnection: async () => {
+        signalValidationStarted();
+        await new Promise((resolve) => { releaseValidation = resolve; });
+        return { ok: true, metadata: {} };
+      },
+    });
+    await validationStarted;
+
+    assert.equal(await disconnectConnection(churchId), false);
+    releaseValidation();
+    await assert.rejects(replacement, (error) => error.code === ELVANTO_CONNECTION_STALE);
+
+    assert.equal(await countConnectionRows(churchId), 0);
+    assert.equal(await countLegacyRows(churchId), 0);
+  }));
+});
+
+test('a deferred first connection cannot create credentials after a concurrent no-op disconnect', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    let releaseValidation;
+    let signalValidationStarted;
+    const validationStarted = new Promise((resolve) => { signalValidationStarted = resolve; });
+    const replacement = replaceConnection({
+      churchId,
+      credentials: { apiKey: 'first-key' },
+      connectedBy: null,
+      validateConnection: async () => {
+        signalValidationStarted();
+        await new Promise((resolve) => { releaseValidation = resolve; });
+        return { ok: true, metadata: {} };
+      },
+    });
+    await validationStarted;
+
+    // A fresh module instance has a separate in-memory queue/state, standing
+    // in for another Node process sharing the same SQLite church database.
+    const independentService = loadIndependentCredentialService();
+    assert.equal(await independentService.disconnectConnection(churchId), false);
+    const [generation] = await Database.queryForChurch(
+      churchId,
+      `SELECT generation FROM integration_connection_generations
+        WHERE church_id = ? AND provider = 'elvanto'`,
+      [churchId]
+    );
+    assert.equal(generation.generation, 1);
+    releaseValidation();
+    await assert.rejects(replacement, (error) => error.code === ELVANTO_CONNECTION_STALE);
+    assert.equal(await countConnectionRows(churchId), 0);
+  }));
+});
+
+test('a same-key concurrent replacement still changes the credential generation', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId, 'same-key');
+
+    let releaseValidation;
+    let signalValidationStarted;
+    const validationStarted = new Promise((resolve) => { signalValidationStarted = resolve; });
+    const oldReplacement = replaceConnection({
+      churchId,
+      credentials: { apiKey: 'late-key' },
+      connectedBy: null,
+      validateConnection: async () => {
+        signalValidationStarted();
+        await new Promise((resolve) => { releaseValidation = resolve; });
+        return { ok: true, metadata: {} };
+      },
+    });
+    await validationStarted;
+
+    // Simulates a write from another process, which does not share this
+    // module's in-memory mutation queue/generation counter.
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'elvanto',
+      authType: 'api_key',
+      credentials: { apiKey: 'same-key' },
+      connectedBy: null,
+      metadata: { connectionLabel: 'newer same-key reconnect' },
+    });
+    releaseValidation();
+
+    await assert.rejects(oldReplacement, (error) => error.code === ELVANTO_CONNECTION_STALE);
+    assert.deepEqual(await connectionStore.getCredentials(churchId, 'elvanto'), { apiKey: 'same-key' });
+  }));
+});
+
+test('a validated replacement persists the new church credential and retires legacy rows', async () => {
+  await withCredentialKey(() => withTestChurchDb(async (churchId) => {
+    const adminId = await insertAdmin(churchId, 'admin@example.test');
+    await seedConnection(churchId, 'old-key');
+    await seedLegacyKey(churchId, adminId, 'legacy-key');
+
+    const result = await replaceConnection({
+      churchId,
+      credentials: { apiKey: 'new-key' },
+      connectedBy: adminId,
+      validateConnection: async ({ churchId: receivedChurchId, credentials }) => {
+        assert.equal(receivedChurchId, churchId);
+        assert.deepEqual(credentials, { apiKey: 'new-key' });
+        return { ok: true, metadata: { connectionLabel: 'Replacement account' } };
+      },
+    });
+
+    assert.equal(result.status.provider, 'elvanto');
+    assert.deepEqual(await connectionStore.getCredentials(churchId, 'elvanto'), { apiKey: 'new-key' });
+    assert.equal(await countLegacyRows(churchId), 0);
   }));
 });
