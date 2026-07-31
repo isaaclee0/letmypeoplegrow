@@ -92,6 +92,42 @@ async function getCredentials(churchId, provider) {
   return rows[0] ? decryptCredential(rows[0]) : null;
 }
 
+async function getConnectionGeneration(churchId, provider) {
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT generation
+       FROM integration_connection_generations
+      WHERE church_id = ? AND provider = ?
+      LIMIT 1`,
+    [churchId, provider]
+  );
+  return Number(rows[0]?.generation || 0);
+}
+
+async function assertConnectionGenerationWithConnection(conn, {
+  churchId,
+  provider,
+  expectedGeneration,
+}) {
+  const rows = await conn.query(
+    `SELECT generation
+       FROM integration_connection_generations
+      WHERE church_id = ? AND provider = ?
+      LIMIT 1`,
+    [churchId, provider]
+  );
+  const actualGeneration = Number(rows[0]?.generation || 0);
+  if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 ||
+      actualGeneration !== expectedGeneration) {
+    const error = new Error(
+      'The provider connection changed after this reconciliation started. Refresh and try again.'
+    );
+    error.code = 'SYNC_PLAN_STALE';
+    error.status = 409;
+    throw error;
+  }
+}
+
 async function markValidated(
   churchId,
   provider,
@@ -136,6 +172,8 @@ module.exports = {
   upsertConnection,
   getConnection,
   getCredentials,
+  getConnectionGeneration,
+  assertConnectionGenerationWithConnection,
   markValidated,
   updateMetadataCache,
   disconnectConnection,

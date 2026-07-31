@@ -232,6 +232,48 @@ describe('ElvantoOnboarding authority review lifecycle', () => {
     ));
   });
 
+  it('retries the same exact owned preview after onboarding unmount cancellation fails', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...authorityReview } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReset();
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockRejectedValueOnce(new Error('temporary cancellation outage'))
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    const { unmount } = render(<AuthorityHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByRole('region', { name: 'Elvanto onboarding authority review' })).toBeInTheDocument();
+    unmount();
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mock.calls).toEqual([
+      ['elvanto', 'authority-preview-1'],
+      ['elvanto', 'authority-preview-1'],
+    ]);
+  });
+
+  it('keeps retrying an explicit onboarding cancel after unmount', async () => {
+    const firstCancel = deferred<never>();
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...authorityReview } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReset();
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockImplementationOnce(() => firstCancel.promise as ReturnType<typeof peopleSyncAPI.cancelAuthorityPreview>)
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    const { unmount } = render(<AuthorityHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByRole('region', { name: 'Elvanto onboarding authority review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => firstCancel.reject(new Error('temporary cancellation outage')));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mock.calls).toEqual([
+      ['elvanto', 'authority-preview-1'],
+      ['elvanto', 'authority-preview-1'],
+    ]);
+  });
+
   it('exact-cancels a preview that resolves after onboarding unmounts', async () => {
     const pending = deferred<{ data: { success: true } & PeopleSyncReview }>();
     vi.mocked(peopleSyncAPI.previewAuthority).mockImplementation(

@@ -136,6 +136,7 @@ test('presence projection is bound into the plan digest', () => {
 
 test('source context snapshots are digested in numeric batch order and bind source review inputs', () => {
   const sourceContext = {
+    connectionGeneration: 17,
     activeRevision: 7,
     draftDigest: 'd'.repeat(64),
     snapshots: [
@@ -148,6 +149,7 @@ test('source context snapshots are digested in numeric batch order and bind sour
   assert.equal(reordered, baseline);
 
   for (const changed of [
+    { ...sourceContext, connectionGeneration: 18 },
     { ...sourceContext, activeRevision: 8 },
     { ...sourceContext, draftDigest: 'e'.repeat(64) },
     { ...sourceContext, snapshots: [{ ...sourceContext.snapshots[0], sourceExternalId: 'changed' }, sourceContext.snapshots[1]] },

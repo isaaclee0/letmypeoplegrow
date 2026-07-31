@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const Database = require('../../config/database');
+const connectionStore = require('./connectionStore');
 const linkRepository = require('./linkRepository');
 const matchReviewRepository = require('./matchReviewRepository');
 const authority = require('./authority');
@@ -362,6 +363,7 @@ async function applyPeopleSyncPlan({
   reviewedApply = null,
   authorityExpectation = null,
   sourceExpectations = null,
+  connectionExpectation = null,
   requireConnection = false,
 }) {
   assertProvider(provider);
@@ -378,6 +380,21 @@ async function applyPeopleSyncPlan({
     if (sourceExpectations) {
       await batchRepository.assertSourceExpectationsWithConnection(conn, {
         churchId, provider, expectations: sourceExpectations,
+      });
+    }
+    if (connectionExpectation) {
+      const signedGeneration = plan.sourceContext?.connectionGeneration;
+      if (!Number.isSafeInteger(signedGeneration) || signedGeneration < 0 ||
+          signedGeneration !== connectionExpectation.generation) {
+        throw reviewedApplyError(
+          'SYNC_PLAN_STALE',
+          'The reviewed provider connection generation changed before apply.'
+        );
+      }
+      await connectionStore.assertConnectionGenerationWithConnection(conn, {
+        churchId,
+        provider,
+        expectedGeneration: connectionExpectation.generation,
       });
     }
     if (requireConnection || activateAuthority) {

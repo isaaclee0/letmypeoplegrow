@@ -9,8 +9,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('node:http');
+const { EventEmitter } = require('node:events');
 const { createPeopleSyncRouter } = require('./peopleSync');
 const { OrchestratorError } = require('../../services/peopleSync/orchestrator');
+const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
 
 const ADMIN_USER = { id: 1, church_id: 'churcha1', role: 'admin' };
 const OTHER_CHURCH_ADMIN = { id: 2, church_id: 'churchb2', role: 'admin' };
@@ -117,6 +119,11 @@ function collectRoutePaths(router) {
     if (layer.route && layer.route.path) paths.push(layer.route.path);
   }
   return paths;
+}
+
+function routeHandler(router, path) {
+  const layer = router.stack.find((candidate) => candidate.route?.path === path);
+  return layer?.route?.stack.at(-1)?.handle;
 }
 
 // THE actual regression guard: walks every route this router really
@@ -536,14 +543,14 @@ test('a provider timeout propagating through previewAuthoritySwitch is mapped to
   });
 });
 
-test('a stale/invalid Elvanto key surfacing through applyReviewed (authority switch) maps to 401', async () => {
-  const { ElvantoError } = require('../../services/elvanto/httpClient');
+test('the emitted Elvanto source-auth code surfacing through authority apply maps to 401 reconnect-required', async () => {
   await withServer({
-    applyReviewed: async () => { throw new ElvantoError('rejected', 'ELVANTO_AUTH', {}); },
+    applyReviewed: async () => { throw new ElvantoError('rejected', ELVANTO_AUTH, {}); },
   }, { user: ADMIN_USER }, async (base) => {
     const { status, body } = await requestJson(`${base}/people-authority/apply`, { method: 'POST', body: { provider: 'elvanto', reviewToken: 't' } });
     assert.equal(status, 401);
-    assert.equal(body.code, 'ELVANTO_AUTH');
+    assert.equal(body.code, ELVANTO_AUTH);
+    assert.match(body.error, /reconnect elvanto/i);
   });
 });
 
@@ -616,6 +623,49 @@ test('disconnecting the preview request aborts its pipeline and conditionally cl
   });
 
   assert.deepEqual(cancellations, [[ADMIN_USER.church_id, 'elvanto', 'preview-disconnect-1']]);
+});
+
+test('a response socket close after res.json but before finish still cancels the exact preview intent', async () => {
+  const cancellations = [];
+  let previewSignal;
+  const router = createPeopleSyncRouter({
+    createAuthorityPreviewId: () => 'preview-response-loss-1',
+    previewAuthoritySwitch: async ({ signal }) => {
+      previewSignal = signal;
+      return { runId: 1, reviewToken: 'token', decisionContractVersion: 2, summary: {}, plan: {} };
+    },
+    cancelAuthoritySwitch: async (...args) => {
+      cancellations.push(args);
+      return { active: 'none', pending: null };
+    },
+  });
+  const handler = routeHandler(router, '/people-authority/preview');
+  assert.equal(typeof handler, 'function');
+
+  const req = Object.assign(new EventEmitter(), {
+    body: { provider: 'elvanto' },
+    user: ADMIN_USER,
+    aborted: false,
+  });
+  const res = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    status() { return this; },
+    json(payload) {
+      this.payload = payload;
+      this.writableEnded = true;
+      return this;
+    },
+  });
+
+  await handler(req, res);
+  assert.equal(res.payload.success, true);
+  assert.equal(previewSignal.aborted, false);
+  res.emit('close');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(previewSignal.aborted, true);
+  assert.deepEqual(cancellations, [[ADMIN_USER.church_id, 'elvanto', 'preview-response-loss-1']]);
 });
 
 test('POST /people-authority/apply times out with a safe 503 rather than hanging forever on a stuck applyReviewed call', async () => {

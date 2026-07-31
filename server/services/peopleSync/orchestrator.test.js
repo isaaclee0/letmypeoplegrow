@@ -115,6 +115,7 @@ function makeDeps({
   };
   const deps = {
     getConnection: async () => ({ connectionStatus: 'connected' }),
+    getConnectionGeneration: async () => 17,
     getCredentials: async () => ({ apiKey: 'test-key' }),
     getProvider: () => adapter,
     listBatches: async () => batches,
@@ -194,6 +195,22 @@ test('enabled sources are fetched sequentially', async () => {
 
   assert.equal(maxInFlight, 1);
   assert.deepEqual(order, ['start:one', 'end:one', 'start:two', 'end:two', 'start:three', 'end:three']);
+});
+
+test('Elvanto reconciliation snapshots the durable connection generation before reading credentials', async () => {
+  // Reading in this order prevents old credentials from ever being paired
+  // with a newer generation when a reconnect commits between the two reads.
+  const reads = [];
+  const { deps } = makeDeps({
+    extra: {
+      getConnectionGeneration: async () => { reads.push('generation'); return 23; },
+      getCredentials: async () => { reads.push('credentials'); return { apiKey: 'test-key' }; },
+    },
+  });
+
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', trigger: 'manual' }, deps);
+
+  assert.deepEqual(reads, ['generation', 'credentials']);
 });
 
 test('duplicate members are normalized once while each batch retains its own member set', async () => {
@@ -754,6 +771,7 @@ test('review digest binds sorted source identity, revision, draft identity, and 
   await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 20, trigger: 'manual' }, deps);
 
   assert.equal(digested.filterContext, undefined);
+  assert.equal(digested.sourceContext.connectionGeneration, 17);
   assert.equal(digested.sourceContext.activeRevision, 9);
   assert.equal(digested.sourceContext.draftDigest, digestSourceIdentity(draft));
   assert.deepEqual(digested.sourceContext.snapshots.map((item) => item.batchId), [3, 20]);
@@ -786,6 +804,7 @@ test('reviewed apply sends source promotion CAS data and records member-only ful
     selectedSource: 'draft',
   }]);
   assert.equal(applied[0].requireConnection, true);
+  assert.deepEqual(applied[0].connectionExpectation, { generation: 17 });
   assert.equal(Object.hasOwn(applied[0], 'filterPromotion'), false);
   assert.equal(applied[0].reviewedApply.reviewToken, 'review-token');
   assert.match(applied[0].reviewedApply.planDigest, /^[a-f0-9]{64}$/);
@@ -875,6 +894,7 @@ test('scheduled source sync is full-only, ignores legacy watermarks, persists pr
   assert.equal(result.externalWatermark, null);
   assert.equal(presence.length, 1);
   assert.deepEqual(applied[0].authorityExpectation, { active: 'elvanto', pending: null });
+  assert.deepEqual(applied[0].connectionExpectation, { generation: 17 });
   assert.deepEqual(applied[0].sourceExpectations, [{
     batchId: 1,
     sourceRevision: 2,
@@ -1060,4 +1080,71 @@ test('a cancelled failing source fetch cannot record missing health', async () =
   await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
   assert.deepEqual(availableHealth, []);
   assert.deepEqual(failedHealth, []);
+});
+
+test('cancellation during an awaited available-health write prevents that health commit', async () => {
+  const controller = new AbortController();
+  let releaseHealth;
+  let markHealthEntered;
+  const healthGate = new Promise((resolve) => { releaseHealth = resolve; });
+  const healthEntered = new Promise((resolve) => { markHealthEntered = resolve; });
+  let committedHealth = 0;
+  const { deps } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    extra: {
+      recordActiveSourceAvailable: async (input) => {
+        markHealthEntered();
+        await healthGate;
+        if (!input.signal?.aborted) committedHealth += 1;
+      },
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-cancelled-available-health',
+    signal: controller.signal,
+  }, deps);
+  await healthEntered;
+  controller.abort();
+  releaseHealth();
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.equal(committedHealth, 0);
+});
+
+test('cancellation during an awaited missing-health write prevents health and notification commit', async () => {
+  const controller = new AbortController();
+  let releaseHealth;
+  let markHealthEntered;
+  const healthGate = new Promise((resolve) => { releaseHealth = resolve; });
+  const healthEntered = new Promise((resolve) => { markHealthEntered = resolve; });
+  let committedHealth = 0;
+  let notifications = 0;
+  const missing = Object.assign(new Error('source disappeared'), { code: 'SYNC_SOURCE_UNAVAILABLE' });
+  const { deps } = makeDeps({
+    authorityState: { active: 'none', pending: null },
+    fetchSourceSnapshot: async () => { throw missing; },
+    extra: {
+      recordActiveSourceFailure: async (input) => {
+        markHealthEntered();
+        await healthGate;
+        if (!input.signal?.aborted) {
+          committedHealth += 1;
+          notifications += 1;
+        }
+      },
+    },
+  });
+
+  const preview = previewAuthoritySwitch({
+    churchId: 'church-a', provider: 'elvanto', authorityPreviewId: 'preview-cancelled-missing-health',
+    signal: controller.signal,
+  }, deps);
+  await healthEntered;
+  controller.abort();
+  releaseHealth();
+
+  await assert.rejects(preview, (error) => error.code === 'SYNC_ROUTE_TIMEOUT');
+  assert.equal(committedHealth, 0);
+  assert.equal(notifications, 0);
 });

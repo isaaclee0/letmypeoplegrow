@@ -3,6 +3,10 @@ import { peopleSyncAPI } from '../../services/api';
 import Modal from '../Modal';
 import SyncReview from './SyncReview';
 import { peopleSyncErrorMessage, toPeopleSyncDisplayError } from './apiError';
+import {
+  cancelAuthorityPreviewUntilSuccess,
+  type AuthorityPreviewCancellation,
+} from './authorityPreviewCancellation';
 import type {
   PeopleSyncReview,
   PeopleSyncSelections,
@@ -54,24 +58,28 @@ export default function PeopleSourceControl({
   const errorRef = useRef<HTMLParagraphElement>(null);
   const previewGenerationRef = useRef(0);
   const activeReviewTokenRef = useRef<string | null>(null);
-  const ownedAuthorityPreviewRef = useRef<{
-    provider: SyncProvider;
-    authorityPreviewId: string;
-  } | null>(null);
+  const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
   const dialogWasOpen = useRef(false);
   const restoreSwitchOnDialogClose = useRef(true);
   const continueFocusPending = useRef(false);
+
+  const retireAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
+    const cancellation = cancelAuthorityPreviewUntilSuccess(preview);
+    void cancellation.then(() => {
+      if (ownedAuthorityPreviewRef.current?.provider === preview.provider
+        && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
+        ownedAuthorityPreviewRef.current = null;
+      }
+    });
+    return cancellation;
+  };
 
   useEffect(() => () => {
     previewGenerationRef.current += 1;
     activeReviewTokenRef.current = null;
     const ownedPreview = ownedAuthorityPreviewRef.current;
-    ownedAuthorityPreviewRef.current = null;
     if (ownedPreview) {
-      void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
-        ownedPreview.provider,
-        ownedPreview.authorityPreviewId,
-      )).catch(() => undefined);
+      void retireAuthorityPreview(ownedPreview);
     }
   }, []);
 
@@ -128,14 +136,10 @@ export default function PeopleSourceControl({
 
   const discardSupersededPreview = (discardedProvider: SyncProvider, discardedReview: PeopleSyncReview) => {
     if (!discardedReview.authorityPreviewId) return;
-    if (ownedAuthorityPreviewRef.current?.provider === discardedProvider
-      && ownedAuthorityPreviewRef.current.authorityPreviewId === discardedReview.authorityPreviewId) {
-      ownedAuthorityPreviewRef.current = null;
-    }
-    void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
-      discardedProvider,
-      discardedReview.authorityPreviewId,
-    )).catch(() => undefined);
+    void retireAuthorityPreview({
+      provider: discardedProvider,
+      authorityPreviewId: discardedReview.authorityPreviewId,
+    });
   };
 
   const preview = async (nextProvider: SyncProvider) => {
@@ -153,9 +157,16 @@ export default function PeopleSourceControl({
         return;
       }
       activeReviewTokenRef.current = response.data.reviewToken;
-      ownedAuthorityPreviewRef.current = response.data.authorityPreviewId
+      const nextOwnedPreview = response.data.authorityPreviewId
         ? { provider: nextProvider, authorityPreviewId: response.data.authorityPreviewId }
         : null;
+      const previousOwnedPreview = ownedAuthorityPreviewRef.current;
+      if (previousOwnedPreview && (!nextOwnedPreview
+        || previousOwnedPreview.provider !== nextOwnedPreview.provider
+        || previousOwnedPreview.authorityPreviewId !== nextOwnedPreview.authorityPreviewId)) {
+        void retireAuthorityPreview(previousOwnedPreview);
+      }
+      ownedAuthorityPreviewRef.current = nextOwnedPreview;
       setPendingReview(response.data);
       setState('reviewing');
     } catch (cause) {
@@ -267,18 +278,16 @@ export default function PeopleSourceControl({
       return;
     }
 
-    const ownedPreview = ownedAuthorityPreviewRef.current;
-    if (ownedPreview?.provider === providerToCancel
-      && ownedPreview.authorityPreviewId === reviewToCancel.authorityPreviewId) {
-      ownedAuthorityPreviewRef.current = null;
-    }
+    const previewToCancel = {
+      provider: providerToCancel,
+      authorityPreviewId: reviewToCancel.authorityPreviewId,
+    };
     setState('cancelling');
     try {
-      await peopleSyncAPI.cancelAuthorityPreview(providerToCancel, reviewToCancel.authorityPreviewId);
+      await retireAuthorityPreview(previewToCancel);
     } catch (cause) {
       if (generation !== previewGenerationRef.current) return;
       activeReviewTokenRef.current = reviewToCancel.reviewToken;
-      ownedAuthorityPreviewRef.current = ownedPreview;
       setError(peopleSyncErrorMessage(cause, 'Failed to cancel the authority change.'));
       setState('reviewing');
       return;

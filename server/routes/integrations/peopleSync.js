@@ -26,7 +26,7 @@ const { ensureChurchIsolation } = require('../../middleware/churchIsolation');
 const authority = require('../../services/peopleSync/authority');
 const orchestrator = require('../../services/peopleSync/orchestrator');
 const runRepository = require('../../services/peopleSync/runRepository');
-const { ElvantoError } = require('../../services/elvanto/httpClient');
+const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
 const { DEFAULT_ROUTE_TIMEOUT_MS, RouteTimeoutError, withTimeout } = require('./routeTimeout');
 
 const { OrchestratorError } = orchestrator;
@@ -44,7 +44,7 @@ const { OrchestratorError } = orchestrator;
 // (see services/peopleSync/pcoAdapter.js), so there is nothing analogous to
 // add for that provider yet.
 const ELVANTO_ERROR_STATUS = {
-  ELVANTO_AUTH: 401,
+  [ELVANTO_AUTH]: 401,
   ELVANTO_UNAVAILABLE: 503,
   ELVANTO_RESPONSE: 502,
   ELVANTO_PAGINATION: 502,
@@ -311,7 +311,7 @@ function respondWithError(res, err, logLabel) {
     return res.status(err.status || 400).json({ error: err.message, code: err.code });
   }
   if (err instanceof ElvantoError) {
-    if (err.code === 'ELVANTO_AUTH') {
+    if (err.code === ELVANTO_AUTH) {
       return res.status(401).json({ error: 'Elvanto rejected the stored API key. Reconnect Elvanto to continue.', code: err.code });
     }
     const status = ELVANTO_ERROR_STATUS[err.code] || 502;
@@ -382,6 +382,8 @@ function createPeopleSyncRouter(overrides = {}) {
     const authorityPreviewId = deps.createAuthorityPreviewId();
     const abortController = new AbortController();
     let cleanupPromise = null;
+    let responseFinished = false;
+    let lifecycleSettled = false;
     const cleanupPreview = () => {
       if (!cleanupPromise && RUN_PROVIDERS.includes(provider)) {
         cleanupPromise = Promise.resolve(
@@ -392,13 +394,30 @@ function createPeopleSyncRouter(overrides = {}) {
       }
       return cleanupPromise || Promise.resolve();
     };
+    const detachLifecycleListeners = () => {
+      req.removeListener('aborted', handleDisconnect);
+      res.removeListener('close', handleDisconnect);
+      res.removeListener('finish', handleResponseFinished);
+    };
+    const handleResponseFinished = () => {
+      if (lifecycleSettled) return;
+      responseFinished = true;
+      lifecycleSettled = true;
+      detachLifecycleListeners();
+    };
     const handleDisconnect = () => {
-      if (res.writableEnded) return;
+      // response.end()/res.json() flips writableEnded before Node has flushed
+      // the response. Ownership transfers only on `finish`; a close in that
+      // gap means the client never received the exact preview ID.
+      if (responseFinished || lifecycleSettled) return;
+      lifecycleSettled = true;
+      detachLifecycleListeners();
       abortController.abort();
       void cleanupPreview();
     };
     req.once('aborted', handleDisconnect);
     res.once('close', handleDisconnect);
+    res.once('finish', handleResponseFinished);
     try {
       // previewAuthoritySwitch forces a full paginated roster snapshot —
       // exactly the "many sequential network calls in one request" shape
@@ -425,8 +444,10 @@ function createPeopleSyncRouter(overrides = {}) {
       if (req.aborted || res.destroyed) return;
       respondWithError(res, err, 'people-sync POST /people-authority/preview');
     } finally {
-      req.removeListener('aborted', handleDisconnect);
-      res.removeListener('close', handleDisconnect);
+      // Do not detach merely because the async route handler returned:
+      // res.json() can have ended the writable side while the socket still
+      // has not flushed. The finish/close event owns final cleanup.
+      if (req.aborted || res.destroyed) handleDisconnect();
     }
   });
 

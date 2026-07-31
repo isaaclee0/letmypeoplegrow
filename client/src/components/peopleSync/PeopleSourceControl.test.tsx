@@ -430,6 +430,48 @@ describe('PeopleSourceControl', () => {
     ));
   });
 
+  it('retries the same exact owned preview after unmount cancellation fails', async () => {
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReset();
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockRejectedValueOnce(new Error('temporary cancellation outage'))
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    const { unmount } = render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    unmount();
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mock.calls).toEqual([
+      ['elvanto', 'authority-preview-1'],
+      ['elvanto', 'authority-preview-1'],
+    ]);
+  });
+
+  it('keeps retrying an explicit exact cancel after unmount without restoring its old generation', async () => {
+    let rejectFirstCancel!: (error: Error) => void;
+    vi.mocked(peopleSyncAPI.previewAuthority).mockResolvedValue({ data: { success: true, ...review } });
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mockReset();
+    vi.mocked(peopleSyncAPI.cancelAuthorityPreview)
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirstCancel = reject; }))
+      .mockResolvedValueOnce({ data: { success: true, authority: { active: 'none', pending: null } } });
+    const { unmount } = render(<Harness initialAuthority="none" />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
+    expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel authority change' }));
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => rejectFirstCancel(new Error('temporary cancellation outage')));
+
+    await waitFor(() => expect(peopleSyncAPI.cancelAuthorityPreview).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(peopleSyncAPI.cancelAuthorityPreview).mock.calls).toEqual([
+      ['elvanto', 'authority-preview-1'],
+      ['elvanto', 'authority-preview-1'],
+    ]);
+  });
+
   it('exact-cancels a preview that resolves after the control unmounts', async () => {
     let resolvePreview!: (value: { data: { success: true } & PeopleSyncReview }) => void;
     vi.mocked(peopleSyncAPI.previewAuthority).mockImplementation(() => new Promise((resolve) => {

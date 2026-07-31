@@ -131,6 +131,25 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+async function replaceElvantoConnectionGeneration(churchId, generation, apiKey) {
+  return Database.transactionForChurch(churchId, async (conn) => {
+    await connectionStore.upsertConnection({
+      churchId,
+      provider: 'elvanto',
+      authType: 'api_key',
+      credentials: { apiKey },
+      connectedBy: null,
+      metadata: {},
+    });
+    await conn.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', ?)
+       ON CONFLICT(church_id, provider) DO UPDATE SET generation = excluded.generation`,
+      [churchId, generation]
+    );
+  });
+}
+
 test('unattended sync requires reviewed source intent before run creation, then accepts a reviewed empty source', async () => {
   await withTestChurchDb(async (churchId) => {
     scenarios = new Map([['members', snapshot(source('members', 'Members'))]]);
@@ -554,6 +573,64 @@ test('reviewed apply rejects an active-source generation promoted during the pro
     assert.equal(await countPeople(churchId), 0);
     const reloaded = await batchRepository.getBatch(churchId, 'elvanto', batch.id);
     assert.equal(reloaded.source.externalId, 'members-new');
+  });
+});
+
+test('reviewed apply rejects an Elvanto account replacement during its provider read', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await replaceElvantoConnectionGeneration(churchId, 4, 'old-account-key');
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const current = snapshot(selected, { people: [person('late-person')], memberExternalIds: ['late-person'] });
+    scenarios = new Map([['members', current]]);
+    const review = await orchestrator.buildReview({
+      churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
+    });
+
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios.set('members', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return current;
+    });
+    const applying = orchestrator.applyReviewed({
+      churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+    });
+    await fetchEntered.promise;
+    await replaceElvantoConnectionGeneration(churchId, 5, 'replacement-account-key');
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    assert.equal(await countPeople(churchId), 0);
+  });
+});
+
+test('unattended apply rejects an Elvanto account replacement during its provider read', async () => {
+  await withTestChurchDb(async (churchId) => {
+    await seedConnection(churchId);
+    await replaceElvantoConnectionGeneration(churchId, 11, 'old-account-key');
+    await setAuthority(churchId);
+    const selected = source('members', 'Members');
+    const batch = await reviewedBatch(churchId, selected);
+    const current = snapshot(selected, { people: [person('late-person')], memberExternalIds: ['late-person'] });
+    const fetchEntered = deferred();
+    const releaseFetch = deferred();
+    scenarios = new Map([['members', async () => {
+      fetchEntered.resolve();
+      await releaseFetch.promise;
+      return current;
+    }]]);
+
+    const applying = orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
+    await fetchEntered.promise;
+    await replaceElvantoConnectionGeneration(churchId, 12, 'replacement-account-key');
+    releaseFetch.resolve();
+
+    await assert.rejects(applying, (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409);
+    assert.equal(await countPeople(churchId), 0);
   });
 });
 

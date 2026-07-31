@@ -3,6 +3,10 @@ import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '.
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
 import type { PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
+import {
+  cancelAuthorityPreviewUntilSuccess,
+  type AuthorityPreviewCancellation,
+} from '../peopleSync/authorityPreviewCancellation';
 
 export type ElvantoOnboardingStep = 'elvanto-connect' | 'elvanto-batch' | 'elvanto-review' | 'elvanto-authority';
 
@@ -40,30 +44,27 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
   const [error, setError] = useState<string | null>(null);
   const authorityPreviewGenerationRef = useRef(0);
   const activeAuthorityReviewTokenRef = useRef<string | null>(null);
-  const ownedAuthorityPreviewRef = useRef<{ provider: 'elvanto'; authorityPreviewId: string } | null>(null);
+  const ownedAuthorityPreviewRef = useRef<AuthorityPreviewCancellation | null>(null);
+
+  const cancelExactAuthorityPreview = (preview: AuthorityPreviewCancellation) => {
+    const cancellation = cancelAuthorityPreviewUntilSuccess(preview);
+    void cancellation.then(() => {
+      if (ownedAuthorityPreviewRef.current?.provider === preview.provider
+        && ownedAuthorityPreviewRef.current.authorityPreviewId === preview.authorityPreviewId) {
+        ownedAuthorityPreviewRef.current = null;
+      }
+    });
+    return cancellation;
+  };
 
   useEffect(() => () => {
     authorityPreviewGenerationRef.current += 1;
     activeAuthorityReviewTokenRef.current = null;
     const ownedPreview = ownedAuthorityPreviewRef.current;
-    ownedAuthorityPreviewRef.current = null;
     if (ownedPreview) {
-      void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
-        ownedPreview.provider,
-        ownedPreview.authorityPreviewId,
-      )).catch(() => undefined);
+      void cancelExactAuthorityPreview(ownedPreview);
     }
   }, []);
-
-  const cancelExactAuthorityPreview = (preview: { provider: 'elvanto'; authorityPreviewId: string }) => {
-    if (ownedAuthorityPreviewRef.current?.authorityPreviewId === preview.authorityPreviewId) {
-      ownedAuthorityPreviewRef.current = null;
-    }
-    void Promise.resolve(peopleSyncAPI.cancelAuthorityPreview(
-      preview.provider,
-      preview.authorityPreviewId,
-    )).catch(() => undefined);
-  };
 
   const discardAuthorityPreviewResponse = (discardedReview: PeopleSyncReview) => {
     if (!discardedReview.authorityPreviewId) return;
@@ -241,15 +242,10 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
       return;
     }
 
-    ownedAuthorityPreviewRef.current = null;
     try {
-      await peopleSyncAPI.cancelAuthorityPreview(
-        previewToCancel.provider,
-        previewToCancel.authorityPreviewId,
-      );
+      await cancelExactAuthorityPreview(previewToCancel);
     } catch (cause) {
       if (generation !== authorityPreviewGenerationRef.current) return;
-      ownedAuthorityPreviewRef.current = previewToCancel;
       activeAuthorityReviewTokenRef.current = reviewToken;
       setError(errorMessage(cause, 'Failed to cancel the Elvanto authority review.'));
       return;

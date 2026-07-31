@@ -62,48 +62,87 @@ async function write(conn, sql, params) {
   return conn.prepare(sql).run(...params);
 }
 
-async function recordActiveSourceAvailable({ churchId, provider, batchId, expectedSource, observedSource, checkedAt }) {
-  const expected = normalizeSource(provider, expectedSource);
-  const observed = normalizeSource(provider, observedSource);
-  if (!sameIdentity(expected, observed)) throw invalidHealthUpdate();
-  const time = checkedTime(checkedAt);
-
-  return Database.transactionForChurch(churchId, async (conn) => {
-    const result = await recordActiveSourceHealthWithConnection(conn, {
-      churchId, provider, batchId, expectedSource: expected, sourceName: observed.name,
-      sourceStatus: 'available', checkedAt: time, errorCode: null,
-    });
-    return { updated: result.updated, notified: false, adminCount: 0 };
-  });
+function assertPreviewActive(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error('The authority preview was cancelled before source health could be committed.');
+  error.code = 'SYNC_ROUTE_TIMEOUT';
+  error.status = 503;
+  throw error;
 }
 
-async function recordActiveSourceFailure({ churchId, provider, batchId, expectedSource, code, checkedAt }) {
-  const expected = normalizeSource(provider, expectedSource);
-  const time = checkedTime(checkedAt);
-  const errorCode = safeFailureCode(code);
-  const sourceStatus = errorCode === 'SYNC_SOURCE_UNAVAILABLE' ? 'missing' : 'error';
+function createSourceHealth(overrides = {}) {
+  const transactionForChurch = overrides.transactionForChurch ||
+    ((churchId, callback) => Database.transactionForChurch(churchId, callback));
+  const recordHealth = overrides.recordActiveSourceHealthWithConnection ||
+    recordActiveSourceHealthWithConnection;
 
-  return Database.transactionForChurch(churchId, async (conn) => {
-    const result = await recordActiveSourceHealthWithConnection(conn, {
-      churchId, provider, batchId, expectedSource: expected, sourceName: null,
-      sourceStatus, checkedAt: time, errorCode,
+  async function recordActiveSourceAvailable({
+    churchId, provider, batchId, expectedSource, observedSource, checkedAt, signal = null,
+  }) {
+    const expected = normalizeSource(provider, expectedSource);
+    const observed = normalizeSource(provider, observedSource);
+    if (!sameIdentity(expected, observed)) throw invalidHealthUpdate();
+    const time = checkedTime(checkedAt);
+
+    return transactionForChurch(churchId, async (conn) => {
+      // The first check runs only after transactionForChurch acquires its
+      // church lock. Every later check is still inside this transaction, so
+      // an abort while a write is awaited throws before COMMIT and rolls back.
+      assertPreviewActive(signal);
+      const result = await recordHealth(conn, {
+        churchId, provider, batchId, expectedSource: expected, sourceName: observed.name,
+        sourceStatus: 'available', checkedAt: time, errorCode: null,
+      });
+      assertPreviewActive(signal);
+      const response = { updated: result.updated, notified: false, adminCount: 0 };
+      assertPreviewActive(signal);
+      return response;
     });
-    if (!result.updated || sourceStatus !== 'missing' || result.priorSourceStatus === 'missing') {
-      return { updated: result.updated, notified: false, adminCount: 0 };
-    }
+  }
 
-    const admins = await query(conn,
-      `SELECT id FROM users WHERE church_id = ? AND role = 'admin' AND is_active = 1`, [churchId]);
-    const notice = missingNotification(provider, result.sourceName, result.batchName);
-    for (const admin of admins) {
-      await write(conn, `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
-        VALUES (?, ?, ?, 'system', ?)`, [admin.id, notice.title, notice.message, churchId]);
-    }
-    return { updated: true, notified: true, adminCount: admins.length };
-  });
+  async function recordActiveSourceFailure({
+    churchId, provider, batchId, expectedSource, code, checkedAt, signal = null,
+  }) {
+    const expected = normalizeSource(provider, expectedSource);
+    const time = checkedTime(checkedAt);
+    const errorCode = safeFailureCode(code);
+    const sourceStatus = errorCode === 'SYNC_SOURCE_UNAVAILABLE' ? 'missing' : 'error';
+
+    return transactionForChurch(churchId, async (conn) => {
+      assertPreviewActive(signal);
+      const result = await recordHealth(conn, {
+        churchId, provider, batchId, expectedSource: expected, sourceName: null,
+        sourceStatus, checkedAt: time, errorCode,
+      });
+      assertPreviewActive(signal);
+      if (!result.updated || sourceStatus !== 'missing' || result.priorSourceStatus === 'missing') {
+        const response = { updated: result.updated, notified: false, adminCount: 0 };
+        assertPreviewActive(signal);
+        return response;
+      }
+
+      const admins = await query(conn,
+        `SELECT id FROM users WHERE church_id = ? AND role = 'admin' AND is_active = 1`, [churchId]);
+      assertPreviewActive(signal);
+      const notice = missingNotification(provider, result.sourceName, result.batchName);
+      for (const admin of admins) {
+        assertPreviewActive(signal);
+        await write(conn, `INSERT INTO notifications (user_id, title, message, notification_type, church_id)
+          VALUES (?, ?, ?, 'system', ?)`, [admin.id, notice.title, notice.message, churchId]);
+        assertPreviewActive(signal);
+      }
+      const response = { updated: true, notified: true, adminCount: admins.length };
+      assertPreviewActive(signal);
+      return response;
+    });
+  }
+
+  return { recordActiveSourceAvailable, recordActiveSourceFailure };
 }
+
+const sourceHealth = createSourceHealth();
 
 module.exports = {
-  recordActiveSourceAvailable,
-  recordActiveSourceFailure,
+  ...sourceHealth,
+  createSourceHealth,
 };

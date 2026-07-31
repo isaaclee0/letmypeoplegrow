@@ -6,10 +6,11 @@ const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
 const {
   createBatch, getBatch, saveSourceDraft, promoteSourceDraftWithConnection,
+  recordActiveSourceHealthWithConnection,
 } = require('./batchRepository');
 const { digestSourceIdentity } = require('./sourceModel');
 const {
-  recordActiveSourceAvailable, recordActiveSourceFailure,
+  recordActiveSourceAvailable, recordActiveSourceFailure, createSourceHealth,
 } = require('./sourceHealth');
 
 const ACTIVE_SOURCE = { kind: 'planning_center_list', externalId: 'list-secret-42', name: 'Sunday Attendance' };
@@ -65,6 +66,16 @@ async function notificationsFor(churchId, userId) {
      WHERE church_id = ? AND user_id = ? ORDER BY id`,
     [churchId, userId]
   );
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 test('a successful modern Planning Center List refreshes the derived batch name and health metadata without changing revision', async () => {
@@ -148,6 +159,71 @@ test('a missing active source notifies exactly active admins once and never expo
     assert.equal((await notificationsFor(churchId, coordinator)).length, 0);
     assert.equal((await notificationsFor(churchId, inactiveAdmin)).length, 0);
     assert.equal(notices[0].message.includes(ACTIVE_SOURCE.externalId), false);
+  });
+});
+
+test('an aborted preview waiting for the church transaction lock cannot commit available health', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await seedActiveBatch(churchId);
+    const lockEntered = deferred();
+    const releaseLock = deferred();
+    const lock = Database.transactionForChurch(churchId, async () => {
+      lockEntered.resolve();
+      await releaseLock.promise;
+    });
+    await lockEntered.promise;
+
+    const controller = new AbortController();
+    const update = recordActiveSourceAvailable({
+      churchId,
+      provider: 'planning_center',
+      batchId: batch.id,
+      expectedSource: ACTIVE_SOURCE,
+      observedSource: ACTIVE_SOURCE,
+      checkedAt: '2026-07-29T01:00:00.000Z',
+      signal: controller.signal,
+    });
+    controller.abort();
+    releaseLock.resolve();
+    await lock;
+
+    await assert.rejects(update, (error) => error?.code === 'SYNC_ROUTE_TIMEOUT');
+    assert.equal((await getBatch(churchId, 'planning_center', batch.id)).sourceStatus, 'unknown');
+  });
+});
+
+test('an abort inside missing-health persistence rolls back both health and admin notifications', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const batch = await seedActiveBatch(churchId);
+    const adminId = await seedUser(churchId, { label: 'aborted-health-admin' });
+    const healthWritten = deferred();
+    const releaseHealth = deferred();
+    const cancellableHealth = createSourceHealth({
+      recordActiveSourceHealthWithConnection: async (conn, input) => {
+        const result = await recordActiveSourceHealthWithConnection(conn, input);
+        healthWritten.resolve();
+        await releaseHealth.promise;
+        return result;
+      },
+    });
+    const controller = new AbortController();
+
+    const update = cancellableHealth.recordActiveSourceFailure({
+      churchId,
+      provider: 'planning_center',
+      batchId: batch.id,
+      expectedSource: ACTIVE_SOURCE,
+      code: 'SYNC_SOURCE_UNAVAILABLE',
+      checkedAt: '2026-07-29T01:00:00.000Z',
+      signal: controller.signal,
+    });
+    await healthWritten.promise;
+    controller.abort();
+    releaseHealth.resolve();
+
+    await assert.rejects(update, (error) => error?.code === 'SYNC_ROUTE_TIMEOUT');
+    assert.equal((await getBatch(churchId, 'planning_center', batch.id)).sourceStatus, 'unknown');
+    assert.deepEqual(await notificationsFor(churchId, adminId), []);
   });
 });
 

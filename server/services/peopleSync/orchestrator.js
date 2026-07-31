@@ -168,6 +168,7 @@ async function defaultGetSyncSettings(churchId) {
 
 const defaultDeps = {
   getConnection: connectionStore.getConnection,
+  getConnectionGeneration: connectionStore.getConnectionGeneration,
   getCredentials: connectionStore.getCredentials,
   listBatches: batchRepository.listBatches,
   getSyncSettings: defaultGetSyncSettings,
@@ -214,10 +215,11 @@ function effectiveReviewBatches(batches, batchId) {
   });
 }
 
-function reviewedSourceContext(batches, batchId, sourceProvenance) {
+function reviewedSourceContext(batches, batchId, sourceProvenance, connectionGeneration) {
   const batch = batchId === null || batchId === undefined ? null
     : batches.find((candidate) => String(candidate.id) === String(batchId));
   return {
+    connectionGeneration,
     activeRevision: batch ? batch.sourceRevision : null,
     draftDigest: batch?.draftSource ? digestSourceIdentity(batch.draftSource) : null,
     snapshots: sourceProvenance.map(({ batchId: sourceBatchId, sourceKind, sourceExternalId, snapshotDigest }) => {
@@ -466,6 +468,12 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   if (connection.connectionStatus === 'invalid') {
     throw new OrchestratorError('SYNC_CONNECTION_INVALID', `The ${provider} connection is marked invalid`, 400);
   }
+  // This durable generation must be observed before credentials. If a
+  // reconnect lands between the reads, the older generation is retained and
+  // the apply-time CAS fails closed instead of pairing old/new account state.
+  const connectionGeneration = provider === 'elvanto'
+    ? await deps.getConnectionGeneration(churchId, provider)
+    : null;
   const credentials = await deps.getCredentials(churchId, provider);
   if (!credentials) throw new OrchestratorError('SYNC_NOT_CONNECTED', `No ${provider} credentials for this church`, 400);
 
@@ -482,7 +490,7 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const settings = await deps.getSyncSettings(churchId);
   const authorityState = await deps.getAuthority(churchId);
 
-  return { connection, credentials, adapter, batches, settings, authorityState };
+  return { connection, connectionGeneration, credentials, adapter, batches, settings, authorityState };
 }
 
 // ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
@@ -529,7 +537,9 @@ function snapshotDigestInput(snapshot) {
 async function recordSourceFailureSafely(deps, input) {
   try {
     await deps.recordActiveSourceFailure(input);
+    assertAuthorityPreviewActive(input.signal);
   } catch (healthError) {
+    assertAuthorityPreviewActive(input.signal);
     logger.error(`peopleSync orchestrator: failed to record source health for church ${input.churchId} batch ${input.batchId}: ${healthError.message}`);
   }
 }
@@ -654,6 +664,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         await deps.recordActiveSourceAvailable({
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           observedSource: sourceSnapshot.source, checkedAt: sourceSnapshot.fetchedAt,
+          signal,
         });
       }
     } catch (error) {
@@ -667,6 +678,7 @@ async function acquireSourceSet({ churchId, provider, batches, settings, credent
         await recordSourceFailureSafely(deps, {
           churchId, provider, batchId: batch.id, expectedSource: batch.source,
           code: failure.code, checkedAt: new Date().toISOString(),
+          signal,
         });
       }
       throw failure;
@@ -819,7 +831,9 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
-    body.plan.sourceContext = reviewedSourceContext(pre.batches, batchId, body.sourceProvenance);
+    body.plan.sourceContext = reviewedSourceContext(
+      pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+    );
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
       churchId, provider, batchId, planDigest, expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
@@ -908,7 +922,9 @@ async function previewAuthoritySwitch({
     });
     assertAuthorityPreviewActive(signal);
 
-    body.plan.sourceContext = reviewedSourceContext(pre.batches, null, body.sourceProvenance);
+    body.plan.sourceContext = reviewedSourceContext(
+      pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+    );
     if (stagedThisPreview) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const reviewToken = deps.createReviewToken({
@@ -1024,7 +1040,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
-    body.plan.sourceContext = reviewedSourceContext(pre.batches, batchId, body.sourceProvenance);
+    body.plan.sourceContext = reviewedSourceContext(
+      pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
+    );
     if (isAuthoritySwitch && authorityPreviewId) body.plan.authorityPreviewId = authorityPreviewId;
     const planDigest = deps.digestPlan(body.plan);
     const verification = deps.verifyReviewToken(reviewToken, { churchId, provider, batchId, planDigest });
@@ -1057,6 +1075,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
       } : null,
       authorityExpectation,
       sourceExpectations,
+      connectionExpectation: pre.connectionGeneration === null
+        ? null
+        : { generation: pre.connectionGeneration },
       requireConnection: true,
     });
   } catch (err) {
@@ -1173,12 +1194,20 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
       credentials: pre.credentials, adapter: pre.adapter, deps,
     });
 
+    body.plan.sourceContext = reviewedSourceContext(
+      pre.batches, null, body.sourceProvenance, pre.connectionGeneration
+    );
+
     // 8. apply safe unattended actions (no selections — ambiguous/conflict/
     // rename/unmatched-local buckets are never mutated by apply.js off an
     // empty selection set regardless).
     applyResult = await deps.applyPeopleSyncPlan({
       churchId, provider, plan: body.plan, selections: {}, userId: null,
-      authorityExpectation, sourceExpectations, requireConnection: true,
+      authorityExpectation, sourceExpectations,
+      connectionExpectation: pre.connectionGeneration === null
+        ? null
+        : { generation: pre.connectionGeneration },
+      requireConnection: true,
     });
   } catch (err) {
     await safeFailRun(deps, { churchId, provider, runId: run.id, error: err });

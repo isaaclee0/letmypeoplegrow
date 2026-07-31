@@ -397,6 +397,69 @@ test('an apply transaction rejects an old active-source generation after concurr
   });
 });
 
+test('an apply transaction rejects an Elvanto credential generation replaced during provider fetch', async () => {
+  // Catches an old-account roster being applied merely because a different,
+  // newly connected Elvanto account is usable by commit time.
+  await withTestChurchDb(async (churchId) => {
+    const individualId = await seedIndividual(churchId);
+    await seedConnectionRow(churchId, 'elvanto');
+    await Database.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', 8)`,
+      [churchId]
+    );
+    const plan = emptyPlan({
+      archive: [{ id: 'archive:old-account', externalPersonId: 'ext-1', individualId, reason: 'provider_state_archived' }],
+    });
+
+    await Database.query(
+      `UPDATE integration_connection_generations
+          SET generation = 9
+        WHERE church_id = ? AND provider = 'elvanto'`,
+      [churchId]
+    );
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId,
+        provider: 'elvanto',
+        plan,
+        connectionExpectation: { generation: 8 },
+        requireConnection: true,
+      }),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+
+    const [individual] = await Database.query(
+      'SELECT is_active FROM individuals WHERE church_id = ? AND id = ?', [churchId, individualId]
+    );
+    assert.equal(individual.is_active, 1);
+  });
+});
+
+test('an apply rejects a connection expectation that diverges from the signed plan context', async () => {
+  // The apply-time CAS must consume the same generation that the reviewer
+  // signed, not a parallel caller-supplied value that could drift from it.
+  await withTestChurchDb(async (churchId) => {
+    await seedConnectionRow(churchId, 'elvanto');
+    await Database.query(
+      `INSERT INTO integration_connection_generations (church_id, provider, generation)
+       VALUES (?, 'elvanto', 9)`,
+      [churchId]
+    );
+
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId,
+        provider: 'elvanto',
+        plan: emptyPlan({ sourceContext: { connectionGeneration: 8 } }),
+        connectionExpectation: { generation: 9 },
+        requireConnection: true,
+      }),
+      (error) => error?.code === 'SYNC_PLAN_STALE' && error?.status === 409
+    );
+  });
+});
+
 test('managed field updates ignore an isChild change whose externalValue is null', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId, { firstName: 'Old' });
