@@ -2,8 +2,8 @@
 // people-sync project). This is the ONE place that composes every prior
 // task into a single fetch -> match -> plan -> review/apply -> audit
 // pipeline: routes (Task 16) must call buildReview/applyReviewed/
-// runUnattended/previewAuthoritySwitch exclusively and must never call an
-// adapter, matcher, plan, or apply module directly.
+// runUnattended/previewAuthoritySwitch/previewLinkCorrections exclusively and
+// must never call an adapter, matcher, plan, or apply module directly.
 //
 // ─── The 10-step pipeline ───────────────────────────────────────────────────
 //
@@ -39,7 +39,8 @@
 // `personLinks` this module passes in — this module does not re-derive
 // that counting logic, it only decides WHEN the durable counters in
 // external_person_links get written via linkRepository.recordFullFetchPresence:
-//   - buildReview/previewAuthoritySwitch (pure previews): NEVER call it.
+//   - buildReview/previewAuthoritySwitch/previewLinkCorrections (pure
+//     previews): NEVER call it.
 //   - applyReviewed: calls it exactly once, AFTER applyPeopleSyncPlan's
 //     transaction has committed, using the fresh full snapshot it just
 //     fetched for verification. A stale-plan re-fetch inside a retried
@@ -988,6 +989,60 @@ async function buildReview({
   }
 }
 
+// Rebuilds the unsigned base and corrected projections from one acquired
+// provider/local snapshot. The base token must still describe that snapshot
+// before any submitted correction is validated or signed. Unlike buildReview,
+// this interactive edit preview deliberately creates no audit run.
+async function previewLinkCorrections({
+  churchId, provider, batchId, baseReviewToken, linkCorrections,
+} = {}, overrides = {}) {
+  const deps = mergeDeps(overrides);
+  assertChurchId(churchId);
+  assertProvider(provider);
+
+  const pre = await loadPreconditions({ churchId, provider, batchId, deps });
+  const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
+    churchId, provider, batchId, trigger: 'manual', mode: 'full', watermark: undefined,
+  }));
+  const sourceContext = reviewedSourceContext(
+    provider, pre.batches, batchId, acquired.sourceProvenance, pre.connectionGeneration
+  );
+
+  const base = computePipelineProjection(acquired, { linkCorrections: {} });
+  base.plan.sourceContext = sourceContext;
+  const baseDigest = deps.digestPlan(base.plan);
+  const baseVerification = deps.verifyReviewToken(baseReviewToken, {
+    churchId, provider, batchId, planDigest: baseDigest,
+  });
+  if (!baseVerification.ok) {
+    throw new OrchestratorError(
+      baseVerification.code,
+      reviewTokenErrorMessage(baseVerification.code),
+      reviewTokenErrorStatus(baseVerification.code)
+    );
+  }
+
+  const corrected = computePipelineProjection(acquired, { linkCorrections });
+  corrected.plan.sourceContext = sourceContext;
+  const correctedDigest = deps.digestPlan(corrected.plan);
+  const reviewToken = deps.createReviewToken({
+    churchId, provider, batchId, planDigest: correctedDigest,
+    expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
+  });
+
+  return {
+    reviewToken,
+    decisionContractVersion: DECISION_CONTRACT_VERSION,
+    summary: summarizePlan(corrected.plan),
+    coverage: reviewCoverage(corrected.matcherResult, corrected.individuals),
+    plan: sanitizePlanForReview(
+      corrected.plan, corrected.externalPeople, corrected.individuals,
+      corrected.snapshot.families, corrected.families
+    ),
+    snapshot: { fetchedAt: corrected.plan.snapshot.fetchedAt, mode: corrected.plan.snapshot.mode },
+  };
+}
+
 // ─── previewAuthoritySwitch ──────────────────────────────────────────────────
 //
 // Stages the switch (beginAuthoritySwitch sets pending_authority_provider)
@@ -1128,6 +1183,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   if (typeof reviewToken !== 'string' || reviewToken.length === 0) {
     throw new OrchestratorError('SYNC_REVIEW_INVALID', 'A review token is required', 400);
   }
+  const linkCorrections = selections.linkCorrections || {};
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
@@ -1168,7 +1224,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
       batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
-    }));
+    }), { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
@@ -1389,6 +1445,7 @@ module.exports = {
   applyReviewed,
   runUnattended,
   previewAuthoritySwitch,
+  previewLinkCorrections,
   sanitizePlanForReview,
   reviewCoverage,
   // Exported for orchestrator.test.js's dependency-injected unit tests.
