@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { desiredPeopleType } = require('./plan');
+const { canonicalLinkCorrections } = require('./linkCorrections');
 
 const DECISION_CONTRACT_VERSION = 2;
 
@@ -112,10 +113,27 @@ function createPerson(externalPerson, qualifyingBatches) {
   };
 }
 
+function establishedLinksForSource(personLinks, sourceExternalIds) {
+  const sourceIds = sourceExternalIds instanceof Set
+    ? sourceExternalIds
+    : new Set(sourceExternalIds || []);
+  return Object.fromEntries((personLinks || [])
+    .map((link) => [externalId(link?.externalPersonId), individualId(link?.individualId)])
+    .filter(([personId, localId]) => personId !== null && localId !== null && sourceIds.has(personId))
+    .sort(([left], [right]) => compareText(left, right))
+    .map(([personId, localId]) => [personId, { individualId: localId }]));
+}
+
 function buildReviewContext(input = {}) {
+  const basePersonLinks = input.basePersonLinks ?? input.personLinks ?? [];
+  const projectedPersonLinks = input.projectedPersonLinks ?? basePersonLinks;
+  const baseExclusions = input.baseExclusions ?? input.exclusions ?? [];
+  const projectedExclusions = input.projectedExclusions ?? baseExclusions;
+  const baseHolds = input.baseHolds ?? input.holds ?? [];
+  const projectedHolds = input.projectedHolds ?? baseHolds;
   const externalPeople = byExternalId(input.externalPeople);
-  const excluded = excludedByExternalId(input.exclusions);
-  const held = heldExternalIds(input.holds);
+  const excluded = excludedByExternalId(projectedExclusions);
+  const held = heldExternalIds(projectedHolds);
   const identities = {};
   for (const id of reviewableExternalIds(input.plan)) {
     const candidates = actionCandidates(input.plan, id);
@@ -130,14 +148,18 @@ function buildReviewContext(input = {}) {
   }
   return {
     version: DECISION_CONTRACT_VERSION,
-    manualCandidateIndividualIds: eligibleManualIds(input.localPeople, input.personLinks),
+    correctionContractVersion: 1,
+    manualCandidateIndividualIds: eligibleManualIds(input.localPeople, projectedPersonLinks),
     localIdentityDigest: buildLocalIdentityDigest({
       localPeople: input.localPeople,
       localFamilies: input.localFamilies,
-      personLinks: input.personLinks,
-      exclusions: input.exclusions,
-      holds: input.holds,
+      personLinks: basePersonLinks,
+      exclusions: baseExclusions,
+      holds: baseHolds,
     }),
+    establishedLinks: establishedLinksForSource(basePersonLinks, input.sourceExternalIds),
+    projectedEstablishedLinks: establishedLinksForSource(projectedPersonLinks, input.sourceExternalIds),
+    linkCorrections: canonicalLinkCorrections(input.linkCorrections),
     identities,
   };
 }

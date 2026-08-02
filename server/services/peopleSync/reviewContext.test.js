@@ -5,6 +5,69 @@ const assert = require('node:assert/strict');
 
 const { buildReviewContext, buildReviewDirectory } = require('./reviewContext');
 
+test('signs source-visible established links while eligibility uses the projected mapping', () => {
+  const context = buildReviewContext({
+    plan: { linkPeople: [], ambiguousPeople: [], addPeople: [] },
+    externalPeople: [{ id: 'ext-a', firstName: 'External', lastName: 'Person', state: 'active' }],
+    localPeople: [{ id: 10 }, { id: 20 }],
+    basePersonLinks: [{ externalPersonId: 'ext-a', individualId: 10, missingFullSyncCount: 0 }],
+    projectedPersonLinks: [{ externalPersonId: 'ext-a', individualId: 20, missingFullSyncCount: 0 }],
+    sourceExternalIds: new Set(['ext-a']),
+    linkCorrections: { 'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 } },
+  });
+
+  assert.deepEqual(context.establishedLinks, { 'ext-a': { individualId: 10 } });
+  assert.deepEqual(context.projectedEstablishedLinks, { 'ext-a': { individualId: 20 } });
+  assert.equal(context.manualCandidateIndividualIds.includes(10), true);
+  assert.equal(context.manualCandidateIndividualIds.includes(20), false);
+  assert.equal(context.correctionContractVersion, 1);
+});
+
+test('keeps the signed digest on base state and canonicalizes correction keys', () => {
+  const shared = {
+    plan: { linkPeople: [], ambiguousPeople: [], addPeople: [] },
+    localPeople: [{ id: 10 }, { id: 20 }, { id: 30 }],
+    basePersonLinks: [
+      { externalPersonId: 'ext-a', individualId: 10, missingFullSyncCount: 0 },
+      { externalPersonId: 'outside-source', individualId: 30, missingFullSyncCount: 0 },
+    ],
+    baseExclusions: [{ externalPersonId: 'ext-a', individualId: 20 }],
+    baseHolds: [{ externalPersonId: 'ext-a', reason: 'deferred' }],
+    sourceExternalIds: new Set(['ext-a', 'ext-z']),
+  };
+  const baseline = buildReviewContext({
+    ...shared,
+    projectedPersonLinks: shared.basePersonLinks,
+    projectedExclusions: shared.baseExclusions,
+    projectedHolds: shared.baseHolds,
+  });
+  const corrected = buildReviewContext({
+    ...shared,
+    projectedPersonLinks: [
+      { externalPersonId: 'ext-a', individualId: 20, missingFullSyncCount: 0 },
+      shared.basePersonLinks[1],
+    ],
+    projectedExclusions: [
+      ...shared.baseExclusions,
+      { externalPersonId: 'ext-a', individualId: 10 },
+    ],
+    projectedHolds: [],
+    linkCorrections: {
+      'ext-z': { outcome: 'unlink', fromIndividualId: 30 },
+      'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 },
+    },
+  });
+
+  assert.equal(corrected.localIdentityDigest, baseline.localIdentityDigest);
+  assert.deepEqual(corrected.linkCorrections, [
+    { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'relink', individualId: 20 },
+    { externalPersonId: 'ext-z', fromIndividualId: 30, outcome: 'unlink' },
+  ]);
+  assert.deepEqual(corrected.establishedLinks, { 'ext-a': { individualId: 10 } });
+  assert.equal(corrected.manualCandidateIndividualIds.includes(30), false,
+    'an out-of-source durable link still reserves its local individual');
+});
+
 test('signs every reviewable identity with deterministic selections and fresh create data', () => {
   const context = buildReviewContext({
     plan: {
@@ -31,7 +94,11 @@ test('signs every reviewable identity with deterministic selections and fresh cr
   assert.match(localIdentityDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(reviewContract, {
     version: 2,
+    correctionContractVersion: 1,
     manualCandidateIndividualIds: [7, 8, 9],
+    establishedLinks: {},
+    projectedEstablishedLinks: {},
+    linkCorrections: [],
     identities: {
       'ext-1': {
         suggestedIndividualId: 7,

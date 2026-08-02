@@ -64,6 +64,17 @@ function person(id, overrides = {}) {
   };
 }
 
+function localPerson(id, firstName, lastName, overrides = {}) {
+  return {
+    id, firstName, lastName, peopleType: 'regular', familyId: null,
+    isChild: false, isActive: true, ...overrides,
+  };
+}
+
+function personLink(externalPersonId, individualId, overrides = {}) {
+  return { externalPersonId, individualId, missingFullSyncCount: 0, linkSource: 'matched', ...overrides };
+}
+
 function sourceSnapshot(selectedSource, overrides = {}) {
   const people = overrides.people || [person(`${selectedSource.externalId}-person`)];
   return {
@@ -150,6 +161,117 @@ function makeDeps({
   };
   return { deps, events, finished, failed, applied, presence, availableHealth, failedHealth, plans };
 }
+
+test('a relink projection manages the new local person from one provider read without clearing null fields', async () => {
+  const providerReads = [];
+  const external = person('ext-a', { firstName: null, lastName: 'Correct' });
+  const { deps } = makeDeps({
+    localIndividuals: [
+      localPerson(10, 'Wrong', 'Target'),
+      localPerson(20, 'Known', 'Old'),
+    ],
+    personLinks: [personLink('ext-a', 10)],
+    fetchSourceSnapshot: async () => {
+      providerReads.push('ext-a');
+      return sourceSnapshot(source('group-1'), { people: [external], memberExternalIds: ['ext-a'] });
+    },
+  });
+
+  const review = await buildReview({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual',
+    linkCorrections: { 'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 } },
+  }, deps);
+
+  assert.equal(providerReads.length, 1);
+  assert.deepEqual(review.plan.updateManagedFields, [{
+    id: 'updateManagedFields:ext-a:20', externalPersonId: 'ext-a', individualId: 20,
+    changes: [{ field: 'lastName', localValue: 'Old', externalValue: 'Correct' }],
+    reason: 'provider_managed_fields', reviewRequired: false,
+  }]);
+  assert.deepEqual(review.plan.reviewContext.linkCorrections, [
+    { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'relink', individualId: 20 },
+  ]);
+});
+
+test('an unlink projection defers the source identity without removing it from source presence', async () => {
+  const providerReads = [];
+  const external = person('ext-a', { firstName: 'External', lastName: 'Person' });
+  const { deps, plans } = makeDeps({
+    batches: [batch({ gatheringTypeId: 100 })],
+    localIndividuals: [localPerson(10, 'Local', 'Person', {
+      peopleType: 'local_visitor', isActive: false,
+    })],
+    personLinks: [personLink('ext-a', 10)],
+    fetchSourceSnapshot: async () => {
+      providerReads.push('ext-a');
+      return sourceSnapshot(source('group-1'), { people: [external], memberExternalIds: ['ext-a'] });
+    },
+  });
+
+  const review = await buildReview({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual',
+    linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+  }, deps);
+
+  assert.equal(providerReads.length, 1);
+  for (const bucketName of [
+    'linkPeople', 'addPeople', 'updateManagedFields', 'promoteToRegular',
+    'demoteToLocalVisitor', 'archive', 'reactivate', 'addToGathering',
+  ]) {
+    assert.equal(review.plan[bucketName].some((action) => action.externalPersonId === 'ext-a'), false,
+      `${bucketName} must not act on a deliberately unlinked identity`);
+  }
+  assert.deepEqual(review.plan.skipped, [{
+    id: 'skipped:ext-a:link_correction_deferred',
+    externalPersonId: 'ext-a', reason: 'link_correction_deferred',
+  }]);
+  assert.deepEqual(plans[0].externalPeople.map(({ id }) => id), ['ext-a']);
+  assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['ext-a']);
+});
+
+test('a batch review cannot correct an established identity owned by another enabled batch source', async () => {
+  const { deps } = makeDeps({
+    batches: [batch({ id: 1, source: source('one') }), batch({ id: 2, source: source('two') })],
+    localIndividuals: [localPerson(10, 'One', 'Person'), localPerson(20, 'Two', 'Person')],
+    personLinks: [personLink('ext-two', 20)],
+    fetchSourceSnapshot: async ({ sourceExternalId }) => sourceExternalId === 'one'
+      ? sourceSnapshot(source('one'), { people: [person('ext-one')], memberExternalIds: ['ext-one'] })
+      : sourceSnapshot(source('two'), { people: [person('ext-two')], memberExternalIds: ['ext-two'] }),
+  });
+
+  await assert.rejects(
+    buildReview({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual',
+      linkCorrections: { 'ext-two': { outcome: 'unlink', fromIndividualId: 20 } },
+    }, deps),
+    /outside the reviewed source.*ext-two/i
+  );
+});
+
+test('pipeline acquisition preserves the established church-scoped read invocation order', async () => {
+  const order = [];
+  const read = (name, value) => async () => {
+    order.push(name);
+    return value;
+  };
+  const { deps } = makeDeps({
+    extra: {
+      listLocalIndividuals: read('individuals', []),
+      listLocalFamilies: read('families', []),
+      listPersonLinks: read('person-links', []),
+      listFamilyLinks: read('family-links', []),
+      listGatheringMemberships: read('gathering-memberships', []),
+      listMatchReviewState: read('match-review-state', { exclusions: [], holds: [] }),
+    },
+  });
+
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 1, trigger: 'manual' }, deps);
+
+  assert.deepEqual(order, [
+    'individuals', 'families', 'person-links', 'family-links',
+    'gathering-memberships', 'match-review-state',
+  ]);
+});
 
 test('target review substitutes only the target draft source while other enabled batches use active sources', async () => {
   const reads = [];
@@ -392,8 +514,12 @@ test('review signs durable match context and returns a family-aware directory wi
   assert.match(signedPlan.reviewContext.localIdentityDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(signedPlan.reviewContext, {
     version: 2,
+    correctionContractVersion: 1,
     manualCandidateIndividualIds: [7, 8, 9],
     localIdentityDigest: signedPlan.reviewContext.localIdentityDigest,
+    establishedLinks: {},
+    projectedEstablishedLinks: {},
+    linkCorrections: [],
     identities: {
       'ext-1': {
         suggestedIndividualId: null,

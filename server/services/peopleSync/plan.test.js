@@ -184,6 +184,26 @@ test('unknown child state never proposes a managed-field update', () => {
   assert.deepEqual(plan.updateManagedFields, []);
 });
 
+test('a projected link changes only provider fields with known values on its new local target', () => {
+  const plan = computePeopleSyncPlan(input({
+    externalPeople: [person({ firstName: null, lastName: 'External' })],
+    localPeople: [
+      local({ id: 10, firstName: 'Old', lastName: 'Target' }),
+      local({ id: 20, firstName: 'Known', lastName: 'Local' }),
+    ],
+    matcher: matcher({
+      linked: [{ externalPersonId: 'ext-1', individualId: 20, reason: 'existing_link' }],
+    }),
+    personLinks: [{ externalPersonId: 'ext-1', individualId: 20, missingFullSyncCount: 0 }],
+  }));
+
+  assert.deepEqual(plan.updateManagedFields, [{
+    id: 'updateManagedFields:ext-1:20', externalPersonId: 'ext-1', individualId: 20,
+    changes: [{ field: 'lastName', localValue: 'Local', externalValue: 'External' }],
+    reason: 'provider_managed_fields', reviewRequired: false,
+  }]);
+});
+
 test('an inactive provider cannot update authority-owned fields or create regulars', () => {
   const linked = person({ firstName: 'New' });
   const unlinked = person({ id: 'ext-2', firstName: 'Another' });

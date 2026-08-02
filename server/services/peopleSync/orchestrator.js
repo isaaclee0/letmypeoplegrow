@@ -64,6 +64,7 @@ const providerRegistry = require('./providerRegistry');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
 const { DECISION_CONTRACT_VERSION, buildReviewContext, buildReviewDirectory } = require('./reviewContext');
+const { validateAndProjectLinkCorrections } = require('./linkCorrections');
 const { applyPeopleSyncPlan, validateSelections } = require('./apply');
 const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
 const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
@@ -494,7 +495,29 @@ async function loadPreconditions({ churchId, provider, batchId, deps }) {
   const settings = await deps.getSyncSettings(churchId);
   const authorityState = await deps.getAuthority(churchId);
 
-  return { connection, connectionGeneration, credentials, adapter, batches, settings, authorityState };
+  return { connection, connectionGeneration, credentials, adapter, batches, settings, authorityState, deps };
+}
+
+function pipelineInputFromPreconditions(pre, input = {}) {
+  const batchId = input.batchId ?? null;
+  const provider = input.provider;
+  return {
+    ...input,
+    batchId,
+    authoritative: Object.hasOwn(input, 'authoritative')
+      ? input.authoritative
+      : pre.authorityState.active === provider,
+    activeAuthority: Object.hasOwn(input, 'activeAuthority')
+      ? input.activeAuthority
+      : pre.authorityState.active,
+    batches: input.batches || effectiveReviewBatches(pre.batches, batchId),
+    settings: pre.settings,
+    credentials: pre.credentials,
+    adapter: pre.adapter,
+    deps: input.deps || pre.deps,
+    connectionExpectation: input.connectionExpectation ??
+      connectionExpectationFor(provider, pre.connectionGeneration),
+  };
 }
 
 // ─── Steps 4-7: fetch, load local state, match, plan ────────────────────────
@@ -556,7 +579,7 @@ async function recordSourceFailureSafely(deps, input) {
   }
 }
 
-async function acquireSourceSet({
+async function acquireCompleteProviderSources({
   churchId, provider, batches, settings, credentials, adapter, deps,
   connectionExpectation = null, signal = null,
 }) {
@@ -737,19 +760,8 @@ function memberOnlyMatcherResult(result, memberIds) {
   };
 }
 
-async function runPipelineBody({
-  churchId, provider, trigger, authoritative, activeAuthority,
-  batches, settings, credentials, adapter, deps, connectionExpectation = null, signal = null,
-}) {
-  // 4. Fetch every provider-owned source sequentially and build one member union.
-  const acquired = await acquireSourceSet({
-    churchId, provider, batches, settings, credentials, adapter, deps, connectionExpectation, signal,
-  });
-  const { snapshot } = acquired;
-  assertAuthorityPreviewActive(signal);
-
-  // 5. load local state/links and existing missing counters
-  const [individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState] = await Promise.all([
+async function loadChurchScopedProjectionInputs(churchId, provider, deps) {
+  return Promise.all([
     deps.listLocalIndividuals(churchId),
     deps.listLocalFamilies(churchId),
     deps.listPersonLinks(churchId, provider),
@@ -757,70 +769,165 @@ async function runPipelineBody({
     deps.listGatheringMemberships(churchId),
     deps.listMatchReviewState(churchId, provider),
   ]);
-  assertAuthorityPreviewActive(signal);
+}
 
-  const linkedExternalIds = new Set(personLinks.map((link) => String(link.externalPersonId)));
-  const matchingPeople = [...acquired.matchingPeople];
-  // Retain an ineligible record only when it protects an existing durable
-  // link from being rematched. Its matcher result and presence projection
-  // are filtered below, so this context cannot create lifecycle actions.
+async function acquirePipelineState(input) {
+  // 4. Fetch every provider-owned source sequentially and build one member union.
+  const providerState = await acquireCompleteProviderSources(input);
+  assertAuthorityPreviewActive(input.signal);
+
+  // 5. Load church-scoped local state only after the complete provider read.
+  const [individuals, families, personLinks, familyLinks, gatheringMemberships, matchReviewState] =
+    await loadChurchScopedProjectionInputs(input.churchId, input.provider, input.deps);
+  assertAuthorityPreviewActive(input.signal);
+
+  return {
+    ...input,
+    ...providerState,
+    individuals,
+    families,
+    personLinks,
+    familyLinks,
+    matchReviewState,
+    gatheringMemberships,
+  };
+}
+
+function correctionScopeExternalIds(eligibleByBatch, batchId) {
+  if (batchId === null || batchId === undefined) return new Set();
+  const entries = eligibleByBatch instanceof Map ? eligibleByBatch.entries() : Object.entries(eligibleByBatch || {});
+  for (const [candidateBatchId, values] of entries) {
+    if (String(candidateBatchId) !== String(batchId)) continue;
+    return new Set([...(values instanceof Set ? values : values || [])].map(String));
+  }
+  return new Set();
+}
+
+function applyCorrectionReviewState(matchReviewState, correction) {
+  const exclusions = new Map();
+  for (const entry of matchReviewState?.exclusions || []) {
+    exclusions.set(`${String(entry.externalPersonId)}\u0000${Number(entry.individualId)}`, { ...entry });
+  }
+  for (const entry of correction.exclusionsToAdd) {
+    exclusions.set(`${entry.externalPersonId}\u0000${entry.individualId}`, entry);
+  }
+
+  const holds = new Map();
+  for (const entry of matchReviewState?.holds || []) holds.set(String(entry.externalPersonId), { ...entry });
+  for (const externalPersonId of correction.holdsToDelete) holds.delete(externalPersonId);
+  for (const entry of correction.holdsToUpsert) holds.set(entry.externalPersonId, entry);
+
+  return {
+    exclusions: [...exclusions.values()].sort((left, right) =>
+      String(left.externalPersonId).localeCompare(String(right.externalPersonId), 'en') ||
+      Number(left.individualId) - Number(right.individualId)),
+    holds: [...holds.values()].sort((left, right) =>
+      String(left.externalPersonId).localeCompare(String(right.externalPersonId), 'en')),
+  };
+}
+
+function matchProjectedPeople(acquired, correction, effectiveReviewState) {
+  const linkedExternalIds = new Set(correction.projectedLinks.map((link) => String(link.externalPersonId)));
+  const matchingPeople = acquired.matchingPeople.filter((person) =>
+    !correction.unlinkedExternalIds.has(String(person.id)));
+  // Retain an ineligible record only when it protects an existing projected
+  // link from being rematched. It remains filtered from planning/presence.
   for (const person of acquired.ineligibleMemberPeople) {
     if (linkedExternalIds.has(String(person.id))) matchingPeople.push(person);
   }
-  const actionablePersonLinks = personLinks.filter((link) =>
+
+  return memberOnlyMatcherResult(acquired.deps.matchPeople({
+    externalPeople: matchingPeople,
+    localPeople: acquired.individuals,
+    existingLinks: correction.projectedLinks.map((link) => ({
+      externalPersonId: link.externalPersonId,
+      individualId: link.individualId,
+    })),
+    excludedPairs: new Set(effectiveReviewState.exclusions.map((entry) =>
+      `${String(entry.externalPersonId)}\u0000${Number(entry.individualId)}`)),
+    heldExternalIds: new Set(effectiveReviewState.holds.map((entry) => String(entry.externalPersonId))),
+    externalFamilyMembers: groupMembersByFamily(matchingPeople),
+    localFamilyMembers: groupMembersByFamily(acquired.individuals),
+  }), acquired.seenMemberExternalIds);
+}
+
+function appendDeferredCorrectionRows(plan, unlinkedExternalIds) {
+  const skippedById = new Map((plan.skipped || []).map((action) => [action.id, action]));
+  for (const externalPersonId of [...unlinkedExternalIds].sort((left, right) => left.localeCompare(right, 'en'))) {
+    const id = `skipped:${encodeURIComponent(externalPersonId)}:link_correction_deferred`;
+    skippedById.set(id, { id, externalPersonId, reason: 'link_correction_deferred' });
+  }
+  plan.skipped = [...skippedById.values()].sort((left, right) => String(left.id).localeCompare(String(right.id), 'en'));
+}
+
+function computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState) {
+  const actionablePersonLinks = correction.projectedLinks.filter((link) =>
     !acquired.ignoredLifecycleExternalIds.has(String(link.externalPersonId))
   );
-
-  // 6. match
-  const matcherResult = memberOnlyMatcherResult(deps.matchPeople({
-    externalPeople: matchingPeople,
-    localPeople: individuals,
-    existingLinks: personLinks.map((link) => ({ externalPersonId: link.externalPersonId, individualId: link.individualId })),
-    excludedPairs: new Set((matchReviewState?.exclusions || []).map((entry) =>
-      `${String(entry.externalPersonId)}\u0000${Number(entry.individualId)}`)),
-    heldExternalIds: new Set((matchReviewState?.holds || []).map((entry) => String(entry.externalPersonId))),
-    externalFamilyMembers: groupMembersByFamily(matchingPeople),
-    localFamilyMembers: groupMembersByFamily(individuals),
-  }), acquired.seenMemberExternalIds);
-
-  // 7. compute the plan (plan.js's own presenceProjection computes the
-  // projected next missing count for a complete full snapshot from the
-  // personLinks passed in here — this module never re-derives that logic).
-  const plan = deps.computePeopleSyncPlan({
-    provider,
-    externalPeople: snapshot.people,
-    localPeople: individuals,
+  const plan = acquired.deps.computePeopleSyncPlan({
+    provider: acquired.provider,
+    externalPeople: acquired.snapshot.people,
+    localPeople: acquired.individuals,
     matcher: matcherResult,
-    batches,
+    batches: acquired.batches,
     eligibleByBatch: acquired.eligibleByBatch,
-    settings,
-    authoritative,
-    activeAuthority,
-    trigger,
+    settings: acquired.settings,
+    authoritative: acquired.authoritative,
+    activeAuthority: acquired.activeAuthority,
+    trigger: acquired.trigger,
     personLinks: actionablePersonLinks.map((link) => ({
-      externalPersonId: link.externalPersonId, individualId: link.individualId, missingFullSyncCount: link.missingFullSyncCount,
+      externalPersonId: link.externalPersonId,
+      individualId: link.individualId,
+      missingFullSyncCount: link.missingFullSyncCount,
     })),
-    snapshot: { fetchedAt: snapshot.fetchedAt, watermark: snapshot.watermark, mode: snapshot.mode, complete: snapshot.complete },
+    snapshot: {
+      fetchedAt: acquired.snapshot.fetchedAt,
+      watermark: acquired.snapshot.watermark,
+      mode: acquired.snapshot.mode,
+      complete: acquired.snapshot.complete,
+    },
     familyConflicts: [],
-    gatheringMemberships,
+    gatheringMemberships: acquired.gatheringMemberships,
   });
-  const externalPeople = [...snapshot.people, ...acquired.contextPeople];
+  appendDeferredCorrectionRows(plan, correction.unlinkedExternalIds);
+
+  const externalPeople = [...acquired.snapshot.people, ...acquired.contextPeople];
+  const sourceExternalIds = correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId);
   plan.reviewContext = buildReviewContext({
     plan,
     externalPeople,
-    localPeople: individuals,
-    localFamilies: families,
-    personLinks,
-    exclusions: matchReviewState?.exclusions || [],
-    holds: matchReviewState?.holds || [],
-    batches,
+    localPeople: acquired.individuals,
+    localFamilies: acquired.families,
+    basePersonLinks: acquired.personLinks,
+    projectedPersonLinks: correction.projectedLinks,
+    baseExclusions: acquired.matchReviewState?.exclusions || [],
+    projectedExclusions: effectiveReviewState.exclusions,
+    baseHolds: acquired.matchReviewState?.holds || [],
+    projectedHolds: effectiveReviewState.holds,
+    sourceExternalIds,
+    linkCorrections: correction.corrections,
+    batches: acquired.batches,
     eligibleByBatch: acquired.eligibleByBatch,
   });
+  return { plan, externalPeople };
+}
 
-  return {
-    ...acquired, externalPeople, individuals, families, personLinks, familyLinks, gatheringMemberships,
-    matchReviewState, matcherResult, plan,
-  };
+function computePipelineProjection(acquired, { linkCorrections = {} } = {}) {
+  const correction = validateAndProjectLinkCorrections({
+    rawCorrections: linkCorrections,
+    baseLinks: acquired.personLinks,
+    sourceExternalIds: correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId),
+    localIndividualIds: new Set(acquired.individuals.map(({ id }) => Number(id))),
+  });
+  const effectiveReviewState = applyCorrectionReviewState(acquired.matchReviewState, correction);
+  const matcherResult = matchProjectedPeople(acquired, correction, effectiveReviewState);
+  const { plan, externalPeople } = computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState);
+  return { ...acquired, externalPeople, correction, effectiveReviewState, matcherResult, plan };
+}
+
+async function runPipelineBody(input, { linkCorrections = {} } = {}) {
+  const acquired = await acquirePipelineState(input);
+  return computePipelineProjection(acquired, { linkCorrections });
 }
 
 // ─── buildReview ─────────────────────────────────────────────────────────────
@@ -829,7 +936,9 @@ async function runPipelineBody({
 // (via previewAuthoritySwitch) authority switching. Never applies anything,
 // never increments missing counters — a pure preview, however many times
 // it is called.
-async function buildReview({ churchId, provider, batchId = null, trigger, forceFull } = {}, overrides = {}) {
+async function buildReview({
+  churchId, provider, batchId = null, trigger, forceFull, linkCorrections = {},
+} = {}, overrides = {}) {
   void forceFull; // accepted for interface parity; buildReview is always a full-snapshot preview.
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -846,11 +955,10 @@ async function buildReview({ churchId, provider, batchId = null, trigger, forceF
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
   try {
-    const body = await runPipelineBody({
+    const body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
-    });
+      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
+    }), { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
@@ -937,11 +1045,11 @@ async function previewAuthoritySwitch({
     assertAuthorityPreviewActive(signal);
     run = await deps.startRun({ churchId, provider, batchId: null, trigger: 'authority_switch', fetchMode: 'full' });
     assertAuthorityPreviewActive(signal);
-    const body = await runPipelineBody({
+    const body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger: 'authority_switch', mode: 'full', watermark: undefined,
-      authoritative: true, activeAuthority: provider, batches: pre.batches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation, signal,
-    });
+      batchId: null, authoritative: true, activeAuthority: provider, batches: pre.batches,
+      connectionExpectation, signal,
+    }));
     assertAuthorityPreviewActive(signal);
 
     body.plan.sourceContext = reviewedSourceContext(
@@ -1057,11 +1165,10 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   let body;
   let applyResult;
   try {
-    body = await runPipelineBody({
+    body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
-      authoritative, activeAuthority, batches: reviewBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
-    });
+      batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
+    }));
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration
@@ -1211,11 +1318,11 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
   let body;
   let applyResult;
   try {
-    body = await runPipelineBody({
+    body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger,
-      authoritative: true, activeAuthority: provider, batches: unattendedBatches, settings: pre.settings,
-      credentials: pre.credentials, adapter: pre.adapter, deps, connectionExpectation,
-    });
+      batchId: null, authoritative: true, activeAuthority: provider, batches: unattendedBatches,
+      connectionExpectation,
+    }));
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, null, body.sourceProvenance, pre.connectionGeneration
