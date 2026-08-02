@@ -6,6 +6,21 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 Let My People Grow is a church attendance tracking and member management system with a React/TypeScript frontend, Node.js/Express backend, and per-church SQLite databases. The application is fully containerized using Docker.
 
+## Proportional Development Process
+
+Match the amount of process to the risk and scope of the requested change. Safety matters, but ceremony is not a goal.
+
+For small, well-specified, low-risk changes (for example copy, styling, layout, or a localized UI behavior):
+
+- Inspect only the files needed to understand the change, then implement it directly.
+- Keep any required design or planning check brief and in the conversation. Do not create design documents, implementation plans, or additional tracking artifacts unless the user asks for them.
+- Do not broaden the requirements, introduce new abstractions, or refactor adjacent code without a concrete need.
+- Run the narrowest useful validation, such as the affected test file, type check, lint check, or build step. Do not run unrelated full suites by default.
+- Do not use subagents or parallel work unless the user explicitly requests them or the task has genuinely independent, substantial parts.
+- Ask questions only when an unresolved choice materially affects behavior, security, data, or the visible result. Otherwise make the smallest reasonable assumption and proceed.
+
+Use a fuller design, planning, and verification process when the change affects authentication, church isolation, permissions, database schemas or migrations, destructive data operations, external integrations, concurrency, broad cross-module behavior, or has significant architectural ambiguity. Scale tests to the realistic failure impact.
+
 ## Development Commands
 
 ### Running the Application

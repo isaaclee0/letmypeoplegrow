@@ -33,7 +33,24 @@ const ChurchSwitcher: React.FC<ChurchSwitcherProps> = ({ className, textClassNam
   };
 
   if (myChurches.length === 0) {
-    return <p className={textClassName}>{user?.churchName}</p>;
+    return (
+      <div
+        className={`relative overflow-hidden rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2.5 shadow-sm ${textClassName || 'text-white'} ${className || ''}`}
+        role="group"
+        aria-label="Current church"
+      >
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-secondary-300/80"
+        />
+        <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-primary-100/80">
+          Current church
+        </p>
+        <p className="mt-0.5 break-words text-base font-semibold leading-snug">
+          {user?.churchName}
+        </p>
+      </div>
+    );
   }
 
   return (

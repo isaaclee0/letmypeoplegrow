@@ -9,7 +9,7 @@ vi.mock('../contexts/AuthContext', () => ({
 }));
 
 describe('ChurchSwitcher', () => {
-  it('renders static text with no button when there are no other linked churches', () => {
+  it('highlights the current church without making it interactive when there are no other linked churches', () => {
     (useAuth as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       user: { churchName: 'Kingston CRC' },
       myChurches: [],
@@ -18,7 +18,9 @@ describe('ChurchSwitcher', () => {
 
     render(<ChurchSwitcher />);
 
-    expect(screen.getByText('Kingston CRC')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Current church' })).toBeInTheDocument();
+    expect(screen.getByText('Current church')).toBeInTheDocument();
+    expect(screen.getByText('Kingston CRC')).toHaveClass('text-base');
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
