@@ -14,8 +14,13 @@ const directory: PeopleSyncPeopleDirectory = {
     '11': {
       firstName: 'Alex', lastName: 'Jones', matchEligible: true,
       family: {
-        state: 'known', name: 'Jones family', totalOtherMembers: 1,
-        members: [{ firstName: 'Casey', lastName: 'Jones' }],
+        state: 'known', name: 'Jones family', totalOtherMembers: 5,
+        members: [
+          { firstName: 'Casey', lastName: 'Jones' },
+          { firstName: 'Drew', lastName: 'Jones' },
+          { firstName: 'Jamie', lastName: 'Jones' },
+          { firstName: 'Riley', lastName: 'Jones' },
+        ],
       },
     },
     '12': {
@@ -108,22 +113,42 @@ describe('PeoplePickerDialog', () => {
     expect(onSelectPerson).toHaveBeenCalledWith(11);
   });
 
-  it('selects an eligible person directly and identifies the current selection', async () => {
+  it('selects an eligible person directly and excludes the current target from candidates', async () => {
     const user = userEvent.setup();
     const onSelectPerson = vi.fn();
     render(<PickerHarness selectedIndividualId={12} onSelectPerson={onSelectPerson} />);
 
     await user.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
     const dialog = screen.getByRole('dialog', { name: 'Choose an LMPG person for Alex Smith' });
-    expect(within(dialog).getByText('Currently selected')).toBeVisible();
+    expect(within(dialog).queryByRole('button', { name: 'Select Morgan Reed' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Currently selected')).not.toBeInTheDocument();
 
     await user.click(within(dialog).getByRole('button', { name: 'Select Alex Jones' }));
     expect(onSelectPerson).toHaveBeenCalledWith(11);
   });
 
+  it('keeps expandable family details outside the selection button so they cannot select a person', async () => {
+    const user = userEvent.setup();
+    const onSelectPerson = vi.fn();
+    render(<PickerHarness onSelectPerson={onSelectPerson} />);
+
+    await user.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
+    const dialog = screen.getByRole('dialog', { name: 'Choose an LMPG person for Alex Smith' });
+    const selectButton = within(dialog).getByRole('button', { name: 'Select Alex Jones' });
+    const familyDetails = within(dialog).getByText('2 more family members');
+
+    await user.click(familyDetails);
+    await user.keyboard('{Enter}');
+
+    expect(onSelectPerson).not.toHaveBeenCalled();
+    expect(selectButton.querySelector('a, button, details, input, select, summary, textarea')).toBeNull();
+  });
+
   it('closes on Escape and returns focus to the invoking control', async () => {
     const user = userEvent.setup();
-    render(<PickerHarness />);
+    const onSelectPerson = vi.fn();
+    const onSelectCreate = vi.fn();
+    render(<PickerHarness onSelectPerson={onSelectPerson} onSelectCreate={onSelectCreate} />);
     const trigger = screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' });
 
     await user.click(trigger);
@@ -132,5 +157,7 @@ describe('PeoplePickerDialog', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await waitFor(() => expect(trigger).toHaveFocus());
+    expect(onSelectPerson).not.toHaveBeenCalled();
+    expect(onSelectCreate).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,28 @@
-import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import React, { useState } from 'react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import IdentityRemovalDialog from './IdentityRemovalDialog';
+
+function RemovalHarness({ onRejectPair, onSkip }: {
+  onRejectPair: (individualId: number) => void;
+  onSkip: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>Remove matching decision for Alex Smith</button>
+      <IdentityRemovalDialog
+        open={open}
+        externalName="Alex Smith"
+        pairedIndividualId={42}
+        onRejectPair={onRejectPair}
+        onSkip={onSkip}
+        onClose={() => setOpen(false)}
+      />
+    </>
+  );
+}
 
 describe('IdentityRemovalDialog', () => {
   it('offers rejecting the exact pair or deferring a paired decision with exact callback payloads', async () => {
@@ -71,6 +91,23 @@ describe('IdentityRemovalDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Close remove matching decision' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith();
+    expect(onRejectPair).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+  });
+
+  it('unmounts on X, leaves decisions untouched, and restores focus to its trigger', async () => {
+    const user = userEvent.setup();
+    const onRejectPair = vi.fn();
+    const onSkip = vi.fn();
+    render(<RemovalHarness onRejectPair={onRejectPair} onSkip={onSkip} />);
+    const trigger = screen.getByRole('button', { name: 'Remove matching decision for Alex Smith' });
+
+    await user.click(trigger);
+    expect(screen.getByRole('dialog', { name: 'Remove matching decision for Alex Smith' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Close remove matching decision' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
     expect(onRejectPair).not.toHaveBeenCalled();
     expect(onSkip).not.toHaveBeenCalled();
   });

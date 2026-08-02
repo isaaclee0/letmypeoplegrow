@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,8 +15,13 @@ const directory: PeopleSyncPeopleDirectory = {
     '22': {
       firstName: 'Eligible', lastName: 'Person', matchEligible: true,
       family: {
-        state: 'known', name: 'Green family', totalOtherMembers: 1,
-        members: [{ firstName: 'Family', lastName: 'Member' }],
+        state: 'known', name: 'Green family', totalOtherMembers: 5,
+        members: [
+          { firstName: 'Family', lastName: 'Member' },
+          { firstName: 'Second', lastName: 'Member' },
+          { firstName: 'Third', lastName: 'Member' },
+          { firstName: 'Fourth', lastName: 'Member' },
+        ],
       },
     },
     '23': { firstName: 'Durable', lastName: 'Person', matchEligible: false, family: { state: 'unavailable' } },
@@ -35,6 +40,25 @@ const defaultProps = {
   onUnlink: vi.fn(),
   onClose: vi.fn(),
 };
+
+function EstablishedHarness({ onRelink, onUnlink }: {
+  onRelink: (individualId: number) => void;
+  onUnlink: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>Correct linked person for Alex Smith</button>
+      <EstablishedLinkDialog
+        {...defaultProps}
+        open={open}
+        onRelink={onRelink}
+        onUnlink={onUnlink}
+        onClose={() => setOpen(false)}
+      />
+    </>
+  );
+}
 
 describe('EstablishedLinkDialog', () => {
   it('offers correction actions and explains that unlinking holds unattended sync', async () => {
@@ -71,10 +95,27 @@ describe('EstablishedLinkDialog', () => {
     const dialog = screen.getByRole('dialog', { name: 'Correct linked person for Alex Smith' });
 
     await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    expect(within(dialog).queryByRole('button', { name: 'Select Current Person' })).not.toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Select Durable Person' })).toBeDisabled();
     expect(within(dialog).getByText('Already linked to a provider person')).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Select Claimed Person' })).toBeDisabled();
     expect(within(dialog).getByText('Already selected for another provider person')).toBeVisible();
+  });
+
+  it('keeps expandable family details outside replacement buttons so they cannot relink a person', async () => {
+    const user = userEvent.setup();
+    const onRelink = vi.fn();
+    render(<EstablishedLinkDialog {...defaultProps} onRelink={onRelink} />);
+    const dialog = screen.getByRole('dialog', { name: 'Correct linked person for Alex Smith' });
+
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    const selectButton = within(dialog).getByRole('button', { name: 'Select Eligible Person' });
+    const familyDetails = within(dialog).getByText('2 more family members');
+    await user.click(familyDetails);
+    await user.keyboard('{Enter}');
+
+    expect(onRelink).not.toHaveBeenCalled();
+    expect(selectButton.querySelector('a, button, details, input, select, summary, textarea')).toBeNull();
   });
 
   it('emits unlink without closing or relinking on its own', async () => {
@@ -89,5 +130,24 @@ describe('EstablishedLinkDialog', () => {
     expect(onUnlink).toHaveBeenCalledWith();
     expect(onRelink).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('unmounts on backdrop dismissal, leaves corrections untouched, and restores focus', async () => {
+    const user = userEvent.setup();
+    const onRelink = vi.fn();
+    const onUnlink = vi.fn();
+    render(<EstablishedHarness onRelink={onRelink} onUnlink={onUnlink} />);
+    const trigger = screen.getByRole('button', { name: 'Correct linked person for Alex Smith' });
+
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Correct linked person for Alex Smith' });
+    const backdrop = dialog.querySelector<HTMLElement>('[aria-hidden="true"]');
+    expect(backdrop).not.toBeNull();
+    await user.click(backdrop!);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(onRelink).not.toHaveBeenCalled();
+    expect(onUnlink).not.toHaveBeenCalled();
   });
 });

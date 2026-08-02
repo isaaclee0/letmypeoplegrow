@@ -58,9 +58,10 @@ export default function EstablishedLinkDialog({
     return Object.entries(directory.local)
       .map(([rawId, person]) => ({ individualId: Number(rawId), person }))
       .filter(({ individualId }) => Number.isSafeInteger(individualId) && individualId > 0)
+      .filter(({ individualId }) => individualId !== currentIndividualId)
       .filter(({ person }) => !needle || searchableText(person).includes(needle))
       .sort((left, right) => personDisplayName(left.person).localeCompare(personDisplayName(right.person)));
-  }, [directory.local, query]);
+  }, [currentIndividualId, directory.local, query]);
 
   return (
     <Dialog open={open} onClose={() => onClose()} className="relative z-50">
@@ -125,30 +126,29 @@ export default function EstablishedLinkDialog({
                     <p className="py-4 text-sm text-gray-500 dark:text-gray-400">No matching people found.</p>
                   )}
                   {people.map(({ individualId, person }) => {
-                    const current = individualId === currentIndividualId;
                     const claimedExternalId = claimedBy.get(individualId);
                     const claimedElsewhere = claimedExternalId !== undefined && claimedExternalId !== externalId;
                     const unavailable = !availableIndividualIds.has(individualId);
-                    const disabled = current || claimedElsewhere || unavailable;
+                    const disabled = claimedElsewhere || unavailable;
                     return (
                       <div key={individualId} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+                        <PersonIdentitySummary label="LMPG person" person={person} />
                         <button
                           type="button"
                           disabled={disabled}
                           aria-label={`Select ${personDisplayName(person)}`}
                           onClick={() => onRelink(individualId)}
-                          className="block w-full rounded-md text-left focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-55"
+                          className="mt-2 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm font-semibold text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
                         >
-                          <PersonIdentitySummary label="LMPG person" person={person} />
+                          Select {personDisplayName(person)}
                         </button>
-                        {current && <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Currently linked person</p>}
-                        {!current && claimedElsewhere && (
+                        {claimedElsewhere && (
                           <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Already selected for another provider person</p>
                         )}
-                        {!current && !claimedElsewhere && unavailable && person.matchEligible === false && (
+                        {!claimedElsewhere && unavailable && person.matchEligible === false && (
                           <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Already linked to a provider person</p>
                         )}
-                        {!current && !claimedElsewhere && unavailable && person.matchEligible !== false && (
+                        {!claimedElsewhere && unavailable && person.matchEligible !== false && (
                           <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Not available for matching in this review</p>
                         )}
                       </div>
