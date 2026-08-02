@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSyncSelections,
+  initializeSyncSelectionState,
   incompleteIdentityExternalIds,
   initializeIdentityDecisions,
 } from './syncSelections';
 import type { PeopleSyncPlan, PeopleSyncPlanSummary, PeopleSyncReview } from './types';
+
+function stateWith(overrides: Partial<Parameters<typeof buildSyncSelections>[0]> = {}) {
+  return {
+    identityDecisions: {},
+    ambiguousChoices: {},
+    skippedExternalIds: new Set<string>(),
+    visitorChoices: {},
+    acceptedArchiveIds: new Set<number>(),
+    acceptedFamilyRenameIds: new Set<string>(),
+    ...overrides,
+  };
+}
 
 function reviewWithIdentityContext(): PeopleSyncReview {
   const plan: PeopleSyncPlan = {
@@ -107,6 +120,29 @@ function reviewWithIdentityContext(): PeopleSyncReview {
 }
 
 describe('buildSyncSelections', () => {
+  it('initializes empty link corrections for each refreshed review state', () => {
+    const review = reviewWithIdentityContext();
+    const first = initializeSyncSelectionState(review);
+    const refreshed = initializeSyncSelectionState({ ...review, reviewToken: 'fresh-review-token' });
+
+    expect(first.linkCorrections).toEqual({});
+    expect(refreshed.linkCorrections).toEqual({});
+  });
+
+  it('serializes canonical link corrections with V2 identity decisions', () => {
+    const state = stateWith({
+      linkCorrections: {
+        'ext-b': { outcome: 'unlink', fromIndividualId: 20 },
+        'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 30 },
+      },
+    });
+
+    expect(buildSyncSelections(state).linkCorrections).toEqual({
+      'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 30 },
+      'ext-b': { outcome: 'unlink', fromIndividualId: 20 },
+    });
+  });
+
   it('serializes each v2 identity outcome and destructive selections in stable order', () => {
     expect(buildSyncSelections({
       identityDecisions: {

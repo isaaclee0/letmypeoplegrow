@@ -1,4 +1,5 @@
 import type {
+  EstablishedLinkCorrection,
   IdentityDecision,
   PeopleSyncReview,
   PeopleSyncReviewContext,
@@ -12,11 +13,24 @@ export interface SyncSelectionState {
   // V2 review state is initialized with every signed identity explicitly
   // present, using null until the reviewer makes a required decision.
   identityDecisions?: Record<string, IdentityDecision | null>;
+  linkCorrections?: Record<string, EstablishedLinkCorrection>;
   ambiguousChoices: Record<string, number | null>;
   skippedExternalIds: Set<string>;
   visitorChoices: Record<string, VisitorChoice | null>;
   acceptedArchiveIds: Set<number>;
   acceptedFamilyRenameIds: Set<string>;
+}
+
+export function initializeSyncSelectionState(review: PeopleSyncReview): SyncSelectionState {
+  return {
+    identityDecisions: review.decisionContractVersion === 2 ? initializeIdentityDecisions(review) : undefined,
+    linkCorrections: {},
+    ambiguousChoices: {},
+    skippedExternalIds: new Set(),
+    visitorChoices: {},
+    acceptedArchiveIds: new Set(),
+    acceptedFamilyRenameIds: new Set(),
+  };
 }
 
 function sortedKeys(record: Record<string, unknown>): string[] {
@@ -70,9 +84,11 @@ function destructiveSelections(state: SyncSelectionState): Pick<
 
 export function buildSyncSelections(state: SyncSelectionState): PeopleSyncSelections {
   if (state.identityDecisions !== undefined) {
+    const linkCorrections = sortedRecord(state.linkCorrections || {});
     return {
       decisionContractVersion: 2,
       identityDecisions: sortedRecord(state.identityDecisions),
+      ...(Object.keys(linkCorrections).length > 0 ? { linkCorrections } : {}),
       ...destructiveSelections(state),
     };
   }
