@@ -85,6 +85,20 @@ function isValidEstablishedLinks(value: unknown): boolean {
     isRecord(link) && isPositiveInteger(link.individualId)));
 }
 
+function hasExactlyFields(value: Record<string, unknown>, fields: string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === fields.length && fields.every((field) => Object.hasOwn(value, field));
+}
+
+function isValidEstablishedLinkCorrection(value: unknown): value is EstablishedLinkCorrection {
+  if (!isRecord(value) || !isPositiveInteger(value.fromIndividualId)) return false;
+  return value.outcome === 'unlink'
+    ? hasExactlyFields(value, ['outcome', 'fromIndividualId'])
+    : value.outcome === 'relink'
+      && isPositiveInteger(value.individualId)
+      && hasExactlyFields(value, ['outcome', 'fromIndividualId', 'individualId']);
+}
+
 function isValidLinkCorrections(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value)) return false;
@@ -96,8 +110,8 @@ function isValidLinkCorrections(value: unknown): boolean {
       || !isPositiveInteger(correction.fromIndividualId)
       || externalIds.has(correction.externalPersonId)) return false;
     externalIds.add(correction.externalPersonId);
-    return correction.outcome === 'unlink'
-      || (correction.outcome === 'relink' && isPositiveInteger(correction.individualId));
+    const { externalPersonId: _externalPersonId, ...linkCorrection } = correction;
+    return isValidEstablishedLinkCorrection(linkCorrection);
   });
 }
 
@@ -366,6 +380,8 @@ function recordsMatch(
   return Object.entries(leftCorrections).every(([externalPersonId, leftCorrection]) => {
     if (!Object.prototype.hasOwnProperty.call(rightCorrections, externalPersonId)) return false;
     const rightCorrection = rightCorrections[externalPersonId];
+    if (!isValidEstablishedLinkCorrection(leftCorrection)
+      || !isValidEstablishedLinkCorrection(rightCorrection)) return false;
     if (leftCorrection.outcome !== rightCorrection.outcome
       || leftCorrection.fromIndividualId !== rightCorrection.fromIndividualId) return false;
     return leftCorrection.outcome === 'unlink'

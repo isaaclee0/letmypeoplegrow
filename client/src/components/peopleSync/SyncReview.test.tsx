@@ -395,6 +395,7 @@ describe('SyncReview compact V2 workflow', () => {
     ['an object instead of a correction list', {}],
     ['a relink with a non-numeric source person', [{ externalPersonId: 'ext-established', outcome: 'relink', fromIndividualId: '40', individualId: 30 }]],
     ['a correction with an unknown outcome', [{ externalPersonId: 'ext-established', outcome: 'replace', fromIndividualId: 40, individualId: 30 }]],
+    ['an unlink with an unexpected target person', [{ externalPersonId: 'ext-established', outcome: 'unlink', fromIndividualId: 40, individualId: 30 }]],
   ])('fails closed for malformed link corrections: %s', (_label, linkCorrections) => {
     const malformed = v2Review({ attention: false });
     malformed.plan.reviewContext!.linkCorrections = linkCorrections as never;
@@ -535,6 +536,27 @@ describe('SyncReview correction previews and dirty state', () => {
     await beginEstablishedCorrection('Replacement Local');
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeEnabled());
+  });
+
+  it('does not treat an unlink preview with an unexpected target as signed', async () => {
+    const preview = correctionPreview(
+      { outcome: 'unlink', fromIndividualId: 40, individualId: 30 },
+      'preview-unlink-with-target',
+    );
+    const onPreviewCorrections = vi.fn().mockResolvedValue(preview);
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false, established: true })}
+      onRefresh={vi.fn()}
+      onPreviewCorrections={onPreviewCorrections}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    await beginEstablishedCorrection('unlink');
+
+    expect(await screen.findByText('The latest established-link correction needs a successful signed preview before you can apply.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply sync' })).toBeDisabled();
   });
 
   it('blocks a half-swap, then applies both explicit corrections with the signed swap preview token', async () => {
