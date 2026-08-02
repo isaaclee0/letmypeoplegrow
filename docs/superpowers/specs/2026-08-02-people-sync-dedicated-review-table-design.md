@@ -1,7 +1,7 @@
 # People Sync Dedicated Review Table Design
 
 **Date:** 2026-08-02
-**Status:** Awaiting written-spec review
+**Status:** Approved
 
 ## Purpose
 
