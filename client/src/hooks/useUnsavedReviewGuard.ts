@@ -2,6 +2,16 @@ import { useCallback, useEffect } from 'react';
 
 const DISCARD_PROMPT = 'You have unsaved review choices. Discard them and continue?';
 
+type PopStateGuard = (event: PopStateEvent) => void;
+
+// This module is imported before the application renders BrowserRouter. Keeping
+// one dormant interceptor here ensures a dirty guard can cancel traversal before
+// the router's listener renders a different route and unmounts local review state.
+let activePopStateGuard: PopStateGuard | null = null;
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', (event) => activePopStateGuard?.(event));
+}
+
 export interface UnsavedReviewGuardOptions {
   dirty: boolean;
   onConfirmDiscard: () => void;
@@ -74,6 +84,7 @@ export function useUnsavedReviewGuard({
         return;
       }
       if (confirmDiscard()) return;
+      event.stopImmediatePropagation();
       const destinationIndex = typeof event.state?.idx === 'number' ? event.state.idx as number : null;
       const restoreDelta = currentEntryIndex !== null && destinationIndex !== null
         ? currentEntryIndex - destinationIndex
@@ -83,11 +94,11 @@ export function useUnsavedReviewGuard({
     };
 
     window.addEventListener('beforeunload', beforeUnload);
-    window.addEventListener('popstate', popState);
+    activePopStateGuard = popState;
     document.addEventListener('click', internalLink, true);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
-      window.removeEventListener('popstate', popState);
+      if (activePopStateGuard === popState) activePopStateGuard = null;
       document.removeEventListener('click', internalLink, true);
     };
   }, [dirty, onConfirmDiscard]);

@@ -30,11 +30,15 @@ export default function PeopleSyncBatchReviewPage() {
   const requestGeneration = useRef(0);
   const [batch, setBatch] = useState<PeopleSyncBatch | null>(null);
   const [review, setReview] = useState<PeopleSyncReview | null>(null);
+  const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const providerLabel = adapter?.provider === 'planning_center' ? 'Planning Center' : 'Elvanto';
+  const routeContextKey = adapter && batchId !== null ? `${adapter.provider}:${batchId}` : null;
+  const visibleBatch = loadedContextKey === routeContextKey ? batch : null;
+  const visibleReview = loadedContextKey === routeContextKey ? review : null;
   const ignoreConfirmedDiscard = useCallback(() => undefined, []);
   const { confirmAction } = useUnsavedReviewGuard({
     dirty,
@@ -56,6 +60,7 @@ export default function PeopleSyncBatchReviewPage() {
       if (!nextBatch) throw new Error('This sync batch is no longer available.');
       setBatch(nextBatch);
       setReview(nextReview);
+      setLoadedContextKey(`${adapter.provider}:${batchId}`);
       setDirty(false);
       return true;
     } catch (cause) {
@@ -74,6 +79,12 @@ export default function PeopleSyncBatchReviewPage() {
       navigate(adapter?.returnTo || '/app/settings?tab=integrations', { replace: true });
       return undefined;
     }
+    setBatch(null);
+    setReview(null);
+    setLoadedContextKey(null);
+    setLoadError(null);
+    setDirty(false);
+    setApplying(false);
     void loadReview();
     return () => {
       requestGeneration.current += 1;
@@ -129,7 +140,7 @@ export default function PeopleSyncBatchReviewPage() {
         <p className="text-sm text-gray-500 dark:text-gray-400">Review every proposed change before applying the sync.</p>
       </div>
 
-      {loading && !review && (
+      {loading && !visibleReview && (
         <p role="status" className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
           Loading sync review…
         </p>
@@ -146,12 +157,12 @@ export default function PeopleSyncBatchReviewPage() {
         </div>
       )}
 
-      {review && batch && (
+      {visibleReview && visibleBatch && (
         <SyncReview
           provider={adapter.provider}
-          review={review}
-          batchName={batch.name}
-          sourceName={(batch.draftSource || batch.source)?.name}
+          review={visibleReview}
+          batchName={visibleBatch.name}
+          sourceName={(visibleBatch.draftSource || visibleBatch.source)?.name}
           onRefresh={refresh}
           onPreviewCorrections={previewCorrections}
           onApply={applyReview}

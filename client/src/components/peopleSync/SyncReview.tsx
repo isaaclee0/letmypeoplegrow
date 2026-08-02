@@ -546,6 +546,14 @@ export default function SyncReview({
         setEffectiveReview(nextReview);
       }
       return nextReview;
+    } catch (error) {
+      if (request.isCurrent()
+        && baseReviewRef.current.reviewToken === requestBase.reviewToken
+        && baseReviewRef.current.runId === requestBase.runId
+        && isRefreshOnlyReviewError(error)) {
+        setApplyError(error);
+      }
+      throw error;
     } finally {
       if (request.isCurrent()
         && baseReviewRef.current.reviewToken === requestBase.reviewToken
@@ -674,6 +682,7 @@ export default function SyncReview({
               state={state}
               onStateChange={setState}
               onPreviewCorrections={previewCorrections}
+              onRefreshReview={guardedRefresh}
               previewing={previewing}
             />
           </div>

@@ -1,6 +1,7 @@
 const REFRESH_ONLY_REVIEW_CODES = new Set([
   'SYNC_PLAN_STALE',
   'SYNC_REVIEW_EXPIRED',
+  'SYNC_REVIEW_INVALID',
   'SYNC_REVIEW_ALREADY_APPLIED',
   // Compatibility with the immediately previous review API.
   'STALE_REVIEW',

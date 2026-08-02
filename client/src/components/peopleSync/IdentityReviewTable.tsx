@@ -11,6 +11,7 @@ import EstablishedLinkDialog from './EstablishedLinkDialog';
 import IdentityRemovalDialog from './IdentityRemovalDialog';
 import PeoplePickerDialog from './PeoplePickerDialog';
 import { FamilyContext, personDisplayName } from './PersonIdentitySummary';
+import { isRefreshOnlyReviewError } from './apiError';
 import type { SyncSelectionState } from './syncSelections';
 import {
   buildDecisionRows,
@@ -50,6 +51,7 @@ export interface IdentityReviewTableProps {
     corrections: Record<string, EstablishedLinkCorrection>,
     request: CorrectionPreviewRequestContext,
   ) => Promise<PeopleSyncReview>;
+  onRefreshReview?: () => void | Promise<void>;
   previewing: boolean;
 }
 
@@ -57,6 +59,7 @@ interface CorrectionFailure {
   externalId: string;
   attemptedCorrections: Record<string, EstablishedLinkCorrection>;
   previousCorrections: Record<string, EstablishedLinkCorrection>;
+  cause: unknown;
 }
 
 const filterOptions: Array<{ value: ReviewRowFilter; label: string; status?: ReviewRowStatus }> = [
@@ -118,6 +121,7 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   state,
   onStateChange,
   onPreviewCorrections,
+  onRefreshReview,
   previewing,
 }, ref) {
   const [activeTab, setActiveTab] = useState<IdentityTab>('decisions');
@@ -254,11 +258,11 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
       previewControllerRef.current = null;
       setCorrectionFailure(null);
       setLocalPreviewing(false);
-    } catch {
+    } catch (cause) {
       if (!request.isCurrent()) return;
       previewControllerRef.current = null;
       setLocalPreviewing(false);
-      setCorrectionFailure({ externalId, attemptedCorrections, previousCorrections });
+      setCorrectionFailure({ externalId, attemptedCorrections, previousCorrections, cause });
     }
   };
 
@@ -538,16 +542,35 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
 
       {correctionFailure && (
         <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-950 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
-          <p className="font-semibold">The correction is still drafted, but its updated sync preview could not be loaded.</p>
-          <p className="mt-1">Retry the preview before applying, or revert this correction to the last signed mapping.</p>
+          {isRefreshOnlyReviewError(correctionFailure.cause) ? (
+            <>
+              <p className="font-semibold">The current review can no longer preview this correction.</p>
+              <p className="mt-1">Refresh the full plan before applying, then review the affected people again.</p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">The correction is still drafted, but its updated sync preview could not be loaded.</p>
+              <p className="mt-1">Retry the preview before applying, or revert this correction to the last signed mapping.</p>
+            </>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => retryCorrectionPreview()}
-              className="rounded-md bg-primary-600 px-3 py-2 font-semibold text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              Retry preview
-            </button>
+            {isRefreshOnlyReviewError(correctionFailure.cause) ? (
+              <button
+                type="button"
+                onClick={() => void onRefreshReview?.()}
+                className="rounded-md bg-primary-600 px-3 py-2 font-semibold text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                Refresh plan
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => retryCorrectionPreview()}
+                className="rounded-md bg-primary-600 px-3 py-2 font-semibold text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                Retry preview
+              </button>
+            )}
             <button
               type="button"
               onClick={() => revertCorrection()}

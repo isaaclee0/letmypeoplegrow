@@ -450,6 +450,31 @@ describe('PeopleSyncBatchReviewPage', () => {
     expect(screen.queryByText('Planning Center sync review')).not.toBeInTheDocument();
   });
 
+  it('clears the old review before a different provider and batch fail to load', async () => {
+    const failedElvantoPlan = deferred<{ data: { success: true } & PeopleSyncReview }>();
+    vi.mocked(elvantoSyncAPI.listBatches)
+      .mockResolvedValue({ data: { success: true, batches: [batchFor('elvanto', 8)] } } as never);
+    vi.mocked(elvantoSyncAPI.getBatchPlan).mockReturnValue(failedElvantoPlan.promise as never);
+    const router = renderRoute('/app/settings/integrations/planning-center/batches/7/review');
+    await screen.findByText('Planning Center sync review');
+
+    await act(async () => {
+      await router.navigate('/app/settings/integrations/elvanto/batches/8/review');
+    });
+
+    expect(screen.queryByText('Planning Center sync review')).not.toBeInTheDocument();
+    expect(screen.queryByText('Members 7')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply 1 selected change' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading sync review');
+    expect(elvantoSyncAPI.applyBatch).not.toHaveBeenCalled();
+
+    failedElvantoPlan.reject(new Error('Elvanto batch 8 unavailable'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Elvanto batch 8 unavailable');
+    expect(screen.queryByText('Planning Center sync review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Apply .*selected change/ })).not.toBeInTheDocument();
+    expect(elvantoSyncAPI.applyBatch).not.toHaveBeenCalled();
+  });
+
   it('ignores an older correction preview after a newer preview succeeds', async () => {
     const base = reviewFor({ token: 'original-base', established: true });
     const older = deferred<{ data: { success: true } & PeopleSyncCorrectionPreview }>();

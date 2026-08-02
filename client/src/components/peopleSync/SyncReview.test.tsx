@@ -489,6 +489,38 @@ describe('SyncReview correction previews and dirty state', () => {
     expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeEnabled();
   });
 
+  it.each([
+    'SYNC_PLAN_STALE',
+    'SYNC_REVIEW_EXPIRED',
+    'SYNC_REVIEW_INVALID',
+  ])('requires a full-plan refresh when correction preview returns %s', async (code) => {
+    const onRefresh = vi.fn();
+    const onPreviewCorrections = vi.fn().mockRejectedValue({
+      response: { data: { code, error: 'The signed review can no longer be used.' } },
+    });
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false, established: true })}
+      onRefresh={onRefresh}
+      onPreviewCorrections={onPreviewCorrections}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    const user = await beginEstablishedCorrection('unlink');
+    const guidance = await screen.findByText(/Refresh the full plan before applying/);
+    const alert = guidance.closest('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(within(alert as HTMLElement).queryByRole('button', { name: 'Retry preview' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeDisabled();
+
+    await user.click(within(alert as HTMLElement).getByRole('button', { name: 'Refresh plan' }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onPreviewCorrections).toHaveBeenCalledTimes(1);
+    await user.click(within(alert as HTMLElement).getByRole('button', { name: 'Revert correction' }));
+    expect(screen.getByRole('button', { name: 'Apply 1 selected change' })).toBeDisabled();
+  });
+
   it('does not let an older API response replace the latest effective review', async () => {
     const older = deferred<PeopleSyncCorrectionPreview>();
     const newer = deferred<PeopleSyncCorrectionPreview>();

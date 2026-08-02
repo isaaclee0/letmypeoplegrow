@@ -1,5 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUnsavedReviewGuard } from './useUnsavedReviewGuard';
 
@@ -20,6 +21,16 @@ function GuardHarness({
     <button type="button" onClick={() => confirmAction(onRefresh)}>Refresh plan</button>
     <a href="/app/settings">Settings</a>
   </>;
+}
+
+function BrowserReviewHarness() {
+  const [choice, setChoice] = React.useState('Keep original');
+  const dirty = choice !== 'Keep original';
+  useUnsavedReviewGuard({ dirty, onConfirmDiscard: vi.fn() });
+  return <label>
+    Review choice
+    <input value={choice} onChange={(event) => setChoice(event.target.value)} />
+  </label>;
 }
 
 function capturedClickListener(spy: ReturnType<typeof vi.spyOn>) {
@@ -148,6 +159,25 @@ describe('useUnsavedReviewGuard', () => {
     expect(onConfirmDiscard).not.toHaveBeenCalled();
   });
 
+  it('preserves dirty local choices when real BrowserRouter back traversal is cancelled', async () => {
+    window.history.replaceState({ idx: 0 }, '', '/before-review');
+    window.history.pushState({ idx: 1 }, '', '/batch-review');
+    vi.mocked(window.confirm).mockReturnValue(false);
+    render(<BrowserRouter><Routes>
+      <Route path="/before-review" element={<p>Before review</p>} />
+      <Route path="/batch-review" element={<BrowserReviewHarness />} />
+    </Routes></BrowserRouter>);
+    const input = screen.getByRole('textbox', { name: 'Review choice' });
+    fireEvent.change(input, { target: { value: 'Link to Taylor' } });
+
+    act(() => window.history.back());
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.location.pathname).toBe('/batch-review'));
+    expect(screen.queryByText('Before review')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Review choice' })).toHaveValue('Link to Taylor');
+  });
+
   it('reverses cancelled forward navigation without prompting again for the restoration event', () => {
     const originalState = window.history.state;
     window.history.replaceState({ ...originalState, idx: 5 }, '');
@@ -185,16 +215,16 @@ describe('useUnsavedReviewGuard', () => {
     const { rerender, unmount } = render(<GuardHarness dirty onConfirmDiscard={vi.fn()} />);
 
     const beforeUnload = addWindow.mock.calls.find(([type]) => type === 'beforeunload')?.[1];
-    const popState = addWindow.mock.calls.find(([type]) => type === 'popstate')?.[1];
     const internalClick = addDocument.mock.calls.find(([type, , options]) => type === 'click' && options === true)?.[1];
     expect(beforeUnload).toBeDefined();
-    expect(popState).toBeDefined();
     expect(internalClick).toBeDefined();
 
     rerender(<GuardHarness dirty={false} onConfirmDiscard={vi.fn()} />);
     expect(removeWindow).toHaveBeenCalledWith('beforeunload', beforeUnload);
-    expect(removeWindow).toHaveBeenCalledWith('popstate', popState);
     expect(removeDocument).toHaveBeenCalledWith('click', internalClick, true);
+    vi.mocked(window.confirm).mockClear();
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(window.confirm).not.toHaveBeenCalled();
 
     rerender(<GuardHarness dirty onConfirmDiscard={vi.fn()} />);
     const latestBeforeUnload = [...addWindow.mock.calls].reverse().find(([type]) => type === 'beforeunload')?.[1];
