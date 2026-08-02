@@ -14,6 +14,8 @@ The design is provider-neutral. Planning Center and Elvanto use the same page, t
 - Open batch review in the full LMPG content area while retaining the main application sidebar.
 - Replace large identity comparison cards with a dense, searchable, filterable, paginated table.
 - Let an administrator change any proposed addition into a match and change any proposed match to another LMPG person.
+- Let an administrator safely correct or remove an incorrect established provider link.
+- Preview the newly linked identity's managed effects before an established-link correction is applied.
 - Distinguish rejecting one exact pairing from deferring the provider person for later review.
 - Put the single apply action after all review options and warnings.
 - Preserve review-token validation, church isolation, collision protection, source promotion, and transactional apply.
@@ -21,10 +23,12 @@ The design is provider-neutral. Planning Center and Elvanto use the same page, t
 
 ## Non-goals
 
-- Displaying every provider person already connected by an established durable link.
+- Displaying established links in the default new-decision table.
+- Managing established provider links whose identities are outside the batch source being reviewed.
 - Permanently ignoring a provider person without a management screen for ignored identities.
 - Editing provider-owned people, households, Lists, Categories, or Groups.
-- Changing an established durable provider link from this batch review.
+- Automatically swapping two claimed LMPG people without explicit corrections for both provider identities.
+- Reversing historical attendance, notes, or fields the integration does not manage when a link is corrected.
 - Replacing batch configuration, source selection, or scheduling.
 - Introducing a multi-step review wizard.
 
@@ -50,19 +54,29 @@ Leaving the route or refreshing the plan after changing a decision prompts befor
 
 After a successful apply, the app returns to the relevant integration batch list, reloads the batch and sync status, and shows a success message.
 
-## Identity decision scope
+## Identity tabs and scope
 
-The table contains only provider people for whom the current plan requires a new identity decision:
+The identity area has two tabs.
+
+### Decisions
+
+The default **Decisions** tab contains only provider people for whom the current plan requires a new identity decision:
 
 - deterministic suggested matches;
 - ambiguous or held identities requiring an explicit choice; and
 - proposed new LMPG people.
 
-It does not contain people whose durable provider-to-LMPG link already exists. Existing links are unchanged by the review and may number in the thousands. Non-identity plan actions for already-linked people remain visible in the compact sections below the table.
+It does not contain people whose durable provider-to-LMPG link already exists. Non-identity plan actions for already-linked people remain visible in the compact sections below the table.
+
+### Already linked
+
+The **Already linked** tab contains established provider-to-LMPG links whose provider identities are present in the reviewed batch source snapshot. It is loaded and paginated separately so thousands of routine links do not clutter the default decision workflow. It exists specifically to find and correct an erroneous established link.
+
+Links whose provider identities are outside the current batch source cannot be safely displayed with current source context and remain outside this batch-review design.
 
 ## Desktop identity table
 
-The desktop table columns are:
+Both tabs use the same desktop columns:
 
 1. **Integration source name**
 2. **Integration source family/household**
@@ -86,9 +100,9 @@ This preserves the source-to-LMPG comparison order, keeps the editable decision 
 
 ## Search, filters, and pagination
 
-Search matches provider names, LMPG names, provider household names, and LMPG family names across the complete identity decision set.
+Search matches provider names, LMPG names, provider household names, and LMPG family names across the complete set for the active tab.
 
-Filters are:
+The **Decisions** filters are:
 
 - **All**
 - **Needs attention**
@@ -98,7 +112,7 @@ Filters are:
 
 Filtering and search happen before pagination. The default page size is 50 rows, with a rows-per-page selector and accessible previous/next controls. Changing search or filters returns to the first page. A decision made on one page remains in local state when the administrator changes page, filter, or search.
 
-The filter counts and summary chips reflect the complete decision set, not only the current page.
+The **Already linked** tab supports search and pagination but does not need the decision-state filters. Filter counts and summary chips reflect the complete relevant set, not only the current page.
 
 ## Default decisions
 
@@ -144,6 +158,32 @@ After either choice, the row remains editable. Choosing a valid match or additio
 
 The product does not offer “permanently ignore this provider person” in this design. That stronger feature requires a discoverable ignored-identities management surface and is separately scoped.
 
+## Correcting an established link
+
+In the **Already linked** tab, clicking or tapping the linked LMPG person opens an established-link dialog with two actions.
+
+### Change linked person
+
+The administrator searches for and selects a different eligible LMPG person. The draft final mapping then:
+
+- removes the provider identity's old established link;
+- records the old exact provider/LMPG pairing as rejected;
+- assigns the provider identity to the selected LMPG person;
+- frees the previous LMPG person for a different provider identity in the same review; and
+- clears any review hold for the reassigned provider identity.
+
+### Unlink and review again
+
+The draft final mapping removes the established link, records the old exact pairing as rejected, and places the provider identity on review hold. The identity is not immediately matched or created by unattended sync. It returns as a decision in a later manual review unless the administrator assigns it within the current review.
+
+The review validates uniqueness against the complete final mapping rather than applying edits in click order. This lets one explicit correction free an LMPG person that another explicit decision uses in the same transaction. Selecting an LMPG person still claimed by an unchanged established link or another final decision is blocked. The UI does not infer or perform a two-person swap; the administrator must explicitly correct both rows.
+
+Changing an established link can change which provider data manages each LMPG person. After such an edit, the client automatically requests a refreshed signed preview using the draft final identity mapping. The preview shows all downstream managed-field, people-type, family, lifecycle, and gathering effects produced by the correction. Apply remains disabled until the preview for the current draft mapping succeeds.
+
+The refreshed preview does not attempt to undo history. The correction projects the newly linked identity's current managed values onto the new LMPG target in the same reviewed transaction, and that identity supplies future provider-managed values. Attendance history, notes, and fields outside the integration's managed set remain unchanged. Missing or unknown provider values retain the existing rule that they do not erase known LMPG values.
+
+Apply performs old-link removal, the new link or hold, the old-pair exclusion, provider-managed changes, family and gathering effects, and Planning Center's denormalized `planning_center_id` clearing or reassignment in one church-scoped transaction. A failure rolls back the complete correction.
+
 ## Non-identity plan sections
 
 The large summary cards and verbose plan cards are replaced with compact count chips and dense expandable sections below the identity table:
@@ -164,6 +204,8 @@ Apply is disabled when:
 
 - a required identity decision is incomplete;
 - two decisions claim the same LMPG person;
+- an established-link correction collides with the final identity mapping;
+- the signed downstream preview does not represent the current draft mapping;
 - a destructive confirmation is incomplete;
 - the review context is malformed;
 - the review is stale or already applied;
@@ -172,9 +214,9 @@ Apply is disabled when:
 
 The disabled state includes administrator-readable guidance. Incomplete or colliding identity decisions provide a shortcut that selects **Needs attention** and returns to the relevant page or first affected row.
 
-A stale source snapshot, changed local roster, changed match-review state, or changed plan applies nothing. The page explains that refresh is required. Refresh obtains a new signed review and resets local choices only after the administrator accepts the dirty-state warning.
+A stale source snapshot, changed local roster, changed established-link mapping, changed match-review state, changed plan, or changed correction preview applies nothing. The page explains that refresh is required. Refresh obtains a new signed review and resets local choices only after the administrator accepts the dirty-state warning.
 
-Apply continues to send one explicit outcome for every identity in the signed review context. The server rebuilds and validates the review before applying. Identity links, created people, holds, exclusions, source promotion, accepted non-identity actions, and presence tracking retain their existing transactional guarantees.
+Apply continues to send one explicit outcome for every new-decision identity in the signed review context plus the explicit established-link corrections represented by the signed preview. The server rebuilds and validates the review before applying. Identity links, created people, corrected links, holds, exclusions, source promotion, accepted non-identity actions, and presence tracking retain their transactional guarantees.
 
 ## Architecture
 
@@ -183,6 +225,7 @@ The client adds a provider-neutral dedicated review page composed from focused u
 - review route/page orchestration;
 - compact header and summary chips;
 - identity decision table with responsive row rendering;
+- established-link table and correction dialog;
 - client-side search, filters, and pagination;
 - LMPG person-picker dialog;
 - reject-or-skip dialog;
@@ -191,7 +234,7 @@ The client adds a provider-neutral dedicated review page composed from focused u
 
 Planning Center and Elvanto integration panels navigate to the shared page rather than rendering `SyncReview` inside a batch card. Provider adapters supply labels, batch/source metadata, plan loading, refreshing, applying, and the post-apply return destination.
 
-The current V2 identity decision contract already represents the required behaviour:
+The current V2 identity decision contract already represents the new-decision behaviour:
 
 - `accept` for an unchanged suggested match;
 - `link` for selecting another LMPG individual;
@@ -199,7 +242,9 @@ The current V2 identity decision contract already represents the required behavi
 - `defer` for **Skip and ask again**; and
 - `defer` with `excludeIndividualId` for **Reject this match**.
 
-The existing match-review tables store holds and exact-pair exclusions, so this design requires no database migration or new persistence model. Server changes should be limited to gaps discovered while exposing the existing decision contract through the new page; any contract expansion requires a separate safety review.
+The established-link correction flow extends the review contract with a signed draft final mapping and its downstream preview. The server must recompute this preview from fresh provider and church-scoped local state rather than trust client-projected changes. Apply must verify that the signed preview digest matches the submitted final mapping and current review context.
+
+The current person-link uniqueness constraints, match-review holds, and exact-pair exclusions remain the persistence model, so no database migration is expected. Link-repository behaviour does require an explicit transactional correction operation; ordinary upsert intentionally rejects reassignment collisions and must remain strict for other callers. Planning Center correction also keeps the legacy `individuals.planning_center_id` value consistent with the provider-neutral link table.
 
 ## Accessibility
 
@@ -216,6 +261,7 @@ The existing match-review tables store holds and exact-pair exclusions, so this 
 
 - **Plan load failure:** keep the dedicated page and show retry and back actions.
 - **Refresh failure:** preserve the current review and local choices because no replacement review was accepted.
+- **Correction-preview failure:** preserve the draft correction, block apply, and offer retry or revert for the affected edit.
 - **Stale review:** apply nothing and require an explicit refresh.
 - **Local person became unavailable:** identify the affected provider and LMPG names without exposing raw IDs.
 - **Collision:** block apply and identify every conflicting row.
@@ -229,13 +275,19 @@ Shared client tests cover:
 
 - dedicated routing, reload context, back navigation, and post-apply return for both providers;
 - dirty-state prompts for refresh and navigation;
-- identity scope excluding established durable links;
+- the default **Decisions** tab excluding established durable links;
+- separately loaded, searchable, and paginated established links from the current batch source;
 - default suggested-match and proposed-add decisions;
 - Add to Match, Match to another Match, and Match to Add transitions;
 - exact-pair rejection versus skip-without-exclusion;
 - editing a rejected or skipped row before apply;
 - previously excluded pairing confirmation;
 - duplicate local-person claims and incomplete decisions;
+- established-link reassignment, unlink-to-hold, old-pair exclusion, and explicit two-row corrections;
+- refusal to infer a swap or claim an unchanged established target;
+- signed downstream-preview refresh, failure, staleness, and apply blocking;
+- atomic correction of provider-neutral links, holds/exclusions, managed effects, and PCO legacy IDs;
+- preservation of attendance, notes, unmanaged fields, and known values when provider data is missing;
 - search across provider and LMPG family context;
 - filter counts, filter transitions, 50-row pagination, and retained off-page choices;
 - responsive comparison-row rendering without horizontal scrolling;
