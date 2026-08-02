@@ -287,6 +287,31 @@ describe('SyncReview compact V2 workflow', () => {
     expect(onApply).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a stale review locked when its owner catches and resolves a failed refresh', async () => {
+    const user = userEvent.setup();
+    const stale = Object.assign(new Error('The reviewed plan was out of date.'), { code: 'SYNC_PLAN_STALE' });
+    const onApply = vi.fn().mockRejectedValue(stale);
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false })}
+      onRefresh={onRefresh}
+      onApply={onApply}
+      applying={false}
+    />);
+
+    const apply = screen.getByRole('button', { name: 'Apply 1 selected change' });
+    await user.click(apply);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This review is out of date.');
+
+    await user.click(within(alert).getByRole('button', { name: 'Refresh plan' }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('This review is out of date.')).toBeInTheDocument();
+    expect(apply).toBeDisabled();
+  });
+
   it('makes an already-applied review refresh-only', async () => {
     const user = userEvent.setup();
     const replay = Object.assign(new Error('Request failed'), {
@@ -312,6 +337,45 @@ describe('SyncReview compact V2 workflow', () => {
     rerender(<SyncReview provider="planning_center" review={v2Review({ attention: false, runId: 5, token: 'disabled' })} onRefresh={vi.fn()} onApply={vi.fn()} applying={false} interactionDisabled />);
     expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+  });
+
+  it.each([
+    ['an object instead of a correction list', {}],
+    ['a relink with a non-numeric source person', [{ externalPersonId: 'ext-established', outcome: 'relink', fromIndividualId: '40', individualId: 30 }]],
+    ['a correction with an unknown outcome', [{ externalPersonId: 'ext-established', outcome: 'replace', fromIndividualId: 40, individualId: 30 }]],
+  ])('fails closed for malformed link corrections: %s', (_label, linkCorrections) => {
+    const malformed = v2Review({ attention: false });
+    malformed.plan.reviewContext!.linkCorrections = linkCorrections as never;
+
+    render(<SyncReview
+      provider="planning_center"
+      review={malformed}
+      onRefresh={vi.fn()}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+    expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed when an established-link target is malformed', () => {
+    const malformed = v2Review({ attention: false });
+    malformed.plan.reviewContext!.establishedLinks = {
+      'ext-established': { individualId: '40' },
+    } as never;
+
+    render(<SyncReview
+      provider="planning_center"
+      review={malformed}
+      onRefresh={vi.fn()}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be safely loaded');
+    expect(screen.queryByRole('table', { name: 'Identity decisions' })).not.toBeInTheDocument();
   });
 
   it('resets local decisions for an explicit refreshed review token', async () => {
@@ -364,6 +428,20 @@ describe('SyncReview compact V2 workflow', () => {
 });
 
 describe('SyncReview correction previews and dirty state', () => {
+  it('shows established links read-only when the review owner cannot preview corrections', () => {
+    render(<SyncReview
+      provider="elvanto"
+      review={v2Review({ attention: false, established: true })}
+      onRefresh={vi.fn()}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    expect(screen.getByText('Already linked (read-only)')).toBeInTheDocument();
+    expect(screen.getByText(/Established Source.*Current Link/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Correct linked person for Established Source' })).not.toBeInTheDocument();
+  });
+
   it('uses the base token, disables apply while pending, and applies the signed preview token', async () => {
     const pending = deferred<PeopleSyncCorrectionPreview>();
     const onPreviewCorrections = vi.fn(() => pending.promise);
@@ -471,15 +549,22 @@ describe('SyncReview correction previews and dirty state', () => {
   it('clears dirty state after the review owner accepts a successful plan refresh', async () => {
     const user = userEvent.setup();
     const onDirtyChange = vi.fn();
-    const onRefresh = vi.fn().mockResolvedValue(undefined);
-    render(<SyncReview
-      provider="planning_center"
-      review={v2Review()}
-      onRefresh={onRefresh}
-      onApply={vi.fn()}
-      onDirtyChange={onDirtyChange}
-      applying={false}
-    />);
+    const onRefresh = vi.fn();
+    function RefreshOwner() {
+      const [ownedReview, setOwnedReview] = React.useState(v2Review());
+      return <SyncReview
+        provider="planning_center"
+        review={ownedReview}
+        onRefresh={() => {
+          onRefresh();
+          setOwnedReview(v2Review({ token: 'refreshed-token', runId: 2 }));
+        }}
+        onApply={vi.fn()}
+        onDirtyChange={onDirtyChange}
+        applying={false}
+      />;
+    }
+    render(<RefreshOwner />);
 
     await chooseAlternativeForAttention();
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));

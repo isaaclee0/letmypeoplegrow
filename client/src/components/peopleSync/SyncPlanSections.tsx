@@ -55,6 +55,11 @@ export function deriveSyncPlanView(review: PeopleSyncReview, state: SyncSelectio
   const suggestionStillAccepted = (action: { externalPersonId?: string; individualId?: number | null }) =>
     !(action.externalPersonId && rejectedSuggestedExternalIds.has(action.externalPersonId))
     && !(action.individualId != null && rejectedSuggestedIndividualIds.has(action.individualId));
+  const gatheringAdditionStillSelected = (action: { externalPersonId: string; individualId: number | null }) => {
+    if (!suggestionStillAccepted(action)) return false;
+    if (action.individualId !== null) return true;
+    return state.identityDecisions?.[action.externalPersonId]?.outcome === 'create';
+  };
 
   return {
     updateManagedFields: isV2 ? plan.updateManagedFields.filter(suggestionStillAccepted) : plan.updateManagedFields,
@@ -66,7 +71,7 @@ export function deriveSyncPlanView(review: PeopleSyncReview, state: SyncSelectio
     linkFamilies: plan.linkFamilies,
     addFamilies: plan.addFamilies,
     renameFamily: plan.renameFamily,
-    addToGathering: isV2 ? plan.addToGathering.filter(suggestionStillAccepted) : plan.addToGathering,
+    addToGathering: isV2 ? plan.addToGathering.filter(gatheringAdditionStillSelected) : plan.addToGathering,
     removeFromGathering: isV2 ? plan.removeFromGathering.filter(suggestionStillAccepted) : plan.removeFromGathering,
     archive: isV2 ? plan.archive.filter(suggestionStillAccepted) : plan.archive,
     reactivate: isV2 ? plan.reactivate.filter(suggestionStillAccepted) : plan.reactivate,

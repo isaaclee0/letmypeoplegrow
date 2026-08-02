@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanningCenterSyncReview from './PlanningCenterSyncReview';
@@ -9,6 +9,7 @@ import type { PeopleSyncPlan, PeopleSyncReview } from '../peopleSync/types';
 vi.mock('../../services/api', () => ({
   integrationsAPI: {
     getPlanningCenterBatchPlan: vi.fn(),
+    previewPlanningCenterLinkCorrections: vi.fn(),
     applyPlanningCenterBatch: vi.fn(),
   },
 }));
@@ -53,6 +54,37 @@ const review: PeopleSyncReview = {
   },
 };
 
+function establishedReview(reviewToken: string, replacementId = 40): PeopleSyncReview {
+  return {
+    ...review,
+    reviewToken,
+    plan: {
+      ...review.plan,
+      people: {
+        external: {
+          ...review.plan.people!.external,
+          'pco-established': { firstName: 'Established', lastName: 'Source', family: { state: 'none' } },
+        },
+        local: {
+          ...review.plan.people!.local,
+          '30': { firstName: 'Replacement', lastName: 'Local', matchEligible: true, family: { state: 'none' } },
+          '40': { firstName: 'Current', lastName: 'Link', matchEligible: true, family: { state: 'none' } },
+        },
+      },
+      reviewContext: {
+        ...review.plan.reviewContext!,
+        correctionContractVersion: 1,
+        manualCandidateIndividualIds: [7, 8, 30, 40],
+        establishedLinks: { 'pco-established': { individualId: 40 } },
+        projectedEstablishedLinks: { 'pco-established': { individualId: replacementId } },
+        linkCorrections: replacementId === 40 ? [] : [{
+          externalPersonId: 'pco-established', outcome: 'relink', fromIndividualId: 40, individualId: replacementId,
+        }],
+      },
+    },
+  };
+}
+
 describe('PlanningCenterSyncReview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -83,6 +115,40 @@ describe('PlanningCenterSyncReview', () => {
         acceptFamilyRenameIds: [],
       },
     }));
+  });
+
+  it('previews established-link corrections through the real batch owner and applies the signed token', async () => {
+    const base = establishedReview('pco-base-review');
+    const preview = establishedReview('pco-correction-preview', 30);
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockResolvedValue({ data: { success: true, ...base } });
+    vi.mocked(integrationsAPI.previewPlanningCenterLinkCorrections).mockResolvedValue({
+      data: { success: true, ...preview },
+    });
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+
+    await screen.findByText('Planning Center sync review');
+    fireEvent.click(screen.getByRole('tab', { name: 'Already linked 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Correct linked person for Established Source' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Change linked person' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Select Replacement Local' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Correct linked person for Established Source' })).toHaveTextContent('Replacement Local'));
+    expect(integrationsAPI.previewPlanningCenterLinkCorrections).toHaveBeenCalledWith(7, {
+      baseReviewToken: 'pco-base-review',
+      linkCorrections: {
+        'pco-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
+    await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(7, expect.objectContaining({
+      reviewToken: 'pco-correction-preview',
+      selections: expect.objectContaining({
+        linkCorrections: {
+          'pco-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
+        },
+      }),
+    })));
   });
 
   it('offers a plan refresh instead of a blind apply retry when the review is stale', async () => {

@@ -2,7 +2,7 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from './ElvantoBatchEditor';
 import SyncReview from '../peopleSync/SyncReview';
-import type { PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
+import type { EstablishedLinkCorrection, PeopleSyncBatch, PeopleSyncReview, PeopleSyncSelections } from '../peopleSync/types';
 import {
   cancelAuthorityPreviewWithRetry,
   type AuthorityPreviewCancellation,
@@ -166,6 +166,18 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
     }
   };
 
+  const previewBatchLinkCorrections = async (
+    baseReviewToken: string,
+    linkCorrections: Record<string, EstablishedLinkCorrection>,
+  ) => {
+    if (!batch) throw new Error('The Elvanto batch is no longer available.');
+    const response = await elvantoSyncAPI.previewLinkCorrections(batch.id, {
+      baseReviewToken,
+      linkCorrections,
+    });
+    return response.data;
+  };
+
   const retryAppliedBatchRefresh = async () => {
     setBusy(true);
     setError(null);
@@ -321,7 +333,7 @@ export default function ElvantoOnboarding({ step, onStepChange, onContinueToGath
           </div>
         ) : batchReview && (
           <div role="region" aria-label="Elvanto onboarding batch sync review" className="rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20">
-            <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onApply={applyBatch} applying={busy} />
+            <SyncReview provider="elvanto" review={batchReview} onRefresh={() => batch ? loadBatchReview(batch) : undefined} onPreviewCorrections={previewBatchLinkCorrections} onApply={applyBatch} applying={busy} />
           </div>
         )}
         <div className="flex flex-wrap gap-3">

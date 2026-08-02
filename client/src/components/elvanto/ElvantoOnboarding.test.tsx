@@ -7,7 +7,7 @@ import type { PeopleSyncBatch, PeopleSyncReview } from '../peopleSync/types';
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn() },
-  elvantoSyncAPI: { createBatch: vi.fn(), getBatchPlan: vi.fn(), applyBatch: vi.fn(), listBatches: vi.fn() },
+  elvantoSyncAPI: { createBatch: vi.fn(), getBatchPlan: vi.fn(), previewLinkCorrections: vi.fn(), applyBatch: vi.fn(), listBatches: vi.fn() },
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
   peopleSyncAPI: { previewAuthority: vi.fn(), cancelAuthorityPreview: vi.fn(), applyAuthority: vi.fn() },
 }));
@@ -21,24 +21,33 @@ vi.mock('../peopleSync/BatchSourceControls', () => ({
 vi.mock('../peopleSync/SyncReview', async () => {
   const ReactModule = await import('react');
   return {
-    default: ({ review: renderedReview, onApply, onRefresh, applying, interactionDisabled }: {
+    default: ({ review: renderedReview, onApply, onRefresh, onPreviewCorrections, applying, interactionDisabled }: {
       review: PeopleSyncReview;
       onApply: (reviewToken: string, selections: Record<string, never>) => void | Promise<void>;
       onRefresh: () => void | Promise<void>;
+      onPreviewCorrections?: (baseReviewToken: string, corrections: Record<string, { outcome: 'unlink'; fromIndividualId: number }>) => Promise<{ reviewToken: string }>;
       applying?: boolean;
       interactionDisabled?: boolean;
     }) => {
       const [stale, setStale] = ReactModule.useState(false);
+      const [correctionToken, setCorrectionToken] = ReactModule.useState<string | null>(null);
       const disabled = Boolean(applying || interactionDisabled);
       return (
         <section aria-label="Elvanto source review">
           <p>Elvanto sync review</p>
+          {correctionToken && <p>Correction token {correctionToken}</p>}
           {!stale && <button type="button" disabled={disabled} onClick={async () => {
             try { await onApply(renderedReview.reviewToken, {}); } catch (cause) {
               if ((cause as { response?: { data?: { code?: string } } }).response?.data?.code === 'SYNC_PLAN_STALE') setStale(true);
             }
           }}>Apply reviewed source</button>}
           <button type="button" disabled={disabled} onClick={() => void onRefresh()}>Refresh plan</button>
+          {onPreviewCorrections && <button type="button" disabled={disabled} onClick={async () => {
+            const preview = await onPreviewCorrections(renderedReview.reviewToken, {
+              'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
+            });
+            setCorrectionToken(preview.reviewToken);
+          }}>Preview onboarding correction</button>}
         </section>
       );
     },
@@ -144,6 +153,25 @@ describe('ElvantoOnboarding source review', () => {
     expect(screen.queryByText('Keep LMPG aligned with Elvanto?')).not.toBeInTheDocument();
     await act(async () => { refreshedBatches.resolve({ data: { batches: [promotedBatch] } }); });
     expect(await screen.findByText('Keep LMPG aligned with Elvanto?')).toBeInTheDocument();
+  });
+
+  it('wires onboarding batch correction previews through the saved batch owner', async () => {
+    vi.mocked(elvantoSyncAPI.previewLinkCorrections).mockResolvedValue({
+      data: { reviewToken: 'signed-onboarding-correction' },
+    } as never);
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose Youth Group' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create batch' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview onboarding correction' }));
+
+    expect(await screen.findByText('Correction token signed-onboarding-correction')).toBeInTheDocument();
+    expect(elvantoSyncAPI.previewLinkCorrections).toHaveBeenCalledWith(42, {
+      baseReviewToken: 'review-token',
+      linkCorrections: {
+        'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
+      },
+    });
   });
 
   it('requires batch creation to return a pending source draft before it can begin review', async () => {

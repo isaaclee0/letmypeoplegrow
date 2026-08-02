@@ -76,6 +76,31 @@ function isPositiveIntegerArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((id) => Number.isSafeInteger(id) && id > 0);
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isValidEstablishedLinks(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.values(value).every((link) =>
+    isRecord(link) && isPositiveInteger(link.individualId)));
+}
+
+function isValidLinkCorrections(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  const externalIds = new Set<string>();
+  return value.every((correction) => {
+    if (!isRecord(correction)
+      || typeof correction.externalPersonId !== 'string'
+      || correction.externalPersonId.length === 0
+      || !isPositiveInteger(correction.fromIndividualId)
+      || externalIds.has(correction.externalPersonId)) return false;
+    externalIds.add(correction.externalPersonId);
+    return correction.outcome === 'unlink'
+      || (correction.outcome === 'relink' && isPositiveInteger(correction.individualId));
+  });
+}
+
 function isValidCreatePerson(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return typeof value.firstName === 'string'
@@ -91,7 +116,11 @@ function hasValidV2Context(review: PeopleSyncReview): boolean {
   if (review.decisionContractVersion !== 2
     || context?.version !== 2
     || !isPositiveIntegerArray(context.manualCandidateIndividualIds)
-    || !isRecord(context.identities)) return false;
+    || !isRecord(context.identities)
+    || (context.correctionContractVersion !== undefined && context.correctionContractVersion !== 1)
+    || !isValidEstablishedLinks(context.establishedLinks)
+    || !isValidEstablishedLinks(context.projectedEstablishedLinks)
+    || !isValidLinkCorrections(context.linkCorrections)) return false;
 
   return Object.values(context.identities).every((identity) => {
     if (!isRecord(identity)) return false;
@@ -403,6 +432,21 @@ export default function SyncReview({
   const malformedV2 = declaresV2 && !validV2Context;
   const reviewContext = validV2Context ? plan.reviewContext : undefined;
   const isV2 = declaresV2 && validV2Context;
+  const establishedLinksReadOnly = isV2 && !onPreviewCorrections;
+  const identityTableReview = establishedLinksReadOnly && reviewContext
+    ? {
+      ...effectiveReview,
+      plan: {
+        ...effectiveReview.plan,
+        reviewContext: {
+          ...reviewContext,
+          establishedLinks: {},
+          projectedEstablishedLinks: {},
+          linkCorrections: [],
+        },
+      },
+    }
+    : effectiveReview;
   const unmatchedCoverageCount = effectiveReview.coverage?.unmatchedActiveLocalRegulars ?? 0;
   const externalPerson = (id: string) => displayName(directory.external[id]) || 'External person';
   const localPerson = (id: number) => displayName(directory.local[String(id)]) || 'Local person';
@@ -437,7 +481,7 @@ export default function SyncReview({
   const incompleteExternalIds = incompleteIdentityExternalIds(state, reviewContext);
   const affectedExternalId = incompleteExternalIds[0] || collisions[0]?.[1][0];
   const planView = deriveSyncPlanView(effectiveReview, state);
-  const signedCorrections = correctionsForReview(effectiveReview);
+  const signedCorrections = validV2Context ? correctionsForReview(effectiveReview) : {};
   const correctionsReady = recordsMatch(state.linkCorrections, signedCorrections);
   const requiresConfirmation = planView.archive.length > 0
     || planView.removeFromGathering.length > 0
@@ -481,9 +525,6 @@ export default function SyncReview({
   const guardedRefresh = async () => {
     try {
       await onRefresh();
-      setApplyError(null);
-      setConfirmedDestructiveChanges(false);
-      markClean();
     } catch {
       // Refresh owners already expose their own provider-specific error state.
     }
@@ -629,13 +670,34 @@ export default function SyncReview({
           <div ref={identityReviewRootRef}>
             <IdentityReviewTable
               ref={tableRef}
-              review={effectiveReview}
+              review={identityTableReview}
               state={state}
               onStateChange={setState}
               onPreviewCorrections={previewCorrections}
               previewing={previewing}
             />
           </div>
+        )}
+
+        {establishedLinksReadOnly && reviewContext && Object.keys(reviewContext.establishedLinks || {}).length > 0 && (
+          <LegacySection title="Already linked (read-only)" count={Object.keys(reviewContext.establishedLinks || {}).length}>
+            <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-200">
+              {Object.entries(reviewContext.establishedLinks || {}).map(([externalId, established]) => {
+                const correction = state.linkCorrections?.[externalId];
+                const projected = reviewContext.projectedEstablishedLinks?.[externalId];
+                const targetId = correction?.outcome === 'unlink'
+                  ? null
+                  : correction?.outcome === 'relink'
+                    ? correction.individualId
+                    : projected?.individualId ?? established.individualId;
+                return (
+                  <li key={externalId}>
+                    {externalPerson(externalId)} → {targetId === null ? 'Skipped for now' : localPerson(targetId)}
+                  </li>
+                );
+              })}
+            </ul>
+          </LegacySection>
         )}
 
         {!declaresV2 && (

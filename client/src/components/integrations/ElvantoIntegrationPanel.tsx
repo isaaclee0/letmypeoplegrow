@@ -6,6 +6,7 @@ import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import SyncReview from '../peopleSync/SyncReview';
 import type {
+  EstablishedLinkCorrection,
   PeopleSyncBatch,
   PeopleSyncReview,
   PeopleSyncRun,
@@ -335,6 +336,18 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     }
   };
 
+  const previewReviewLinkCorrections = async (
+    baseReviewToken: string,
+    linkCorrections: Record<string, EstablishedLinkCorrection>,
+  ) => {
+    if (!review) throw new Error('The Elvanto review is no longer open.');
+    const response = await elvantoSyncAPI.previewLinkCorrections(review.batch.id, {
+      baseReviewToken,
+      linkCorrections,
+    });
+    return response.data;
+  };
+
   const deleteBatch = async (batch: PeopleSyncBatch) => {
     try {
       await elvantoSyncAPI.deleteBatch(batch.id);
@@ -436,6 +449,7 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                         provider="elvanto"
                         review={review.data}
                         onRefresh={() => openReview(batch)}
+                        onPreviewCorrections={previewReviewLinkCorrections}
                         onApply={applyReview}
                         applying={applying || reviewLoading}
                       />}

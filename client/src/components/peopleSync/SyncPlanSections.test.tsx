@@ -169,4 +169,47 @@ describe('SyncPlanSections', () => {
     expect(screen.queryByText('Update Local Match')).not.toBeInTheDocument();
     expect(screen.queryByText('Add Source Match to a gathering')).not.toBeInTheDocument();
   });
+
+  it('removes a new person gathering addition when its identity changes from create to defer', async () => {
+    const user = userEvent.setup();
+    const review = reviewFixture({
+      addPeople: [{
+        id: 'add:ext-held', externalPersonId: 'ext-held', firstName: 'Source', lastName: 'Held',
+        isChild: false, peopleType: 'regular', externalFamilyId: null,
+        reason: 'no_match', reviewRequired: true,
+      }],
+      addToGathering: [{
+        id: 'gathering:ext-held', batchId: 1, gatheringTypeId: 2, externalPersonId: 'ext-held',
+        individualId: null, eligibleBatchIds: [1], reason: 'batch_eligible',
+      }],
+    });
+    const initialState = initializeSyncSelectionState(review);
+    initialState.identityDecisions = {
+      ...initialState.identityDecisions,
+      'ext-held': { outcome: 'create' },
+    };
+
+    function DecisionHarness() {
+      const [state, setState] = useState(initialState);
+      return (
+        <>
+          <button type="button" onClick={() => setState((current) => ({
+            ...current,
+            identityDecisions: { ...current.identityDecisions, 'ext-held': { outcome: 'defer' } },
+          }))}>
+            Decide later
+          </button>
+          <SyncPlanSections review={review} state={state} onStateChange={setState} />
+        </>
+      );
+    }
+
+    render(<DecisionHarness />);
+    expect(screen.getByText('Add Source Held to a gathering')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Decide later' }));
+
+    expect(screen.queryByText('Add Source Held to a gathering')).not.toBeInTheDocument();
+    expect(screen.getByText('Source Held will be skipped for now.')).toBeInTheDocument();
+  });
 });

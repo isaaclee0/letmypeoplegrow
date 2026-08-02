@@ -7,7 +7,7 @@ import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn(), disconnectElvanto: vi.fn() },
-  elvantoSyncAPI: { listBatches: vi.fn(), deleteBatch: vi.fn(), getBatchPlan: vi.fn(), applyBatch: vi.fn() },
+  elvantoSyncAPI: { listBatches: vi.fn(), deleteBatch: vi.fn(), getBatchPlan: vi.fn(), previewLinkCorrections: vi.fn(), applyBatch: vi.fn() },
   gatheringsAPI: { getAll: vi.fn(), create: vi.fn() },
   peopleSyncAPI: { getRuns: vi.fn(), discardSourceDraft: vi.fn(), updateSettings: vi.fn() },
 }));
@@ -21,19 +21,30 @@ const elvantoV2Selections = {
   acceptFamilyRenameIds: [],
 };
 vi.mock('../peopleSync/SyncReview', () => ({
-  default: ({ review, onApply, onRefresh, applying }: {
+  default: ({ review, onApply, onRefresh, onPreviewCorrections, applying }: {
     review: { reviewToken: string };
     onApply: (reviewToken: string, selections: typeof elvantoV2Selections) => void;
     onRefresh: () => void | Promise<void>;
+    onPreviewCorrections?: (baseReviewToken: string, corrections: Record<string, { outcome: 'unlink'; fromIndividualId: number }>) => Promise<{ reviewToken: string }>;
     applying: boolean;
-  }) => (
-    <div>
-      <p>Sync review</p>
-      <p>Review token {review.reviewToken}</p>
-      <button type="button" disabled={applying} onClick={() => onApply(review.reviewToken, elvantoV2Selections)}>Apply shared review</button>
-      <button type="button" disabled={applying} onClick={() => void onRefresh()}>Refresh shared review</button>
-    </div>
-  ),
+  }) => {
+    const [previewToken, setPreviewToken] = React.useState<string | null>(null);
+    return (
+      <div>
+        <p>Sync review</p>
+        <p>Review token {review.reviewToken}</p>
+        {previewToken && <p>Correction token {previewToken}</p>}
+        <button type="button" disabled={applying} onClick={() => onApply(review.reviewToken, elvantoV2Selections)}>Apply shared review</button>
+        <button type="button" disabled={applying} onClick={() => void onRefresh()}>Refresh shared review</button>
+        {onPreviewCorrections && <button type="button" onClick={async () => {
+          const preview = await onPreviewCorrections(review.reviewToken, {
+            'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
+          });
+          setPreviewToken(preview.reviewToken);
+        }}>Preview shared correction</button>}
+      </div>
+    );
+  },
 }));
 
 const settings: PeopleSyncSettings = {
@@ -106,6 +117,24 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     }));
     await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(refreshPeopleSync).toHaveBeenCalledTimes(1));
+  });
+
+  it('wires Elvanto batch correction previews through the shared review owner', async () => {
+    vi.mocked(elvantoSyncAPI.previewLinkCorrections).mockResolvedValue({
+      data: { reviewToken: 'signed-elvanto-correction' },
+    } as never);
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review & sync Members' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview shared correction' }));
+
+    expect(await screen.findByText('Correction token signed-elvanto-correction')).toBeInTheDocument();
+    expect(elvantoSyncAPI.previewLinkCorrections).toHaveBeenCalledWith(5, {
+      baseReviewToken: 'elvanto-review-5',
+      linkCorrections: {
+        'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
+      },
+    });
   });
 
   it('keeps review loading and recoverable errors inside the nested review surface', async () => {
