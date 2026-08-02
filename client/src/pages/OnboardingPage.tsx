@@ -44,7 +44,7 @@ const OnboardingPage: React.FC = () => {
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [locationSearching, setLocationSearching] = useState(false);
-  const [firstBatchId, setFirstBatchId] = useState<number | null>(null);
+  const [firstBatch, setFirstBatch] = useState<PeopleSyncBatch | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [checkinProbe, setCheckinProbe] = useState<'probing' | 'available' | 'unavailable'>('probing');
   const [showCheckinImport, setShowCheckinImport] = useState(false);
@@ -215,7 +215,7 @@ const OnboardingPage: React.FC = () => {
   // applying; the batch is saved regardless and can be run later from
   // Settings).
   const onFirstBatchSaved = (batch: PeopleSyncBatch) => {
-    setFirstBatchId(batch.id);
+    setFirstBatch(batch);
     setStep('pco-review');
   };
 
@@ -407,8 +407,14 @@ const OnboardingPage: React.FC = () => {
               <p className="text-sm text-gray-700">
                 Review Planning Center's selected List before continuing. Applying this review promotes the proposed people source and starts the first sync safely.
               </p>
-              {firstBatchId !== null && (
-                <PlanningCenterSyncReview connected={true} batchId={firstBatchId} onApplied={() => setStep('pco-gatherings')} />
+              {firstBatch !== null && (
+                <PlanningCenterSyncReview
+                  connected={true}
+                  batchId={firstBatch.id}
+                  batchName={firstBatch.name}
+                  sourceName={(firstBatch.draftSource || firstBatch.source)?.name}
+                  onApplied={() => setStep('pco-gatherings')}
+                />
               )}
             </div>
           ) : step === 'pco-gatherings' ? (

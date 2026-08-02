@@ -1,29 +1,31 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api';
 import PlanningCenterIntegrationPanel from './PlanningCenterIntegrationPanel';
 import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
+
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
+
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-router-dom')>(),
+  useNavigate: () => mockNavigate,
+}));
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: {
     getPlanningCenterSyncBatches: vi.fn(), getPlanningCenterSyncStats: vi.fn(),
     getCheckinAvailability: vi.fn(), authorizePlanningCenter: vi.fn(),
     disconnectPlanningCenter: vi.fn(), deletePlanningCenterSyncBatch: vi.fn(),
+    getPlanningCenterBatchPlan: vi.fn(), previewPlanningCenterLinkCorrections: vi.fn(),
+    applyPlanningCenterBatch: vi.fn(),
   },
   peopleSyncAPI: { discardSourceDraft: vi.fn() },
   settingsAPI: { getIntegrationSettings: vi.fn(), updateIntegrationSettings: vi.fn() },
 }));
 vi.mock('../PCOCheckinImport', () => ({ default: () => null }));
 vi.mock('../planningCenter/PlanningCenterBatchEditor', () => ({ default: () => <div>Batch editor</div> }));
-vi.mock('../planningCenter/PlanningCenterSyncReview', () => ({
-  default: ({ onApplied }: { onApplied?: () => void | Promise<void> }) => (
-    <div>
-      <p>Sync review</p>
-      <button type="button" onClick={() => void onApplied?.()}>Complete reviewed sync</button>
-    </div>
-  ),
-}));
 vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
 
 const settings: PeopleSyncSettings = {
@@ -63,6 +65,7 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     vi.mocked(integrationsAPI.getPlanningCenterSyncStats).mockResolvedValue({ data: { totalPeople: 0, syncedPeople: 0 } });
     vi.mocked(integrationsAPI.getCheckinAvailability).mockResolvedValue({ data: { available: false, hasImported: false, peopleLinked: true } });
     vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({ data: { planningCenterSyncEnabled: true, planningCenterTrackBackgroundChecks: false } });
+    vi.mocked(integrationsAPI.getPlanningCenterBatchPlan).mockReturnValue(new Promise(() => {}));
   });
 
   it('shows a pending List change and discards that draft without removing the batch', async () => {
@@ -75,17 +78,33 @@ describe('PlanningCenterIntegrationPanel source drafts', () => {
     await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
   });
 
-  it('uses the primary review action, nests the expanded review, and reloads batches and stats after apply', async () => {
+  it('opens the dedicated batch review without fetching or rendering a review inline when automatic sync is off', async () => {
+    const user = userEvent.setup();
+    vi.mocked(settingsAPI.getIntegrationSettings).mockResolvedValue({
+      data: { planningCenterSyncEnabled: false, planningCenterTrackBackgroundChecks: false },
+    });
     renderPanel();
     const reviewButton = await screen.findByRole('button', { name: 'Review & sync Members' });
     expect(reviewButton).toHaveClass('rounded-md', 'bg-green-600', 'text-white');
 
-    fireEvent.click(reviewButton);
-    expect(screen.getByRole('button', { name: 'Hide review Members' })).toHaveClass('rounded-md', 'border', 'border-gray-300');
+    await user.click(reviewButton);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Complete reviewed sync' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/planning-center/batches/12/review');
+    expect(integrationsAPI.getPlanningCenterBatchPlan).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: 'Planning Center batch sync review' })).not.toBeInTheDocument();
+  });
+
+  it('retains modern batch edit and delete mutations beside dedicated review navigation', async () => {
+    vi.mocked(integrationsAPI.deletePlanningCenterSyncBatch).mockResolvedValue({ data: { success: true } });
+    renderPanel();
+
+    expect(await screen.findByText('Members')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Batch editor')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(integrationsAPI.deletePlanningCenterSyncBatch).toHaveBeenCalledWith(12));
     await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncBatches).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(integrationsAPI.getPlanningCenterSyncStats).toHaveBeenCalledTimes(3));
   });
 
   it('shows source check errors with their safe code instead of calling the source missing', async () => {

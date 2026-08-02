@@ -9,7 +9,21 @@ import { isRetiredLegacyBatchError, planningCenterBatchErrorMessage, RETIRED_LEG
 const reviewSurfaceClass = 'space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20';
 const secondaryButtonClass = 'inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700';
 
-export default function PlanningCenterSyncReview({ connected, batchId, onApplied }: { connected: boolean; batchId: number; onApplied?: () => void | Promise<void> }) {
+interface PlanningCenterSyncReviewProps {
+  connected: boolean;
+  batchId: number;
+  batchName?: string;
+  sourceName?: string;
+  onApplied?: () => void | Promise<void>;
+}
+
+export default function PlanningCenterSyncReview({
+  connected,
+  batchId,
+  batchName,
+  sourceName,
+  onApplied,
+}: PlanningCenterSyncReviewProps) {
   const navigate = useNavigate();
   const [review, setReview] = useState<PeopleSyncReview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -52,8 +66,11 @@ export default function PlanningCenterSyncReview({ connected, batchId, onApplied
     try {
       const response = await integrationsAPI.applyPlanningCenterBatch(batchId, { reviewToken, selections });
       setResult(`Applied sync run ${response.data.runId}.`);
+      if (onApplied) {
+        await onApplied();
+        return;
+      }
       setAppliedRefreshPending(true);
-      await onApplied?.();
       if (await loadReview({ preserveResult: true })) setAppliedRefreshPending(false);
     } catch (caught: any) {
       logger.error('Failed to apply Planning Center batch sync', caught);
@@ -85,9 +102,9 @@ export default function PlanningCenterSyncReview({ connected, batchId, onApplied
   };
 
   return <div role="region" aria-label="Planning Center batch sync review" className={reviewSurfaceClass}>
-    {!appliedRefreshPending && <SyncReview provider="planning_center" review={review} onRefresh={() => refreshReview()} onPreviewCorrections={previewLinkCorrections} onApply={apply} applying={applying || loading} requireAllPlannedArchivesAccepted />}
+    {!appliedRefreshPending && <SyncReview provider="planning_center" review={review} batchName={batchName} sourceName={sourceName} onRefresh={() => refreshReview()} onPreviewCorrections={previewLinkCorrections} onApply={apply} applying={applying || loading} requireAllPlannedArchivesAccepted />}
     {appliedRefreshPending && <p role="status" className="text-sm text-gray-600 dark:text-gray-300">Sync applied. Refresh the plan before reviewing another run.</p>}
-    <button type="button" className={secondaryButtonClass} disabled={applying || loading} onClick={() => void refreshReview(!appliedRefreshPending)}>{appliedRefreshPending ? 'Retry plan refresh' : 'Refresh from Planning Center'}</button>
+    {appliedRefreshPending && <button type="button" className={secondaryButtonClass} disabled={applying || loading} onClick={() => void refreshReview(true)}>Retry plan refresh</button>}
     {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
     {result && <div className="text-sm text-green-700 dark:text-green-400">{result}</div>}
   </div>;

@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { useNavigate } from 'react-router-dom';
 import { elvantoSyncAPI, gatheringsAPI, integrationsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoBatchEditor, { type ElvantoGatheringOption } from '../elvanto/ElvantoBatchEditor';
 import ElvantoGatheringImport from '../elvanto/ElvantoGatheringImport';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
-import SyncReview from '../peopleSync/SyncReview';
 import type {
-  EstablishedLinkCorrection,
   PeopleSyncBatch,
-  PeopleSyncReview,
   PeopleSyncRun,
   PeopleSyncSettings,
 } from '../peopleSync/types';
@@ -223,21 +221,16 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
+  const navigate = useNavigate();
   const [batches, setBatches] = useState<PeopleSyncBatch[]>([]);
   const [gatherings, setGatherings] = useState<ElvantoGatheringOption[]>([]);
   const [runs, setRuns] = useState<PeopleSyncRun[]>([]);
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
-  const [review, setReview] = useState<{ batch: PeopleSyncBatch; data: PeopleSyncReview } | null>(null);
-  const [reviewingBatch, setReviewingBatch] = useState<PeopleSyncBatch | null>(null);
-  const [reviewLoading, setReviewLoading] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [applying, setApplying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const connectedRef = useRef(status.connected);
   const connectedDataGeneration = useRef(0);
-  const reviewLoadGeneration = useRef(0);
   connectedRef.current = status.connected;
 
   const loadConnectedData = useCallback(async () => {
@@ -271,15 +264,10 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
   }, []);
 
   const reloadConnectionData = useCallback(async () => {
-    reviewLoadGeneration.current += 1;
     setConnectionRevision((current) => current + 1);
     setBatches([]);
     setGatherings([]);
     setRuns([]);
-    setReview(null);
-    setReviewingBatch(null);
-    setReviewError(null);
-    setReviewLoading(false);
     setEditingBatch(null);
     await loadConnectedData();
   }, [loadConnectedData]);
@@ -293,60 +281,8 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
     void loadConnectedData();
     return () => {
       connectedDataGeneration.current += 1;
-      reviewLoadGeneration.current += 1;
     };
   }, [loadConnectedData, status.connected]);
-
-  const openReview = async (batch: PeopleSyncBatch) => {
-    const generation = ++reviewLoadGeneration.current;
-    setReviewingBatch(batch);
-    setReviewLoading(true);
-    setReviewError(null);
-    setReview((current) => current?.batch.id === batch.id ? current : null);
-    try {
-      const response = await elvantoSyncAPI.getBatchPlan(batch.id);
-      if (generation !== reviewLoadGeneration.current) return;
-      setReview({ batch, data: response.data });
-    } catch (cause) {
-      if (generation !== reviewLoadGeneration.current) return;
-      setReviewError(errorMessage(cause, 'Failed to prepare the sync review.'));
-    } finally {
-      if (generation === reviewLoadGeneration.current) setReviewLoading(false);
-    }
-  };
-
-  const closeReview = () => {
-    reviewLoadGeneration.current += 1;
-    setReview(null);
-    setReviewingBatch(null);
-    setReviewError(null);
-    setReviewLoading(false);
-  };
-
-  const applyReview = async (reviewToken: string, selections: Parameters<typeof elvantoSyncAPI.applyBatch>[1]['selections']) => {
-    if (!review) return;
-    setApplying(true);
-    try {
-      await elvantoSyncAPI.applyBatch(review.batch.id, { reviewToken, selections });
-      closeReview();
-      await loadConnectedData();
-      await refreshPeopleSync();
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  const previewReviewLinkCorrections = async (
-    baseReviewToken: string,
-    linkCorrections: Record<string, EstablishedLinkCorrection>,
-  ) => {
-    if (!review) throw new Error('The Elvanto review is no longer open.');
-    const response = await elvantoSyncAPI.previewLinkCorrections(review.batch.id, {
-      baseReviewToken,
-      linkCorrections,
-    });
-    return response.data;
-  };
 
   const deleteBatch = async (batch: PeopleSyncBatch) => {
     try {
@@ -432,31 +368,11 @@ const ElvantoIntegrationPanel: React.FC<Props> = ({
                     </div>
                     <div className="flex flex-wrap gap-3 text-sm">
                       <button type="button" onClick={() => setEditingBatch(batch)} className="underline">Edit</button>
-                      <button type="button" aria-label={`Review & sync ${batch.name}`} onClick={() => void openReview(batch)} className="rounded-md bg-green-600 px-3 py-2 font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">Review & sync</button>
+                      <button type="button" aria-label={`Review & sync ${batch.name}`} onClick={() => navigate(`/app/settings/integrations/elvanto/batches/${batch.id}/review`)} className="rounded-md bg-green-600 px-3 py-2 font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">Review & sync</button>
                       {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch)} className="underline">Discard source draft</button>}
                       <button type="button" onClick={() => void deleteBatch(batch)} className="text-red-600 underline">Delete</button>
                     </div>
                   </div>
-                  {reviewingBatch?.id === batch.id && (
-                    <div
-                      role="region"
-                      aria-label={`Elvanto ${batch.name} sync review`}
-                      className="mt-4 space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-700 dark:bg-gray-900/20"
-                    >
-                      {reviewLoading && !review && <p role="status" className="text-sm text-gray-500 dark:text-gray-400">Preparing sync review…</p>}
-                      {reviewError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{reviewError}</p>}
-                      {review?.batch.id === batch.id && <SyncReview
-                        provider="elvanto"
-                        review={review.data}
-                        onRefresh={() => openReview(batch)}
-                        onPreviewCorrections={previewReviewLinkCorrections}
-                        onApply={applyReview}
-                        applying={applying || reviewLoading}
-                      />}
-                      {reviewError && <button type="button" onClick={() => void openReview(batch)} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">Refresh plan</button>}
-                      <button type="button" onClick={closeReview} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">Close review</button>
-                    </div>
-                  )}
                 </li>
               ))}
             </ul>

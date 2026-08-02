@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -15,7 +16,6 @@ import { integrationsAPI, peopleSyncAPI, settingsAPI } from '../../services/api'
 import Modal from '../Modal';
 import logger from '../../utils/logger';
 import PCOCheckinImport from '../PCOCheckinImport';
-import PlanningCenterSyncReview from '../planningCenter/PlanningCenterSyncReview';
 import PlanningCenterBatchEditor from '../planningCenter/PlanningCenterBatchEditor';
 import PeopleSourceControl from '../peopleSync/PeopleSourceControl';
 import { PlanningCenterStatus, PanelProps, PeopleSyncPanelProps } from './types';
@@ -60,6 +60,7 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   refreshPeopleSync,
   retryPeopleSync,
 }) => {
+  const navigate = useNavigate();
   const [planningCenterConnecting, setPlanningCenterConnecting] = useState(false);
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [showPlanningCenterDisconnectModal, setShowPlanningCenterDisconnectModal] = useState(false);
@@ -77,7 +78,6 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
   const [batchesError, setBatchesError] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState<{ totalPeople: number; syncedPeople: number } | null>(null);
   const [editingBatch, setEditingBatch] = useState<PeopleSyncBatch | 'new' | null>(null);
-  const [reviewingBatchId, setReviewingBatchId] = useState<number | null>(null);
   const [legacyBatchPendingDelete, setLegacyBatchPendingDelete] = useState<PeopleSyncBatch | null>(null);
   const [legacyBatchDeleting, setLegacyBatchDeleting] = useState(false);
   const [legacyBatchDeleteError, setLegacyBatchDeleteError] = useState<string | null>(null);
@@ -545,28 +545,18 @@ const PlanningCenterIntegrationPanel: React.FC<PanelProps<PlanningCenterStatus> 
                         </div>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setEditingBatch(batch)} className="text-sm underline text-gray-600 dark:text-gray-300">Edit</button>
-                          <button type="button" onClick={() => {
-                            setReviewingBatchId(reviewingBatchId === batch.id ? null : batch.id);
-                            // Applies happen inside the review panel — refresh on every toggle (open
-                            // or close) since switching directly from reviewing one batch to another
-                            // implicitly closes the first without a dedicated "closing" click.
-                            loadSyncStats();
-                          }}
-                            aria-label={`${reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'} ${batch.name}`}
-                            className={reviewingBatchId === batch.id
-                              ? 'rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
-                              : 'rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2'}>
-                            {reviewingBatchId === batch.id ? 'Hide review' : 'Review & sync'}
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/app/settings/integrations/planning-center/batches/${batch.id}/review`)}
+                            aria-label={`Review & sync ${batch.name}`}
+                            className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                          >
+                            Review & sync
                           </button>
                           {batch.needsSourceReview && !batch.initialSourceReviewPending && <button type="button" onClick={() => void discardDraft(batch.id)} className="text-sm underline text-gray-600 dark:text-gray-300">Discard source draft</button>}
                           <button type="button" onClick={() => deleteBatch(batch.id)} className="text-sm underline text-red-600 dark:text-red-400">Delete</button>
                         </div>
                       </div>
-                      {reviewingBatchId === batch.id && (
-                        <div className="mt-4">
-                          <PlanningCenterSyncReview connected={status.connected} batchId={batch.id} onApplied={() => reloadAfterBatchMutation()} />
-                        </div>
-                      )}
                     </li>
                   ))}
                 </ul>

@@ -120,6 +120,13 @@ const IntegrationsTab: React.FC = () => {
     fetchPeopleSyncSettings();
   }, [fetchElvantoStatus, fetchAiStatus, fetchPlanningCenterStatus, fetchPeopleSyncSettings]);
 
+  const integrationParam = new URLSearchParams(window.location.search).get('integration');
+  useEffect(() => {
+    if (integrationParam === 'planning-center' || integrationParam === 'elvanto') {
+      setSelected(integrationParam);
+    }
+  }, [integrationParam]);
+
   const providerConnections = {
     planning_center: pcStatus.connected,
     elvanto: elvantoStatus.connected,
@@ -145,6 +152,10 @@ const IntegrationsTab: React.FC = () => {
   }, [fetchPlanningCenterStatus]);
 
   const handleBack = () => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', 'integrations');
+    params.delete('integration');
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
     setSelected(null);
     setPendingDisconnect(null);
   };

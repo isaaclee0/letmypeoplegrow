@@ -1,9 +1,17 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { elvantoSyncAPI, gatheringsAPI, peopleSyncAPI } from '../../services/api';
 import ElvantoIntegrationPanel from './ElvantoIntegrationPanel';
 import type { PeopleSyncBatch, PeopleSyncSettings } from '../peopleSync/types';
+
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
+
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-router-dom')>(),
+  useNavigate: () => mockNavigate,
+}));
 
 vi.mock('../../services/api', () => ({
   integrationsAPI: { connectElvanto: vi.fn(), disconnectElvanto: vi.fn() },
@@ -14,38 +22,6 @@ vi.mock('../../services/api', () => ({
 vi.mock('../elvanto/ElvantoBatchEditor', () => ({ default: () => <div>Batch editor</div> }));
 vi.mock('../elvanto/ElvantoGatheringImport', () => ({ default: () => null }));
 vi.mock('../peopleSync/PeopleSourceControl', () => ({ default: () => <div>People source control</div> }));
-const elvantoV2Selections = {
-  decisionContractVersion: 2 as const,
-  identityDecisions: { 'elvanto-person-1': { outcome: 'link' as const, individualId: 23 } },
-  acceptArchiveIndividualIds: [],
-  acceptFamilyRenameIds: [],
-};
-vi.mock('../peopleSync/SyncReview', () => ({
-  default: ({ review, onApply, onRefresh, onPreviewCorrections, applying }: {
-    review: { reviewToken: string };
-    onApply: (reviewToken: string, selections: typeof elvantoV2Selections) => void;
-    onRefresh: () => void | Promise<void>;
-    onPreviewCorrections?: (baseReviewToken: string, corrections: Record<string, { outcome: 'unlink'; fromIndividualId: number }>) => Promise<{ reviewToken: string }>;
-    applying: boolean;
-  }) => {
-    const [previewToken, setPreviewToken] = React.useState<string | null>(null);
-    return (
-      <div>
-        <p>Sync review</p>
-        <p>Review token {review.reviewToken}</p>
-        {previewToken && <p>Correction token {previewToken}</p>}
-        <button type="button" disabled={applying} onClick={() => onApply(review.reviewToken, elvantoV2Selections)}>Apply shared review</button>
-        <button type="button" disabled={applying} onClick={() => void onRefresh()}>Refresh shared review</button>
-        {onPreviewCorrections && <button type="button" onClick={async () => {
-          const preview = await onPreviewCorrections(review.reviewToken, {
-            'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
-          });
-          setPreviewToken(preview.reviewToken);
-        }}>Preview shared correction</button>}
-      </div>
-    );
-  },
-}));
 
 const settings: PeopleSyncSettings = {
   authorityProvider: 'none', pendingAuthorityProvider: null, elvantoIncludeContacts: true,
@@ -62,14 +38,6 @@ const batch = {
   scheduleEnabled: false, scheduleFrequency: 'weekly', scheduleDay: 1, legacyProviderBatchId: null,
   lastExternalWatermark: null, lastSyncAt: null, lastSyncResult: null,
 } as PeopleSyncBatch;
-const secondBatch = { ...batch, id: 6, name: 'Youth' } as PeopleSyncBatch;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((onResolve) => { resolve = onResolve; });
-  return { promise, resolve };
-}
-
 function renderPanel() {
   return render(<ElvantoIntegrationPanel
     status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
@@ -84,123 +52,31 @@ describe('ElvantoIntegrationPanel source drafts', () => {
     vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({ data: { batches: [batch] } });
     vi.mocked(gatheringsAPI.getAll).mockResolvedValue({ data: { gatherings: [] } });
     vi.mocked(peopleSyncAPI.getRuns).mockResolvedValue({ data: { runs: [] } });
-    vi.mocked(elvantoSyncAPI.getBatchPlan).mockResolvedValue({ data: {
-      runId: 5,
-      reviewToken: 'elvanto-review-5',
-      decisionContractVersion: 2,
-      plan: { provider: 'elvanto' },
-      summary: {},
-      snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' },
-    } } as never);
-    vi.mocked(elvantoSyncAPI.applyBatch).mockResolvedValue({ data: { success: true } } as never);
   });
 
-  it('uses the same nested review surface and forwards external-to-local v2 decisions before reloading', async () => {
-    const refreshPeopleSync = vi.fn();
-    render(<ElvantoIntegrationPanel
-      status={{ connected: true, loading: false, elvantoAccount: 'Example church' }} refreshStatus={vi.fn()} onBack={vi.fn()}
-      peopleSyncSettings={settings} peopleSyncStatus="known" providerConnections={{ planning_center: true, elvanto: true }}
-      refreshPeopleSync={refreshPeopleSync} retryPeopleSync={vi.fn()}
-    />);
-
+  it('opens the dedicated batch review without fetching or rendering a review inline for a manual-only batch', async () => {
+    const user = userEvent.setup();
+    renderPanel();
     const reviewButton = await screen.findByRole('button', { name: 'Review & sync Members' });
     expect(reviewButton).toHaveClass('rounded-md', 'bg-green-600', 'text-white');
-    fireEvent.click(reviewButton);
+    await user.click(reviewButton);
 
-    const reviewRegion = await screen.findByRole('region', { name: 'Elvanto Members sync review' });
-    expect(reviewRegion).toHaveClass('rounded-lg', 'border', 'bg-gray-50/50', 'p-4', 'dark:bg-gray-900/20');
-    expect(screen.getByRole('button', { name: 'Close review' })).toHaveClass('rounded-md', 'border', 'border-gray-300');
-    fireEvent.click(screen.getByRole('button', { name: 'Apply shared review' }));
-
-    await waitFor(() => expect(elvantoSyncAPI.applyBatch).toHaveBeenCalledWith(5, {
-      reviewToken: 'elvanto-review-5', selections: elvantoV2Selections,
-    }));
-    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(refreshPeopleSync).toHaveBeenCalledTimes(1));
-  });
-
-  it('wires Elvanto batch correction previews through the shared review owner', async () => {
-    vi.mocked(elvantoSyncAPI.previewLinkCorrections).mockResolvedValue({
-      data: { reviewToken: 'signed-elvanto-correction' },
-    } as never);
-    renderPanel();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Review & sync Members' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview shared correction' }));
-
-    expect(await screen.findByText('Correction token signed-elvanto-correction')).toBeInTheDocument();
-    expect(elvantoSyncAPI.previewLinkCorrections).toHaveBeenCalledWith(5, {
-      baseReviewToken: 'elvanto-review-5',
-      linkCorrections: {
-        'elvanto-established': { outcome: 'unlink', fromIndividualId: 55 },
-      },
-    });
-  });
-
-  it('keeps review loading and recoverable errors inside the nested review surface', async () => {
-    let rejectReview!: (reason: unknown) => void;
-    vi.mocked(elvantoSyncAPI.getBatchPlan).mockImplementationOnce(() => new Promise((_, reject) => {
-      rejectReview = reject;
-    }) as never);
-    renderPanel();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Review & sync Members' }));
-    const reviewRegion = screen.getByRole('region', { name: 'Elvanto Members sync review' });
-    expect(reviewRegion).toHaveTextContent('Preparing sync review…');
-
-    await act(async () => rejectReview({ response: { data: { error: 'Elvanto review unavailable.' } } }));
-    expect(within(reviewRegion).getByRole('alert')).toHaveTextContent('Elvanto review unavailable.');
-    expect(within(reviewRegion).getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
-  });
-
-  it('ignores late review loads after close and after switching to another batch', async () => {
-    vi.mocked(elvantoSyncAPI.listBatches).mockResolvedValue({ data: { batches: [batch, secondBatch] } });
-    const closedLoad = deferred<{ data: never }>();
-    const switchedLoad = deferred<{ data: never }>();
-    vi.mocked(elvantoSyncAPI.getBatchPlan)
-      .mockImplementationOnce(() => closedLoad.promise as never)
-      .mockImplementationOnce(() => switchedLoad.promise as never)
-      .mockResolvedValueOnce({ data: {
-        runId: 6, reviewToken: 'elvanto-review-6', decisionContractVersion: 2,
-        plan: { provider: 'elvanto' }, summary: {}, snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' },
-      } } as never);
-    renderPanel();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Review & sync Members' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close review' }));
-    await act(async () => closedLoad.resolve({ data: {
-      runId: 5, reviewToken: 'closed-members-review', decisionContractVersion: 2,
-      plan: { provider: 'elvanto' }, summary: {}, snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' },
-    } as never }));
+    expect(mockNavigate).toHaveBeenCalledWith('/app/settings/integrations/elvanto/batches/5/review');
+    expect(elvantoSyncAPI.getBatchPlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Elvanto Members sync review' })).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review & sync Members' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review & sync Youth' }));
-    expect(await screen.findByText('Review token elvanto-review-6')).toBeInTheDocument();
-    await act(async () => switchedLoad.resolve({ data: {
-      runId: 5, reviewToken: 'late-members-review', decisionContractVersion: 2,
-      plan: { provider: 'elvanto' }, summary: {}, snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' },
-    } as never }));
-    expect(screen.getByText('Review token elvanto-review-6')).toBeInTheDocument();
-    expect(screen.queryByText('Review token late-members-review')).not.toBeInTheDocument();
   });
 
-  it('disables shared review actions while refreshing an existing review', async () => {
-    const refresh = deferred<{ data: never }>();
-    vi.mocked(elvantoSyncAPI.getBatchPlan)
-      .mockResolvedValueOnce({ data: {
-        runId: 5, reviewToken: 'elvanto-review-5', decisionContractVersion: 2,
-        plan: { provider: 'elvanto' }, summary: {}, snapshot: { fetchedAt: '2026-07-29T00:00:00.000Z', mode: 'full' },
-      } } as never)
-      .mockImplementationOnce(() => refresh.promise as never);
+  it('retains batch edit and delete mutations beside dedicated review navigation', async () => {
+    vi.mocked(elvantoSyncAPI.deleteBatch).mockResolvedValue({ data: { success: true } } as never);
     renderPanel();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Review & sync Members' }));
-    await screen.findByText('Review token elvanto-review-5');
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh shared review' }));
+    expect(await screen.findByText('Members')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Batch editor')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    expect(screen.getByRole('button', { name: 'Apply shared review' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Refresh shared review' })).toBeDisabled();
+    await waitFor(() => expect(elvantoSyncAPI.deleteBatch).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(elvantoSyncAPI.listBatches).toHaveBeenCalledTimes(2));
   });
 
   it('shows a pending Category/Group change and lets the admin discard it', async () => {

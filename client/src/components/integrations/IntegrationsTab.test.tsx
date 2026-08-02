@@ -18,8 +18,19 @@ vi.mock('../../utils/logger', () => ({
 }));
 
 vi.mock('./PlanningCenterIntegrationPanel', () => ({
-  default: ({ status }: { status: { connectionErrorCode?: string | null } }) => (
-    <div data-testid="planning-center-status-code">{status.connectionErrorCode ?? 'none'}</div>
+  default: ({ status, onBack }: { status: { connectionErrorCode?: string | null }; onBack: () => void }) => (
+    <section aria-label="Planning Center integration panel">
+      <div data-testid="planning-center-status-code">{status.connectionErrorCode ?? 'none'}</div>
+      <button type="button" onClick={onBack}>Back to integrations</button>
+    </section>
+  ),
+}));
+
+vi.mock('./ElvantoIntegrationPanel', () => ({
+  default: ({ onBack }: { onBack: () => void }) => (
+    <section aria-label="Elvanto integration panel">
+      <button type="button" onClick={onBack}>Back to integrations</button>
+    </section>
   ),
 }));
 
@@ -35,9 +46,42 @@ const settings = {
 describe('IntegrationsTab authority status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/app/settings?tab=integrations');
     vi.mocked(integrationsAPI.getElvantoStatus).mockResolvedValue({ data: { connected: true, elvantoAccount: 'Elvanto church' } });
     vi.mocked(integrationsAPI.getPlanningCenterStatus).mockResolvedValue({ data: { enabled: true, connected: true, planningCenterAccount: 'PCO church' } });
     vi.mocked(aiAPI.getStatus).mockResolvedValue({ data: { configured: false, provider: null } });
+    vi.mocked(peopleSyncAPI.getSettings).mockResolvedValue({ data: { success: true, settings } });
+  });
+
+  it.each([
+    ['elvanto', 'Elvanto integration panel'],
+    ['planning-center', 'Planning Center integration panel'],
+  ])('restores the %s provider panel from the integration return query', async (provider, panelName) => {
+    window.history.replaceState({}, '', `/app/settings?tab=integrations&integration=${provider}`);
+    render(<IntegrationsTab />);
+
+    expect(await screen.findByRole('region', { name: panelName })).toBeInTheDocument();
+    await waitFor(() => expect(peopleSyncAPI.getSettings).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('heading', { name: 'External Integrations' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to the integration card list for an unknown integration query', async () => {
+    window.history.replaceState({}, '', '/app/settings?tab=integrations&integration=unknown');
+    render(<IntegrationsTab />);
+
+    expect(await screen.findByRole('heading', { name: 'External Integrations' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /integration panel/ })).not.toBeInTheDocument();
+  });
+
+  it.each(['elvanto', 'planning-center'])('removes the %s integration query when returning to the card list', async (provider) => {
+    window.history.replaceState({}, '', `/app/settings?tab=integrations&integration=${provider}`);
+    render(<IntegrationsTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to integrations' }));
+
+    expect(window.location.pathname).toBe('/app/settings');
+    expect(window.location.search).toBe('?tab=integrations');
+    expect(screen.getByRole('heading', { name: 'External Integrations' })).toBeInTheDocument();
   });
 
   it('blocks both disconnect paths while authority is loading', async () => {

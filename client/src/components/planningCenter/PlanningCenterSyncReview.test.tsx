@@ -94,13 +94,21 @@ describe('PlanningCenterSyncReview', () => {
     });
   });
 
-  it('renders the shared review in a nested surface and submits external-to-local v2 decisions', async () => {
-    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
+  it('renders onboarding batch context with one small refresh and one bottom apply action', async () => {
+    render(<MemoryRouter><PlanningCenterSyncReview
+      connected
+      batchId={7}
+      batchName="Members"
+      sourceName="Selected members"
+    /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Planning Center batch sync review' })).toHaveClass(
-      'rounded-lg', 'border', 'bg-gray-50/50', 'p-4', 'dark:bg-gray-900/20',
-    );
+    expect(screen.getByText('Members')).toBeInTheDocument();
+    expect(screen.getByText('Selected members')).toBeInTheDocument();
+    const refresh = screen.getByRole('button', { name: 'Refresh plan' });
+    expect(refresh).toHaveClass('px-3', 'py-1.5', 'text-xs');
+    expect(screen.queryByRole('button', { name: 'Refresh from Planning Center' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Apply \d+ selected changes?$/ })).toHaveLength(1);
     expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
     fireEvent.click(screen.getByRole('button', { name: 'Select Alex Jones' }));
@@ -115,6 +123,17 @@ describe('PlanningCenterSyncReview', () => {
         acceptFamilyRenameIds: [],
       },
     }));
+  });
+
+  it('advances onboarding after apply without fetching an obsolete follow-up review', async () => {
+    const onApplied = vi.fn();
+    render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} onApplied={onApplied} /></MemoryRouter>);
+
+    expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(1);
   });
 
   it('previews established-link corrections through the real batch owner and applies the signed token', async () => {
@@ -229,7 +248,7 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh from Planning Center' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
     expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
   });
 });
