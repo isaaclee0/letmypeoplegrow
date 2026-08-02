@@ -230,9 +230,9 @@ describe('PeopleSourceControl', () => {
     expect(await screen.findByRole('region', { name: 'Elvanto authority review' })).toHaveClass(
       'rounded-lg', 'border', 'bg-gray-50/50', 'p-4', 'dark:bg-gray-900/20',
     );
-    fireEvent.click(screen.getByRole('radio', { name: 'Choose someone else' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
     fireEvent.click(screen.getByRole('button', { name: 'Select Alex Jones' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     await waitFor(() => expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledWith('elvanto', 'authority-review', {
       decisionContractVersion: 2,
@@ -267,12 +267,12 @@ describe('PeopleSourceControl', () => {
     const toggle = screen.getByRole('switch', { name: 'Use Elvanto as source of truth' });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The authority change was applied, but its status could not be refreshed: Authority status could not be refreshed.',
     );
-    expect(screen.queryByRole('button', { name: 'Apply sync' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Apply \d+ selected changes?$/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
     expect(toggle).not.toBeChecked();
     expect(screen.getByRole('region', { name: 'Elvanto authority review' })).toBeInTheDocument();
@@ -303,7 +303,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
     expect(await screen.findByRole('button', { name: 'Retry status refresh' })).toBeInTheDocument();
 
     rerender(
@@ -331,7 +331,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('The review expired; refresh the plan.');
     expect(screen.queryByText(/Request failed with status code 409/i)).not.toBeInTheDocument();
@@ -347,7 +347,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     const applyError = await screen.findByRole('alert');
     expect(within(applyError).getByRole('button', { name: 'Refresh plan' })).toBeInTheDocument();
@@ -371,13 +371,13 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to review' }));
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Apply sync' }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     const applyError = await screen.findByRole('alert');
     expect(applyError).toHaveTextContent('This review has expired.');
     expect(applyError).toHaveTextContent('This authority review expired on the server.');
-    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
     expect(peopleSyncAPI.applyAuthority).toHaveBeenCalledTimes(1);
   });
 
@@ -407,7 +407,7 @@ describe('PeopleSourceControl', () => {
     ));
     expect(screen.getByText('Elvanto sync review')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeDisabled();
-    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeDisabled();
 
     await act(async () => resolveCancel({ data: { success: true, authority: { active: 'none', pending: null } } }));
     expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
@@ -527,18 +527,18 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
 
-    screen.getAllByRole('button', { name: 'Apply sync' }).forEach((button) => expect(button).toBeDisabled());
-    screen.getAllByRole('button', { name: 'Refresh plan' }).forEach((button) => expect(button).toBeDisabled());
+    expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel authority change' })).toBeDisabled();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
     expect(peopleSyncAPI.applyAuthority).not.toHaveBeenCalled();
 
     await act(async () => resolveRefresh({
       data: { ...review, success: true, reviewToken: 'refreshed-review', authorityPreviewId: 'authority-preview-2' },
     }));
-    expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeEnabled();
   });
 
   it('never re-enables the old review when a refresh fails after its intent may have changed', async () => {
@@ -549,7 +549,7 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('refresh failed');
     expect(screen.queryByText('Elvanto sync review')).not.toBeInTheDocument();
@@ -571,10 +571,10 @@ describe('PeopleSourceControl', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Use Elvanto as source of truth' }));
     expect(await screen.findByText('Elvanto sync review')).toBeInTheDocument();
-    const refreshButtons = screen.getAllByRole('button', { name: 'Refresh plan' });
+    const refreshButton = screen.getByRole('button', { name: 'Refresh plan' });
     act(() => {
-      refreshButtons[0].click();
-      refreshButtons[1].click();
+      refreshButton.click();
+      refreshButton.click();
     });
     expect(peopleSyncAPI.previewAuthority).toHaveBeenCalledTimes(3);
 
@@ -658,7 +658,7 @@ describe('PeopleSourceControl', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Use Planning Center as source of truth' }));
     expect(await screen.findByRole('region', { name: 'Planning Center authority review' })).toBeInTheDocument();
 
-    const apply = screen.getAllByRole('button', { name: 'Apply sync' })[0];
+    const apply = screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ });
     fireEvent.click(screen.getByRole('checkbox', { name: /I understand that this sync will archive people/ }));
     expect(apply).toBeDisabled();
 

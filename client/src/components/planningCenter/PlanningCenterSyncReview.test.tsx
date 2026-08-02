@@ -70,9 +70,9 @@ describe('PlanningCenterSyncReview', () => {
       'rounded-lg', 'border', 'bg-gray-50/50', 'p-4', 'dark:bg-gray-900/20',
     );
     expect(integrationsAPI.applyPlanningCenterBatch).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('radio', { name: 'Choose someone else' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
     fireEvent.click(screen.getByRole('button', { name: 'Select Alex Jones' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     await waitFor(() => expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledWith(7, {
       reviewToken: 'pco-review-7',
@@ -92,11 +92,11 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     expect(await screen.findByText('This review is out of date.')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Refresh plan' }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeDisabled();
   });
 
   it('disables the consumed review until a failed post-apply plan refresh succeeds', async () => {
@@ -108,16 +108,16 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the applied plan.');
-    expect(screen.queryByRole('button', { name: 'Apply sync' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Apply \d+ selected changes?$/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry plan refresh' })).toBeInTheDocument();
     expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry plan refresh' }));
     await waitFor(() => expect(integrationsAPI.getPlanningCenterBatchPlan).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Apply sync' })[0]).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ })).toBeEnabled());
     expect(integrationsAPI.applyPlanningCenterBatch).toHaveBeenCalledTimes(1);
   });
 
@@ -129,9 +129,9 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh plan' })[0]);
-    expect(screen.getAllByRole('button', { name: 'Applying…' })[0]).toBeDisabled();
-    expect(screen.getAllByRole('button', { name: 'Refresh plan' })[0]).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh plan' }));
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh plan' })).toBeDisabled();
 
     await act(async () => resolveRefresh({ data: { success: true, ...review, reviewToken: 'refreshed-token' } }));
   });
@@ -152,7 +152,7 @@ describe('PlanningCenterSyncReview', () => {
     render(<MemoryRouter><PlanningCenterSyncReview connected batchId={7} /></MemoryRouter>);
 
     expect(await screen.findByText('Planning Center sync review')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Apply sync' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /^Apply \d+ selected changes?$/ }));
     expect(await screen.findByText('This legacy batch has been retired. Reload the page to view or delete it.')).toBeInTheDocument();
   });
 
