@@ -8,6 +8,7 @@ import type {
   PeopleSyncPersonDisplay,
   PeopleSyncPeopleDirectory,
   PeopleSyncReview,
+  PeopleSyncReviewContext,
 } from './types';
 
 export type ReviewRowStatus =
@@ -19,6 +20,13 @@ export type ReviewRowStatus =
   | 'corrected';
 
 export type ReviewRowFilter = 'all' | 'needs_attention' | 'matched' | 'adding' | 'skipped';
+
+export const DEFAULT_REVIEW_PAGE_SIZE = 50;
+
+export interface ReviewRowCriteria {
+  query: string;
+  filter: ReviewRowFilter;
+}
 
 export interface ReviewIdentityRow {
   externalId: string;
@@ -157,6 +165,14 @@ export function filterReviewRows(
   );
 }
 
+export function pageAfterReviewCriteriaChange(
+  currentPage: number,
+  previous: ReviewRowCriteria,
+  next: ReviewRowCriteria,
+): number {
+  return previous.query === next.query && previous.filter === next.filter ? currentPage : 1;
+}
+
 export function paginateReviewRows<T>(rows: T[], page: number, pageSize: number) {
   const safePageSize = Number.isFinite(pageSize) ? Math.max(1, Math.floor(pageSize)) : 1;
   const totalPages = Math.max(1, Math.ceil(rows.length / safePageSize));
@@ -182,9 +198,23 @@ function isValidDecision(entry: IdentityReviewEntry, manualCandidateIds: Set<num
   return decision.excludeIndividualId === undefined || entry.candidateIndividualIds.includes(decision.excludeIndividualId);
 }
 
-function sortedCorrections(corrections: Record<string, EstablishedLinkCorrection> | undefined) {
-  return Object.fromEntries(Object.entries(corrections || {})
-    .sort(([left], [right]) => left.localeCompare(right)));
+function signedCorrections(corrections: PeopleSyncReviewContext['linkCorrections']) {
+  const entries: Array<[string, EstablishedLinkCorrection]> = [];
+  for (const correction of corrections || []) {
+    if (correction.outcome === 'relink') {
+      entries.push([correction.externalPersonId, {
+        outcome: 'relink',
+        fromIndividualId: correction.fromIndividualId,
+        individualId: correction.individualId,
+      }]);
+    } else {
+      entries.push([correction.externalPersonId, {
+        outcome: 'unlink',
+        fromIndividualId: correction.fromIndividualId,
+      }]);
+    }
+  }
+  return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)));
 }
 
 export function mergeSelectionsForPreview(previous: SyncSelectionState, nextReview: PeopleSyncReview): SyncSelectionState {
@@ -207,7 +237,7 @@ export function mergeSelectionsForPreview(previous: SyncSelectionState, nextRevi
   return {
     ...previous,
     identityDecisions,
-    linkCorrections: sortedCorrections(previous.linkCorrections),
+    linkCorrections: signedCorrections(context.linkCorrections),
     acceptedArchiveIds: new Set([...previous.acceptedArchiveIds].filter((id) => permittedArchiveIds.has(id))),
     acceptedFamilyRenameIds: new Set([...previous.acceptedFamilyRenameIds].filter((id) => permittedRenameIds.has(id))),
   };

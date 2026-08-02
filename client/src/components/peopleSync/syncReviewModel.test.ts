@@ -3,10 +3,12 @@ import type { SyncSelectionState } from './syncSelections';
 import {
   buildDecisionRows,
   buildEstablishedRows,
+  DEFAULT_REVIEW_PAGE_SIZE,
   filterReviewRows,
   isReviewDirty,
   mergeSelectionsForPreview,
   paginateReviewRows,
+  pageAfterReviewCriteriaChange,
   selectedChangeCount,
 } from './syncReviewModel';
 import type { PeopleSyncPlan, PeopleSyncPlanSummary, PeopleSyncReview } from './types';
@@ -183,13 +185,28 @@ describe('review identity row model', () => {
     expect(paginateReviewRows(adding, 1, 50).rows).toHaveLength(50);
   });
 
-  it('paginates fifty rows at a time and clamps a filtered second page to the first page', () => {
+  it('paginates at the exported fifty-row default and resets a changed filter to page one', () => {
     const rows = buildDecisionRows(reviewWith55Identities(), stateWith());
+    const adding = filterReviewRows(rows, '', 'adding');
+    const resetPage = pageAfterReviewCriteriaChange(
+      2,
+      { query: '', filter: 'all' },
+      { query: '', filter: 'adding' },
+    );
+    const searchResetPage = pageAfterReviewCriteriaChange(
+      2,
+      { query: '', filter: 'all' },
+      { query: 'provider', filter: 'all' },
+    );
 
-    expect(paginateReviewRows(rows, 1, 50)).toMatchObject({ page: 1, totalPages: 2, rows: expect.any(Array) });
-    expect(paginateReviewRows(rows, 1, 50).rows).toHaveLength(50);
-    expect(paginateReviewRows(rows, 2, 50).rows).toHaveLength(5);
-    expect(paginateReviewRows(filterReviewRows(rows, 'provider one', 'all'), 2, 50)).toMatchObject({ page: 1, totalPages: 1 });
+    expect(DEFAULT_REVIEW_PAGE_SIZE).toBe(50);
+    expect(paginateReviewRows(rows, 1, DEFAULT_REVIEW_PAGE_SIZE)).toMatchObject({ page: 1, totalPages: 2, rows: expect.any(Array) });
+    expect(paginateReviewRows(rows, 1, DEFAULT_REVIEW_PAGE_SIZE).rows).toHaveLength(DEFAULT_REVIEW_PAGE_SIZE);
+    expect(paginateReviewRows(rows, 2, DEFAULT_REVIEW_PAGE_SIZE).rows).toHaveLength(5);
+    expect(resetPage).toBe(1);
+    expect(searchResetPage).toBe(1);
+    expect(paginateReviewRows(adding, resetPage, DEFAULT_REVIEW_PAGE_SIZE).rows).toHaveLength(DEFAULT_REVIEW_PAGE_SIZE);
+    expect(paginateReviewRows(filterReviewRows(rows, 'provider one', 'all'), 2, DEFAULT_REVIEW_PAGE_SIZE)).toMatchObject({ page: 1, totalPages: 1 });
   });
 
   it('retains only decisions that are valid in the corrected signed context', () => {
@@ -216,7 +233,24 @@ describe('review identity row model', () => {
       'ext-02': null,
       'ext-04': null,
     });
-    expect(merged.linkCorrections).toEqual({ 'ext-established': { outcome: 'unlink', fromIndividualId: 40 } });
+    expect(merged.linkCorrections).toEqual({});
+  });
+
+  it('retains only canonical corrections signed by the next preview', () => {
+    const previous = stateWith({
+      linkCorrections: {
+        'ext-stale': { outcome: 'unlink', fromIndividualId: 99 },
+        'ext-established': { outcome: 'unlink', fromIndividualId: 40 },
+      },
+    });
+    const nextReview = reviewWith55Identities();
+    nextReview.plan.reviewContext!.linkCorrections = [{
+      externalPersonId: 'ext-established', outcome: 'relink', fromIndividualId: 40, individualId: 30,
+    }];
+
+    expect(mergeSelectionsForPreview(previous, nextReview).linkCorrections).toEqual({
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
+    });
   });
 
   it('compares only selectable review state and counts current selected outcomes', () => {
