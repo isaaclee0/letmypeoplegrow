@@ -54,7 +54,7 @@ function isPlainObject(value) {
 
 function parseBatchId(raw) {
   const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 // batchRepository.createBatch's own defaults (services/peopleSync/
@@ -157,6 +157,7 @@ const defaultDeps = {
   deleteBatch: batchRepository.deleteBatch,
   resolveVisibleSource,
   buildReview: orchestrator.buildReview,
+  previewLinkCorrections: orchestrator.previewLinkCorrections,
   applyReviewed: orchestrator.applyReviewed,
 };
 
@@ -402,6 +403,39 @@ function createElvantoRouter(overrides = {}) {
       res.json({ success: true, ...result });
     } catch (err) {
       respondWithError(res, err, { logLabel: 'elvanto GET /sync-batches/:id/plan' });
+    }
+  });
+
+  router.post('/sync-batches/:id/preview-link-corrections', async (req, res) => {
+    const churchId = req.user.church_id;
+    const batchId = parseBatchId(req.params.id);
+    const baseReviewToken = typeof req.body?.baseReviewToken === 'string'
+      ? req.body.baseReviewToken.trim()
+      : '';
+    if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+    if (!baseReviewToken) {
+      return res.status(400).json({
+        error: 'A base review token is required.',
+        code: 'SYNC_REVIEW_TOKEN_REQUIRED',
+      });
+    }
+    if (!isPlainObject(req.body?.linkCorrections)) {
+      return res.status(400).json({
+        error: 'Link corrections must be an object.',
+        code: 'SYNC_SELECTIONS_INVALID',
+      });
+    }
+    try {
+      const result = await withTimeout(deps.previewLinkCorrections({
+        churchId,
+        provider: PROVIDER,
+        batchId,
+        baseReviewToken,
+        linkCorrections: req.body.linkCorrections,
+      }), deps.routeTimeoutMs);
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      return respondWithError(res, err, { logLabel: 'elvanto POST /sync-batches/:id/preview-link-corrections' });
     }
   });
 

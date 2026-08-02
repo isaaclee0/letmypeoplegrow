@@ -423,10 +423,22 @@ export interface IdentityReviewEntry {
   createPerson: IdentityCreatePerson | null;
 }
 
+export type EstablishedLinkCorrection =
+  | { outcome: 'relink'; fromIndividualId: number; individualId: number }
+  | { outcome: 'unlink'; fromIndividualId: number };
+
+export interface PeopleSyncEstablishedLink {
+  individualId: number;
+}
+
 // Signed identity choices and create payloads. Unlike `people`, this is an
 // authorization boundary, not just a display model.
 export interface PeopleSyncReviewContext {
   version: 2;
+  correctionContractVersion?: 1;
+  establishedLinks?: Record<string, PeopleSyncEstablishedLink>;
+  projectedEstablishedLinks?: Record<string, PeopleSyncEstablishedLink>;
+  linkCorrections?: Array<{ externalPersonId: string } & EstablishedLinkCorrection>;
   manualCandidateIndividualIds: number[];
   identities: Record<string, IdentityReviewEntry>;
 }
@@ -508,6 +520,8 @@ export interface PeopleSyncReview {
   coverage?: PeopleSyncCoverage;
 }
 
+export type PeopleSyncCorrectionPreview = Omit<PeopleSyncReview, 'runId'>;
+
 // applyReviewed()'s return shape -- used by both POST
 // /people-sync/people-authority/apply and POST
 // /elvanto/sync-batches/:id/apply. Status is always 'applied': applyReviewed
@@ -546,6 +560,7 @@ export interface PeopleSyncSelections {
   // signed external identity. Omit both fields for pre-v2 review responses.
   decisionContractVersion?: 2;
   identityDecisions?: Record<string, IdentityDecision>;
+  linkCorrections?: Record<string, EstablishedLinkCorrection>;
   // Compatibility-only legacy fields. Do not use them when submitting v2.
   // externalPersonId -> chosen individualId, for entries in
   // plan.ambiguousPeople the reviewer resolved manually.

@@ -12,8 +12,13 @@ const PROVIDER = 'planning_center';
 const defaultDeps = {
   routeTimeoutMs: DEFAULT_ROUTE_TIMEOUT_MS,
   buildReview: orchestrator.buildReview,
+  previewLinkCorrections: orchestrator.previewLinkCorrections,
   applyReviewed: orchestrator.applyReviewed,
 };
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
 function parseBatchId(raw) {
   const id = Number(raw);
@@ -50,6 +55,38 @@ function createPlanningCenterPeopleSyncRouter(overrides = {}) {
       return res.json({ success: true, ...review });
     } catch (error) {
       return respondWithError(res, error, 'planning-center GET batch plan');
+    }
+  });
+
+  router.post('/sync-batches/:id/preview-link-corrections', async (req, res) => {
+    const batchId = parseBatchId(req.params.id);
+    const baseReviewToken = typeof req.body?.baseReviewToken === 'string'
+      ? req.body.baseReviewToken.trim()
+      : '';
+    if (batchId === null) return res.status(400).json({ error: 'Invalid batch id.' });
+    if (!baseReviewToken) {
+      return res.status(400).json({
+        error: 'A base review token is required.',
+        code: 'SYNC_REVIEW_TOKEN_REQUIRED',
+      });
+    }
+    if (!isPlainObject(req.body?.linkCorrections)) {
+      return res.status(400).json({
+        error: 'Link corrections must be an object.',
+        code: 'SYNC_SELECTIONS_INVALID',
+      });
+    }
+    try {
+      const result = await withTimeout(deps.previewLinkCorrections({
+        churchId: req.user.church_id,
+        provider: PROVIDER,
+        batchId,
+        baseReviewToken,
+        linkCorrections: req.body.linkCorrections,
+      }), deps.routeTimeoutMs);
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      return respondWithError(res, error, 'planning-center POST link correction preview');
     }
   });
 

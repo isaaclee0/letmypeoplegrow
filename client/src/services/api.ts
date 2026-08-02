@@ -12,9 +12,11 @@ import type {
   PeopleSyncSettingsPatch,
   PeopleSyncAuthorityState,
   PeopleSyncReview,
+  PeopleSyncCorrectionPreview,
   PeopleSyncApplyResult,
   PeopleSyncRun,
   PeopleSyncSelections,
+  EstablishedLinkCorrection,
   ExternalLinks,
   ElvantoStatus,
   ElvantoConnection,
@@ -925,6 +927,15 @@ export const integrationsAPI = {
       params: opts?.force ? { refresh: 1 } : undefined,
       timeout: 120000,
     }),
+  previewPlanningCenterLinkCorrections: (
+    id: number,
+    data: { baseReviewToken: string; linkCorrections: Record<string, EstablishedLinkCorrection> },
+  ) =>
+    api.post<{ success: true } & PeopleSyncCorrectionPreview>(
+      `/integrations/planning-center/sync-batches/${id}/preview-link-corrections`,
+      data,
+      { timeout: 120000 },
+    ),
   applyPlanningCenterBatch: (id: number, data: PeopleSyncApplyRequest) =>
     api.post<{ success: true } & PeopleSyncApplyResult>(`/integrations/planning-center/sync-batches/${id}/apply`, data, { timeout: 120000 }),
   // Check-in attendance import (events discovery + preview + execute)
@@ -1059,6 +1070,16 @@ export const elvantoSyncAPI = {
     api.get<{ success: true } & PeopleSyncReview>(`/integrations/elvanto/sync-batches/${id}/plan`, {
       timeout: 120000,
     }),
+
+  previewLinkCorrections: (
+    id: number,
+    data: { baseReviewToken: string; linkCorrections: Record<string, EstablishedLinkCorrection> },
+  ) =>
+    api.post<{ success: true } & PeopleSyncCorrectionPreview>(
+      `/integrations/elvanto/sync-batches/${id}/preview-link-corrections`,
+      data,
+      { timeout: 120000 },
+    ),
 
   // `selections` is optional here (mirroring applyAuthority's own default
   // above) since the server treats a missing/non-object `selections` the

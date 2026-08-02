@@ -10,6 +10,7 @@ const {
   ElvantoConnectionStaleError,
 } = require('../../services/elvanto/legacyCredential');
 const { ElvantoError, ELVANTO_AUTH } = require('../../services/elvanto/httpClient');
+const { OrchestratorError } = require('../../services/peopleSync/orchestrator');
 
 const ADMIN = { id: 1, church_id: 'churcha1', role: 'admin' };
 
@@ -44,8 +45,8 @@ function buildServer(overrides = {}, user = ADMIN) {
   return http.createServer(app);
 }
 
-async function withServer(overrides, callback) {
-  const server = buildServer(overrides);
+async function withServer(overrides, callback, user = ADMIN) {
+  const server = buildServer(overrides, user);
   await new Promise((resolve) => server.listen(0, resolve));
   try { return await callback(`http://127.0.0.1:${server.address().port}/elvanto`); }
   finally { await new Promise((resolve) => server.close(resolve)); }
@@ -53,8 +54,119 @@ async function withServer(overrides, callback) {
 
 async function request(url, body, method = 'POST') {
   const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return { status: response.status, body: await response.json() };
+  const responseBody = response.headers.get('content-type')?.includes('application/json')
+    ? await response.json()
+    : await response.text();
+  return { status: response.status, body: responseBody };
 }
+
+test('correction preview delegates the signed correction request in church scope', async () => {
+  const calls = [];
+  await withServer({
+    previewLinkCorrections: async (input) => {
+      calls.push(input);
+      return { reviewToken: 'corrected-review', decisionContractVersion: 2, summary: {}, plan: {}, snapshot: {} };
+    },
+  }, async (base) => {
+    const response = await request(`${base}/sync-batches/12/preview-link-corrections`, {
+      baseReviewToken: 'base-review',
+      linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.success, true);
+    assert.equal(response.body.reviewToken, 'corrected-review');
+  });
+  assert.deepEqual(calls, [{
+    churchId: ADMIN.church_id,
+    provider: 'elvanto',
+    batchId: 12,
+    baseReviewToken: 'base-review',
+    linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+  }]);
+});
+
+test('correction preview rejects missing base tokens before orchestration', async () => {
+  let calls = 0;
+  await withServer({ previewLinkCorrections: async () => { calls += 1; return {}; } }, async (base) => {
+    const response = await request(`${base}/sync-batches/12/preview-link-corrections`, { linkCorrections: {} });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.code, 'SYNC_REVIEW_TOKEN_REQUIRED');
+  });
+  assert.equal(calls, 0);
+});
+
+test('correction preview rejects non-object corrections before orchestration', async () => {
+  let calls = 0;
+  await withServer({ previewLinkCorrections: async () => { calls += 1; return {}; } }, async (base) => {
+    for (const linkCorrections of [null, [], 'unlink']) {
+      const response = await request(`${base}/sync-batches/12/preview-link-corrections`, {
+        baseReviewToken: 'base-review', linkCorrections,
+      });
+      assert.equal(response.status, 400);
+      assert.equal(response.body.code, 'SYNC_SELECTIONS_INVALID');
+    }
+  });
+  assert.equal(calls, 0);
+});
+
+test('correction preview rejects unsafe batch identifiers before orchestration', async () => {
+  let calls = 0;
+  await withServer({ previewLinkCorrections: async () => { calls += 1; return {}; } }, async (base) => {
+    for (const id of ['0', '-1', '1.5', '9007199254740992', '1e309']) {
+      const response = await request(`${base}/sync-batches/${id}/preview-link-corrections`, {
+        baseReviewToken: 'base-review', linkCorrections: {},
+      });
+      assert.equal(response.status, 400, id);
+    }
+  });
+  assert.equal(calls, 0);
+});
+
+test('correction preview maps route timeouts like plan and apply', async () => {
+  await withServer({
+    previewLinkCorrections: async () => new Promise(() => {}),
+    routeTimeoutMs: 5,
+  }, async (base) => {
+    const response = await request(`${base}/sync-batches/12/preview-link-corrections`, {
+      baseReviewToken: 'base-review', linkCorrections: {},
+    });
+    assert.equal(response.status, 503);
+    assert.equal(response.body.code, 'SYNC_ROUTE_TIMEOUT');
+  });
+});
+
+test('correction preview passes through orchestrator error status and code', async () => {
+  await withServer({
+    previewLinkCorrections: async () => {
+      throw new OrchestratorError('SYNC_REVIEW_STALE', 'Review changed.', 409);
+    },
+  }, async (base) => {
+    const response = await request(`${base}/sync-batches/12/preview-link-corrections`, {
+      baseReviewToken: 'base-review', linkCorrections: {},
+    });
+    assert.deepEqual(response, {
+      status: 409,
+      body: { error: 'Review changed.', code: 'SYNC_REVIEW_STALE' },
+    });
+  });
+});
+
+test('correction preview remains protected by admin and church middleware', async () => {
+  let calls = 0;
+  const overrides = { previewLinkCorrections: async () => { calls += 1; return {}; } };
+  const sendPreview = (base) => request(`${base}/sync-batches/12/preview-link-corrections`, {
+    baseReviewToken: 'base-review', linkCorrections: {},
+  });
+  await withServer(overrides, async (base) => {
+    assert.equal((await sendPreview(base)).status, 403);
+  }, { ...ADMIN, role: 'coordinator' });
+  await withServer(overrides, async (base) => {
+    const response = await sendPreview(base);
+    assert.equal(response.status, 401);
+    assert.equal(response.body.code, 'MISSING_CHURCH_CONTEXT');
+  }, { id: ADMIN.id, role: 'admin' });
+  assert.equal(calls, 0);
+});
 
 test('batch creation requires one Elvanto Category or Group source', async () => {
   let createInput;
