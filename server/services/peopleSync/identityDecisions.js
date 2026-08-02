@@ -1,5 +1,7 @@
 'use strict';
 
+const { canonicalLinkCorrections } = require('./linkCorrections');
+
 const OUTCOMES = new Set(['accept', 'link', 'create', 'defer']);
 const ALLOWED_FIELDS = {
   accept: new Set(['outcome']),
@@ -69,6 +71,15 @@ function validateDecisionFields(externalPersonId, decision) {
   return record;
 }
 
+function validateSignedLinkCorrections(version, signedCorrections, submittedCorrections) {
+  const signed = canonicalLinkCorrections(version === 1 ? signedCorrections : {});
+  const submitted = canonicalLinkCorrections(submittedCorrections || {});
+  if (JSON.stringify(signed) !== JSON.stringify(submitted)) {
+    throw new Error('Established-link corrections do not match the signed review preview');
+  }
+  return signed;
+}
+
 function normalizeAndValidate(plan, context, rawDecisions, selections) {
   const decisions = asRecord(rawDecisions);
   if (!decisions) throw new Error('Identity decisions must be an object');
@@ -88,9 +99,27 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
     }
   }
 
+  const linkCorrections = validateSignedLinkCorrections(
+    context.correctionContractVersion,
+    context.linkCorrections,
+    selections.linkCorrections,
+  );
+  const correctionExclusionsToAdd = linkCorrections.map(({ externalPersonId, fromIndividualId }) => ({
+    externalPersonId, individualId: fromIndividualId,
+  }));
+  const correctionHoldsToUpsert = linkCorrections
+    .filter(({ outcome }) => outcome === 'unlink')
+    .map(({ externalPersonId }) => ({ externalPersonId, reason: 'pair_rejected' }));
+  const correctionHoldsToDelete = linkCorrections
+    .filter(({ outcome }) => outcome === 'relink')
+    .map(({ externalPersonId }) => externalPersonId);
+
   const manualCandidates = new Set(asArray(context.manualCandidateIndividualIds));
   const addExternalIds = new Set(asArray(plan.addPeople).map((action) => action.externalPersonId));
-  const claimedIndividualIds = new Set();
+  const claimedIndividualIds = new Set(
+    Object.values(asRecord(context.projectedEstablishedLinks) || {})
+      .map(({ individualId }) => individualId)
+  );
   const linkActions = [];
   const createExternalIds = new Set();
   const deferredReasons = new Map();
@@ -175,6 +204,10 @@ function normalizeAndValidate(plan, context, rawDecisions, selections) {
   const destructive = validateDestructiveSelections(plan, selections, claimedIndividualIds);
   return {
     contractVersion: 2,
+    linkCorrections,
+    correctionExclusionsToAdd,
+    correctionHoldsToUpsert,
+    correctionHoldsToDelete,
     linkActions,
     createExternalIds,
     deferredReasons,
@@ -203,4 +236,5 @@ function validateIdentityDecisions(plan, selections) {
 module.exports = {
   validateDestructiveSelections,
   validateIdentityDecisions,
+  validateSignedLinkCorrections,
 };

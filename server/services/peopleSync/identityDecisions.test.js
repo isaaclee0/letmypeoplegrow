@@ -3,7 +3,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateIdentityDecisions } = require('./identityDecisions');
+const {
+  validateIdentityDecisions,
+  validateSignedLinkCorrections,
+} = require('./identityDecisions');
 const { BUCKETS } = require('./plan');
 
 function emptyPlan(overrides = {}) {
@@ -34,12 +37,109 @@ function reviewPlan(identities, overrides = {}) {
   return emptyPlan({
     reviewContext: {
       version: 2,
+      correctionContractVersion: 1,
       manualCandidateIndividualIds: [10, 11, 12, 13, 14],
+      projectedEstablishedLinks: {},
+      linkCorrections: [],
       identities,
     },
     ...overrides,
   });
 }
+
+test('signed link corrections accept only the same canonical correction mapping', () => {
+  const signed = [
+    { externalPersonId: 'ext-b', fromIndividualId: 11, outcome: 'unlink' },
+    { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'relink', individualId: 12 },
+  ];
+  assert.deepEqual(validateSignedLinkCorrections(1, signed, {
+    'ext-a': { outcome: 'relink', individualId: 12, fromIndividualId: 10 },
+    'ext-b': { outcome: 'unlink', fromIndividualId: 11 },
+  }), [
+    { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'relink', individualId: 12 },
+    { externalPersonId: 'ext-b', fromIndividualId: 11, outcome: 'unlink' },
+  ]);
+
+  assert.throws(
+    () => validateSignedLinkCorrections(1, signed, {
+      'ext-a': { outcome: 'relink', individualId: 13, fromIndividualId: 10 },
+      'ext-b': { outcome: 'unlink', fromIndividualId: 11 },
+    }),
+    /do not match the signed review preview/i
+  );
+});
+
+test('correction selections are rejected unless the signed context enables contract version 1', () => {
+  assert.throws(
+    () => validateSignedLinkCorrections(undefined, [], {
+      'ext-a': { outcome: 'unlink', fromIndividualId: 10 },
+    }),
+    /do not match the signed review preview/i
+  );
+  assert.throws(
+    () => validateSignedLinkCorrections(2, [{
+      externalPersonId: 'ext-a', outcome: 'unlink', fromIndividualId: 10,
+    }], {
+      'ext-a': { outcome: 'unlink', fromIndividualId: 10 },
+    }),
+    /do not match the signed review preview/i
+  );
+});
+
+test('projected established links reserve their final local identity targets', () => {
+  const plan = reviewPlan({
+    'ext-new': identity(),
+  });
+  plan.reviewContext.projectedEstablishedLinks = {
+    'ext-established': { individualId: 10 },
+  };
+
+  assert.throws(
+    () => validateIdentityDecisions(plan, selections({
+      'ext-new': { outcome: 'link', individualId: 10 },
+    })),
+    /individual 10.*claimed/i
+  );
+});
+
+test('a correction can free a local person for another reviewed identity and derives durable effects', () => {
+  const plan = reviewPlan({
+    'ext-new': identity(),
+  });
+  plan.reviewContext.projectedEstablishedLinks = {
+    'ext-established': { individualId: 11 },
+  };
+  plan.reviewContext.linkCorrections = [{
+    externalPersonId: 'ext-established',
+    fromIndividualId: 10,
+    outcome: 'relink',
+    individualId: 11,
+  }];
+
+  const accepted = validateIdentityDecisions(plan, selections(
+    { 'ext-new': { outcome: 'link', individualId: 10 } },
+    {
+      linkCorrections: {
+        'ext-established': {
+          fromIndividualId: 10, outcome: 'relink', individualId: 11,
+        },
+      },
+    }
+  ));
+
+  assert.deepEqual(accepted.linkActions, [{
+    externalPersonId: 'ext-new', individualId: 10, linkSource: 'manual',
+  }]);
+  assert.deepEqual(accepted.linkCorrections, [{
+    externalPersonId: 'ext-established', fromIndividualId: 10,
+    outcome: 'relink', individualId: 11,
+  }]);
+  assert.deepEqual(accepted.correctionExclusionsToAdd, [{
+    externalPersonId: 'ext-established', individualId: 10,
+  }]);
+  assert.deepEqual(accepted.correctionHoldsToUpsert, []);
+  assert.deepEqual(accepted.correctionHoldsToDelete, ['ext-established']);
+});
 
 function selections(identityDecisions, overrides = {}) {
   return {

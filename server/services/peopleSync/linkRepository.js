@@ -99,6 +99,67 @@ async function upsertPersonLinkWithConnection(conn, input) {
     WHERE id = ? AND church_id = ? AND provider = ?`, [result.insertId, churchId, provider]))[0];
 }
 
+async function assertExactBasePairs(conn, churchId, provider, corrections) {
+  for (const correction of corrections) {
+    const rows = await conn.query(
+      `SELECT individual_id FROM external_person_links
+        WHERE church_id = ? AND provider = ? AND external_person_id = ?`,
+      [churchId, provider, correction.externalPersonId]
+    );
+    if (!rows[0] || Number(rows[0].individual_id) !== correction.fromIndividualId) {
+      throw new Error(`Stale established person link before correction apply: ${correction.externalPersonId}`);
+    }
+  }
+}
+
+async function setPlanningCenterCompatibilityId(conn, churchId, provider, correction) {
+  if (provider !== 'planning_center') return;
+  await conn.query(
+    `UPDATE individuals SET planning_center_id = ?, updated_at = datetime('now')
+      WHERE church_id = ? AND id = ?`,
+    [correction.externalPersonId, churchId, correction.individualId]
+  );
+}
+
+async function applyPersonLinkCorrectionsWithConnection(conn, { churchId, provider, corrections }) {
+  assertProvider(provider);
+  if (!churchId || !Array.isArray(corrections)) throw new Error('Invalid person link corrections input');
+
+  await assertExactBasePairs(conn, churchId, provider, corrections);
+  for (const correction of corrections) {
+    if (correction.outcome === 'relink') {
+      await assertLocalRecord(conn, 'individuals', correction.individualId, churchId);
+    }
+  }
+
+  for (const correction of corrections) {
+    await conn.query(
+      `DELETE FROM external_person_links
+        WHERE church_id = ? AND provider = ? AND external_person_id = ? AND individual_id = ?`,
+      [churchId, provider, correction.externalPersonId, correction.fromIndividualId]
+    );
+    if (provider === 'planning_center') {
+      await conn.query(
+        `UPDATE individuals SET planning_center_id = NULL, updated_at = datetime('now')
+          WHERE church_id = ? AND id = ? AND planning_center_id = ?`,
+        [churchId, correction.fromIndividualId, correction.externalPersonId]
+      );
+    }
+  }
+
+  for (const correction of corrections) {
+    if (correction.outcome !== 'relink') continue;
+    await upsertPersonLinkWithConnection(conn, {
+      churchId,
+      provider,
+      externalPersonId: correction.externalPersonId,
+      individualId: correction.individualId,
+      linkSource: 'manual',
+    });
+    await setPlanningCenterCompatibilityId(conn, churchId, provider, correction);
+  }
+}
+
 async function upsertFamilyLinkWithConnection(conn, input) {
   assertLinkInput(input, 'family');
   const { churchId, provider, externalFamilyId, familyId, linkSource } = input;
@@ -213,6 +274,7 @@ module.exports = {
   listFamilyLinks,
   upsertPersonLink,
   upsertPersonLinkWithConnection,
+  applyPersonLinkCorrectionsWithConnection,
   upsertFamilyLink,
   upsertFamilyLinkWithConnection,
   markPeopleSeen,

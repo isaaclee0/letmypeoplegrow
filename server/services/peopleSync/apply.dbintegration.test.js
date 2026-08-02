@@ -190,6 +190,265 @@ test('person, family, and link creation commit together', async () => {
   });
 });
 
+test('reviewed corrections atomically retarget managed effects while preserving old local history', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const provider = 'planning_center';
+    const oldFamilyId = await seedFamily(churchId, 'Old Household');
+    const targetFamilyId = await seedFamily(churchId, 'Target Household');
+    await Database.query(
+      `UPDATE families SET family_notes = 'Keep this pastoral note' WHERE church_id = ? AND id = ?`,
+      [churchId, oldFamilyId]
+    );
+    const oldId = await seedIndividual(churchId, {
+      firstName: 'Old', lastName: 'Person', familyId: oldFamilyId, planningCenterId: 'pco-a',
+    });
+    const newId = await seedIndividual(churchId, {
+      firstName: 'Known', lastName: 'Surname', peopleType: 'local_visitor',
+    });
+    const unlinkId = await seedIndividual(churchId, {
+      firstName: 'Unlink', lastName: 'Person', planningCenterId: 'pco-unlink',
+    });
+    await Database.query('UPDATE individuals SET is_child = 0 WHERE church_id = ? AND id = ?', [churchId, newId]);
+    await Database.query(
+      `INSERT INTO external_person_links
+         (church_id, provider, external_person_id, individual_id, link_source)
+       VALUES (?, ?, 'pco-a', ?, 'matched'), (?, ?, 'pco-unlink', ?, 'matched')`,
+      [churchId, provider, oldId, churchId, provider, unlinkId]
+    );
+    await matchReviewRepository.upsertHold({
+      churchId, provider, externalPersonId: 'pco-a', reason: 'pair_rejected',
+    });
+    await matchReviewRepository.upsertHold({
+      churchId, provider, externalPersonId: 'pco-unlink', reason: 'deferred',
+    });
+
+    const historyGatheringId = await seedGatheringType(churchId, 'History');
+    const managedGatheringId = await seedGatheringType(churchId, 'Managed');
+    const userId = Number((await Database.query(
+      `INSERT INTO users (church_id, email, role) VALUES (?, ?, 'admin')`,
+      [churchId, `${churchId}@example.test`]
+    )).insertId);
+    const sessionId = Number((await Database.query(
+      `INSERT INTO attendance_sessions
+         (gathering_type_id, session_date, created_by, notes, church_id)
+       VALUES (?, '2026-07-01', ?, 'Keep this attendance note', ?)`,
+      [historyGatheringId, userId, churchId]
+    )).insertId);
+    await Database.query(
+      `INSERT INTO attendance_records
+         (session_id, individual_id, present, people_type_at_time, church_id)
+       VALUES (?, ?, 1, 'regular', ?)`,
+      [sessionId, oldId, churchId]
+    );
+
+    const draft = { kind: 'planning_center_list', externalId: 'list-1', name: 'Members' };
+    const batch = await batchRepository.createBatch({
+      churchId, provider, name: 'Reviewed corrections', initialDraftSource: draft,
+    });
+    await setAuthority(churchId, 'none');
+
+    const corrections = [
+      { externalPersonId: 'pco-a', fromIndividualId: oldId, outcome: 'relink', individualId: newId },
+      { externalPersonId: 'pco-unlink', fromIndividualId: unlinkId, outcome: 'unlink' },
+    ];
+    const basePersonLinks = [
+      { externalPersonId: 'pco-a', individualId: oldId, missingFullSyncCount: 0 },
+      { externalPersonId: 'pco-unlink', individualId: unlinkId, missingFullSyncCount: 0 },
+    ];
+    const projectedPersonLinks = [
+      { externalPersonId: 'pco-a', individualId: newId, missingFullSyncCount: 0, linkSource: 'manual' },
+    ];
+    const localPeople = [
+      { id: oldId, firstName: 'Old', lastName: 'Person', familyId: oldFamilyId, peopleType: 'regular', isChild: false, isActive: true },
+      { id: newId, firstName: 'Known', lastName: 'Surname', familyId: null, peopleType: 'local_visitor', isChild: false, isActive: true },
+      { id: unlinkId, firstName: 'Unlink', lastName: 'Person', familyId: null, peopleType: 'regular', isChild: false, isActive: true },
+    ];
+    const plan = emptyPlan({
+      provider,
+      linkPeople: [{
+        id: `linkPeople:pco-new:${oldId}`, externalPersonId: 'pco-new',
+        individualId: oldId, reviewRequired: false,
+      }],
+      updateManagedFields: [{
+        id: `updateManagedFields:pco-a:${newId}`, externalPersonId: 'pco-a', individualId: newId,
+        changes: [
+          { field: 'firstName', localValue: 'Known', externalValue: 'Provider' },
+          { field: 'lastName', localValue: 'Surname', externalValue: null },
+          { field: 'isChild', localValue: false, externalValue: true },
+        ],
+      }],
+      promoteToRegular: [{ id: `promote:pco-a:${newId}`, externalPersonId: 'pco-a', individualId: newId }],
+      moveFamily: [{ id: `move:pco-a:${newId}`, externalPersonId: 'pco-a', individualId: newId, familyId: targetFamilyId }],
+      addToGathering: [{
+        id: `gathering:pco-a:${newId}`, externalPersonId: 'pco-a', individualId: newId,
+        gatheringTypeId: managedGatheringId, batchId: batch.id,
+      }],
+    });
+    plan.reviewContext = buildReviewContext({
+      plan,
+      externalPeople: [{ id: 'pco-new', firstName: 'New', lastName: 'Identity', child: false, familyId: null }],
+      localPeople,
+      localFamilies: [
+        { id: oldFamilyId, familyName: 'Old Household' },
+        { id: targetFamilyId, familyName: 'Target Household' },
+      ],
+      basePersonLinks,
+      projectedPersonLinks,
+      baseExclusions: [],
+      projectedExclusions: corrections.map(({ externalPersonId, fromIndividualId }) => ({
+        externalPersonId, individualId: fromIndividualId,
+      })),
+      baseHolds: [
+        { externalPersonId: 'pco-a', reason: 'pair_rejected' },
+        { externalPersonId: 'pco-unlink', reason: 'deferred' },
+      ],
+      projectedHolds: [{ externalPersonId: 'pco-unlink', reason: 'pair_rejected' }],
+      sourceExternalIds: new Set(['pco-a', 'pco-unlink']),
+      linkCorrections: corrections,
+    });
+
+    await applyPeopleSyncPlan({
+      churchId,
+      provider,
+      plan,
+      selections: {
+        ...v2Selections({ 'pco-new': { outcome: 'accept' } }),
+        linkCorrections: {
+          'pco-unlink': { fromIndividualId: unlinkId, outcome: 'unlink' },
+          'pco-a': { fromIndividualId: oldId, outcome: 'relink', individualId: newId },
+        },
+      },
+      userId,
+      reviewedApply: reviewedApply(churchId, provider, plan, batch.id),
+      authorityExpectation: { active: 'none', pending: null },
+      sourcePromotion: {
+        batchId: batch.id,
+        expectedBaseRevision: batch.draftSourceBaseRevision,
+        expectedDraftDigest: digestSourceIdentity(draft),
+      },
+    });
+
+    const links = await Database.query(
+      `SELECT external_person_id, individual_id FROM external_person_links
+        WHERE church_id = ? AND provider = ? ORDER BY external_person_id`,
+      [churchId, provider]
+    );
+    assert.deepEqual(links, [
+      { external_person_id: 'pco-a', individual_id: newId },
+      { external_person_id: 'pco-new', individual_id: oldId },
+    ]);
+    const people = await Database.query(
+      `SELECT id, first_name, last_name, people_type, is_child, family_id, planning_center_id
+         FROM individuals WHERE church_id = ? ORDER BY id`,
+      [churchId]
+    );
+    assert.deepEqual(people, [
+      { id: oldId, first_name: 'Old', last_name: 'Person', people_type: 'regular', is_child: 0, family_id: oldFamilyId, planning_center_id: 'pco-new' },
+      { id: newId, first_name: 'Provider', last_name: 'Surname', people_type: 'regular', is_child: 1, family_id: targetFamilyId, planning_center_id: 'pco-a' },
+      { id: unlinkId, first_name: 'Unlink', last_name: 'Person', people_type: 'regular', is_child: 0, family_id: null, planning_center_id: null },
+    ]);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, provider), {
+      exclusions: [
+        { externalPersonId: 'pco-a', individualId: oldId },
+        { externalPersonId: 'pco-unlink', individualId: unlinkId },
+      ],
+      holds: [{ externalPersonId: 'pco-unlink', reason: 'pair_rejected' }],
+    });
+    assert.deepEqual(await Database.query(
+      `SELECT ar.individual_id, ar.present, s.notes
+         FROM attendance_records ar JOIN attendance_sessions s ON s.id = ar.session_id
+        WHERE ar.church_id = ?`,
+      [churchId]
+    ), [{ individual_id: oldId, present: 1, notes: 'Keep this attendance note' }]);
+    assert.equal((await Database.query(
+      'SELECT family_notes FROM families WHERE church_id = ? AND id = ?', [churchId, oldFamilyId]
+    ))[0].family_notes, 'Keep this pastoral note');
+    assert.equal((await Database.query(
+      `SELECT COUNT(*) AS count FROM gathering_lists
+        WHERE church_id = ? AND gathering_type_id = ? AND individual_id = ?`,
+      [churchId, managedGatheringId, newId]
+    ))[0].count, 1);
+    const promoted = await batchRepository.getBatch(churchId, provider, batch.id);
+    assert.deepEqual(promoted.source, draft);
+    assert.equal(promoted.draftSource, null);
+  });
+});
+
+test('a later apply failure rolls back corrections, review state, managed fields, and PCO IDs', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const provider = 'planning_center';
+    const oldId = await seedIndividual(churchId, { firstName: 'Old', planningCenterId: 'pco-a' });
+    const newId = await seedIndividual(churchId, { firstName: 'Target' });
+    const unlinkId = await seedIndividual(churchId, { firstName: 'Unlink', planningCenterId: 'pco-unlink' });
+    await Database.query(
+      `INSERT INTO external_person_links
+         (church_id, provider, external_person_id, individual_id, link_source)
+       VALUES (?, ?, 'pco-a', ?, 'matched'), (?, ?, 'pco-unlink', ?, 'matched')`,
+      [churchId, provider, oldId, churchId, provider, unlinkId]
+    );
+    await matchReviewRepository.upsertHold({
+      churchId, provider, externalPersonId: 'pco-a', reason: 'pair_rejected',
+    });
+    const corrections = [
+      { externalPersonId: 'pco-a', fromIndividualId: oldId, outcome: 'relink', individualId: newId },
+      { externalPersonId: 'pco-unlink', fromIndividualId: unlinkId, outcome: 'unlink' },
+    ];
+    const plan = v2Plan({}, {
+      provider,
+      updateManagedFields: [{
+        id: `update:pco-a:${newId}`, externalPersonId: 'pco-a', individualId: newId,
+        changes: [{ field: 'firstName', localValue: 'Target', externalValue: 'Changed' }],
+      }],
+    });
+    plan.reviewContext.correctionContractVersion = 1;
+    plan.reviewContext.projectedEstablishedLinks = { 'pco-a': { individualId: newId } };
+    plan.reviewContext.linkCorrections = corrections;
+    await Database.query(`CREATE TRIGGER abort_managed_update_after_correction
+      BEFORE UPDATE OF first_name ON individuals
+      WHEN NEW.id = ${newId} AND NEW.first_name = 'Changed'
+        AND EXISTS (
+          SELECT 1 FROM external_person_links
+           WHERE church_id = '${churchId}' AND provider = 'planning_center'
+             AND external_person_id = 'pco-a' AND individual_id = ${newId}
+        )
+      BEGIN SELECT RAISE(ABORT, 'forced later apply failure'); END`);
+
+    await assert.rejects(() => applyPeopleSyncPlan({
+      churchId,
+      provider,
+      plan,
+      selections: {
+        ...v2Selections({}),
+        linkCorrections: {
+          'pco-a': { fromIndividualId: oldId, outcome: 'relink', individualId: newId },
+          'pco-unlink': { fromIndividualId: unlinkId, outcome: 'unlink' },
+        },
+      },
+    }), /forced later apply failure/i);
+
+    assert.deepEqual(await Database.query(
+      `SELECT external_person_id, individual_id FROM external_person_links
+        WHERE church_id = ? AND provider = ? ORDER BY external_person_id`,
+      [churchId, provider]
+    ), [
+      { external_person_id: 'pco-a', individual_id: oldId },
+      { external_person_id: 'pco-unlink', individual_id: unlinkId },
+    ]);
+    assert.deepEqual(await Database.query(
+      `SELECT id, first_name, planning_center_id FROM individuals WHERE church_id = ? ORDER BY id`,
+      [churchId]
+    ), [
+      { id: oldId, first_name: 'Old', planning_center_id: 'pco-a' },
+      { id: newId, first_name: 'Target', planning_center_id: null },
+      { id: unlinkId, first_name: 'Unlink', planning_center_id: 'pco-unlink' },
+    ]);
+    assert.deepEqual(await matchReviewRepository.listMatchReviewState(churchId, provider), {
+      exclusions: [],
+      holds: [{ externalPersonId: 'pco-a', reason: 'pair_rejected' }],
+    });
+  });
+});
+
 test('reviewed people mutations and source-draft promotion commit atomically', async () => {
   await withTestChurchDb(async (churchId) => {
     const draft = { kind: 'elvanto_group', externalId: 'group-1', name: 'Members' };

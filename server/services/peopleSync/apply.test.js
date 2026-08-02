@@ -31,6 +31,65 @@ test('validateSelections dispatches an explicit version 2 payload to the identit
   assert.equal(validateLegacySelections(plan, { decisionContractVersion: 2 }).contractVersion, 1);
 });
 
+test('validateSelections rejects corrections that differ from the signed v2 review context', () => {
+  const plan = emptyPlan({
+    reviewContext: {
+      version: 2,
+      correctionContractVersion: 1,
+      manualCandidateIndividualIds: [],
+      projectedEstablishedLinks: { 'ext-a': { individualId: 2 } },
+      linkCorrections: [{
+        externalPersonId: 'ext-a', fromIndividualId: 1, outcome: 'relink', individualId: 2,
+      }],
+      identities: {},
+    },
+  });
+
+  assert.throws(
+    () => validateSelections(plan, {
+      decisionContractVersion: 2,
+      identityDecisions: {},
+      linkCorrections: {
+        'ext-a': { fromIndividualId: 1, outcome: 'relink', individualId: 3 },
+      },
+    }),
+    /do not match the signed review preview/i
+  );
+});
+
+test('validateSelections accepts the canonical signed correction and exposes only derived effects', () => {
+  const plan = emptyPlan({
+    reviewContext: {
+      version: 2,
+      correctionContractVersion: 1,
+      manualCandidateIndividualIds: [],
+      projectedEstablishedLinks: {},
+      linkCorrections: [{
+        externalPersonId: 'ext-a', fromIndividualId: 1, outcome: 'unlink',
+      }],
+      identities: {},
+    },
+  });
+
+  const accepted = validateSelections(plan, {
+    decisionContractVersion: 2,
+    identityDecisions: {},
+    linkCorrections: {
+      'ext-a': { outcome: 'unlink', fromIndividualId: 1 },
+    },
+    correctionExclusionsToAdd: [{ externalPersonId: 'injected', individualId: 999 }],
+    correctionHoldsToDelete: ['injected'],
+  });
+
+  assert.deepEqual(accepted.correctionExclusionsToAdd, [
+    { externalPersonId: 'ext-a', individualId: 1 },
+  ]);
+  assert.deepEqual(accepted.correctionHoldsToUpsert, [
+    { externalPersonId: 'ext-a', reason: 'pair_rejected' },
+  ]);
+  assert.deepEqual(accepted.correctionHoldsToDelete, []);
+});
+
 test('validateSelections rejects every explicitly present unsupported decision contract version', () => {
   for (const decisionContractVersion of [1, 3, null, undefined, '2']) {
     assert.throws(

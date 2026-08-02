@@ -301,6 +301,24 @@ function planWithReviewedArchiveSelections(plan, accepted, reviewedApply) {
   };
 }
 
+async function applyCorrectionReviewState(conn, { churchId, provider, accepted, userId }) {
+  for (const exclusion of accepted.correctionExclusionsToAdd) {
+    await matchReviewRepository.upsertExclusionWithConnection(conn, {
+      churchId, provider, ...exclusion, userId,
+    });
+  }
+  for (const hold of accepted.correctionHoldsToUpsert) {
+    await matchReviewRepository.upsertHoldWithConnection(conn, {
+      churchId, provider, ...hold, userId,
+    });
+  }
+  for (const externalPersonId of accepted.correctionHoldsToDelete) {
+    await matchReviewRepository.deleteHoldWithConnection(conn, {
+      churchId, provider, externalPersonId,
+    });
+  }
+}
+
 // Defense in depth: Task 6's plan.js already refuses to generate managed
 // mutations for a person/family locked by a DIFFERENT active authority (see
 // plan.js's `canManage`/`activeAuthority` gating). This re-checks the same
@@ -456,6 +474,20 @@ async function applyPeopleSyncPlan({
 
     const result = emptyResult();
 
+    if (accepted.contractVersion === 2) {
+      await linkRepository.applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider,
+        corrections: accepted.linkCorrections,
+      });
+      await applyCorrectionReviewState(conn, {
+        churchId,
+        provider,
+        accepted,
+        userId,
+      });
+    }
+
     // 1. Person links: auto-approved matches plus reviewer-accepted
     // ambiguous/visitor choices. Must run before addPeople/archive/etc so an
     // auto-linked-then-archived person (see plan.js's carried-forward note)
@@ -596,8 +628,13 @@ async function applyPeopleSyncPlan({
       const setClauses = [];
       const params = [];
       for (const change of asArray(action.changes)) {
-        if (change.field === 'firstName') { setClauses.push('first_name = ?'); params.push(change.externalValue); }
-        else if (change.field === 'lastName') { setClauses.push('last_name = ?'); params.push(change.externalValue); }
+        if (change.field === 'firstName') {
+          if (change.externalValue === null || change.externalValue === undefined) continue;
+          setClauses.push('first_name = ?'); params.push(change.externalValue);
+        } else if (change.field === 'lastName') {
+          if (change.externalValue === null || change.externalValue === undefined) continue;
+          setClauses.push('last_name = ?'); params.push(change.externalValue);
+        }
         else if (change.field === 'isChild') {
           if (change.externalValue === null || change.externalValue === undefined) continue;
           setClauses.push('is_child = ?'); params.push(change.externalValue ? 1 : 0);

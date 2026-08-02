@@ -6,6 +6,7 @@ const {
   listPersonLinks,
   upsertPersonLink,
   upsertPersonLinkWithConnection,
+  applyPersonLinkCorrectionsWithConnection,
   upsertFamilyLink,
   upsertFamilyLinkWithConnection,
   markPeopleSeen,
@@ -27,6 +28,188 @@ async function seedFamily(churchId, familyName = 'Lovelace') {
   );
   return result.insertId;
 }
+
+async function personLinkPairs(churchId, provider) {
+  const rows = await Database.query(
+    `SELECT external_person_id, individual_id FROM external_person_links
+      WHERE church_id = ? AND provider = ? ORDER BY external_person_id`,
+    [churchId, provider]
+  );
+  return rows.map((row) => [row.external_person_id, row.individual_id]);
+}
+
+async function pcoIds(...individualIds) {
+  const placeholders = individualIds.map(() => '?').join(', ');
+  const rows = await Database.query(
+    `SELECT id, planning_center_id FROM individuals WHERE id IN (${placeholders}) ORDER BY id`,
+    individualIds
+  );
+  return rows.map((row) => row.planning_center_id);
+}
+
+async function seedPersonLink(churchId, provider, externalPersonId, individualId) {
+  await upsertPersonLink({
+    churchId, provider, externalPersonId, individualId, linkSource: 'matched',
+  });
+  if (provider === 'planning_center') {
+    await Database.query(
+      `UPDATE individuals SET planning_center_id = ? WHERE church_id = ? AND id = ?`,
+      [externalPersonId, churchId, individualId]
+    );
+  }
+}
+
+test('explicit PCO relinks clear old compatibility IDs before inserting final links', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstId = await seedIndividual(churchId, 'First');
+    const secondId = await seedIndividual(churchId, 'Second');
+    await seedPersonLink(churchId, 'planning_center', 'pco-a', firstId);
+    await seedPersonLink(churchId, 'planning_center', 'pco-b', secondId);
+
+    await Database.transaction(async (conn) => {
+      await applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider: 'planning_center',
+        corrections: [
+          { externalPersonId: 'pco-a', fromIndividualId: firstId, outcome: 'relink', individualId: secondId },
+          { externalPersonId: 'pco-b', fromIndividualId: secondId, outcome: 'relink', individualId: firstId },
+        ],
+      });
+    });
+
+    assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [
+      ['pco-a', secondId], ['pco-b', firstId],
+    ]);
+    assert.deepEqual(await pcoIds(firstId, secondId), ['pco-b', 'pco-a']);
+  });
+});
+
+test('corrections reject a stale old pair before changing any link', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstId = await seedIndividual(churchId, 'First');
+    const secondId = await seedIndividual(churchId, 'Second');
+    await seedPersonLink(churchId, 'planning_center', 'pco-a', firstId);
+
+    await assert.rejects(Database.transaction((conn) =>
+      applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider: 'planning_center',
+        corrections: [{
+          externalPersonId: 'pco-a', fromIndividualId: secondId, outcome: 'unlink',
+        }],
+      })
+    ), /current link|base pair|stale/i);
+
+    assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [['pco-a', firstId]]);
+    assert.deepEqual(await pcoIds(firstId), ['pco-a']);
+  });
+});
+
+test('correction targets cannot cross the church boundary', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const linkedId = await seedIndividual(churchId, 'Linked');
+    await seedPersonLink(churchId, 'elvanto', 'elvanto-a', linkedId);
+    const otherChurchId = `${churchId}_other`;
+    const otherId = (await Database.query(
+      `INSERT INTO individuals (church_id, first_name, last_name) VALUES (?, 'Other', 'Church')`,
+      [otherChurchId]
+    )).insertId;
+
+    await assert.rejects(Database.transaction((conn) =>
+      applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider: 'elvanto',
+        corrections: [{
+          externalPersonId: 'elvanto-a', fromIndividualId: linkedId,
+          outcome: 'relink', individualId: otherId,
+        }],
+      })
+    ), /outside this church/i);
+
+    assert.deepEqual(await personLinkPairs(churchId, 'elvanto'), [['elvanto-a', linkedId]]);
+  });
+});
+
+test('corrections keep the strict final target uniqueness boundary', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstId = await seedIndividual(churchId, 'First');
+    const occupiedId = await seedIndividual(churchId, 'Occupied');
+    await seedPersonLink(churchId, 'elvanto', 'elvanto-a', firstId);
+    await seedPersonLink(churchId, 'elvanto', 'elvanto-b', occupiedId);
+
+    await assert.rejects(Database.transaction((conn) =>
+      applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider: 'elvanto',
+        corrections: [{
+          externalPersonId: 'elvanto-a', fromIndividualId: firstId,
+          outcome: 'relink', individualId: occupiedId,
+        }],
+      })
+    ), /link collision/i);
+
+    assert.deepEqual(await personLinkPairs(churchId, 'elvanto'), [
+      ['elvanto-a', firstId], ['elvanto-b', occupiedId],
+    ]);
+  });
+});
+
+test('unlink clears only Planning Center compatibility IDs and leaves Elvanto compatibility untouched', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const pcoId = await seedIndividual(churchId, 'PCO');
+    const elvantoId = await seedIndividual(churchId, 'Elvanto');
+    await seedPersonLink(churchId, 'planning_center', 'pco-a', pcoId);
+    await seedPersonLink(churchId, 'elvanto', 'elvanto-a', elvantoId);
+    await Database.query(
+      `UPDATE individuals SET planning_center_id = 'legacy-pco' WHERE church_id = ? AND id = ?`,
+      [churchId, elvantoId]
+    );
+
+    await Database.transaction(async (conn) => {
+      await applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId, provider: 'planning_center',
+        corrections: [{ externalPersonId: 'pco-a', fromIndividualId: pcoId, outcome: 'unlink' }],
+      });
+      await applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId, provider: 'elvanto',
+        corrections: [{ externalPersonId: 'elvanto-a', fromIndividualId: elvantoId, outcome: 'unlink' }],
+      });
+    });
+
+    assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), []);
+    assert.deepEqual(await personLinkPairs(churchId, 'elvanto'), []);
+    assert.deepEqual(await pcoIds(pcoId, elvantoId), [null, 'legacy-pco']);
+  });
+});
+
+test('a later correction insert failure rolls back every deleted link and compatibility ID', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const firstId = await seedIndividual(churchId, 'First');
+    const secondId = await seedIndividual(churchId, 'Second');
+    await seedPersonLink(churchId, 'planning_center', 'pco-a', firstId);
+    await seedPersonLink(churchId, 'planning_center', 'pco-b', secondId);
+    await Database.query(`CREATE TRIGGER abort_pco_b_correction
+      BEFORE INSERT ON external_person_links
+      WHEN NEW.external_person_id = 'pco-b' AND NEW.link_source = 'manual'
+      BEGIN SELECT RAISE(ABORT, 'forced correction insert failure'); END`);
+
+    await assert.rejects(Database.transaction((conn) =>
+      applyPersonLinkCorrectionsWithConnection(conn, {
+        churchId,
+        provider: 'planning_center',
+        corrections: [
+          { externalPersonId: 'pco-a', fromIndividualId: firstId, outcome: 'relink', individualId: secondId },
+          { externalPersonId: 'pco-b', fromIndividualId: secondId, outcome: 'relink', individualId: firstId },
+        ],
+      })
+    ), /forced correction insert failure/i);
+
+    assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [
+      ['pco-a', firstId], ['pco-b', secondId],
+    ]);
+    assert.deepEqual(await pcoIds(firstId, secondId), ['pco-a', 'pco-b']);
+  });
+});
 
 test('a local person can have one link for each provider', async () => {
   await withTestChurchDb(async (churchId) => {
