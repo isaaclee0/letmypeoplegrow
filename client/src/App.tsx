@@ -24,6 +24,7 @@ import Layout from './components/Layout';
 import WebSocketTestPage from './pages/WebSocketTestPage';
 import AiInsightsPage from './pages/AiInsightsPage';
 import CheckInsPage from './pages/CheckInsPage';
+import PeopleSyncBatchReviewPage from './pages/PeopleSyncBatchReviewPage';
 import PendingApprovalPage from './pages/PendingApprovalPage';
 import LoadingSpinner from './components/LoadingSpinner';
 import ToastContainer from './components/ToastContainer';
@@ -58,8 +59,8 @@ const DefaultAppRoute: React.FC = () => {
 };
 
 // Role-based Protected Route component
-const RoleProtectedRoute: React.FC<{ 
-  children: React.ReactNode; 
+export const RoleProtectedRoute: React.FC<{
+  children: React.ReactNode;
   allowedRoles: string[];
 }> = ({ children, allowedRoles }) => {
   const { user } = useAuth();
@@ -195,6 +196,14 @@ function App() {
                     } 
                   />
                   <Route path="settings" element={<SettingsPage />} />
+                  <Route
+                    path="settings/integrations/:provider/batches/:batchId/review"
+                    element={
+                      <RoleProtectedRoute allowedRoles={['admin']}>
+                        <PeopleSyncBatchReviewPage />
+                      </RoleProtectedRoute>
+                    }
+                  />
                   <Route path="profile" element={<Navigate to="/app/settings?tab=myinfo" replace />} />
                   <Route
                     path="ai-insights"
