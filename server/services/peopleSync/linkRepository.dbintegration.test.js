@@ -38,11 +38,13 @@ async function personLinkPairs(churchId, provider) {
   return rows.map((row) => [row.external_person_id, row.individual_id]);
 }
 
-async function pcoIds(...individualIds) {
+async function pcoIds(churchId, ...individualIds) {
   const placeholders = individualIds.map(() => '?').join(', ');
   const rows = await Database.query(
-    `SELECT id, planning_center_id FROM individuals WHERE id IN (${placeholders}) ORDER BY id`,
-    individualIds
+    `SELECT id, planning_center_id FROM individuals
+     WHERE church_id = ? AND id IN (${placeholders})
+     ORDER BY id`,
+    [churchId, ...individualIds]
   );
   return rows.map((row) => row.planning_center_id);
 }
@@ -80,7 +82,7 @@ test('explicit PCO relinks clear old compatibility IDs before inserting final li
     assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [
       ['pco-a', secondId], ['pco-b', firstId],
     ]);
-    assert.deepEqual(await pcoIds(firstId, secondId), ['pco-b', 'pco-a']);
+    assert.deepEqual(await pcoIds(churchId, firstId, secondId), ['pco-b', 'pco-a']);
   });
 });
 
@@ -101,7 +103,7 @@ test('corrections reject a stale old pair before changing any link', async () =>
     ), /current link|base pair|stale/i);
 
     assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [['pco-a', firstId]]);
-    assert.deepEqual(await pcoIds(firstId), ['pco-a']);
+    assert.deepEqual(await pcoIds(churchId, firstId), ['pco-a']);
   });
 });
 
@@ -178,7 +180,52 @@ test('unlink clears only Planning Center compatibility IDs and leaves Elvanto co
 
     assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), []);
     assert.deepEqual(await personLinkPairs(churchId, 'elvanto'), []);
-    assert.deepEqual(await pcoIds(pcoId, elvantoId), [null, 'legacy-pco']);
+    assert.deepEqual(await pcoIds(churchId, pcoId, elvantoId), [null, 'legacy-pco']);
+  });
+});
+
+test('PCO corrections preserve unrelated compatibility IDs on their old local people', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const unlinkId = await seedIndividual(churchId, 'Unlink');
+    const relinkFromId = await seedIndividual(churchId, 'Relink From');
+    const relinkTargetId = await seedIndividual(churchId, 'Relink Target');
+    await seedPersonLink(churchId, 'planning_center', 'pco-unlink', unlinkId);
+    await seedPersonLink(churchId, 'planning_center', 'pco-relink', relinkFromId);
+    await Database.query(
+      `UPDATE individuals SET planning_center_id = CASE id
+         WHEN ? THEN 'unrelated-unlink'
+         WHEN ? THEN 'unrelated-relink'
+       END
+       WHERE church_id = ? AND id IN (?, ?)`,
+      [unlinkId, relinkFromId, churchId, unlinkId, relinkFromId]
+    );
+    const otherChurchId = `${churchId}_other`;
+    const foreignId = (await Database.query(
+      `INSERT INTO individuals
+         (church_id, first_name, last_name, planning_center_id)
+       VALUES (?, 'Foreign', 'Person', 'foreign-pco')`,
+      [otherChurchId]
+    )).insertId;
+
+    await Database.transaction((conn) => applyPersonLinkCorrectionsWithConnection(conn, {
+      churchId,
+      provider: 'planning_center',
+      corrections: [
+        { externalPersonId: 'pco-unlink', fromIndividualId: unlinkId, outcome: 'unlink' },
+        {
+          externalPersonId: 'pco-relink', fromIndividualId: relinkFromId,
+          outcome: 'relink', individualId: relinkTargetId,
+        },
+      ],
+    }));
+
+    assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [
+      ['pco-relink', relinkTargetId],
+    ]);
+    assert.deepEqual(
+      await pcoIds(churchId, unlinkId, relinkFromId, relinkTargetId, foreignId),
+      ['unrelated-unlink', 'unrelated-relink', 'pco-relink']
+    );
   });
 });
 
@@ -207,7 +254,7 @@ test('a later correction insert failure rolls back every deleted link and compat
     assert.deepEqual(await personLinkPairs(churchId, 'planning_center'), [
       ['pco-a', firstId], ['pco-b', secondId],
     ]);
-    assert.deepEqual(await pcoIds(firstId, secondId), ['pco-a', 'pco-b']);
+    assert.deepEqual(await pcoIds(churchId, firstId, secondId), ['pco-a', 'pco-b']);
   });
 });
 
