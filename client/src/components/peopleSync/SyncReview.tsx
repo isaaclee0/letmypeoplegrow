@@ -467,12 +467,11 @@ export default function SyncReview({
     }
     for (const [externalId, established] of Object.entries(reviewContext?.establishedLinks || {})) {
       const correction = state.linkCorrections?.[externalId];
-      const projected = reviewContext?.projectedEstablishedLinks?.[externalId];
       const target = correction?.outcome === 'unlink'
         ? null
         : correction?.outcome === 'relink'
           ? correction.individualId
-          : projected?.individualId ?? established.individualId;
+          : established.individualId;
       claim(target, externalId);
     }
     return byIndividual;
@@ -683,6 +682,7 @@ export default function SyncReview({
               onStateChange={setState}
               onPreviewCorrections={previewCorrections}
               onRefreshReview={guardedRefresh}
+              onPreviewCancelled={() => setPreviewing(false)}
               previewing={previewing}
             />
           </div>

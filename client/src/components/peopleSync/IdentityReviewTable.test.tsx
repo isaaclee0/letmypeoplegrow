@@ -2,7 +2,10 @@ import React, { createRef, useState } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import IdentityReviewTable, { type IdentityReviewTableHandle } from './IdentityReviewTable';
+import IdentityReviewTable, {
+  type CorrectionPreviewRequestContext,
+  type IdentityReviewTableHandle,
+} from './IdentityReviewTable';
 import type { SyncSelectionState } from './syncSelections';
 import type {
   EstablishedLinkCorrection,
@@ -149,6 +152,38 @@ function correctionPreview(correction: EstablishedLinkCorrection): PeopleSyncRev
   return review;
 }
 
+function swapReviewFixture(
+  corrections: Record<string, EstablishedLinkCorrection> = {},
+): PeopleSyncReview {
+  const review = reviewFixture();
+  review.reviewToken = Object.keys(corrections).length === 0 ? 'swap-base' : 'swap-preview';
+  review.plan.people!.external['ext-second-established'] = {
+    firstName: 'Second', lastName: 'Source', family: { state: 'none' },
+  };
+  review.plan.reviewContext!.establishedLinks = {
+    'ext-established': { individualId: 40 },
+    'ext-second-established': { individualId: 41 },
+  };
+  review.plan.reviewContext!.projectedEstablishedLinks = Object.fromEntries(
+    Object.entries(review.plan.reviewContext!.establishedLinks).flatMap(([externalId, established]) => {
+      const correction = corrections[externalId];
+      if (correction?.outcome === 'unlink') return [];
+      return [[externalId, {
+        individualId: correction?.outcome === 'relink' ? correction.individualId : established.individualId,
+      }]];
+    }),
+  );
+  review.plan.reviewContext!.linkCorrections = Object.entries(corrections)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([externalPersonId, correction]) => ({ externalPersonId, ...correction }));
+  const projectedTargetIds = new Set(
+    Object.values(review.plan.reviewContext!.projectedEstablishedLinks).map(({ individualId }) => individualId),
+  );
+  review.plan.reviewContext!.manualCandidateIndividualIds =
+    review.plan.reviewContext!.manualCandidateIndividualIds.filter((id) => !projectedTargetIds.has(id));
+  return review;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -188,7 +223,10 @@ function TableHarness({
 function RefreshableTableHarness({
   onPreviewCorrections,
 }: {
-  onPreviewCorrections: (corrections: Record<string, EstablishedLinkCorrection>) => Promise<PeopleSyncReview>;
+  onPreviewCorrections: (
+    corrections: Record<string, EstablishedLinkCorrection>,
+    request?: CorrectionPreviewRequestContext,
+  ) => Promise<PeopleSyncReview>;
 }) {
   const [review, setReview] = useState(reviewFixture());
   const [state, setState] = useState(stateFixture());
@@ -212,6 +250,34 @@ function RefreshableTableHarness({
         state={state}
         onStateChange={setState}
         onPreviewCorrections={onPreviewCorrections}
+        previewing={false}
+      />
+    </>
+  );
+}
+
+function SwapTableHarness({
+  onPreviewCorrections,
+  onPreviewCancelled,
+}: {
+  onPreviewCorrections: (corrections: Record<string, EstablishedLinkCorrection>) => Promise<PeopleSyncReview>;
+  onPreviewCancelled?: () => void;
+}) {
+  const [review, setReview] = useState(swapReviewFixture());
+  const [state, setState] = useState(stateFixture());
+  return (
+    <>
+      <output data-testid="swap-correction-state">{JSON.stringify(state.linkCorrections)}</output>
+      <IdentityReviewTable
+        review={review}
+        state={state}
+        onStateChange={setState}
+        onPreviewCorrections={async (corrections, request) => {
+          const next = await onPreviewCorrections(corrections, request);
+          setReview(next);
+          return next;
+        }}
+        onPreviewCancelled={onPreviewCancelled}
         previewing={false}
       />
     </>
@@ -451,6 +517,155 @@ describe('IdentityReviewTable established-link correction previews', () => {
     }, expect.any(Object)));
     await waitFor(() => expect(screen.getByTestId('correction-state')).toHaveTextContent('"outcome":"unlink"'));
     expect(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' })).toHaveTextContent('Skipped for now');
+  });
+
+  it('reopens a successful unlink and relinks it without treating the original person as current', async () => {
+    const user = userEvent.setup();
+    const onPreviewCorrections = vi.fn(async (corrections: Record<string, EstablishedLinkCorrection>) => {
+      const correction = corrections['ext-established'];
+      return correction ? correctionPreview(correction) : reviewFixture();
+    });
+    render(<TableHarness onPreviewCorrections={onPreviewCorrections} />);
+    await user.click(screen.getByRole('tab', { name: 'Already linked 1' }));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlink and review again' }));
+    await waitFor(() => expect(screen.getByTestId('correction-state')).toHaveTextContent('"outcome":"unlink"'));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    const reopened = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    expect(within(reopened).getByText(/currently unlinked in this review/i)).toBeVisible();
+    await user.click(within(reopened).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(reopened).getByRole('button', { name: 'Select Alternative Local' }));
+
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenLastCalledWith({
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 42 },
+    }, expect.any(Object)));
+  });
+
+  it('restores a successful relink by previewing removal of the correction', async () => {
+    const user = userEvent.setup();
+    const onPreviewCorrections = vi.fn(async (corrections: Record<string, EstablishedLinkCorrection>) => {
+      const correction = corrections['ext-established'];
+      return correction ? correctionPreview(correction) : reviewFixture();
+    });
+    render(<TableHarness onPreviewCorrections={onPreviewCorrections} />);
+    await user.click(screen.getByRole('tab', { name: 'Already linked 1' }));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Select Replacement Local' }));
+    await waitFor(() => expect(screen.getByTestId('correction-state')).toHaveTextContent('"individualId":30'));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Restore original link' }));
+
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenLastCalledWith({}, expect.any(Object)));
+    await waitFor(() => expect(screen.getByTestId('correction-state')).toHaveTextContent('{}'));
+    expect(onPreviewCorrections.mock.calls.some(([corrections]) =>
+      corrections['ext-established']?.outcome === 'relink'
+      && corrections['ext-established'].individualId === corrections['ext-established'].fromIndividualId
+    )).toBe(false);
+  });
+
+  it('stages a provisional collision and previews a two-person swap only after both explicit corrections exist', async () => {
+    const user = userEvent.setup();
+    const onPreviewCorrections = vi.fn(async (corrections: Record<string, EstablishedLinkCorrection>) =>
+      swapReviewFixture(corrections));
+    render(<SwapTableHarness onPreviewCorrections={onPreviewCorrections} />);
+    await user.click(screen.getByRole('tab', { name: 'Already linked 2' }));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    let dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    const claimedTarget = within(dialog).getByRole('button', { name: 'Select Durable Link' });
+    expect(claimedTarget).toBeEnabled();
+    await user.click(claimedTarget);
+
+    expect(onPreviewCorrections).not.toHaveBeenCalled();
+    expect(screen.getByTestId('swap-correction-state')).toHaveTextContent(
+      '"ext-established":{"outcome":"relink","fromIndividualId":40,"individualId":41}',
+    );
+
+    await user.click(within(desktopRow('ext-second-established')).getByRole('button', { name: 'Correct linked person for Second Source' }));
+    dialog = screen.getByRole('dialog', { name: 'Correct linked person for Second Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Current Link' }));
+
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenCalledTimes(1));
+    expect(onPreviewCorrections).toHaveBeenCalledWith({
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 41 },
+      'ext-second-established': { outcome: 'relink', fromIndividualId: 41, individualId: 40 },
+    }, expect.any(Object));
+  });
+
+  it('revises a signed relink into a swap using the last signed target as the second leg', async () => {
+    const user = userEvent.setup();
+    const onPreviewCorrections = vi.fn(async (corrections: Record<string, EstablishedLinkCorrection>) =>
+      swapReviewFixture(corrections));
+    render(<SwapTableHarness onPreviewCorrections={onPreviewCorrections} />);
+    await user.click(screen.getByRole('tab', { name: 'Already linked 2' }));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    let dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Replacement Local' }));
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(desktopRow('ext-established')).getByRole(
+      'button', { name: 'Correct linked person for Established Source' },
+    )).toHaveTextContent('Replacement Local'));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Durable Link' }));
+    expect(onPreviewCorrections).toHaveBeenCalledTimes(1);
+
+    await user.click(within(desktopRow('ext-second-established')).getByRole('button', { name: 'Correct linked person for Second Source' }));
+    dialog = screen.getByRole('dialog', { name: 'Correct linked person for Second Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    const freedSignedTarget = within(dialog).getByRole('button', { name: 'Select Replacement Local' });
+    expect(freedSignedTarget).toBeEnabled();
+    await user.click(freedSignedTarget);
+
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenCalledTimes(2));
+    expect(onPreviewCorrections).toHaveBeenLastCalledWith({
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 41 },
+      'ext-second-established': { outcome: 'relink', fromIndividualId: 41, individualId: 30 },
+    }, expect.any(Object));
+  });
+
+  it('cancels an older preview when a newer provisional swap draft is not ready to preview', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<PeopleSyncReview>();
+    const onPreviewCorrections = vi.fn(() => pending.promise);
+    const onPreviewCancelled = vi.fn();
+    render(<SwapTableHarness
+      onPreviewCorrections={onPreviewCorrections}
+      onPreviewCancelled={onPreviewCancelled}
+    />);
+    await user.click(screen.getByRole('tab', { name: 'Already linked 2' }));
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    let dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Replacement Local' }));
+    expect(screen.getByText('Refreshing correction preview…')).toBeVisible();
+    const firstRequest = (onPreviewCorrections.mock.calls as unknown[][])[0][1] as {
+      signal: AbortSignal;
+      isCurrent: () => boolean;
+    };
+
+    await user.click(within(desktopRow('ext-established')).getByRole('button', { name: 'Correct linked person for Established Source' }));
+    dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Durable Link' }));
+
+    expect(onPreviewCorrections).toHaveBeenCalledTimes(1);
+    expect(firstRequest.signal.aborted).toBe(true);
+    expect(firstRequest.isCurrent()).toBe(false);
+    expect(onPreviewCancelled).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Refreshing correction preview…')).not.toBeInTheDocument();
   });
 
   it('keeps a failed draft correction and supports retry and local revert', async () => {

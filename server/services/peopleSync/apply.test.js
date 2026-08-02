@@ -31,6 +31,42 @@ test('validateSelections dispatches an explicit version 2 payload to the identit
   assert.equal(validateLegacySelections(plan, { decisionContractVersion: 2 }).contractVersion, 1);
 });
 
+test('a signed v2 plan requires the v2 selection marker instead of falling back to legacy validation', () => {
+  const plan = emptyPlan({
+    reviewContext: {
+      version: 2,
+      correctionContractVersion: 1,
+      manualCandidateIndividualIds: [],
+      projectedEstablishedLinks: {},
+      linkCorrections: [{
+        externalPersonId: 'ext-a', fromIndividualId: 1, outcome: 'unlink',
+      }],
+      identities: {},
+    },
+  });
+  const correctionOnly = {
+    linkCorrections: { 'ext-a': { fromIndividualId: 1, outcome: 'unlink' } },
+  };
+
+  assert.throws(
+    () => validateSelections(plan, correctionOnly),
+    /signed.*version 2.*selection contract|decision contract version 2/i,
+  );
+  assert.throws(
+    () => validateSelections(plan, { ...correctionOnly, decisionContractVersion: 1 }),
+    /signed.*version 2.*selection contract|decision contract version 2/i,
+  );
+});
+
+test('legacy plans reject correction fields instead of silently ignoring them', () => {
+  assert.throws(
+    () => validateSelections(emptyPlan(), {
+      linkCorrections: { 'ext-a': { fromIndividualId: 1, outcome: 'unlink' } },
+    }),
+    /corrections.*version 2|correction.*legacy/i,
+  );
+});
+
 test('validateSelections rejects corrections that differ from the signed v2 review context', () => {
   const plan = emptyPlan({
     reviewContext: {
@@ -55,6 +91,30 @@ test('validateSelections rejects corrections that differ from the signed v2 revi
     }),
     /do not match the signed review preview/i
   );
+});
+
+test('validateSelections rejects present falsey correction payloads instead of treating them as omitted', () => {
+  const plan = emptyPlan({
+    reviewContext: {
+      version: 2,
+      correctionContractVersion: 1,
+      manualCandidateIndividualIds: [],
+      projectedEstablishedLinks: {},
+      linkCorrections: [],
+      identities: {},
+    },
+  });
+
+  for (const linkCorrections of [null, false, 0, '']) {
+    assert.throws(
+      () => validateSelections(plan, {
+        decisionContractVersion: 2,
+        identityDecisions: {},
+        linkCorrections,
+      }),
+      /link corrections must be an object or array/i,
+    );
+  }
 });
 
 test('validateSelections accepts the canonical signed correction and exposes only derived effects', () => {

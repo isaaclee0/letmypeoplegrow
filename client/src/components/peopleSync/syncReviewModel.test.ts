@@ -4,6 +4,7 @@ import {
   buildDecisionRows,
   buildEstablishedRows,
   DEFAULT_REVIEW_PAGE_SIZE,
+  editLinkCorrectionDraft,
   filterReviewRows,
   isReviewDirty,
   mergeSelectionsForPreview,
@@ -161,6 +162,51 @@ describe('review identity row model', () => {
 
     expect(relinked[0]).toMatchObject({ status: 'corrected', localIndividualId: 30, localLabel: 'Projected Target' });
     expect(unlinked[0]).toMatchObject({ status: 'corrected', localIndividualId: null, localLabel: 'Skipped for now' });
+  });
+
+  it('edits an explicit two-person swap as one final correction mapping', () => {
+    let draft = editLinkCorrectionDraft({}, 'ext-a', 10, {
+      outcome: 'unlink', fromIndividualId: 10,
+    });
+    draft = editLinkCorrectionDraft(draft, 'ext-b', 20, {
+      outcome: 'relink', fromIndividualId: 20, individualId: 10,
+    });
+    draft = editLinkCorrectionDraft(draft, 'ext-a', 10, {
+      outcome: 'relink', fromIndividualId: 10, individualId: 20,
+    });
+
+    expect(draft).toEqual({
+      'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 },
+      'ext-b': { outcome: 'relink', fromIndividualId: 20, individualId: 10 },
+    });
+  });
+
+  it('restores a successful relink by removing its draft instead of serializing a server no-op', () => {
+    const restored = editLinkCorrectionDraft({
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
+    }, 'ext-established', 40, {
+      outcome: 'relink', fromIndividualId: 40, individualId: 40,
+    });
+
+    expect(restored).toEqual({});
+  });
+
+  it('shows the durable base target while a signed correction is being removed for a new preview', () => {
+    const review = reviewWith55Identities();
+    review.plan.reviewContext!.projectedEstablishedLinks = {
+      'ext-established': { individualId: 30 },
+    };
+    review.plan.reviewContext!.linkCorrections = [{
+      externalPersonId: 'ext-established',
+      outcome: 'relink',
+      fromIndividualId: 40,
+      individualId: 30,
+    }];
+
+    expect(buildEstablishedRows(review, stateWith({ linkCorrections: {} }))[0]).toMatchObject({
+      localIndividualId: 40,
+      localLabel: 'Current Link',
+    });
   });
 
   it.each([

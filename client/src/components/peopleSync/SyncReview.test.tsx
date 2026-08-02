@@ -142,6 +142,41 @@ function correctionPreview(
   return preview;
 }
 
+function swapCorrectionPreview(
+  corrections: Record<string, EstablishedLinkCorrection>,
+): PeopleSyncCorrectionPreview {
+  const review = v2Review({ attention: false, established: true, token: 'swap-preview' });
+  review.plan.people!.external['ext-second-established'] = {
+    firstName: 'Second', lastName: 'Source', family: { state: 'none' },
+  };
+  review.plan.people!.local['41'] = {
+    firstName: 'Durable', lastName: 'Link', matchEligible: false, family: { state: 'none' },
+  };
+  review.plan.reviewContext!.establishedLinks = {
+    'ext-established': { individualId: 40 },
+    'ext-second-established': { individualId: 41 },
+  };
+  review.plan.reviewContext!.projectedEstablishedLinks = Object.fromEntries(
+    Object.entries(review.plan.reviewContext!.establishedLinks).flatMap(([externalId, established]) => {
+      const correction = corrections[externalId];
+      if (correction?.outcome === 'unlink') return [];
+      return [[externalId, {
+        individualId: correction?.outcome === 'relink' ? correction.individualId : established.individualId,
+      }]];
+    }),
+  );
+  review.plan.reviewContext!.linkCorrections = Object.entries(corrections)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([externalPersonId, correction]) => ({ externalPersonId, ...correction }));
+  const projectedTargetIds = new Set(
+    Object.values(review.plan.reviewContext!.projectedEstablishedLinks).map(({ individualId }) => individualId),
+  );
+  review.plan.reviewContext!.manualCandidateIndividualIds =
+    review.plan.reviewContext!.manualCandidateIndividualIds.filter((id) => !projectedTargetIds.has(id));
+  const { runId: _runId, ...preview } = review;
+  return preview;
+}
+
 function legacyReview(): PeopleSyncReview {
   const plan: PeopleSyncPlan = {
     ...emptyBuckets(),
@@ -466,6 +501,67 @@ describe('SyncReview correction previews and dirty state', () => {
     await user.click(screen.getByRole('button', { name: 'Apply 2 selected changes' }));
     expect(onApply).toHaveBeenCalledWith('preview-30', expect.objectContaining({
       linkCorrections: { 'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 } },
+    }));
+  });
+
+  it('blocks a half-swap, then applies both explicit corrections with the signed swap preview token', async () => {
+    const base = v2Review({ attention: false, established: true });
+    base.plan.people!.external['ext-second-established'] = {
+      firstName: 'Second', lastName: 'Source', family: { state: 'none' },
+    };
+    base.plan.people!.local['41'] = {
+      firstName: 'Durable', lastName: 'Link', matchEligible: false, family: { state: 'none' },
+    };
+    base.plan.reviewContext!.establishedLinks = {
+      'ext-established': { individualId: 40 },
+      'ext-second-established': { individualId: 41 },
+    };
+    base.plan.reviewContext!.projectedEstablishedLinks = {
+      'ext-established': { individualId: 40 },
+      'ext-second-established': { individualId: 41 },
+    };
+    const onPreviewCorrections = vi.fn(async (
+      _baseToken: string,
+      corrections: Record<string, EstablishedLinkCorrection>,
+    ) => swapCorrectionPreview(corrections));
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(<SyncReview
+      provider="planning_center"
+      review={base}
+      onRefresh={vi.fn()}
+      onPreviewCorrections={onPreviewCorrections}
+      onApply={onApply}
+      applying={false}
+    />);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: 'Already linked 2' }));
+    await user.click(screen.getByRole('button', { name: 'Correct linked person for Established Source' }));
+    let dialog = screen.getByRole('dialog', { name: 'Correct linked person for Established Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Durable Link' }));
+
+    expect(onPreviewCorrections).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Apply \d+ selected changes/ })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Correct linked person for Second Source' }));
+    dialog = screen.getByRole('dialog', { name: 'Correct linked person for Second Source' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Current Link' }));
+
+    await waitFor(() => expect(onPreviewCorrections).toHaveBeenCalledWith('review-token', {
+      'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 41 },
+      'ext-second-established': { outcome: 'relink', fromIndividualId: 41, individualId: 40 },
+    }));
+    const apply = screen.getByRole('button', { name: /Apply \d+ selected changes/ });
+    await waitFor(() => expect(apply).toBeEnabled());
+    await user.click(apply);
+
+    expect(onApply).toHaveBeenCalledWith('swap-preview', expect.objectContaining({
+      linkCorrections: {
+        'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 41 },
+        'ext-second-established': { outcome: 'relink', fromIndividualId: 41, individualId: 40 },
+      },
     }));
   });
 

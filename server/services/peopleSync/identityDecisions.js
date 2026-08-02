@@ -73,7 +73,9 @@ function validateDecisionFields(externalPersonId, decision) {
 
 function validateSignedLinkCorrections(version, signedCorrections, submittedCorrections) {
   const signed = canonicalLinkCorrections(version === 1 ? signedCorrections : {});
-  const submitted = canonicalLinkCorrections(submittedCorrections || {});
+  const submitted = canonicalLinkCorrections(
+    submittedCorrections === undefined ? {} : submittedCorrections
+  );
   if (JSON.stringify(signed) !== JSON.stringify(submitted)) {
     throw new Error('Established-link corrections do not match the signed review preview');
   }

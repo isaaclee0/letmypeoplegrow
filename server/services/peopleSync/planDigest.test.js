@@ -2,7 +2,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
-const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
+const {
+  digestPlan,
+  digestReviewToken,
+  createReviewToken,
+  verifyReviewToken,
+  verifyReviewTokenLineage,
+} = require('./planDigest');
 
 function plan(overrides = {}) {
   return {
@@ -202,6 +208,55 @@ test('review token is bound to church, provider, batch, and plan digest', () => 
     assert.deepEqual(verifyReviewToken(token, { ...expected, planDigest: digestPlan(plan({ archive: [{ id: 'archive:e1:1' }] })) }), {
       ok: false, code: 'SYNC_PLAN_STALE',
     });
+  });
+}));
+
+test('a corrected review token signs the base-plan lineage used to classify apply-time projection errors', () => withSecret('review-secret', () => {
+  atUnixSecond(2_000_000_000, () => {
+    const basePlanDigest = digestPlan(plan());
+    const correctedPlanDigest = digestPlan(plan({
+      updateManagedFields: [{ id: 'update:corrected', individualId: 20 }],
+    }));
+    const baseToken = createReviewToken({
+      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest: basePlanDigest,
+      expiresInSeconds: 900,
+    });
+    const rootReviewTokenDigest = digestReviewToken(baseToken);
+    const token = createReviewToken({
+      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest: correctedPlanDigest,
+      basePlanDigest,
+      rootReviewTokenDigest,
+      expiresInSeconds: 900,
+    });
+    const lineage = { churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest };
+
+    const verification = verifyReviewToken(token, {
+      churchId: 'c1', provider: 'elvanto', batchId: 3, planDigest: correctedPlanDigest,
+    });
+    assert.equal(verification.ok, true);
+    assert.equal(verification.payload.rootReviewTokenDigest, rootReviewTokenDigest);
+    assert.equal(verifyReviewTokenLineage(token, lineage).ok, true);
+    assert.deepEqual(verifyReviewTokenLineage(token, {
+      ...lineage,
+      basePlanDigest: digestPlan(plan({ archive: [{ id: 'archive:changed' }] })),
+    }), { ok: false, code: 'SYNC_PLAN_STALE' });
+  });
+}));
+
+test('an ordinary base token is its own valid lineage root', () => withSecret('review-secret', () => {
+  atUnixSecond(2_000_000_000, () => {
+    const basePlanDigest = digestPlan(plan());
+    const token = createReviewToken({
+      churchId: 'c1', provider: 'elvanto', batchId: 3,
+      planDigest: basePlanDigest,
+      expiresInSeconds: 900,
+    });
+
+    assert.equal(verifyReviewTokenLineage(token, {
+      churchId: 'c1', provider: 'elvanto', batchId: 3, basePlanDigest,
+    }).ok, true);
   });
 }));
 

@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan } = require('./plan');
-const { digestPlan } = require('./planDigest');
+const { digestPlan, digestReviewToken } = require('./planDigest');
 const { digestSourceIdentity } = require('./sourceModel');
 const {
   buildReview, applyReviewed, runUnattended, previewAuthoritySwitch, previewLinkCorrections, OrchestratorError,
@@ -156,6 +156,7 @@ function makeDeps({
     digestPlan,
     createReviewToken: ({ planDigest }) => `review:${planDigest}`,
     verifyReviewToken: () => verifyResult,
+    isReviewTokenApplied: async () => false,
     notifyReviewRequired: async () => ({ notified: true }),
     ...extra,
   };
@@ -166,6 +167,7 @@ function correctionPreviewDeps() {
   const providerReads = [];
   const started = [];
   const created = [];
+  const tokenLineage = new Map();
   const external = person('ext-a', { firstName: 'External', lastName: 'Person' });
   const sourceState = { providerRefreshedAt: '2026-07-28T01:00:00.000Z' };
   const localIndividuals = [
@@ -176,7 +178,7 @@ function correctionPreviewDeps() {
   const personLinks = [personLink('ext-a', 10)];
   let expectedBaseDigest = null;
   const validBaseToken = 'base-review-token';
-  const { deps, applied } = makeDeps({
+  const { deps, applied, presence } = makeDeps({
     localIndividuals,
     personLinks,
     fetchSourceSnapshot: async () => {
@@ -191,9 +193,11 @@ function correctionPreviewDeps() {
         started.push(input);
         return { id: started.length, ...input };
       },
-      createReviewToken: ({ planDigest }) => {
+      createReviewToken: ({ planDigest, basePlanDigest, rootReviewTokenDigest }) => {
         created.push(planDigest);
-        return `review:${planDigest}`;
+        const token = `review:${planDigest}`;
+        if (basePlanDigest) tokenLineage.set(token, { basePlanDigest, rootReviewTokenDigest });
+        return token;
       },
       verifyReviewToken: (token, { planDigest }) => {
         if (token === 'invalid-base-token') return { ok: false, code: 'SYNC_REVIEW_INVALID' };
@@ -202,10 +206,23 @@ function correctionPreviewDeps() {
         if (token === validBaseToken) {
           if (expectedBaseDigest === null) expectedBaseDigest = planDigest;
           return planDigest === expectedBaseDigest
-            ? { ok: true }
+            ? { ok: true, payload: {} }
             : { ok: false, code: 'SYNC_PLAN_STALE' };
         }
         return token === `review:${planDigest}`
+          ? { ok: true, payload: {
+            rootReviewTokenDigest: tokenLineage.get(token)?.rootReviewTokenDigest,
+          } }
+          : { ok: false, code: 'SYNC_PLAN_STALE' };
+      },
+      verifyReviewTokenLineage: (token, { basePlanDigest }) => {
+        if (token === validBaseToken) {
+          if (expectedBaseDigest === null) expectedBaseDigest = basePlanDigest;
+          return basePlanDigest === expectedBaseDigest
+            ? { ok: true }
+            : { ok: false, code: 'SYNC_PLAN_STALE' };
+        }
+        return tokenLineage.get(token)?.basePlanDigest === basePlanDigest
           ? { ok: true }
           : { ok: false, code: 'SYNC_PLAN_STALE' };
       },
@@ -213,7 +230,7 @@ function correctionPreviewDeps() {
   });
   deps.validBaseToken = validBaseToken;
   return {
-    deps, providerReads, started, created, applied, external, sourceState, personLinks,
+    deps, providerReads, started, created, applied, presence, external, sourceState, personLinks,
   };
 }
 
@@ -297,9 +314,62 @@ test('correction preview rejects invalid established-link corrections after base
       baseReviewToken: deps.validBaseToken,
       linkCorrections: { 'ext-a': { outcome: 'relink', fromIndividualId: 999, individualId: 20 } },
     }, deps),
-    /stale established link.*ext-a/i
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_SELECTIONS_INVALID' && error.status === 400 &&
+      /stale established link.*ext-a/i.test(error.message)
   );
   assert.equal(created.length, 0);
+});
+
+test('correction preview cannot mint a descendant from an already-applied base token', async () => {
+  const checked = [];
+  const { deps, created } = correctionPreviewDeps();
+  deps.isReviewTokenApplied = async (input) => {
+    checked.push(input);
+    return true;
+  };
+
+  await assert.rejects(
+    previewLinkCorrections({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      baseReviewToken: deps.validBaseToken,
+      linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_REVIEW_ALREADY_APPLIED' && error.status === 409,
+  );
+  assert.deepEqual(checked, [{
+    churchId: 'church-a', provider: 'elvanto', reviewToken: deps.validBaseToken,
+    rootReviewTokenDigest: digestReviewToken(deps.validBaseToken),
+  }]);
+  assert.equal(created.length, 0);
+});
+
+test('an empty corrected descendant cannot launder an already-applied root into a new lineage', async () => {
+  const { deps, created } = correctionPreviewDeps();
+  const first = await previewLinkCorrections({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    baseReviewToken: deps.validBaseToken,
+    linkCorrections: {},
+  }, deps);
+  const originalRootDigest = digestReviewToken(deps.validBaseToken);
+  const checked = [];
+  deps.isReviewTokenApplied = async (input) => {
+    checked.push(input);
+    return input.rootReviewTokenDigest === originalRootDigest;
+  };
+
+  await assert.rejects(
+    previewLinkCorrections({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      baseReviewToken: first.reviewToken,
+      linkCorrections: {},
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_REVIEW_ALREADY_APPLIED' && error.status === 409,
+  );
+  assert.equal(checked[0].rootReviewTokenDigest, originalRootDigest);
+  assert.equal(created.length, 1, 'an applied root must not sign a second empty descendant');
 });
 
 test('correction preview makes a base token stale when only the provider source snapshot changes', async () => {
@@ -456,6 +526,28 @@ test('an unlink projection defers the source identity without removing it from s
   }]);
   assert.deepEqual(plans[0].externalPeople.map(({ id }) => id), ['ext-a']);
   assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['ext-a']);
+});
+
+test('a reviewed corrected unlink keeps the source identity in durable presence accounting', async () => {
+  const { deps, presence } = correctionPreviewDeps();
+  const linkCorrections = {
+    'ext-a': { outcome: 'unlink', fromIndividualId: 10 },
+  };
+  const preview = await previewLinkCorrections({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    baseReviewToken: deps.validBaseToken,
+    linkCorrections,
+  }, deps);
+
+  await applyReviewed({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    reviewToken: preview.reviewToken,
+    selections: { linkCorrections },
+    userId: 1,
+  }, deps);
+
+  assert.equal(presence.length, 1);
+  assert.deepEqual([...presence[0][2]], ['ext-a']);
 });
 
 test('a batch review cannot correct an established identity owned by another enabled batch source', async () => {
@@ -857,6 +949,69 @@ test('a corrected apply token becomes stale when the submitted correction set di
       userId: 1,
     }, deps),
     { code: 'SYNC_PLAN_STALE' }
+  );
+  assert.equal(applied.length, 0);
+});
+
+test('reviewed apply types malformed correction projection as a selection error when its base is current', async () => {
+  const { deps, applied } = correctionPreviewDeps();
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: deps.validBaseToken,
+      selections: {
+        linkCorrections: {
+          'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 0 },
+        },
+      },
+      userId: 1,
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_SELECTIONS_INVALID' && error.status === 400,
+  );
+  assert.equal(applied.length, 0);
+});
+
+test('reviewed apply does not treat present falsey correction payloads as omitted', async () => {
+  for (const linkCorrections of [null, false, 0, '']) {
+    const { deps, applied } = correctionPreviewDeps();
+    await assert.rejects(
+      applyReviewed({
+        churchId: 'church-a', provider: 'elvanto', batchId: 1,
+        reviewToken: deps.validBaseToken,
+        selections: { linkCorrections },
+        userId: 1,
+      }, deps),
+      (error) => error instanceof OrchestratorError &&
+        error.code === 'SYNC_SELECTIONS_INVALID' && error.status === 400,
+      String(linkCorrections),
+    );
+    assert.equal(applied.length, 0);
+  }
+});
+
+test('reviewed apply keeps a changed correction base typed as a stale plan', async () => {
+  const { deps, personLinks, applied } = correctionPreviewDeps();
+  const linkCorrections = {
+    'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 },
+  };
+  const preview = await previewLinkCorrections({
+    churchId: 'church-a', provider: 'elvanto', batchId: 1,
+    baseReviewToken: deps.validBaseToken,
+    linkCorrections,
+  }, deps);
+  personLinks.splice(0, 1, personLink('ext-a', 30));
+
+  await assert.rejects(
+    applyReviewed({
+      churchId: 'church-a', provider: 'elvanto', batchId: 1,
+      reviewToken: preview.reviewToken,
+      selections: { linkCorrections },
+      userId: 1,
+    }, deps),
+    (error) => error instanceof OrchestratorError &&
+      error.code === 'SYNC_PLAN_STALE' && error.status === 409,
   );
   assert.equal(applied.length, 0);
 });

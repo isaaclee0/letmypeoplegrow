@@ -9,12 +9,15 @@ import type { PeopleSyncPeopleDirectory, PeopleSyncPersonDisplay } from './types
 export interface EstablishedLinkDialogProps {
   open: boolean;
   externalId: string;
-  currentIndividualId: number;
+  currentIndividualId: number | null;
+  originalIndividualId: number;
   directory: PeopleSyncPeopleDirectory;
   availableIndividualIds: ReadonlySet<number>;
   claimedBy: ReadonlyMap<number, string>;
+  correctableClaimByIndividualId?: ReadonlyMap<number, string>;
   onRelink: (individualId: number) => void;
   onUnlink: () => void;
+  onRestore?: () => void;
   onClose: () => void;
 }
 
@@ -30,11 +33,14 @@ export default function EstablishedLinkDialog({
   open,
   externalId,
   currentIndividualId,
+  originalIndividualId,
   directory,
   availableIndividualIds,
   claimedBy,
+  correctableClaimByIndividualId = new Map(),
   onRelink,
   onUnlink,
+  onRestore,
   onClose,
 }: EstablishedLinkDialogProps) {
   const [changing, setChanging] = useState(false);
@@ -58,7 +64,7 @@ export default function EstablishedLinkDialog({
     return Object.entries(directory.local)
       .map(([rawId, person]) => ({ individualId: Number(rawId), person }))
       .filter(({ individualId }) => Number.isSafeInteger(individualId) && individualId > 0)
-      .filter(({ individualId }) => individualId !== currentIndividualId)
+      .filter(({ individualId }) => currentIndividualId === null || individualId !== currentIndividualId)
       .filter(({ person }) => !needle || searchableText(person).includes(needle))
       .sort((left, right) => personDisplayName(left.person).localeCompare(personDisplayName(right.person)));
   }, [currentIndividualId, directory.local, query]);
@@ -84,7 +90,13 @@ export default function EstablishedLinkDialog({
             </div>
 
             <div className="mt-4">
-              <PersonIdentitySummary label="Currently linked LMPG person" person={currentPerson} />
+              {currentIndividualId === null ? (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-700 dark:border-gray-600 dark:bg-gray-800/60 dark:text-gray-200">
+                  This provider person is currently unlinked in this review.
+                </div>
+              ) : (
+                <PersonIdentitySummary label="Currently linked LMPG person" person={currentPerson} />
+              )}
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -95,13 +107,24 @@ export default function EstablishedLinkDialog({
               >
                 Change linked person
               </button>
-              <button
-                type="button"
-                onClick={() => onUnlink()}
-                className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200"
-              >
-                Unlink and review again
-              </button>
+              {currentIndividualId !== null && (
+                <button
+                  type="button"
+                  onClick={() => onUnlink()}
+                  className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-800 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:bg-red-950/30 dark:text-red-200"
+                >
+                  Unlink and review again
+                </button>
+              )}
+              {onRestore && (
+                <button
+                  type="button"
+                  onClick={() => onRestore()}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-3 text-left text-sm font-semibold text-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                >
+                  Restore original link
+                </button>
+              )}
             </div>
             <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">
               Unattended sync will be held for this provider person after unlinking, until an administrator reviews it again.
@@ -128,8 +151,11 @@ export default function EstablishedLinkDialog({
                   {people.map(({ individualId, person }) => {
                     const claimedExternalId = claimedBy.get(individualId);
                     const claimedElsewhere = claimedExternalId !== undefined && claimedExternalId !== externalId;
-                    const unavailable = !availableIndividualIds.has(individualId);
-                    const disabled = claimedElsewhere || unavailable;
+                    const correctableExternalId = correctableClaimByIndividualId.get(individualId);
+                    const provisionallyReassignable = individualId === originalIndividualId ||
+                      (correctableExternalId !== undefined && correctableExternalId !== externalId);
+                    const unavailable = !availableIndividualIds.has(individualId) && !provisionallyReassignable;
+                    const disabled = (claimedElsewhere && !provisionallyReassignable) || unavailable;
                     return (
                       <div key={individualId} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
                         <PersonIdentitySummary label="LMPG person" person={person} />
@@ -143,7 +169,11 @@ export default function EstablishedLinkDialog({
                           Select {personDisplayName(person)}
                         </button>
                         {claimedElsewhere && (
-                          <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Already selected for another provider person</p>
+                          <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                            {provisionallyReassignable
+                              ? 'Correct the other linked row to complete this exchange'
+                              : 'Already selected for another provider person'}
+                          </p>
                         )}
                         {!claimedElsewhere && unavailable && person.matchEligible === false && (
                           <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">Already linked to a provider person</p>

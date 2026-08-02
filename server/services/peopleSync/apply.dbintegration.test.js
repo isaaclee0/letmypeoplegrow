@@ -1,8 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const { withTestChurchDb } = require('../../test-helpers/testChurchDb');
-const { applyPeopleSyncPlan } = require('./apply');
+const { applyPeopleSyncPlan, isReviewTokenApplied } = require('./apply');
 const { BUCKETS } = require('./plan');
 const batchRepository = require('./batchRepository');
 const matchReviewRepository = require('./matchReviewRepository');
@@ -59,6 +60,10 @@ function reviewedApply(churchId, provider, plan, batchId = null) {
     batchId,
     verifyReviewToken,
   };
+}
+
+function tokenDigest(reviewToken) {
+  return crypto.createHash('sha256').update(reviewToken).digest('hex');
 }
 
 async function seedIndividual(churchId, overrides = {}) {
@@ -307,19 +312,55 @@ test('reviewed corrections atomically retarget managed effects while preserving 
       linkCorrections: corrections,
     });
 
+    const signedReview = reviewedApply(churchId, provider, plan, batch.id);
+    const submittedCorrections = {
+      'pco-unlink': { fromIndividualId: unlinkId, outcome: 'unlink' },
+      'pco-a': { fromIndividualId: oldId, outcome: 'relink', individualId: newId },
+    };
+
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId,
+        provider,
+        plan,
+        selections: { linkCorrections: submittedCorrections },
+        userId,
+        reviewedApply: signedReview,
+        authorityExpectation: { active: 'none', pending: null },
+        sourcePromotion: {
+          batchId: batch.id,
+          expectedBaseRevision: batch.draftSourceBaseRevision,
+          expectedDraftDigest: digestSourceIdentity(draft),
+        },
+      }),
+      /signed.*version 2.*selection contract|decision contract version 2/i,
+      'a corrected signed plan must never execute through legacy selection validation',
+    );
+    assert.deepEqual(await Database.query(
+      `SELECT external_person_id, individual_id FROM external_person_links
+        WHERE church_id = ? AND provider = ? ORDER BY external_person_id`,
+      [churchId, provider]
+    ), [
+      { external_person_id: 'pco-a', individual_id: oldId },
+      { external_person_id: 'pco-unlink', individual_id: unlinkId },
+    ]);
+    assert.equal((await Database.query(
+      'SELECT first_name FROM individuals WHERE church_id = ? AND id = ?', [churchId, newId]
+    ))[0].first_name, 'Known');
+    assert.deepEqual(await Database.query(
+      'SELECT id FROM people_sync_review_applications WHERE church_id = ?', [churchId]
+    ), [], 'rejected legacy selection must roll back its token claim');
+
     await applyPeopleSyncPlan({
       churchId,
       provider,
       plan,
       selections: {
         ...v2Selections({ 'pco-new': { outcome: 'accept' } }),
-        linkCorrections: {
-          'pco-unlink': { fromIndividualId: unlinkId, outcome: 'unlink' },
-          'pco-a': { fromIndividualId: oldId, outcome: 'relink', individualId: newId },
-        },
+        linkCorrections: submittedCorrections,
       },
       userId,
-      reviewedApply: reviewedApply(churchId, provider, plan, batch.id),
+      reviewedApply: signedReview,
       authorityExpectation: { active: 'none', pending: null },
       sourcePromotion: {
         batchId: batch.id,
@@ -371,6 +412,95 @@ test('reviewed corrections atomically retarget managed effects while preserving 
     const promoted = await batchRepository.getBatch(churchId, provider, batch.id);
     assert.deepEqual(promoted.source, draft);
     assert.equal(promoted.draftSource, null);
+    assert.equal(await isReviewTokenApplied({
+      churchId, provider, reviewToken: signedReview.reviewToken,
+    }), true);
+
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId,
+        provider,
+        plan,
+        selections: {
+          ...v2Selections({ 'pco-new': { outcome: 'accept' } }),
+          linkCorrections: submittedCorrections,
+        },
+        userId,
+        reviewedApply: signedReview,
+      }),
+      (error) => error.code === 'SYNC_REVIEW_ALREADY_APPLIED',
+      'the complete corrected review token must remain one-time after its atomic commit',
+    );
+  });
+});
+
+test('base and pre-minted correction tokens atomically share one consumable review lineage', async () => {
+  await withTestChurchDb(async (churchId) => {
+    const provider = 'elvanto';
+    const plan = emptyPlan();
+    plan.reviewContext = buildReviewContext({
+      plan,
+      localPeople: [],
+      localFamilies: [],
+      personLinks: [],
+    });
+    const planDigest = digestPlan(plan);
+    const selections = v2Selections({});
+
+    const baseReview = reviewedApply(churchId, provider, plan);
+    const childReviewToken = createReviewToken({
+      churchId,
+      provider,
+      batchId: null,
+      planDigest,
+      basePlanDigest: planDigest,
+      rootReviewTokenDigest: tokenDigest(baseReview.reviewToken),
+      expiresInSeconds: 1800,
+    });
+    const childReview = {
+      reviewToken: childReviewToken,
+      planDigest,
+      batchId: null,
+      verifyReviewToken,
+    };
+
+    await applyPeopleSyncPlan({
+      churchId, provider, plan, selections, reviewedApply: baseReview,
+    });
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider, plan, selections, reviewedApply: childReview,
+      }),
+      (error) => error.code === 'SYNC_REVIEW_ALREADY_APPLIED',
+      'a child minted before its base was consumed must still lose the atomic lineage race',
+    );
+
+    const secondBaseReview = reviewedApply(churchId, provider, plan);
+    const secondChildReviewToken = createReviewToken({
+      churchId,
+      provider,
+      batchId: null,
+      planDigest,
+      basePlanDigest: planDigest,
+      rootReviewTokenDigest: tokenDigest(secondBaseReview.reviewToken),
+      expiresInSeconds: 1800,
+    });
+    const secondChildReview = {
+      reviewToken: secondChildReviewToken,
+      planDigest,
+      batchId: null,
+      verifyReviewToken,
+    };
+    await applyPeopleSyncPlan({
+      churchId, provider, plan, selections, reviewedApply: secondChildReview,
+    });
+    await assert.rejects(
+      applyPeopleSyncPlan({
+        churchId, provider, plan, selections, reviewedApply: secondBaseReview,
+      }),
+      (error) => error.code === 'SYNC_REVIEW_ALREADY_APPLIED',
+      'a base token must lose when its correction descendant consumes the lineage first',
+    );
   });
 });
 
@@ -1047,7 +1177,7 @@ test('a planned v2 archive is not applied unless the reviewer explicitly accepts
   });
 });
 
-test('a reviewed legacy payload also requires explicit acceptance for a planned archive', async () => {
+test('a reviewed v2 payload also requires explicit acceptance for a planned archive', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId);
     const plan = emptyPlan({
@@ -1077,7 +1207,7 @@ test('a reviewed legacy payload also requires explicit acceptance for a planned 
       churchId,
       provider: 'elvanto',
       plan,
-      selections: {},
+      selections: v2Selections({}),
       reviewedApply: reviewedApply(churchId, 'elvanto', plan),
     });
 

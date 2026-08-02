@@ -47,7 +47,10 @@ test('POST correction preview delegates the signed correction request in church 
       method: 'POST',
       body: {
         baseReviewToken: 'base-review',
-        linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+        linkCorrections: {
+          'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 11 },
+          'ext-b': { outcome: 'relink', fromIndividualId: 11, individualId: 10 },
+        },
       },
     });
     assert.equal(response.status, 200);
@@ -59,7 +62,10 @@ test('POST correction preview delegates the signed correction request in church 
     provider: 'planning_center',
     batchId: 12,
     baseReviewToken: 'base-review',
-    linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 10 } },
+    linkCorrections: {
+      'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 11 },
+      'ext-b': { outcome: 'relink', fromIndividualId: 11, individualId: 10 },
+    },
   }]);
 });
 
@@ -127,6 +133,35 @@ test('POST correction preview passes through orchestrator error status and code'
     assert.deepEqual(response, {
       status: 409,
       body: { error: 'Review changed.', code: 'SYNC_REVIEW_STALE' },
+    });
+  });
+});
+
+test('POST correction preview and apply expose typed selection errors while stale plans remain conflicts', async () => {
+  await withServer({
+    previewLinkCorrections: async () => {
+      throw new OrchestratorError('SYNC_SELECTIONS_INVALID', 'Relink target is invalid.', 400);
+    },
+    applyReviewed: async () => {
+      throw new OrchestratorError('SYNC_PLAN_STALE', 'The correction base changed.', 409);
+    },
+  }, async (base) => {
+    const preview = await requestJson(`${base}/sync-batches/12/preview-link-corrections`, {
+      method: 'POST',
+      body: { baseReviewToken: 'base-review', linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 1 } } },
+    });
+    assert.deepEqual(preview, {
+      status: 400,
+      body: { error: 'Relink target is invalid.', code: 'SYNC_SELECTIONS_INVALID' },
+    });
+
+    const apply = await requestJson(`${base}/sync-batches/12/apply`, {
+      method: 'POST',
+      body: { reviewToken: 'corrected-review', selections: {} },
+    });
+    assert.deepEqual(apply, {
+      status: 409,
+      body: { error: 'The correction base changed.', code: 'SYNC_PLAN_STALE' },
     });
   });
 });

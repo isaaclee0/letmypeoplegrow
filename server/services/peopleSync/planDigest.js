@@ -62,6 +62,13 @@ function digestPlan(plan) {
   return crypto.createHash('sha256').update(canonicalJson(plan)).digest('hex');
 }
 
+function digestReviewToken(reviewToken) {
+  if (typeof reviewToken !== 'string' || reviewToken.length === 0) {
+    throw new TypeError('A review token is required to compute its digest');
+  }
+  return crypto.createHash('sha256').update(reviewToken).digest('hex');
+}
+
 function signingSecret() {
   const secret = process.env.SYNC_REVIEW_SECRET || process.env.JWT_SECRET;
   return typeof secret === 'string' && secret.length > 0 ? secret : null;
@@ -72,10 +79,17 @@ function sign(payloadPart, secret) {
 }
 
 function assertCreateContext(context) {
+  const hasBasePlanDigest = context?.basePlanDigest !== undefined;
+  const hasRootReviewTokenDigest = context?.rootReviewTokenDigest !== undefined;
   if (!isPlainObject(context) || typeof context.churchId !== 'string' || context.churchId.length === 0 ||
       typeof context.provider !== 'string' || context.provider.length === 0 ||
       !(context.batchId === null || typeof context.batchId === 'string' || Number.isSafeInteger(context.batchId)) ||
       typeof context.planDigest !== 'string' || !/^[a-f0-9]{64}$/.test(context.planDigest) ||
+      hasBasePlanDigest !== hasRootReviewTokenDigest ||
+      (hasBasePlanDigest &&
+        (typeof context.basePlanDigest !== 'string' || !/^[a-f0-9]{64}$/.test(context.basePlanDigest))) ||
+      (hasRootReviewTokenDigest &&
+        (typeof context.rootReviewTokenDigest !== 'string' || !/^[a-f0-9]{64}$/.test(context.rootReviewTokenDigest))) ||
       !Number.isSafeInteger(context.expiresInSeconds) || context.expiresInSeconds <= 0) {
     throw new Error('Invalid review token context');
   }
@@ -106,6 +120,10 @@ function createReviewToken(context) {
     provider: context.provider,
     batchId: context.batchId,
     planDigest: context.planDigest,
+    ...(context.basePlanDigest === undefined ? {} : { basePlanDigest: context.basePlanDigest }),
+    ...(context.rootReviewTokenDigest === undefined
+      ? {}
+      : { rootReviewTokenDigest: context.rootReviewTokenDigest }),
     jti: crypto.randomBytes(16).toString('base64url'),
     exp: Math.floor(Date.now() / 1000) + context.expiresInSeconds,
   };
@@ -120,17 +138,30 @@ function validExpected(expected) {
     typeof expected.planDigest === 'string' && /^[a-f0-9]{64}$/.test(expected.planDigest);
 }
 
+function validLineageExpected(expected) {
+  return isPlainObject(expected) && typeof expected.churchId === 'string' && expected.churchId.length > 0 &&
+    typeof expected.provider === 'string' && expected.provider.length > 0 &&
+    (expected.batchId === null || typeof expected.batchId === 'string' || Number.isSafeInteger(expected.batchId)) &&
+    typeof expected.basePlanDigest === 'string' && /^[a-f0-9]{64}$/.test(expected.basePlanDigest);
+}
+
 function validPayload(payload) {
   if (!isPlainObject(payload)) return false;
   const keys = Object.keys(payload).sort();
   const keyList = keys.join(',');
   const hasOneTimeIdentity = keyList === 'batchId,churchId,exp,jti,planDigest,provider';
+  const hasCorrectionLineage = keyList ===
+    'basePlanDigest,batchId,churchId,exp,jti,planDigest,provider,rootReviewTokenDigest';
   const isLegacyPayload = keyList === 'batchId,churchId,exp,planDigest,provider';
-  if (!hasOneTimeIdentity && !isLegacyPayload) return false;
+  if (!hasOneTimeIdentity && !hasCorrectionLineage && !isLegacyPayload) return false;
   return typeof payload.churchId === 'string' && payload.churchId.length > 0 &&
     typeof payload.provider === 'string' && payload.provider.length > 0 &&
     (payload.batchId === null || typeof payload.batchId === 'string' || Number.isSafeInteger(payload.batchId)) &&
     typeof payload.planDigest === 'string' && /^[a-f0-9]{64}$/.test(payload.planDigest) &&
+    (!hasCorrectionLineage ||
+      (typeof payload.basePlanDigest === 'string' && /^[a-f0-9]{64}$/.test(payload.basePlanDigest) &&
+        typeof payload.rootReviewTokenDigest === 'string' &&
+        /^[a-f0-9]{64}$/.test(payload.rootReviewTokenDigest))) &&
     (isLegacyPayload || (typeof payload.jti === 'string' && /^[A-Za-z0-9_-]{22}$/.test(payload.jti))) &&
     Number.isSafeInteger(payload.exp) && payload.exp >= 0;
 }
@@ -142,10 +173,10 @@ function decodePayload(payloadPart) {
   return JSON.parse(decoded.toString('utf8'));
 }
 
-function verifyReviewToken(token, expected) {
+function verifySignedPayload(token, expected) {
   try {
     const secret = signingSecret();
-    if (!secret || typeof token !== 'string' || token.length === 0 || token.length > 8192 || !validExpected(expected)) {
+    if (!secret || typeof token !== 'string' || token.length === 0 || token.length > 8192) {
       return INVALID;
     }
     const parts = token.split('.');
@@ -161,14 +192,30 @@ function verifyReviewToken(token, expected) {
       return INVALID;
     }
     if (Math.floor(Date.now() / 1000) >= payload.exp) return EXPIRED;
-    if (payload.planDigest !== expected.planDigest) return STALE;
     return { ok: true, payload };
   } catch (_) {
     return INVALID;
   }
 }
 
+function verifyReviewToken(token, expected) {
+  if (!validExpected(expected)) return INVALID;
+  const verification = verifySignedPayload(token, expected);
+  if (!verification.ok) return verification;
+  if (verification.payload.planDigest !== expected.planDigest) return STALE;
+  return verification;
+}
+
+function verifyReviewTokenLineage(token, expected) {
+  if (!validLineageExpected(expected)) return INVALID;
+  const verification = verifySignedPayload(token, expected);
+  if (!verification.ok) return verification;
+  const signedBasePlanDigest = verification.payload.basePlanDigest || verification.payload.planDigest;
+  if (signedBasePlanDigest !== expected.basePlanDigest) return STALE;
+  return verification;
+}
+
 module.exports = {
-  canonicalJson, digestPlan,
-  createReviewToken, verifyReviewToken, ReviewSigningSecretMissingError,
+  canonicalJson, digestPlan, digestReviewToken,
+  createReviewToken, verifyReviewToken, verifyReviewTokenLineage, ReviewSigningSecretMissingError,
 };

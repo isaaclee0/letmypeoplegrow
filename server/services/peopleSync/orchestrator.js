@@ -66,8 +66,10 @@ const { matchPeople } = require('./matcher');
 const { BUCKETS, computePeopleSyncPlan, summarizePlan } = require('./plan');
 const { DECISION_CONTRACT_VERSION, buildReviewContext, buildReviewDirectory } = require('./reviewContext');
 const { validateAndProjectLinkCorrections } = require('./linkCorrections');
-const { applyPeopleSyncPlan, validateSelections } = require('./apply');
-const { digestPlan, createReviewToken, verifyReviewToken } = require('./planDigest');
+const { applyPeopleSyncPlan, validateSelections, isReviewTokenApplied } = require('./apply');
+const {
+  digestPlan, digestReviewToken, createReviewToken, verifyReviewToken, verifyReviewTokenLineage,
+} = require('./planDigest');
 const { digestSourceIdentity, digestSourceSnapshot } = require('./sourceModel');
 const { recordActiveSourceAvailable, recordActiveSourceFailure } = require('./sourceHealth');
 const { notifyReviewRequired } = require('./reviewNotification');
@@ -195,8 +197,11 @@ const defaultDeps = {
   applyPeopleSyncPlan,
   validateSelections,
   digestPlan,
+  digestReviewToken,
   createReviewToken,
   verifyReviewToken,
+  verifyReviewTokenLineage,
+  isReviewTokenApplied,
   notifyReviewRequired,
   recordActiveSourceAvailable,
   recordActiveSourceFailure,
@@ -913,13 +918,17 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
   return { plan, externalPeople };
 }
 
-function computePipelineProjection(acquired, { linkCorrections = {} } = {}) {
-  const correction = validateAndProjectLinkCorrections({
+function projectPipelineLinkCorrections(acquired, linkCorrections = {}) {
+  return validateAndProjectLinkCorrections({
     rawCorrections: linkCorrections,
     baseLinks: acquired.personLinks,
     sourceExternalIds: correctionScopeExternalIds(acquired.eligibleByBatch, acquired.batchId),
     localIndividualIds: new Set(acquired.individuals.map(({ id }) => Number(id))),
   });
+}
+
+function computePipelineProjection(acquired, { linkCorrections = {} } = {}) {
+  const correction = projectPipelineLinkCorrections(acquired, linkCorrections);
   const effectiveReviewState = applyCorrectionReviewState(acquired.matchReviewState, correction);
   const matcherResult = matchProjectedPeople(acquired, correction, effectiveReviewState);
   const { plan, externalPeople } = computeProjectedPlan(acquired, correction, matcherResult, effectiveReviewState);
@@ -1022,11 +1031,30 @@ async function previewLinkCorrections({
     );
   }
 
+  const rootReviewTokenDigest = baseVerification.payload?.rootReviewTokenDigest ||
+    deps.digestReviewToken(baseReviewToken);
+  if (await deps.isReviewTokenApplied({
+    churchId, provider, reviewToken: baseReviewToken, rootReviewTokenDigest,
+  })) {
+    throw new OrchestratorError(
+      'SYNC_REVIEW_ALREADY_APPLIED',
+      'This review has already been applied. Refresh before previewing another correction.',
+      409
+    );
+  }
+
+  try {
+    projectPipelineLinkCorrections(acquired, linkCorrections);
+  } catch (selectionErr) {
+    throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
+  }
   const corrected = computePipelineProjection(acquired, { linkCorrections });
   corrected.plan.sourceContext = sourceContext;
   const correctedDigest = deps.digestPlan(corrected.plan);
   const reviewToken = deps.createReviewToken({
     churchId, provider, batchId, planDigest: correctedDigest,
+    basePlanDigest: baseDigest,
+    rootReviewTokenDigest,
     expiresInSeconds: REVIEW_TOKEN_TTL_SECONDS,
   });
 
@@ -1183,7 +1211,9 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   if (typeof reviewToken !== 'string' || reviewToken.length === 0) {
     throw new OrchestratorError('SYNC_REVIEW_INVALID', 'A review token is required', 400);
   }
-  const linkCorrections = selections.linkCorrections || {};
+  const linkCorrections = selections?.linkCorrections === undefined
+    ? {}
+    : selections.linkCorrections;
 
   const pre = await loadPreconditions({ churchId, provider, batchId, deps });
   const connectionExpectation = connectionExpectationFor(provider, pre.connectionGeneration);
@@ -1221,10 +1251,36 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   let body;
   let applyResult;
   try {
-    body = await runPipelineBody(pipelineInputFromPreconditions(pre, {
+    const acquired = await acquirePipelineState(pipelineInputFromPreconditions(pre, {
       churchId, provider, trigger, mode: 'full', watermark: undefined,
       batchId, authoritative, activeAuthority, batches: reviewBatches, connectionExpectation,
-    }), { linkCorrections });
+    }));
+
+    try {
+      projectPipelineLinkCorrections(acquired, linkCorrections);
+    } catch (selectionErr) {
+      const base = computePipelineProjection(acquired, { linkCorrections: {} });
+      base.plan.sourceContext = reviewedSourceContext(
+        provider, pre.batches, batchId, base.sourceProvenance, pre.connectionGeneration
+      );
+      if (isAuthoritySwitch && authorityPreviewId) base.plan.authorityPreviewId = authorityPreviewId;
+      const lineageVerification = deps.verifyReviewTokenLineage(reviewToken, {
+        churchId,
+        provider,
+        batchId,
+        basePlanDigest: deps.digestPlan(base.plan),
+      });
+      if (!lineageVerification.ok) {
+        throw new OrchestratorError(
+          lineageVerification.code,
+          reviewTokenErrorMessage(lineageVerification.code),
+          reviewTokenErrorStatus(lineageVerification.code)
+        );
+      }
+      throw new OrchestratorError('SYNC_SELECTIONS_INVALID', selectionErr.message, 400);
+    }
+
+    body = computePipelineProjection(acquired, { linkCorrections });
 
     body.plan.sourceContext = reviewedSourceContext(
       provider, pre.batches, batchId, body.sourceProvenance, pre.connectionGeneration

@@ -151,6 +151,34 @@ test('correction preview passes through orchestrator error status and code', asy
   });
 });
 
+test('correction preview and apply expose typed selection errors while stale plans remain conflicts', async () => {
+  await withServer({
+    previewLinkCorrections: async () => {
+      throw new OrchestratorError('SYNC_SELECTIONS_INVALID', 'Relink target is invalid.', 400);
+    },
+    applyReviewed: async () => {
+      throw new OrchestratorError('SYNC_PLAN_STALE', 'The correction base changed.', 409);
+    },
+  }, async (base) => {
+    const preview = await request(`${base}/sync-batches/12/preview-link-corrections`, {
+      baseReviewToken: 'base-review',
+      linkCorrections: { 'ext-a': { outcome: 'unlink', fromIndividualId: 1 } },
+    });
+    assert.deepEqual(preview, {
+      status: 400,
+      body: { error: 'Relink target is invalid.', code: 'SYNC_SELECTIONS_INVALID' },
+    });
+
+    const apply = await request(`${base}/sync-batches/12/apply`, {
+      reviewToken: 'corrected-review', selections: {},
+    });
+    assert.deepEqual(apply, {
+      status: 409,
+      body: { error: 'The correction base changed.', code: 'SYNC_PLAN_STALE' },
+    });
+  });
+});
+
 test('correction preview remains protected by admin and church middleware', async () => {
   let calls = 0;
   const overrides = { previewLinkCorrections: async () => { calls += 1; return {}; } };

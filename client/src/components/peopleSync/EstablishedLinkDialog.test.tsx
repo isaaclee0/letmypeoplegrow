@@ -33,6 +33,7 @@ const defaultProps = {
   open: true,
   externalId: 'provider-alex',
   currentIndividualId: 21,
+  originalIndividualId: 21,
   directory,
   availableIndividualIds: new Set([22, 24]),
   claimedBy: new Map([[24, 'provider-other']]),
@@ -130,6 +131,29 @@ describe('EstablishedLinkDialog', () => {
     expect(onUnlink).toHaveBeenCalledWith();
     expect(onRelink).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('reopens a successfully unlinked row and offers both relinking and explicit restoration', async () => {
+    const user = userEvent.setup();
+    const onRelink = vi.fn();
+    const onRestore = vi.fn();
+    render(<EstablishedLinkDialog
+      {...defaultProps}
+      currentIndividualId={null}
+      originalIndividualId={21}
+      availableIndividualIds={new Set([21, 22, 24])}
+      onRelink={onRelink}
+      onRestore={onRestore}
+    />);
+    const dialog = screen.getByRole('dialog', { name: 'Correct linked person for Alex Smith' });
+
+    expect(within(dialog).getByText(/currently unlinked in this review/i)).toBeVisible();
+    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Select Eligible Person' }));
+    expect(onRelink).toHaveBeenCalledWith(22);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Restore original link' }));
+    expect(onRestore).toHaveBeenCalledOnce();
   });
 
   it('unmounts on backdrop dismissal, leaves corrections untouched, and restores focus', async () => {

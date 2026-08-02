@@ -132,6 +132,31 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function selectionsForReview(review) {
+  const context = review.plan.reviewContext;
+  const additions = new Set((review.plan.addPeople || []).map(({ externalPersonId }) => externalPersonId));
+  const identityDecisions = Object.fromEntries(
+    Object.entries(context?.identities || {}).map(([externalPersonId, identity]) => {
+      if (Number.isSafeInteger(identity.suggestedIndividualId) && identity.suggestedIndividualId > 0) {
+        return [externalPersonId, { outcome: 'accept' }];
+      }
+      if (identity.canCreate === true && additions.has(externalPersonId)) {
+        return [externalPersonId, { outcome: 'create' }];
+      }
+      return [externalPersonId, { outcome: 'defer' }];
+    })
+  );
+  const linkCorrections = Object.fromEntries((context?.linkCorrections || []).map((correction) => {
+    const { externalPersonId, ...selection } = correction;
+    return [externalPersonId, selection];
+  }));
+  return {
+    decisionContractVersion: 2,
+    identityDecisions,
+    ...(Object.keys(linkCorrections).length > 0 ? { linkCorrections } : {}),
+  };
+}
+
 async function replaceElvantoConnectionGeneration(churchId, generation, apiKey) {
   return Database.transactionForChurch(churchId, async (conn) => {
     await connectionStore.upsertConnection({
@@ -193,6 +218,7 @@ test('reviewed apply promotes its draft source with people mutations and records
     const review = await orchestrator.buildReview({ churchId, provider: 'elvanto', batchId: pending.id, trigger: 'manual' });
     const applied = await orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: pending.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
     });
 
     assert.equal(applied.status, 'applied');
@@ -223,7 +249,10 @@ test('a changed source base revision makes the review stale before people writes
     );
 
     await assert.rejects(
-      orchestrator.applyReviewed({ churchId, provider: 'elvanto', batchId: pending.id, reviewToken: review.reviewToken }),
+      orchestrator.applyReviewed({
+        churchId, provider: 'elvanto', batchId: pending.id, reviewToken: review.reviewToken,
+        selections: selectionsForReview(review),
+      }),
       (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409
     );
     assert.equal(await countPeople(churchId), 0);
@@ -243,7 +272,10 @@ test('changed source membership invalidates the review before apply', async () =
       people: [person('one'), person('two', { firstName: 'Grace', lastName: 'Hopper' })], memberExternalIds: ['one', 'two'],
     }));
     await assert.rejects(
-      orchestrator.applyReviewed({ churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken }),
+      orchestrator.applyReviewed({
+        churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+        selections: selectionsForReview(review),
+      }),
       { code: 'SYNC_PLAN_STALE' }
     );
     assert.equal(await countPeople(churchId), 0);
@@ -476,6 +508,7 @@ test('authority preview remains pending until its source reconciliation applies'
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'none', pending: 'elvanto' });
     const applied = await orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: null, reviewToken: preview.reviewToken,
+      selections: selectionsForReview(preview),
     });
     assert.equal(applied.status, 'applied');
     assert.deepEqual(await authority.getAuthority(churchId), { active: 'elvanto', pending: null });
@@ -504,6 +537,7 @@ test('reviewed apply rejects a fetched plan when authority is disabled during th
     });
     const applying = orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
     });
     await fetchEntered.promise;
     await authority.disableAuthority(churchId);
@@ -562,6 +596,7 @@ test('reviewed apply rejects an active-source generation promoted during the pro
     });
     const applying = orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
     });
     await fetchEntered.promise;
     const changed = await batchRepository.saveSourceDraft({
@@ -605,6 +640,7 @@ test('reviewed apply rejects an Elvanto account replacement during its provider 
     });
     const applying = orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
     });
     await fetchEntered.promise;
     await replaceElvantoConnectionGeneration(churchId, 5, 'replacement-account-key');
@@ -702,6 +738,7 @@ test('reviewed post-apply presence ignores an old-account snapshot after reconne
 
     const result = await orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
+      selections: selectionsForReview(review),
     }, {
       recordFullFetchPresence: async (...args) => {
         presenceCalls += 1;

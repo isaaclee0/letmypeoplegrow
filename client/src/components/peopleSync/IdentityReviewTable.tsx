@@ -17,6 +17,7 @@ import {
   buildDecisionRows,
   buildEstablishedRows,
   DEFAULT_REVIEW_PAGE_SIZE,
+  editLinkCorrectionDraft,
   filterReviewRows,
   mergeSelectionsForPreview,
   paginateReviewRows,
@@ -27,6 +28,7 @@ import {
 import type {
   EstablishedLinkCorrection,
   IdentityDecision,
+  PeopleSyncEstablishedLink,
   PeopleSyncFamilyDisplay,
   PeopleSyncReview,
 } from './types';
@@ -52,6 +54,7 @@ export interface IdentityReviewTableProps {
     request: CorrectionPreviewRequestContext,
   ) => Promise<PeopleSyncReview>;
   onRefreshReview?: () => void | Promise<void>;
+  onPreviewCancelled?: () => void;
   previewing: boolean;
 }
 
@@ -116,12 +119,30 @@ function desktopLayoutMatches(): boolean {
     || window.matchMedia('(min-width: 768px)').matches;
 }
 
+function correctionDraftHasEstablishedCollision(
+  establishedLinks: Record<string, PeopleSyncEstablishedLink> | undefined,
+  corrections: Record<string, EstablishedLinkCorrection>,
+): boolean {
+  const claimed = new Set<number>();
+  for (const [externalId, established] of Object.entries(establishedLinks || {})) {
+    const correction = corrections[externalId];
+    if (correction?.outcome === 'unlink') continue;
+    const target = correction?.outcome === 'relink'
+      ? correction.individualId
+      : established.individualId;
+    if (claimed.has(target)) return true;
+    claimed.add(target);
+  }
+  return false;
+}
+
 const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReviewTableProps>(function IdentityReviewTable({
   review,
   state,
   onStateChange,
   onPreviewCorrections,
   onRefreshReview,
+  onPreviewCancelled,
   previewing,
 }, ref) {
   const [activeTab, setActiveTab] = useState<IdentityTab>('decisions');
@@ -214,6 +235,16 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   }, [decisionRows, establishedRows]);
   const directory = review.plan.people || { external: {}, local: {} };
   const reviewContext = review.plan.reviewContext;
+  const correctableClaimByIndividualId = useMemo(() => {
+    const claims = new Map<number, string>();
+    for (const [externalId, established] of Object.entries(reviewContext?.establishedLinks || {})) {
+      claims.set(established.individualId, externalId);
+    }
+    for (const [externalId, established] of Object.entries(reviewContext?.projectedEstablishedLinks || {})) {
+      claims.set(established.individualId, externalId);
+    }
+    return claims;
+  }, [reviewContext]);
 
   const commitState = (nextState: SyncSelectionState) => {
     stateRef.current = nextState;
@@ -266,11 +297,34 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
     }
   };
 
-  const commitCorrection = (externalId: string, correction: EstablishedLinkCorrection) => {
+  const cancelCorrectionPreview = () => {
+    const hadPreview = previewControllerRef.current !== null;
+    previewGenerationRef.current += 1;
+    previewControllerRef.current?.abort();
+    previewControllerRef.current = null;
+    setLocalPreviewing(false);
+    if (hadPreview) onPreviewCancelled?.();
+  };
+
+  const commitCorrection = (
+    externalId: string,
+    originalIndividualId: number,
+    correction: EstablishedLinkCorrection | null,
+  ) => {
     const latest = stateRef.current;
     const previousCorrections = copyCorrections(signedCorrectionsRef.current);
-    const attemptedCorrections = { ...copyCorrections(latest.linkCorrections), [externalId]: correction };
+    const attemptedCorrections = editLinkCorrectionDraft(
+      copyCorrections(latest.linkCorrections),
+      externalId,
+      originalIndividualId,
+      correction,
+    );
     commitState({ ...latest, linkCorrections: attemptedCorrections });
+    if (correctionDraftHasEstablishedCollision(reviewContext?.establishedLinks, attemptedCorrections)) {
+      cancelCorrectionPreview();
+      setCorrectionFailure(null);
+      return;
+    }
     void runCorrectionPreview(externalId, attemptedCorrections, previousCorrections);
   };
 
@@ -449,7 +503,7 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
   const correctionBaseId = correctionRow
     ? reviewContext?.establishedLinks?.[correctionRow.externalId]?.individualId ?? null
     : null;
-  const correctionCurrentId = correctionRow?.localIndividualId ?? correctionBaseId;
+  const correctionCurrentId = correctionRow?.localIndividualId ?? null;
 
   return (
     <section aria-label="Identity review" className="space-y-4">
@@ -755,17 +809,19 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
         />
       )}
 
-      {correctionRow && correctionBaseId !== null && correctionCurrentId !== null && (
+      {correctionRow && correctionBaseId !== null && (
         <EstablishedLinkDialog
           open
           externalId={correctionRow.externalId}
           currentIndividualId={correctionCurrentId}
+          originalIndividualId={correctionBaseId}
           directory={directory}
           availableIndividualIds={availableIndividualIds}
           claimedBy={claimedBy}
+          correctableClaimByIndividualId={correctableClaimByIndividualId}
           onRelink={(individualId) => {
             setEstablishedExternalId(null);
-            commitCorrection(correctionRow.externalId, {
+            commitCorrection(correctionRow.externalId, correctionBaseId, {
               outcome: 'relink',
               fromIndividualId: correctionBaseId,
               individualId,
@@ -773,11 +829,15 @@ const IdentityReviewTable = forwardRef<IdentityReviewTableHandle, IdentityReview
           }}
           onUnlink={() => {
             setEstablishedExternalId(null);
-            commitCorrection(correctionRow.externalId, {
+            commitCorrection(correctionRow.externalId, correctionBaseId, {
               outcome: 'unlink',
               fromIndividualId: correctionBaseId,
             });
           }}
+          onRestore={correctionRow.correction ? () => {
+            setEstablishedExternalId(null);
+            commitCorrection(correctionRow.externalId, correctionBaseId, null);
+          } : undefined}
           onClose={() => setEstablishedExternalId(null)}
         />
       )}

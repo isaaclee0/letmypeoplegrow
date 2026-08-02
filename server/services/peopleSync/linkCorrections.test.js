@@ -87,6 +87,17 @@ test('rejects malformed correction fields and unavailable local relink targets',
   }
 });
 
+test('rejects a nonpositive relink target directly', () => {
+  assert.throws(
+    () => validateAndProjectLinkCorrections(inputs({
+      rawCorrections: {
+        'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 0 },
+      },
+    })),
+    /relink individual ID.*positive integer/i,
+  );
+});
+
 test('rejects duplicate local targets in the complete final mapping', () => {
   assert.throws(
     () => validateAndProjectLinkCorrections(inputs({
@@ -108,6 +119,16 @@ test('canonicalizes keyed and array corrections into the same deterministic orde
     'ext-a': { outcome: 'unlink', fromIndividualId: 10 },
   }), expected);
   assert.deepEqual(canonicalLinkCorrections([...expected].reverse()), expected);
+});
+
+test('rejects duplicate external identities in an already-canonical correction array', () => {
+  assert.throws(
+    () => canonicalLinkCorrections([
+      { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'unlink' },
+      { externalPersonId: 'ext-a', fromIndividualId: 10, outcome: 'relink', individualId: 20 },
+    ]),
+    /duplicate link correction.*ext-a/i,
+  );
 });
 
 test('projects unlink review effects and relink hold deletion from canonical corrections', () => {

@@ -1,4 +1,3 @@
-const crypto = require('node:crypto');
 const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
 const linkRepository = require('./linkRepository');
@@ -7,7 +6,7 @@ const authority = require('./authority');
 const batchRepository = require('./batchRepository');
 const { BUCKETS } = require('./plan');
 const { buildLocalIdentityDigest } = require('./reviewContext');
-const { digestPlan } = require('./planDigest');
+const { digestPlan, digestReviewToken } = require('./planDigest');
 const {
   validateDestructiveSelections,
   validateIdentityDecisions,
@@ -25,6 +24,12 @@ const INDIVIDUAL_MUTATION_BUCKETS = [
 ];
 const SUGGESTION_DEPENDENT_BUCKETS = [
   ...INDIVIDUAL_MUTATION_BUCKETS, 'addToGathering', 'removeFromGathering',
+];
+const LEGACY_FORBIDDEN_CORRECTION_FIELDS = [
+  'linkCorrections',
+  'correctionExclusionsToAdd',
+  'correctionHoldsToUpsert',
+  'correctionHoldsToDelete',
 ];
 
 function assertProvider(provider) {
@@ -52,16 +57,31 @@ function reviewedApplyError(code, message, status = 409) {
   return error;
 }
 
-async function claimReviewedApplyWithConnection(conn, {
-  churchId, provider, reviewToken, planDigest, userId,
+async function isReviewTokenApplied({
+  churchId, provider, reviewToken, rootReviewTokenDigest,
 }) {
-  const reviewTokenDigest = crypto.createHash('sha256').update(reviewToken).digest('hex');
+  const applicationDigest = rootReviewTokenDigest || digestReviewToken(reviewToken);
+  const rows = await Database.queryForChurch(
+    churchId,
+    `SELECT 1 AS applied
+       FROM people_sync_review_applications
+      WHERE church_id = ? AND provider = ? AND review_token_digest = ?
+      LIMIT 1`,
+    [churchId, provider, applicationDigest]
+  );
+  return rows.length > 0;
+}
+
+async function claimReviewedApplyWithConnection(conn, {
+  churchId, provider, reviewToken, rootReviewTokenDigest, planDigest, userId,
+}) {
+  const tokenDigest = rootReviewTokenDigest || digestReviewToken(reviewToken);
   const result = await conn.query(
     `INSERT INTO people_sync_review_applications
        (church_id, provider, review_token_digest, plan_digest, applied_by)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(church_id, provider, review_token_digest) DO NOTHING`,
-    [churchId, provider, reviewTokenDigest, planDigest, userId || null]
+    [churchId, provider, tokenDigest, planDigest, userId || null]
   );
   if (result.affectedRows !== 1) {
     throw reviewedApplyError(
@@ -239,6 +259,16 @@ function validateLegacySelections(plan, selections = {}) {
 }
 
 function validateSelections(plan, selections = {}) {
+  if (plan?.reviewContext?.version === 2) {
+    if (selections?.decisionContractVersion !== 2) {
+      throw new Error('A signed version 2 plan requires decision contract version 2 selections');
+    }
+    return validateIdentityDecisions(plan, selections);
+  }
+  if (LEGACY_FORBIDDEN_CORRECTION_FIELDS.some((field) =>
+    selections && Object.hasOwn(selections, field))) {
+    throw new Error('Established-link corrections require a signed version 2 review plan');
+  }
   if (selections && Object.hasOwn(selections, 'decisionContractVersion')) {
     if (selections.decisionContractVersion !== 2) {
       throw new Error('Unsupported identity decision contract version');
@@ -430,6 +460,7 @@ async function applyPeopleSyncPlan({
         );
       }
     }
+    let reviewedVerification = null;
     if (reviewedApply) {
       const currentPlanDigest = digestPlan(plan);
       if (currentPlanDigest !== reviewedApply.planDigest) {
@@ -453,13 +484,19 @@ async function applyPeopleSyncPlan({
           code === 'SYNC_REVIEW_INVALID' ? 400 : 409
         );
       }
+      reviewedVerification = verification;
     }
-    const accepted = validateSelections(plan, selections);
+    const accepted = reviewedApply
+      ? validateSelections(plan, selections)
+      : selections && Object.hasOwn(selections, 'decisionContractVersion')
+        ? validateIdentityDecisions(plan, selections)
+        : validateLegacySelections(plan, selections);
     if (reviewedApply) {
       await claimReviewedApplyWithConnection(conn, {
         churchId,
         provider,
         reviewToken: reviewedApply.reviewToken,
+        rootReviewTokenDigest: reviewedVerification?.payload?.rootReviewTokenDigest,
         planDigest: reviewedApply.planDigest,
         userId,
       });
@@ -835,6 +872,7 @@ async function applyPeopleSyncPlan({
 
 module.exports = {
   applyPeopleSyncPlan,
+  isReviewTokenApplied,
   validateIdentityDecisions,
   validateLegacySelections,
   validateSelections,

@@ -115,12 +115,11 @@ export function buildEstablishedRows(review: PeopleSyncReview, state: SyncSelect
     .map((externalId) => {
       const established = context.establishedLinks?.[externalId];
       const correction = state.linkCorrections?.[externalId];
-      const projected = context.projectedEstablishedLinks?.[externalId];
       const localIndividualId = correction?.outcome === 'unlink'
         ? null
         : correction?.outcome === 'relink'
           ? correction.individualId
-          : projected?.individualId ?? established?.individualId ?? null;
+          : established?.individualId ?? null;
       const externalPerson = personFor(directory, 'external', externalId);
       return {
         externalId,
@@ -132,6 +131,24 @@ export function buildEstablishedRows(review: PeopleSyncReview, state: SyncSelect
         ...localDetails(directory, localIndividualId, correction?.outcome === 'unlink' ? 'Skipped for now' : 'Name unavailable'),
       };
     });
+}
+
+export function editLinkCorrectionDraft(
+  previous: Record<string, EstablishedLinkCorrection>,
+  externalId: string,
+  originalIndividualId: number,
+  correction: EstablishedLinkCorrection | null,
+): Record<string, EstablishedLinkCorrection> {
+  const next = { ...previous };
+  if (correction === null ||
+      (correction.outcome === 'relink' && correction.individualId === originalIndividualId)) {
+    delete next[externalId];
+  } else {
+    next[externalId] = correction;
+  }
+  return Object.fromEntries(
+    Object.entries(next).sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function searchableIdentityText(value: PeopleSyncPersonDisplay | PeopleSyncFamilyDisplay | undefined): string[] {
