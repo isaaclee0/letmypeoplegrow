@@ -142,6 +142,23 @@ function correctionPreview(
   return preview;
 }
 
+function serverCanonicalCorrectionPreview(
+  token: string,
+): PeopleSyncCorrectionPreview {
+  const preview = correctionPreview(
+    { outcome: 'relink', fromIndividualId: 40, individualId: 30 },
+    token,
+  );
+  // This deliberately matches the server's canonical serialization order.
+  preview.plan.reviewContext!.linkCorrections = [{
+    externalPersonId: 'ext-established',
+    fromIndividualId: 40,
+    outcome: 'relink',
+    individualId: 30,
+  }];
+  return preview;
+}
+
 function swapCorrectionPreview(
   corrections: Record<string, EstablishedLinkCorrection>,
 ): PeopleSyncCorrectionPreview {
@@ -502,6 +519,22 @@ describe('SyncReview correction previews and dirty state', () => {
     expect(onApply).toHaveBeenCalledWith('preview-30', expect.objectContaining({
       linkCorrections: { 'ext-established': { outcome: 'relink', fromIndividualId: 40, individualId: 30 } },
     }));
+  });
+
+  it('enables apply after a server-canonical correction preview', async () => {
+    const onPreviewCorrections = vi.fn().mockResolvedValue(serverCanonicalCorrectionPreview('preview-30'));
+    render(<SyncReview
+      provider="planning_center"
+      review={v2Review({ attention: false, established: true })}
+      onRefresh={vi.fn()}
+      onPreviewCorrections={onPreviewCorrections}
+      onApply={vi.fn()}
+      applying={false}
+    />);
+
+    await beginEstablishedCorrection('Replacement Local');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply 2 selected changes' })).toBeEnabled());
   });
 
   it('blocks a half-swap, then applies both explicit corrections with the signed swap preview token', async () => {

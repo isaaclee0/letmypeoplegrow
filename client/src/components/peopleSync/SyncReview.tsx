@@ -359,10 +359,18 @@ function recordsMatch(
   left: Record<string, EstablishedLinkCorrection> | undefined,
   right: Record<string, EstablishedLinkCorrection> | undefined,
 ): boolean {
-  const sorted = (value: Record<string, EstablishedLinkCorrection> | undefined) => Object.fromEntries(
-    Object.entries(value || {}).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
-  );
-  return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right));
+  const leftCorrections = left || {};
+  const rightCorrections = right || {};
+  if (Object.keys(leftCorrections).length !== Object.keys(rightCorrections).length) return false;
+
+  return Object.entries(leftCorrections).every(([externalPersonId, leftCorrection]) => {
+    if (!Object.prototype.hasOwnProperty.call(rightCorrections, externalPersonId)) return false;
+    const rightCorrection = rightCorrections[externalPersonId];
+    if (leftCorrection.outcome !== rightCorrection.outcome
+      || leftCorrection.fromIndividualId !== rightCorrection.fromIndividualId) return false;
+    return leftCorrection.outcome === 'unlink'
+      || leftCorrection.individualId === rightCorrection.individualId;
+  });
 }
 
 export default function SyncReview({
