@@ -107,7 +107,7 @@ async function assertLocalIdentityContextWithConnection(conn, churchId, provider
       [churchId]
     ),
     conn.query(
-      `SELECT external_person_id, individual_id, missing_full_sync_count FROM external_person_links
+      `SELECT external_person_id, individual_id FROM external_person_links
         WHERE church_id = ? AND provider = ? ORDER BY id`,
       [churchId, provider]
     ),
@@ -136,7 +136,6 @@ async function assertLocalIdentityContextWithConnection(conn, churchId, provider
     personLinks: linkRows.map((row) => ({
       externalPersonId: row.external_person_id,
       individualId: Number(row.individual_id),
-      missingFullSyncCount: Number(row.missing_full_sync_count),
     })),
     exclusions: exclusionRows.map((row) => ({
       externalPersonId: row.external_person_id,

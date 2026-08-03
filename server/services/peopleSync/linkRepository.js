@@ -1,5 +1,4 @@
 const Database = require('../../config/database');
-const connectionStore = require('./connectionStore');
 
 const PROVIDERS = new Set(['planning_center', 'elvanto']);
 const LINK_SOURCES = new Set(['matched', 'created', 'manual', 'legacy_backfill']);
@@ -28,7 +27,6 @@ function toPersonLink(row) {
     linkSource: row.link_source,
     linkedAt: row.linked_at,
     lastSeenAt: row.last_seen_at,
-    missingFullSyncCount: Number(row.missing_full_sync_count),
     reviewDeclined: Boolean(row.review_declined),
   };
 }
@@ -50,7 +48,7 @@ async function listPersonLinks(churchId, provider) {
   assertProvider(provider);
   const rows = await Database.queryForChurch(churchId, `SELECT id, church_id, provider,
       external_person_id, individual_id, link_source, linked_at, last_seen_at,
-      missing_full_sync_count, review_declined
+      review_declined
     FROM external_person_links
     WHERE church_id = ? AND provider = ? ORDER BY id`, [churchId, provider]);
   return rows.map(toPersonLink);
@@ -84,18 +82,18 @@ async function upsertPersonLinkWithConnection(conn, input) {
   }
   if (byExternal[0]) {
     await conn.query(`UPDATE external_person_links SET link_source = ?, last_seen_at = datetime('now'),
-        missing_full_sync_count = 0, updated_at = datetime('now')
+        updated_at = datetime('now')
       WHERE id = ? AND church_id = ? AND provider = ? AND external_person_id = ? AND individual_id = ?`,
     [linkSource, byExternal[0].id, churchId, provider, externalPersonId, individualId]);
     return (await conn.query(`SELECT id, church_id, provider, external_person_id, individual_id, link_source,
-        linked_at, last_seen_at, missing_full_sync_count, review_declined FROM external_person_links
+        linked_at, last_seen_at, review_declined FROM external_person_links
       WHERE id = ? AND church_id = ? AND provider = ?`, [byExternal[0].id, churchId, provider]))[0];
   }
   const result = await conn.query(`INSERT INTO external_person_links
     (church_id, provider, external_person_id, individual_id, link_source, last_seen_at)
     VALUES (?, ?, ?, ?, ?, datetime('now'))`, [churchId, provider, externalPersonId, individualId, linkSource]);
   return (await conn.query(`SELECT id, church_id, provider, external_person_id, individual_id, link_source,
-      linked_at, last_seen_at, missing_full_sync_count, review_declined FROM external_person_links
+      linked_at, last_seen_at, review_declined FROM external_person_links
     WHERE id = ? AND church_id = ? AND provider = ?`, [result.insertId, churchId, provider]))[0];
 }
 
@@ -216,57 +214,16 @@ async function markPeopleSeen(churchId, provider, seenExternalIds) {
   if (!(seenExternalIds instanceof Set)) throw new Error('Seen external IDs must be a Set');
   return Database.transaction(async (conn) => {
     for (const externalPersonId of seenExternalIds) {
-      await conn.query(`UPDATE external_person_links SET missing_full_sync_count = 0,
-          last_seen_at = datetime('now'), updated_at = datetime('now')
+      await conn.query(`UPDATE external_person_links SET last_seen_at = datetime('now'),
+          updated_at = datetime('now')
         WHERE church_id = ? AND provider = ? AND external_person_id = ?`, [churchId, provider, externalPersonId]);
     }
   });
 }
 
-async function recordFullFetchPresence(churchId, provider, seenExternalIds, {
-  complete, ignoredExternalIds = new Set(), authorityExpectation = null, sourceExpectations = null,
-  connectionExpectation = null,
-} = {}) {
+async function recordFullFetchPresence(_churchId, provider, _seenExternalIds, _options = {}) {
   assertProvider(provider);
-  if (complete !== true) throw new Error('Refusing missing-person accounting for an incomplete full fetch');
-  if (!(seenExternalIds instanceof Set)) throw new Error('Seen external IDs must be a Set');
-  if (!(ignoredExternalIds instanceof Set)) throw new Error('Ignored external IDs must be a Set');
-  return Database.transaction(async (conn) => {
-    if (authorityExpectation) {
-      const authority = require('./authority');
-      await authority.assertAuthorityExpectationWithConnection(conn, churchId, authorityExpectation);
-    }
-    if (sourceExpectations) {
-      const batchRepository = require('./batchRepository');
-      await batchRepository.assertSourceExpectationsWithConnection(conn, {
-        churchId, provider, expectations: sourceExpectations,
-      });
-    }
-    if (connectionExpectation) {
-      await connectionStore.assertConnectionGenerationWithConnection(conn, {
-        churchId, provider, expectedGeneration: connectionExpectation.generation,
-      });
-    }
-    const links = await conn.query(`SELECT id, external_person_id, individual_id, missing_full_sync_count
-      FROM external_person_links WHERE church_id = ? AND provider = ?`, [churchId, provider]);
-    const missingCandidates = [];
-    for (const link of links) {
-      // Lifecycle-ineligible source records are neither seen nor missing;
-      // preserve an existing link without advancing its archive counter.
-      if (ignoredExternalIds.has(link.external_person_id)) continue;
-      const seen = seenExternalIds.has(link.external_person_id);
-      const missingFullSyncCount = seen ? 0 : Number(link.missing_full_sync_count) + 1;
-      await conn.query(`UPDATE external_person_links SET missing_full_sync_count = ?,
-          last_seen_at = CASE WHEN ? THEN datetime('now') ELSE last_seen_at END,
-          updated_at = datetime('now')
-        WHERE id = ? AND church_id = ? AND provider = ?`,
-      [missingFullSyncCount, seen ? 1 : 0, link.id, churchId, provider]);
-      if (!seen) missingCandidates.push({
-        id: link.id, externalPersonId: link.external_person_id, individualId: link.individual_id, missingFullSyncCount,
-      });
-    }
-    return { missingCandidates };
-  });
+  return { missingCandidates: [] };
 }
 
 module.exports = {

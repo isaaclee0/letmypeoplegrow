@@ -528,7 +528,7 @@ test('an unlink projection defers the source identity without removing it from s
   assert.deepEqual([...plans[0].eligibleByBatch.get(1)], ['ext-a']);
 });
 
-test('a reviewed corrected unlink keeps the source identity in durable presence accounting', async () => {
+test('a reviewed corrected unlink does not schedule durable presence accounting', async () => {
   const { deps, presence } = correctionPreviewDeps();
   const linkCorrections = {
     'ext-a': { outcome: 'unlink', fromIndividualId: 10 },
@@ -546,8 +546,7 @@ test('a reviewed corrected unlink keeps the source identity in durable presence 
     userId: 1,
   }, deps);
 
-  assert.equal(presence.length, 1);
-  assert.deepEqual([...presence[0][2]], ['ext-a']);
+  assert.equal(presence.length, 0);
 });
 
 test('a batch review cannot correct an established identity owned by another enabled batch source', async () => {
@@ -778,7 +777,7 @@ test('household context can corroborate a member match but never becomes eligibl
   for (const bucketName of ['addPeople', 'reactivate', 'addToGathering']) {
     assert.equal(applied[0].plan[bucketName].some((item) => item.externalPersonId === 'context'), false);
   }
-  assert.deepEqual([...presence[0][2]], ['member']);
+  assert.equal(presence.length, 0);
 });
 
 test('an eligible member displaces an earlier context-only copy in the review directory', async () => {
@@ -1072,7 +1071,7 @@ test('unattended sync holds an unmatched persisted identity for review without c
   }]);
 });
 
-test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-fetch presence', async () => {
+test('an unlinked lifecycle-ineligible member cannot match or act', async () => {
   const matchingInputs = [];
   const terminal = person('archived', { firstName: 'Grace', lastName: 'Hopper', state: 'archived' });
   const { deps, plans, applied, presence } = makeDeps({
@@ -1098,8 +1097,7 @@ test('an unlinked lifecycle-ineligible member cannot match, act, or enter full-f
   assert.deepEqual(matchingInputs[0].map((item) => item.id), ['active']);
   assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
   assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
-  assert.deepEqual([...presence[0][2]], ['active']);
-  assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
+  assert.equal(presence.length, 0);
 });
 
 for (const sourceOrder of [
@@ -1141,12 +1139,11 @@ for (const sourceOrder of [
     assert.equal(matchingInputs[0].some((item) => item.id === 'terminal'), false);
     assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'terminal')), false);
     assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
-    assert.equal(presence[0][2].has('terminal'), false);
-    assert.equal(presence[0][3].ignoredExternalIds.has('terminal'), true);
+    assert.equal(presence.length, 0);
   });
 }
 
-test('a lifecycle-ineligible existing link is reserved only for safe matching and never archived or presence-counted', async () => {
+test('a lifecycle-ineligible existing link is reserved only for safe matching and never archived', async () => {
   const matchingInputs = [];
   const { deps, plans, applied, presence } = makeDeps({
     localIndividuals: [
@@ -1172,8 +1169,7 @@ test('a lifecycle-ineligible existing link is reserved only for safe matching an
   assert.deepEqual(plans[0].personLinks, []);
   assert.equal(BUCKETS.some((bucket) => applied[0].plan[bucket].some((item) => item.externalPersonId === 'archived')), false);
   assert.deepEqual(applied[0].plan.unmatchedLocalRegulars, []);
-  assert.deepEqual([...presence[0][2]], []);
-  assert.deepEqual([...presence[0][3].ignoredExternalIds], ['archived']);
+  assert.equal(presence.length, 0);
 });
 
 test('a complete empty source is accepted', async () => {
@@ -1380,7 +1376,7 @@ test('Planning Center review source context omits the Elvanto-only connection ge
   assert.equal(Object.hasOwn(digested.sourceContext, 'connectionGeneration'), false);
 });
 
-test('reviewed apply sends source promotion CAS data and records member-only full presence once', async () => {
+test('reviewed apply sends source promotion CAS data without scheduling a presence write', async () => {
   const draft = source('draft');
   const reviewed = batch({ source: source('active'), sourceRevision: 6, draftSource: draft, draftSourceBaseRevision: 6 });
   const { deps, applied, presence } = makeDeps({ batches: [reviewed] });
@@ -1406,20 +1402,10 @@ test('reviewed apply sends source promotion CAS data and records member-only ful
   assert.equal(Object.hasOwn(applied[0], 'filterPromotion'), false);
   assert.equal(applied[0].reviewedApply.reviewToken, 'review-token');
   assert.match(applied[0].reviewedApply.planDigest, /^[a-f0-9]{64}$/);
-  assert.equal(presence.length, 1);
-  assert.deepEqual(presence[0][3].authorityExpectation, { active: 'elvanto', pending: null });
-  assert.deepEqual(presence[0][3].sourceExpectations, [{
-    batchId: 1,
-    sourceRevision: 7,
-    activeSourceDigest: digestSourceIdentity(draft),
-    draftSourceDigest: null,
-    draftSourceBaseRevision: null,
-    selectedSource: 'active',
-  }]);
-  assert.deepEqual(presence[0][3].connectionExpectation, { generation: 17 });
+  assert.equal(presence.length, 0);
 });
 
-test('legacy authority apply requires no owned intent and guards presence against the committed stance', async () => {
+test('legacy authority apply requires no owned intent and does not schedule a presence write', async () => {
   const { deps, applied, presence } = makeDeps({
     authorityState: { active: 'none', pending: 'elvanto' },
     extra: {
@@ -1437,7 +1423,7 @@ test('legacy authority apply requires no owned intent and guards presence agains
   assert.deepEqual(applied[0].authorityExpectation, {
     active: 'none', pending: 'elvanto', authorityPreviewId: null,
   });
-  assert.deepEqual(presence[0][3].authorityExpectation, { active: 'elvanto', pending: null });
+  assert.equal(presence.length, 0);
 });
 
 test('a one-time review replay remains a typed refreshable failure and is recorded on the run', async () => {
@@ -1485,13 +1471,13 @@ test('a connection removed before transactional apply remains a typed safe failu
   assert.equal(failed[0].errorCode, 'SYNC_NOT_CONNECTED');
 });
 
-test('scheduled source sync is full-only, ignores legacy watermarks, persists provenance, and records presence once after apply', async () => {
+test('scheduled source sync is full-only, persists provenance, and does not schedule a presence write', async () => {
   const { deps, events, finished, presence, applied } = makeDeps({ batches: [batch({ lastExternalWatermark: 'legacy-watermark' })] });
   const result = await runUnattended({ churchId: 'church-a', provider: 'elvanto', batchId: 1, forceFull: false }, deps);
 
   assert.equal(result.fetchMode, 'full');
   assert.equal(result.externalWatermark, null);
-  assert.equal(presence.length, 1);
+  assert.equal(presence.length, 0);
   assert.deepEqual(applied[0].authorityExpectation, { active: 'elvanto', pending: null });
   assert.deepEqual(applied[0].connectionExpectation, { generation: 17 });
   assert.deepEqual(applied[0].sourceExpectations, [{
@@ -1502,10 +1488,7 @@ test('scheduled source sync is full-only, ignores legacy watermarks, persists pr
     draftSourceBaseRevision: null,
     selectedSource: 'active',
   }]);
-  assert.deepEqual(presence[0][3].authorityExpectation, applied[0].authorityExpectation);
-  assert.deepEqual(presence[0][3].sourceExpectations, applied[0].sourceExpectations);
-  assert.deepEqual(presence[0][3].connectionExpectation, { generation: 17 });
-  assert.ok(events.indexOf('presence') > events.indexOf('apply'));
+  assert.equal(events.includes('presence'), false);
   assert.equal(finished[0].externalWatermark, null);
   assert.equal(finished[0].sourceProvenance.length, 1);
   assert.equal(Object.hasOwn(result, 'plan'), false);

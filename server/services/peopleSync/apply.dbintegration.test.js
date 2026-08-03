@@ -1452,7 +1452,7 @@ test('a reviewed apply fails stale after a local rename or family move and rolls
   });
 });
 
-test('a reviewed apply fails stale when a durable link missing counter changes', async () => {
+test('a legacy missing-counter-only change does not invalidate a reviewed apply', async () => {
   await withTestChurchDb(async (churchId) => {
     const individualId = await seedIndividual(churchId, {
       firstName: 'Reviewed', lastName: 'Person',
@@ -1479,7 +1479,6 @@ test('a reviewed apply fails stale when a durable link missing counter changes',
       personLinks: [{
         externalPersonId: 'ext-missing',
         individualId,
-        missingFullSyncCount: 1,
       }],
     });
     const review = reviewedApply(churchId, 'elvanto', plan);
@@ -1491,17 +1490,14 @@ test('a reviewed apply fails stale when a durable link missing counter changes',
       [churchId]
     );
 
-    await assert.rejects(
-      applyPeopleSyncPlan({
-        churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
-      }),
-      (error) => error.code === 'SYNC_PLAN_STALE'
-    );
+    await applyPeopleSyncPlan({
+      churchId, provider: 'elvanto', plan, selections: v2Selections({}), reviewedApply: review,
+    });
     const claims = await Database.query(
       'SELECT id FROM people_sync_review_applications WHERE church_id = ?',
       [churchId]
     );
-    assert.deepEqual(claims, []);
+    assert.equal(claims.length, 1);
   });
 });
 

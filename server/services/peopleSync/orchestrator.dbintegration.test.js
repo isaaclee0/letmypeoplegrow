@@ -8,7 +8,6 @@ const providerRegistry = require('./providerRegistry');
 const connectionStore = require('./connectionStore');
 const batchRepository = require('./batchRepository');
 const runRepository = require('./runRepository');
-const linkRepository = require('./linkRepository');
 const authority = require('./authority');
 const { digestSourceIdentity } = require('./sourceModel');
 
@@ -282,7 +281,7 @@ test('changed source membership invalidates the review before apply', async () =
   });
 });
 
-test('context people corroborate matching but are excluded from durable full-fetch presence', async () => {
+test('context people corroborate matching without mutating legacy presence counters', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await setAuthority(churchId);
@@ -307,7 +306,7 @@ test('context people corroborate matching but are excluded from durable full-fet
 
     const result = await orchestrator.runUnattended({ churchId, provider: 'elvanto', batchId: batch.id });
     assert.equal(result.counts.linkPeople, 1);
-    assert.deepEqual(await missingCounts(churchId), { context: 1, member: 0 });
+    assert.deepEqual(await missingCounts(churchId), { context: 0, member: 0 });
   });
 });
 
@@ -721,7 +720,7 @@ test('a failed old-account fetch cannot publish missing source health or notific
   });
 });
 
-test('reviewed post-apply presence ignores an old-account snapshot after reconnect', async () => {
+test('reviewed apply does not invoke the legacy post-apply presence boundary', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await replaceElvantoConnectionGeneration(churchId, 31, 'old-account-key');
@@ -734,26 +733,23 @@ test('reviewed post-apply presence ignores an old-account snapshot after reconne
     const review = await orchestrator.buildReview({
       churchId, provider: 'elvanto', batchId: batch.id, trigger: 'manual',
     });
-    let presenceCalls = 0;
 
     const result = await orchestrator.applyReviewed({
       churchId, provider: 'elvanto', batchId: batch.id, reviewToken: review.reviewToken,
       selections: selectionsForReview(review),
     }, {
-      recordFullFetchPresence: async (...args) => {
-        presenceCalls += 1;
+      recordFullFetchPresence: async () => {
         await replaceElvantoConnectionGeneration(churchId, 32, 'replacement-account-key');
-        return linkRepository.recordFullFetchPresence(...args);
       },
     });
 
     assert.equal(result.status, 'applied');
-    assert.equal(presenceCalls, 1);
+    assert.equal(await connectionStore.getConnectionGeneration(churchId, 'elvanto'), 31);
     assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
   });
 });
 
-test('unattended post-apply presence ignores an old-account snapshot after reconnect', async () => {
+test('unattended apply does not invoke the legacy post-apply presence boundary', async () => {
   await withTestChurchDb(async (churchId) => {
     await seedConnection(churchId);
     await replaceElvantoConnectionGeneration(churchId, 41, 'old-account-key');
@@ -763,20 +759,17 @@ test('unattended post-apply presence ignores an old-account snapshot after recon
     const individualId = await seedIndividual(churchId, { firstName: 'Existing' });
     await linkPerson(churchId, 'missing-person', individualId);
     scenarios = new Map([['members', snapshot(selected, { people: [], memberExternalIds: [] })]]);
-    let presenceCalls = 0;
 
     const result = await orchestrator.runUnattended({
       churchId, provider: 'elvanto', batchId: batch.id,
     }, {
-      recordFullFetchPresence: async (...args) => {
-        presenceCalls += 1;
+      recordFullFetchPresence: async () => {
         await replaceElvantoConnectionGeneration(churchId, 42, 'replacement-account-key');
-        return linkRepository.recordFullFetchPresence(...args);
       },
     });
 
     assert.equal(result.status, 'applied');
-    assert.equal(presenceCalls, 1);
+    assert.equal(await connectionStore.getConnectionGeneration(churchId, 'elvanto'), 41);
     assert.deepEqual(await missingCounts(churchId), { 'missing-person': 0 });
   });
 });

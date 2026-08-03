@@ -5,7 +5,7 @@
 // runUnattended/previewAuthoritySwitch/previewLinkCorrections exclusively and
 // must never call an adapter, matcher, plan, or apply module directly.
 //
-// ─── The 10-step pipeline ───────────────────────────────────────────────────
+// ─── The 9-step pipeline ────────────────────────────────────────────────────
 //
 // A specifically requested batch is first loaded and rejected if retired,
 // before connection or credential setup. Every operational batch then runs a
@@ -14,15 +14,11 @@
 //   2. load/validate batches and settings
 //   3. start audit run
 //   4. fetch snapshot
-//   5. load local state/links and existing missing counters
+//   5. load local state/links
 //   6. match
-//   7. compute the plan (including the projected next missing count, via
-//      plan.js's own presenceProjection — see below)
+//   7. compute the plan
 //   8. create a review token, OR apply safe unattended actions
-//   9. persist full-fetch presence at most once (only for an applied
-//      review or a completed unattended reconciliation — NEVER for a pure
-//      preview)
-//   10. finish audit run
+//   9. finish audit run
 //
 // Steps 1-2 (and the startRun call that begins step 3) happen BEFORE any
 // run row exists, so a failure there propagates directly — there is
@@ -32,23 +28,6 @@
 // caught, reported via failRun, and rethrown — apply is never reached
 // once any of that has failed.
 //
-// ─── Missing-counter integrity (the most safety-critical property here) ───
-//
-// plan.js's own computePeopleSyncPlan already computes the FULL projected
-// missing-count bookkeeping (plan.presenceProjection) from whatever
-// `personLinks` this module passes in — this module does not re-derive
-// that counting logic, it only decides WHEN the durable counters in
-// external_person_links get written via linkRepository.recordFullFetchPresence:
-//   - buildReview/previewAuthoritySwitch/previewLinkCorrections (pure
-//     previews): NEVER call it.
-//   - applyReviewed: calls it exactly once, AFTER applyPeopleSyncPlan's
-//     transaction has committed, using the fresh full snapshot it just
-//     fetched for verification. A stale-plan re-fetch inside a retried
-//     applyReviewed never double-counts because the write only happens
-//     after a successful apply, and only once per successful call.
-//   - runUnattended: calls it exactly once per completed classification
-//     (whether the run ends 'applied' or 'review_required') for a
-//     COMPLETE FULL source set only.
 'use strict';
 
 const { randomUUID } = require('node:crypto');
@@ -188,7 +167,6 @@ const defaultDeps = {
   listPersonLinks: linkRepository.listPersonLinks,
   listMatchReviewState: matchReviewRepository.listMatchReviewState,
   listFamilyLinks: linkRepository.listFamilyLinks,
-  recordFullFetchPresence: linkRepository.recordFullFetchPresence,
   listLocalIndividuals: defaultListLocalIndividuals,
   listLocalFamilies: defaultListLocalFamilies,
   listGatheringMemberships: defaultListGatheringMemberships,
@@ -252,18 +230,6 @@ function sourceExpectationsFor(batches) {
     draftSourceBaseRevision: batch.draftSourceBaseRevision ?? null,
     selectedSource: batch.effectiveSourceIsDraft ? 'draft' : 'active',
   })).sort((left, right) => Number(left.batchId) - Number(right.batchId));
-}
-
-function sourceExpectationsAfterReviewedApply(expectations, reviewedBatch) {
-  if (!reviewedBatch?.draftSource) return expectations;
-  return expectations.map((expectation) => expectation.batchId === reviewedBatch.id ? {
-    ...expectation,
-    sourceRevision: expectation.sourceRevision + 1,
-    activeSourceDigest: expectation.draftSourceDigest,
-    draftSourceDigest: null,
-    draftSourceBaseRevision: null,
-    selectedSource: 'active',
-  } : expectation);
 }
 
 function groupMembersByFamily(people) {
@@ -884,7 +850,6 @@ function computeProjectedPlan(acquired, correction, matcherResult, effectiveRevi
     personLinks: actionablePersonLinks.map((link) => ({
       externalPersonId: link.externalPersonId,
       individualId: link.individualId,
-      missingFullSyncCount: link.missingFullSyncCount,
     })),
     snapshot: {
       fetchedAt: acquired.snapshot.fetchedAt,
@@ -1202,8 +1167,7 @@ function reviewTokenErrorMessage(code) {
 // after that point may ever cause this run's audit record to read
 // 'failed' — that would misrepresent a successful import/archive as
 // having not happened. Authority activation is committed inside that same
-// apply transaction; only presence accounting and finishRun remain
-// best-effort after it returns.
+// apply transaction; only finishRun remains after it returns.
 async function applyReviewed({ churchId, provider, batchId = null, reviewToken, selections = {}, userId } = {}, overrides = {}) {
   const deps = mergeDeps(overrides);
   assertChurchId(churchId);
@@ -1235,10 +1199,6 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
   };
   const sourceExpectations = sourceExpectationsFor(reviewBatches);
   const reviewedBatch = pre.batches.find((candidate) => String(candidate.id) === String(batchId));
-  const postApplyAuthorityExpectation = isAuthoritySwitch
-    ? { active: provider, pending: null }
-    : authorityExpectation;
-  const postApplySourceExpectations = sourceExpectationsAfterReviewedApply(sourceExpectations, reviewedBatch);
 
   const run = await deps.startRun({ churchId, provider, batchId, trigger, fetchMode: 'full' });
 
@@ -1337,21 +1297,7 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
     throw reportedError;
   }
 
-  // 9. persist full-fetch presence at most once. applyReviewed always
-  // re-fetched the complete provider-owned source set above, so this is
-  // unconditional here.
-  try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
-      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
-      authorityExpectation: postApplyAuthorityExpectation,
-      sourceExpectations: postApplySourceExpectations,
-      connectionExpectation,
-    });
-  } catch (presenceErr) {
-    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-  }
-
-  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // mergeAppliedCounts()/finishRun() pair.
   const { status } = await finishAppliedRun(deps, {
@@ -1368,10 +1314,8 @@ async function applyReviewed({ churchId, provider, batchId = null, reviewToken, 
 //
 // Permitted only when `provider` is the church's current active authority.
 // Applies deterministic links, additions, managed updates, explicit
-// upstream archive/reactivate (including a CONFIRMED — i.e. already at
-// count >= 2 — missing-person archive; plan.js itself never proposes an
-// archive action below count 2, see its addMissingActions), and
-// provenance-safe gathering changes, by calling applyPeopleSyncPlan with
+// upstream archive/reactivate and provenance-safe gathering changes, by
+// calling applyPeopleSyncPlan with
 // NO selections. ambiguousPeople/familyConflicts/renameFamily/
 // unmatchedLocalRegulars are never mutated by apply.js regardless of
 // selections, so "stripping" them is a matter of how this run's outcome is
@@ -1454,17 +1398,7 @@ async function runUnattended({ churchId, provider, batchId, forceFull = false, t
     throw err;
   }
 
-  // 9. persist member-only full-fetch presence exactly once after apply.
-  try {
-    await deps.recordFullFetchPresence(churchId, provider, body.seenMemberExternalIds, {
-      complete: true, ignoredExternalIds: body.ignoredLifecycleExternalIds,
-      authorityExpectation, sourceExpectations, connectionExpectation,
-    });
-  } catch (presenceErr) {
-    logger.warn(`peopleSync orchestrator: presence accounting failed for church ${churchId} run ${run.id}: ${presenceErr.message}`);
-  }
-
-  // 10. classify and finish the audit run — see finishAppliedRun's own
+  // 9. classify and finish the audit run — see finishAppliedRun's own
   // header note for why this is one guarded block rather than a bare
   // hasHeldItems()/mergeAppliedCounts()/finishRun() sequence.
   const { status, counts } = await finishAppliedRun(deps, {

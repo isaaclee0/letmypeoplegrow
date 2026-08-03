@@ -10,8 +10,8 @@ test('signs source-visible established links while eligibility uses the projecte
     plan: { linkPeople: [], ambiguousPeople: [], addPeople: [] },
     externalPeople: [{ id: 'ext-a', firstName: 'External', lastName: 'Person', state: 'active' }],
     localPeople: [{ id: 10 }, { id: 20 }],
-    basePersonLinks: [{ externalPersonId: 'ext-a', individualId: 10, missingFullSyncCount: 0 }],
-    projectedPersonLinks: [{ externalPersonId: 'ext-a', individualId: 20, missingFullSyncCount: 0 }],
+    basePersonLinks: [{ externalPersonId: 'ext-a', individualId: 10 }],
+    projectedPersonLinks: [{ externalPersonId: 'ext-a', individualId: 20 }],
     sourceExternalIds: new Set(['ext-a']),
     linkCorrections: { 'ext-a': { outcome: 'relink', fromIndividualId: 10, individualId: 20 } },
   });
@@ -28,8 +28,8 @@ test('keeps the signed digest on base state and canonicalizes correction keys', 
     plan: { linkPeople: [], ambiguousPeople: [], addPeople: [] },
     localPeople: [{ id: 10 }, { id: 20 }, { id: 30 }],
     basePersonLinks: [
-      { externalPersonId: 'ext-a', individualId: 10, missingFullSyncCount: 0 },
-      { externalPersonId: 'outside-source', individualId: 30, missingFullSyncCount: 0 },
+      { externalPersonId: 'ext-a', individualId: 10 },
+      { externalPersonId: 'outside-source', individualId: 30 },
     ],
     baseExclusions: [{ externalPersonId: 'ext-a', individualId: 20 }],
     baseHolds: [{ externalPersonId: 'ext-a', reason: 'deferred' }],
@@ -44,7 +44,7 @@ test('keeps the signed digest on base state and canonicalizes correction keys', 
   const corrected = buildReviewContext({
     ...shared,
     projectedPersonLinks: [
-      { externalPersonId: 'ext-a', individualId: 20, missingFullSyncCount: 0 },
+      { externalPersonId: 'ext-a', individualId: 20 },
       shared.basePersonLinks[1],
     ],
     projectedExclusions: [
@@ -260,7 +260,8 @@ test('binds local names, family context, and provider-link eligibility without e
     'the exact local family ID must be signed even when both rendered family summaries are identical'
   );
   assert.notEqual(newlyLinked.localIdentityDigest, original.localIdentityDigest);
-  assert.notEqual(linkedMissingCountChanged.localIdentityDigest, newlyLinked.localIdentityDigest);
+  assert.equal(linkedMissingCountChanged.localIdentityDigest, newlyLinked.localIdentityDigest,
+    'legacy absence counters must not participate in the signed local identity');
   assert.notEqual(renamedEmptyFamily.localIdentityDigest, original.localIdentityDigest);
   assert.equal(contactOnlyChange.localIdentityDigest, original.localIdentityDigest);
   assert.notEqual(exclusionAdded.localIdentityDigest, original.localIdentityDigest);

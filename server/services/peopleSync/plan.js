@@ -23,13 +23,6 @@ function positiveInteger(value, label) {
   return value;
 }
 
-function nonNegativeInteger(value, label) {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(`${label} must be a safe non-negative integer`);
-  }
-  return value;
-}
-
 function actionId(bucket, ...parts) {
   return [bucket, ...parts.map((part) => encodeURIComponent(stableString(part)))].join(':');
 }
@@ -210,10 +203,6 @@ function managedFieldChanges(externalPerson, localPerson) {
   return changes;
 }
 
-function actionExists(actions, externalPersonId, individualId) {
-  return actions.some((item) => item.externalPersonId === externalPersonId && item.individualId === individualId);
-}
-
 function qualifyingBatchesFor(externalPersonId, batches, eligibleByBatch) {
   return batches.filter((batch) => eligibleByBatch.get(batch.id)?.has(externalPersonId));
 }
@@ -263,7 +252,7 @@ function addLifecycleAndManagedActions(context) {
         state === 'contact' && input.settings?.includeContacts === false ? 'contact_excluded' : 'no_longer_eligible';
       plan.archive.push({
         id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
-        reason, missingFullSyncCount: null,
+        reason,
       });
       continue;
     }
@@ -328,63 +317,6 @@ function addUnmatchedActions(context) {
   }
 }
 
-function presenceLinks(input) {
-  if ((input.personLinks || []).length > 0) return input.personLinks;
-  // Compatibility for callers that still pass Task 3's already-incremented
-  // missingCandidates. New orchestration should pass all durable personLinks.
-  return (input.missingCandidates || []).map((candidate) => {
-    const projectedCount = nonNegativeInteger(candidate?.missingFullSyncCount, 'Missing full-sync count');
-    return { ...candidate, missingFullSyncCount: Math.max(0, projectedCount - 1) };
-  });
-}
-
-function buildPresenceProjection(input, externalById, eligibleUnion) {
-  const completeFullSnapshot = input.snapshot?.mode === 'full' && input.snapshot?.complete === true;
-  const projection = { completeFullSnapshot, updates: [] };
-  if (!completeFullSnapshot) return projection;
-  const links = uniqueBy(presenceLinks(input).map((link) => ({
-    externalPersonId: externalId(link?.externalPersonId),
-    individualId: positiveInteger(link?.individualId, 'Linked individual ID'),
-    missingFullSyncCount: nonNegativeInteger(link?.missingFullSyncCount, 'Missing full-sync count'),
-  })), (link) => `${link.externalPersonId}\u0000${link.individualId}`);
-  for (const link of links) {
-    const seen = externalById.has(link.externalPersonId) || eligibleUnion.has(link.externalPersonId);
-    const nextMissingFullSyncCount = seen ? 0 : link.missingFullSyncCount + 1;
-    nonNegativeInteger(nextMissingFullSyncCount, 'Next missing full-sync count');
-    projection.updates.push({
-      externalPersonId: link.externalPersonId,
-      individualId: link.individualId,
-      previousMissingFullSyncCount: link.missingFullSyncCount,
-      nextMissingFullSyncCount,
-      seen,
-    });
-  }
-  projection.updates.sort((a, b) => a.externalPersonId.localeCompare(b.externalPersonId, 'en') ||
-    a.individualId - b.individualId);
-  return projection;
-}
-
-function addMissingActions(plan, input, conflictIds) {
-  if (!input.authoritative || !plan.presenceProjection.completeFullSnapshot) return;
-  for (const update of plan.presenceProjection.updates) {
-    const { externalPersonId, individualId, nextMissingFullSyncCount } = update;
-    if (conflictIds.has(externalPersonId)) continue;
-    if (!update.seen && nextMissingFullSyncCount >= 2) {
-      if (!actionExists(plan.archive, externalPersonId, individualId)) {
-        plan.archive.push({
-          id: actionId('archive', externalPersonId, individualId), externalPersonId, individualId,
-          reason: 'confirmed_missing_full_sync', missingFullSyncCount: nextMissingFullSyncCount,
-        });
-      }
-    } else if (!update.seen && nextMissingFullSyncCount > 0) {
-      plan.skipped.push({
-        id: actionId('skipped', externalPersonId, individualId, 'awaiting_missing_confirmation'), externalPersonId,
-        individualId, reason: 'awaiting_missing_confirmation', missingFullSyncCount: nextMissingFullSyncCount,
-      });
-    }
-  }
-}
-
 function membershipBatchId(row) {
   const value = row?.addedBySyncBatchId ?? row?.added_by_sync_batch_id;
   return value === null || value === undefined ? null : positiveInteger(value, 'Roster provenance batch ID');
@@ -392,6 +324,7 @@ function membershipBatchId(row) {
 
 function addGatheringActions(context) {
   const { plan, batches, eligibleByBatch, populationIds, identities, protectedIndividualIds, input } = context;
+  const completeFullSnapshot = input.snapshot?.mode === 'full' && input.snapshot?.complete === true;
   const actionableIdentities = identities.filter((item) => !item.reviewRequired);
   const individualByExternal = new Map(actionableIdentities.map((item) => [item.externalPersonId, item.individualId]));
   for (const addition of plan.addPeople) individualByExternal.set(addition.externalPersonId, null);
@@ -437,7 +370,7 @@ function addGatheringActions(context) {
     if (!ownerBatch || ownerBatch.gatheringAutoRemoveEnabled !== true || ownerBatch.gatheringTypeId !== gatheringTypeId) continue;
     if (protectedIndividualIds.has(individualId)) continue;
     const externalPersonId = externalByIndividual.get(individualId);
-    if (!plan.presenceProjection.completeFullSnapshot && !externalPersonId) continue;
+    if (!completeFullSnapshot && !externalPersonId) continue;
     const remainsEligible = externalPersonId && batches.some((batch) =>
       batch.gatheringTypeId === gatheringTypeId &&
       eligibleByBatch.get(batch.id)?.has(externalPersonId) && populationIds.has(externalPersonId));
@@ -476,7 +409,7 @@ function computePeopleSyncPlan(input = {}) {
   for (const identity of allIdentityRows) if (identity.reviewRequired) protectedIndividualIds.add(identity.individualId);
   const identities = unambiguousIdentityRows(allIdentityRows, conflictIds);
   const { batches, eligibleByBatch, eligibleUnion } = buildEligibility(input);
-  plan.presenceProjection = buildPresenceProjection(input, externalById, eligibleUnion);
+  plan.presenceProjection = { completeFullSnapshot: false, updates: [] };
   const populationIds = new Set();
   for (const externalPersonId of eligibleUnion) {
     const externalPerson = externalById.get(externalPersonId);
@@ -491,7 +424,6 @@ function computePeopleSyncPlan(input = {}) {
   };
   addLifecycleAndManagedActions(context);
   addUnmatchedActions(context);
-  addMissingActions(plan, input, conflictIds);
   addGatheringActions(context);
 
   for (const bucket of BUCKETS) {
