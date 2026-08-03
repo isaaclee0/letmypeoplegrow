@@ -7,9 +7,16 @@ const {
   refreshBackgroundCheckStatuses,
   invalidateBackgroundCheckStatusCache,
 } = require('./backgroundCheckSync');
+const accountCoordinator = require('./accountCoordinator');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
 const response = (status, data, headers = {}) => ({ status, data, headers });
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
 
 test('fetchBackgroundCheckSnapshot reads every People page without includes', async () => {
   const calls = [];
@@ -403,4 +410,101 @@ test('refresh bounds automatic retries when credentials keep changing', async ()
   );
   assert.equal(providerReads, 2);
   assert.equal(localApplies, 0);
+});
+
+test('each caller owns one stale-credential retry when joining a newer epoch attempt', async (t) => {
+  invalidateBackgroundCheckStatusCache();
+  const churchId = 'church-caller-owned-retry';
+  const epochOneFetchStarted = createDeferred();
+  const epochOneFetchRelease = createDeferred();
+  const epochTwoFetchStarted = createDeferred();
+  const epochTwoFetchRelease = createDeferred();
+  const originalJoinedEpochTwo = createDeferred();
+  const providerReads = [];
+  const localApplies = [];
+  let currentToken = 'epoch-one-token';
+  let epochTwo;
+  const snapshots = {
+    'epoch-one-token': {
+      fetchedAt: '2026-08-03T05:00:00.000Z',
+      complete: true,
+      people: [{ id: 'epoch-one', passedBackgroundCheck: false }],
+    },
+    'epoch-two-token': {
+      fetchedAt: '2026-08-03T05:01:00.000Z',
+      complete: true,
+      people: [{ id: 'epoch-two', passedBackgroundCheck: false }],
+    },
+    'epoch-three-token': {
+      fetchedAt: '2026-08-03T05:02:00.000Z',
+      complete: true,
+      people: [{ id: 'epoch-three', passedBackgroundCheck: true }],
+    },
+  };
+  const originalSameCredentialEpoch = accountCoordinator.sameCredentialEpoch;
+  t.mock.method(accountCoordinator, 'sameCredentialEpoch', (left, right) => {
+    const same = originalSameCredentialEpoch(left, right);
+    if (same && epochTwo && originalSameCredentialEpoch(right, epochTwo)) {
+      originalJoinedEpochTwo.resolve();
+    }
+    return same;
+  });
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => 1_000,
+    withToken: async (_churchId, operation) => operation(currentToken),
+    fetchSnapshot: async ({ accessToken }) => {
+      providerReads.push(accessToken);
+      if (accessToken === 'epoch-one-token') {
+        epochOneFetchStarted.resolve();
+        await epochOneFetchRelease.promise;
+      }
+      if (accessToken === 'epoch-two-token') {
+        epochTwoFetchStarted.resolve();
+        await epochTwoFetchRelease.promise;
+      }
+      return snapshots[accessToken];
+    },
+    applySnapshot: async (_churchId, snapshot) => {
+      localApplies.push(snapshot);
+      return {
+        fetchedAt: snapshot.fetchedAt,
+        updated: 1,
+        cleared: snapshot.people[0].passedBackgroundCheck ? 1 : 0,
+        notCleared: snapshot.people[0].passedBackgroundCheck ? 0 : 1,
+        unknown: 0,
+      };
+    },
+  };
+
+  const originalRefresh = refreshBackgroundCheckStatuses(churchId, overrides);
+  await epochOneFetchStarted.promise;
+
+  currentToken = 'epoch-two-token';
+  invalidateBackgroundCheckStatusCache(churchId);
+  epochTwo = accountCoordinator.getCredentialEpoch(churchId);
+  const newerRefresh = refreshBackgroundCheckStatuses(churchId, overrides);
+  await epochTwoFetchStarted.promise;
+
+  epochOneFetchRelease.resolve();
+  await originalJoinedEpochTwo.promise;
+  currentToken = 'epoch-three-token';
+  invalidateBackgroundCheckStatusCache(churchId);
+  epochTwoFetchRelease.resolve();
+
+  const originalOutcome = await originalRefresh.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (error) => ({ status: 'rejected', error })
+  );
+  const newerResult = await newerRefresh;
+
+  assert.equal(originalOutcome.status, 'rejected');
+  assert.equal(originalOutcome.error.code, 'PCO_BACKGROUND_CHECK_CREDENTIAL_CHANGED');
+  assert.equal(newerResult.fetchedAt, snapshots['epoch-three-token'].fetchedAt);
+  assert.deepEqual(providerReads, [
+    'epoch-one-token',
+    'epoch-two-token',
+    'epoch-three-token',
+  ]);
+  assert.deepEqual(localApplies, [snapshots['epoch-three-token']]);
 });

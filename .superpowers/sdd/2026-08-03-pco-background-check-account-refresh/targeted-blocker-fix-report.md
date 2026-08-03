@@ -200,3 +200,62 @@ node --test config/database.test.js config/peopleSyncSchema.dbintegration.test.j
   multi-process writer topology would require a durable account epoch checked
   atomically in the apply transaction.
 - No live Kingston/provider reconciliation was attempted, by instruction.
+
+## Review fix round 1: caller-owned retry accounting
+
+### Finding and root cause
+
+The per-church `refreshInFlight` entry represented the promise creator's entire
+recursive retry chain. A caller that had already consumed its one stale-epoch
+retry could join a newer top-level caller's in-flight promise and inherit that
+caller's unused retry. In a three-epoch sequence, the original caller therefore
+survived two credential changes and fulfilled from epoch three.
+
+### Fix
+
+- The shared singleflight now represents exactly one credential-epoch attempt
+  and resolves to the coordinator's tagged `{ stale, value }` outcome.
+- The public refresh function owns the retry loop and remaining budget for each
+  invocation. Joined callers independently interpret the shared stale outcome.
+- Fetch/apply coalescing, cache reapplication, per-church isolation, and the
+  credential-mutation apply boundary are unchanged.
+- Added a deterministic three-epoch concurrency test. Deferred provider reads
+  and a pass-through observation of the real epoch comparison establish the
+  join boundary without sleeps. It proves the original caller rejects with
+  `PCO_BACKGROUND_CHECK_CREDENTIAL_CHANGED`, the newer caller succeeds on its
+  one eligible retry, provider reads are exactly one per epoch, and only the
+  epoch-three snapshot applies.
+
+### RED/GREEN evidence
+
+All commands used the isolated server mount and existing `node_modules` volume
+in Docker with `--network none`.
+
+RED against the pre-fix production code:
+
+```text
+node --test --test-name-pattern='each caller owns one stale-credential retry' services/planningCenter/backgroundCheckSync.test.js
+0 passed, 1 failed; expected original caller status `rejected`, actual `fulfilled`; duration 67.48575 ms
+```
+
+GREEN after moving retry ownership outside the shared epoch promise:
+
+```text
+node --test --test-name-pattern='each caller owns one stale-credential retry' services/planningCenter/backgroundCheckSync.test.js
+1 passed, 0 failed; duration 61.933042 ms
+```
+
+Focused credential-coordinator, route-race, and background-sync set:
+
+```text
+node --test routes/integrations.pcoConnection.test.js services/peopleSync/pcoCredentialMigration.dbintegration.test.js services/planningCenter/backgroundCheckSync.test.js services/planningCenter/backgroundCheckSync.dbintegration.test.js
+45 passed, 0 failed; duration 907.839167 ms
+```
+
+Affected database, credential, route, background-sync, orchestrator, and run
+repository set:
+
+```text
+node --test config/database.test.js config/peopleSyncSchema.dbintegration.test.js routes/integrations.pcoConnection.test.js services/peopleSync/pcoCredentialMigration.dbintegration.test.js services/planningCenter/backgroundCheckSync.test.js services/planningCenter/backgroundCheckSync.dbintegration.test.js services/peopleSync/orchestrator.test.js services/peopleSync/orchestrator.dbintegration.test.js services/peopleSync/runRepository.dbintegration.test.js
+188 passed, 0 failed; duration 1770.987668 ms
+```

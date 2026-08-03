@@ -117,14 +117,13 @@ function staleCredentialError() {
   return error;
 }
 
-async function refreshBackgroundCheckStatusesAttempt(
-  churchId,
-  overrides,
-  staleCredentialRetriesRemaining
-) {
+async function refreshBackgroundCheckStatusesEpochAttempt(churchId, overrides) {
   const isTrackingEnabled = overrides.isTrackingEnabled || isBackgroundCheckTrackingEnabled;
   if (!(await isTrackingEnabled(churchId))) {
-    return { skipped: 'tracking_disabled', updated: 0 };
+    return {
+      stale: false,
+      value: { skipped: 'tracking_disabled', updated: 0 },
+    };
   }
 
   const now = overrides.now || Date.now;
@@ -156,13 +155,7 @@ async function refreshBackgroundCheckStatusesAttempt(
       credentialEpoch,
       () => applySnapshot(churchId, cached.snapshot)
     );
-    if (!application.stale) return application.value;
-    if (staleCredentialRetriesRemaining <= 0) throw staleCredentialError();
-    return refreshBackgroundCheckStatusesAttempt(
-      churchId,
-      overrides,
-      staleCredentialRetriesRemaining - 1
-    );
+    return application;
   }
 
   const withToken = overrides.withToken || defaultWithToken;
@@ -185,13 +178,7 @@ async function refreshBackgroundCheckStatusesAttempt(
         return result;
       }
     );
-    if (!application.stale) return application.value;
-    if (staleCredentialRetriesRemaining <= 0) throw staleCredentialError();
-    return refreshBackgroundCheckStatusesAttempt(
-      churchId,
-      overrides,
-      staleCredentialRetriesRemaining - 1
-    );
+    return application;
   })();
   const refreshEntry = { credentialEpoch, promise: refreshPromise };
   refreshInFlight.set(churchId, refreshEntry);
@@ -205,11 +192,15 @@ async function refreshBackgroundCheckStatusesAttempt(
 }
 
 async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
-  return refreshBackgroundCheckStatusesAttempt(
-    churchId,
-    overrides,
-    MAX_STALE_CREDENTIAL_RETRIES
-  );
+  let staleCredentialRetriesRemaining = MAX_STALE_CREDENTIAL_RETRIES;
+  while (true) {
+    // The shared promise covers exactly one credential epoch. Interpret its
+    // stale outcome here so every caller spends only its own retry budget.
+    const attempt = await refreshBackgroundCheckStatusesEpochAttempt(churchId, overrides);
+    if (!attempt.stale) return attempt.value;
+    if (staleCredentialRetriesRemaining <= 0) throw staleCredentialError();
+    staleCredentialRetriesRemaining -= 1;
+  }
 }
 
 module.exports = {
