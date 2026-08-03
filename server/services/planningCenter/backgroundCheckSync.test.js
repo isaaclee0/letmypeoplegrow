@@ -2,7 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { fetchBackgroundCheckSnapshot } = require('./backgroundCheckSync');
+const {
+  fetchBackgroundCheckSnapshot,
+  refreshBackgroundCheckStatuses,
+  invalidateBackgroundCheckStatusCache,
+} = require('./backgroundCheckSync');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
 const response = (status, data, headers = {}) => ({ status, data, headers });
@@ -65,4 +69,189 @@ test('fetchBackgroundCheckSnapshot rejects malformed Person resources', async ()
       (error) => error.code === 'SYNC_SOURCE_INCOMPLETE'
     );
   }
+});
+
+test('refresh skips token and provider reads when tracking is disabled', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let tokenReads = 0;
+  let providerReads = 0;
+
+  const result = await refreshBackgroundCheckStatuses('church-a', {
+    isTrackingEnabled: async () => false,
+    withToken: async () => { tokenReads += 1; },
+    fetchSnapshot: async () => { providerReads += 1; },
+  });
+
+  assert.deepEqual(result, { skipped: 'tracking_disabled', updated: 0 });
+  assert.equal(tokenReads, 0);
+  assert.equal(providerReads, 0);
+});
+
+test('refresh obtains the church token lazily and passes its access token to the provider read', async () => {
+  invalidateBackgroundCheckStatusCache();
+  const events = [];
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+
+  await refreshBackgroundCheckStatuses('church-token-owner', {
+    isTrackingEnabled: async (churchId) => {
+      events.push(['tracking', churchId]);
+      return true;
+    },
+    withToken: async (churchId, operation) => {
+      events.push(['token', churchId]);
+      return operation('church-owner-token');
+    },
+    fetchSnapshot: async (options) => {
+      events.push(['provider', options.accessToken]);
+      return remoteSnapshot;
+    },
+    applySnapshot: async (churchId, snapshot) => {
+      events.push(['apply', churchId, snapshot]);
+      return { fetchedAt: snapshot.fetchedAt, updated: 0, cleared: 0, notCleared: 0, unknown: 0 };
+    },
+  });
+
+  assert.deepEqual(events, [
+    ['tracking', 'church-token-owner'],
+    ['token', 'church-token-owner'],
+    ['provider', 'church-owner-token'],
+    ['apply', 'church-token-owner', remoteSnapshot],
+  ]);
+});
+
+test('refresh coalesces concurrent work and re-applies a recent successful snapshot', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let providerReads = 0;
+  let localApplies = 0;
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [{ id: 'p1', passedBackgroundCheck: true }],
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => 1_000,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => { providerReads += 1; return remoteSnapshot; },
+    applySnapshot: async () => {
+      localApplies += 1;
+      return {
+        fetchedAt: remoteSnapshot.fetchedAt,
+        updated: 1,
+        cleared: 1,
+        notCleared: 0,
+        unknown: 0,
+      };
+    },
+  };
+
+  await Promise.all([
+    refreshBackgroundCheckStatuses('church-a', overrides),
+    refreshBackgroundCheckStatuses('church-a', overrides),
+  ]);
+  await refreshBackgroundCheckStatuses('church-a', { ...overrides, now: () => 30_000 });
+
+  assert.equal(providerReads, 1);
+  assert.equal(localApplies, 2);
+});
+
+test('refresh singleflight is isolated per church', async () => {
+  invalidateBackgroundCheckStatusCache();
+  const providerReads = [];
+  const localApplies = [];
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    withToken: async (churchId, operation) => operation(`${churchId}-token`),
+    fetchSnapshot: async ({ accessToken }) => {
+      providerReads.push(accessToken);
+      return remoteSnapshot;
+    },
+    applySnapshot: async (churchId) => {
+      localApplies.push(churchId);
+      return { fetchedAt: remoteSnapshot.fetchedAt, updated: 0, cleared: 0, notCleared: 0, unknown: 0 };
+    },
+  };
+
+  await Promise.all([
+    refreshBackgroundCheckStatuses('church-a', overrides),
+    refreshBackgroundCheckStatuses('church-a', overrides),
+    refreshBackgroundCheckStatuses('church-b', overrides),
+    refreshBackgroundCheckStatuses('church-b', overrides),
+  ]);
+
+  assert.deepEqual(providerReads.sort(), ['church-a-token', 'church-b-token']);
+  assert.deepEqual(localApplies.sort(), ['church-a', 'church-b']);
+});
+
+test('refresh reuses a snapshot for less than 60 seconds and fetches again at expiry', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let currentTime = 1_000;
+  let providerReads = 0;
+  let localApplies = 0;
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => currentTime,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => { providerReads += 1; return remoteSnapshot; },
+    applySnapshot: async () => {
+      localApplies += 1;
+      return { fetchedAt: remoteSnapshot.fetchedAt, updated: 0, cleared: 0, notCleared: 0, unknown: 0 };
+    },
+  };
+
+  await refreshBackgroundCheckStatuses('church-a', overrides);
+  currentTime = 60_999;
+  await refreshBackgroundCheckStatuses('church-a', overrides);
+  currentTime = 61_000;
+  await refreshBackgroundCheckStatuses('church-a', overrides);
+
+  assert.equal(providerReads, 2);
+  assert.equal(localApplies, 3);
+});
+
+test('refresh does not cache a failed provider read', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let providerReads = 0;
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => {
+      providerReads += 1;
+      if (providerReads === 1) throw new Error('temporary PCO failure');
+      return {
+        fetchedAt: '2026-08-03T05:00:00.000Z',
+        complete: true,
+        people: [],
+      };
+    },
+    applySnapshot: async () => ({
+      fetchedAt: '2026-08-03T05:00:00.000Z',
+      updated: 0,
+      cleared: 0,
+      notCleared: 0,
+      unknown: 0,
+    }),
+  };
+
+  await assert.rejects(
+    refreshBackgroundCheckStatuses('church-a', overrides),
+    /temporary PCO failure/
+  );
+  await refreshBackgroundCheckStatuses('church-a', overrides);
+
+  assert.equal(providerReads, 2);
 });

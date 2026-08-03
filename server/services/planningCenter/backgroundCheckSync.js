@@ -11,8 +11,12 @@
 
 const Database = require('../../config/database');
 const { createPcoReadClient, PcoSourceError } = require('./readClient');
+const { isBackgroundCheckTrackingEnabled } = require('./mode');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
+const SUCCESS_CACHE_TTL_MS = 60 * 1000;
+const successfulSnapshots = new Map();
+const refreshInFlight = new Map();
 
 function projectBackgroundCheckPerson(resource) {
   const id = resource?.id === null || resource?.id === undefined
@@ -90,4 +94,52 @@ async function applyBackgroundCheckSnapshot(churchId, snapshot) {
   });
 }
 
-module.exports = { fetchBackgroundCheckSnapshot, applyBackgroundCheckSnapshot };
+function invalidateBackgroundCheckStatusCache(churchId) {
+  if (churchId) successfulSnapshots.delete(churchId);
+  else successfulSnapshots.clear();
+}
+
+async function defaultWithToken(churchId, operation) {
+  return require('../planningCenterSync').withPlanningCenterSourceToken(churchId, operation);
+}
+
+async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
+  const isTrackingEnabled = overrides.isTrackingEnabled || isBackgroundCheckTrackingEnabled;
+  if (!(await isTrackingEnabled(churchId))) {
+    return { skipped: 'tracking_disabled', updated: 0 };
+  }
+
+  const now = overrides.now || Date.now;
+  const applySnapshot = overrides.applySnapshot || applyBackgroundCheckSnapshot;
+  const cached = successfulSnapshots.get(churchId);
+  if (cached && now() - cached.cachedAt < SUCCESS_CACHE_TTL_MS) {
+    return applySnapshot(churchId, cached.snapshot);
+  }
+  if (refreshInFlight.has(churchId)) {
+    return refreshInFlight.get(churchId);
+  }
+
+  const withToken = overrides.withToken || defaultWithToken;
+  const fetchSnapshot = overrides.fetchSnapshot || fetchBackgroundCheckSnapshot;
+  const refreshPromise = (async () => {
+    const snapshot = await withToken(
+      churchId,
+      (accessToken) => fetchSnapshot({ accessToken })
+    );
+    successfulSnapshots.set(churchId, { snapshot, cachedAt: now() });
+    return applySnapshot(churchId, snapshot);
+  })();
+  refreshInFlight.set(churchId, refreshPromise);
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshInFlight.delete(churchId);
+  }
+}
+
+module.exports = {
+  fetchBackgroundCheckSnapshot,
+  applyBackgroundCheckSnapshot,
+  refreshBackgroundCheckStatuses,
+  invalidateBackgroundCheckStatusCache,
+};
