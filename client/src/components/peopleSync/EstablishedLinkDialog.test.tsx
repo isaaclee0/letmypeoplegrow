@@ -74,7 +74,7 @@ describe('EstablishedLinkDialog', () => {
     expect(within(dialog).queryByText('21')).not.toBeInTheDocument();
   });
 
-  it('searches for an eligible replacement and emits only its local individual ID', async () => {
+  it('searches replacement names only and relinks from a compact person row', async () => {
     const user = userEvent.setup();
     const onRelink = vi.fn();
     render(<EstablishedLinkDialog {...defaultProps} onRelink={onRelink} />);
@@ -83,8 +83,19 @@ describe('EstablishedLinkDialog', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
     const search = within(dialog).getByRole('searchbox', { name: 'Search LMPG people' });
     await waitFor(() => expect(search).toHaveFocus());
-    await user.type(search, 'Family Member');
-    await user.click(within(dialog).getByRole('button', { name: 'Select Eligible Person' }));
+    await user.type(search, 'Family');
+
+    expect(within(dialog).getByText('No matching people found.')).toBeVisible();
+
+    await user.clear(search);
+    await user.type(search, 'Eligible');
+    const eligible = within(dialog).getByRole('button', { name: 'Select Eligible Person' });
+    expect(eligible).toHaveTextContent('Eligible Person');
+    expect(eligible).toHaveTextContent('Green family');
+    expect(within(dialog).queryByText('Family Member')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('2 more family members')).not.toBeInTheDocument();
+
+    await user.click(eligible);
 
     expect(onRelink).toHaveBeenCalledOnce();
     expect(onRelink).toHaveBeenCalledWith(22);
@@ -101,22 +112,6 @@ describe('EstablishedLinkDialog', () => {
     expect(within(dialog).getByText('Already linked to a provider person')).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Select Claimed Person' })).toBeDisabled();
     expect(within(dialog).getByText('Already selected for another provider person')).toBeVisible();
-  });
-
-  it('keeps expandable family details outside replacement buttons so they cannot relink a person', async () => {
-    const user = userEvent.setup();
-    const onRelink = vi.fn();
-    render(<EstablishedLinkDialog {...defaultProps} onRelink={onRelink} />);
-    const dialog = screen.getByRole('dialog', { name: 'Correct linked person for Alex Smith' });
-
-    await user.click(within(dialog).getByRole('button', { name: 'Change linked person' }));
-    const selectButton = within(dialog).getByRole('button', { name: 'Select Eligible Person' });
-    const familyDetails = within(dialog).getByText('2 more family members');
-    await user.click(familyDetails);
-    await user.keyboard('{Enter}');
-
-    expect(onRelink).not.toHaveBeenCalled();
-    expect(selectButton.querySelector('a, button, details, input, select, summary, textarea')).toBeNull();
   });
 
   it('emits unlink without closing or relinking on its own', async () => {
