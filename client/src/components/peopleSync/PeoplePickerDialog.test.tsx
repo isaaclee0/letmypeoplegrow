@@ -59,11 +59,7 @@ function PickerHarness(props: Partial<React.ComponentProps<typeof PeoplePickerDi
 }
 
 describe('PeoplePickerDialog', () => {
-  it.each([
-    ['name', 'Alex Jones', 'Select Alex Jones'],
-    ['family', 'Jones family', 'Select Alex Jones'],
-    ['family member', 'Jamie Stone', 'Select Morgan Reed'],
-  ])('searches by %s', async (_kind, query, resultName) => {
+  it('searches only each person name and shows compact family context', async () => {
     const user = userEvent.setup();
     render(<PickerHarness />);
 
@@ -71,10 +67,19 @@ describe('PeoplePickerDialog', () => {
     const dialog = screen.getByRole('dialog', { name: 'Choose an LMPG person for Alex Smith' });
     const search = within(dialog).getByRole('searchbox', { name: 'Search LMPG people' });
     await waitFor(() => expect(search).toHaveFocus());
-    await user.type(search, query);
+    await user.type(search, 'Jamie');
 
-    expect(within(dialog).getByRole('button', { name: resultName })).toBeEnabled();
-    expect(within(dialog).queryByRole('button', { name: 'Select Durable Link' })).not.toBeInTheDocument();
+    expect(within(dialog).getByText('No matching people found.')).toBeVisible();
+
+    await user.clear(search);
+    await user.type(search, 'Alex');
+
+    const alex = within(dialog).getByRole('button', { name: 'Select Alex Jones' });
+    expect(alex).toHaveTextContent('Alex Jones');
+    expect(alex).toHaveTextContent('Jones family');
+    expect(within(dialog).queryByRole('button', { name: 'Select Morgan Reed' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Casey Jones')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('2 more family members')).not.toBeInTheDocument();
   });
 
   it('explains durable and in-review claims and exposes creation without leaking identifiers', async () => {
@@ -125,23 +130,6 @@ describe('PeoplePickerDialog', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'Select Alex Jones' }));
     expect(onSelectPerson).toHaveBeenCalledWith(11);
-  });
-
-  it('keeps expandable family details outside the selection button so they cannot select a person', async () => {
-    const user = userEvent.setup();
-    const onSelectPerson = vi.fn();
-    render(<PickerHarness onSelectPerson={onSelectPerson} />);
-
-    await user.click(screen.getByRole('button', { name: 'Change LMPG match for Alex Smith' }));
-    const dialog = screen.getByRole('dialog', { name: 'Choose an LMPG person for Alex Smith' });
-    const selectButton = within(dialog).getByRole('button', { name: 'Select Alex Jones' });
-    const familyDetails = within(dialog).getByText('2 more family members');
-
-    await user.click(familyDetails);
-    await user.keyboard('{Enter}');
-
-    expect(onSelectPerson).not.toHaveBeenCalled();
-    expect(selectButton.querySelector('a, button, details, input, select, summary, textarea')).toBeNull();
   });
 
   it('closes on Escape and returns focus to the invoking control', async () => {

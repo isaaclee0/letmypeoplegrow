@@ -1,9 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, DialogPanel, DialogTitle } from '@headlessui/react';
-import PersonIdentitySummary, {
-  personDisplayName,
-  personFamilyDisplay,
-} from './PersonIdentitySummary';
+import { personDisplayName, personFamilyDisplay } from './PersonIdentitySummary';
 import type { PeopleSyncPeopleDirectory, PeopleSyncPersonDisplay } from './types';
 
 export interface PeoplePickerDialogProps {
@@ -21,11 +18,13 @@ export interface PeoplePickerDialogProps {
 }
 
 function searchableText(person: PeopleSyncPersonDisplay): string {
+  return `${person.firstName} ${person.lastName}`.normalize('NFKD').toLocaleLowerCase();
+}
+
+function familyLabel(person: PeopleSyncPersonDisplay): string {
   const family = personFamilyDisplay(person);
-  const familyText = family.state === 'known'
-    ? [family.name, ...family.members.flatMap((member) => [member.firstName, member.lastName])].join(' ')
-    : '';
-  return `${person.firstName} ${person.lastName} ${familyText}`.normalize('NFKD').toLocaleLowerCase();
+  if (family.state === 'known') return family.name || 'Unnamed family';
+  return family.state === 'none' ? 'No family' : 'Family unavailable';
 }
 
 export default function PeoplePickerDialog({
@@ -108,7 +107,7 @@ export default function PeoplePickerDialog({
                 setQuery(event.target.value);
                 setPendingExcludedId(null);
               }}
-              placeholder="Search a name, family, or family member"
+              placeholder="Search by person name"
               className="mt-2 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
             />
 
@@ -132,16 +131,16 @@ export default function PeoplePickerDialog({
                 const unavailable = !availableIndividualIds.has(individualId);
                 const disabled = claimedElsewhere || unavailable;
                 return (
-                  <div key={individualId} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                    <PersonIdentitySummary label="LMPG person" person={person} />
+                  <div key={individualId}>
                     <button
                       type="button"
                       disabled={disabled}
                       aria-label={`Select ${personDisplayName(person)}`}
                       onClick={() => choosePerson(individualId)}
-                      className="mt-2 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm font-semibold text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
+                      className="block w-full rounded-lg border border-gray-200 bg-white px-3 py-3 text-left hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-55 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
                     >
-                      Select {personDisplayName(person)}
+                      <span className="block text-sm font-semibold text-gray-900 dark:text-gray-100">{personDisplayName(person)}</span>
+                      <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{familyLabel(person)}</span>
                     </button>
                     {claimedElsewhere && (
                       <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Already selected for another provider person</p>
