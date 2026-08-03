@@ -71,7 +71,7 @@ test('saving a source draft captures the active revision and a normal draft can 
   });
 });
 
-test('source generation expectations bind the complete enabled batch set', async () => {
+test('source generation expectations bind only sources used by a batch review', async () => {
   await withTestChurchDb(async (churchId) => {
     const first = await createBatch({
       churchId, provider: 'elvanto', name: 'Members', initialDraftSource: ELVANTO_SOURCE,
@@ -91,21 +91,18 @@ test('source generation expectations bind the complete enabled batch set', async
     });
 
     await Database.transactionForChurch(churchId, async (transactionConnection) => {
-      await assert.rejects(
-        assertSourceExpectationsWithConnection(transactionConnection, {
-          churchId,
-          provider: 'elvanto',
-          expectations: [{
-            batchId: firstActive.id,
-            sourceRevision: firstActive.sourceRevision,
-            activeSourceDigest: digestSourceIdentity(firstActive.source),
-            draftSourceDigest: null,
-            draftSourceBaseRevision: null,
-            selectedSource: 'active',
-          }],
-        }),
-        (error) => error.code === 'SYNC_PLAN_STALE' && error.status === 409,
-      );
+      await assert.doesNotReject(assertSourceExpectationsWithConnection(transactionConnection, {
+        churchId,
+        provider: 'elvanto',
+        expectations: [{
+          batchId: firstActive.id,
+          sourceRevision: firstActive.sourceRevision,
+          activeSourceDigest: digestSourceIdentity(firstActive.source),
+          draftSourceDigest: null,
+          draftSourceBaseRevision: null,
+          selectedSource: 'active',
+        }],
+      }));
     });
   });
 });

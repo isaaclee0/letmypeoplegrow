@@ -738,6 +738,26 @@ test('target review substitutes only the target draft source while other enabled
   assert.deepEqual(availableHealth[0].connectionExpectation, { generation: 17 });
 });
 
+test('target review ignores other initial source drafts until they are reviewed', async () => {
+  const reads = [];
+  const batches = [
+    batch({ id: 20, source: null, initialSourceReviewPending: true, draftSource: source('am-draft'), draftSourceBaseRevision: 1 }),
+    batch({ id: 21, source: null, initialSourceReviewPending: true, draftSource: source('pm-draft'), draftSourceBaseRevision: 1 }),
+  ];
+  const { deps, finished } = makeDeps({
+    batches,
+    fetchSourceSnapshot: async (input) => {
+      reads.push(input.sourceExternalId);
+      return sourceSnapshot(source(input.sourceExternalId));
+    },
+  });
+
+  await buildReview({ churchId: 'church-a', provider: 'elvanto', batchId: 20, trigger: 'manual' }, deps);
+
+  assert.deepEqual(reads, ['am-draft']);
+  assert.equal(finished[0].status, 'review_required');
+});
+
 test('enabled sources are fetched sequentially', async () => {
   let inFlight = 0;
   let maxInFlight = 0;

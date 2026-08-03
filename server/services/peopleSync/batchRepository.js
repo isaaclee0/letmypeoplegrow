@@ -71,7 +71,6 @@ async function assertSourceExpectationsWithConnection(conn, {
       ORDER BY id`,
     [churchId, provider]
   );
-  if (rows.length !== expectations.length) throw staleSourceExpectation();
   const rowsById = new Map(rows.map((row) => [Number(row.id), row]));
   const seenBatchIds = new Set();
   for (const expectation of expectations) {

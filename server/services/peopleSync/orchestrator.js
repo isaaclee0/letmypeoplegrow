@@ -195,11 +195,15 @@ function mergeDeps(overrides) {
 // ─── Small pure helpers ──────────────────────────────────────────────────────
 
 function effectiveReviewBatches(batches, batchId) {
-  return batches.map((batch) => {
+  const reviewed = batches.map((batch) => {
     const useDraft = batchId !== null && batchId !== undefined &&
       String(batch.id) === String(batchId) && !!batch.draftSource;
     return { ...batch, effectiveSource: useDraft ? batch.draftSource : batch.source, effectiveSourceIsDraft: useDraft };
   });
+  if (batchId === null || batchId === undefined) return reviewed;
+  // A batch-specific initial review must not be blocked by other enabled
+  // batches which are still waiting for their own first source review.
+  return reviewed.filter((batch) => batch.effectiveSource || String(batch.id) === String(batchId));
 }
 
 function connectionExpectationFor(provider, connectionGeneration) {
