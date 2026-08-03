@@ -6,7 +6,7 @@ const {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
-  UPDATED_AT_TRIGGERS,
+  UPDATED_AT_TRIGGER_DEFINITIONS,
   INDIVIDUALS_UPDATED_AT_TRIGGER,
 } = require('./schema');
 const { randomUUID } = require('crypto');
@@ -91,7 +91,10 @@ function migrateScheduledPcoAuthority(db, churchId) {
 
 function migrateIndividualsBackgroundCheckTimestamp(db) {
   const individualColumns = db.prepare('PRAGMA table_info(individuals)').all();
-  if (!individualColumns.some((column) => column.name === 'updated_at')) return;
+  if (!individualColumns.some((column) => column.name === 'updated_at')) {
+    db.exec('DROP TRIGGER IF EXISTS individuals_updated_at');
+    return;
+  }
 
   ensureMigrationTrackingSchema(db);
   db.transaction(() => {
@@ -117,6 +120,22 @@ function migrateIndividualsBackgroundCheckTimestamp(db) {
       INDIVIDUALS_BACKGROUND_CHECK_TIMESTAMP_MIGRATION.description
     );
   })();
+}
+
+function ensureCompatibleUpdatedAtTriggers(db) {
+  for (const definition of UPDATED_AT_TRIGGER_DEFINITIONS) {
+    const tableExists = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+    ).get(definition.table);
+    const columns = tableExists
+      ? db.prepare(`PRAGMA table_info("${definition.table}")`).all()
+      : [];
+    if (!columns.some((column) => column.name === 'updated_at')) {
+      db.exec(`DROP TRIGGER IF EXISTS "${definition.name}"`);
+      continue;
+    }
+    db.exec(definition.sql);
+  }
 }
 
 function ensureProviderNeutralSyncSchema(db) {
@@ -352,7 +371,6 @@ class Database {
 
     if (isNew) {
       db.exec(CHURCH_SCHEMA);
-      db.exec(UPDATED_AT_TRIGGERS);
       // Fresh churches use the reviewed provider-neutral authority flow and
       // must never be auto-promoted merely because they later schedule a PCO
       // batch. Only databases that predate this marker receive the legacy
@@ -635,6 +653,7 @@ class Database {
     // EXISTS. Recreate this one transactionally once per church so deployed
     // databases gain the background-only timestamp exception too.
     migrateIndividualsBackgroundCheckTimestamp(db);
+    ensureCompatibleUpdatedAtTriggers(db);
 
     churchDbs.set(churchId, db);
     return db;
@@ -643,7 +662,7 @@ class Database {
   static ensureChurchSchema(churchId) {
     const db = Database.getChurchDb(churchId);
     ensureProviderNeutralSyncSchema(db);
-    db.exec(UPDATED_AT_TRIGGERS);
+    ensureCompatibleUpdatedAtTriggers(db);
     backfillProviderNeutralSync(db, churchId);
   }
 

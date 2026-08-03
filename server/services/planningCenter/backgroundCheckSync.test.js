@@ -367,3 +367,40 @@ test('refresh does not cache a failed provider read', async () => {
 
   assert.equal(providerReads, 2);
 });
+
+test('refresh bounds automatic retries when credentials keep changing', async () => {
+  invalidateBackgroundCheckStatusCache();
+  let providerReads = 0;
+  let localApplies = 0;
+  const remoteSnapshot = {
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [],
+  };
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    withToken: async (_churchId, operation) => operation('token'),
+    fetchSnapshot: async () => {
+      providerReads += 1;
+      if (providerReads <= 2) invalidateBackgroundCheckStatusCache('church-a');
+      return remoteSnapshot;
+    },
+    applySnapshot: async () => {
+      localApplies += 1;
+      return {
+        fetchedAt: remoteSnapshot.fetchedAt,
+        updated: 0,
+        cleared: 0,
+        notCleared: 0,
+        unknown: 0,
+      };
+    },
+  };
+
+  await assert.rejects(
+    refreshBackgroundCheckStatuses('church-a', overrides),
+    (error) => error.code === 'PCO_BACKGROUND_CHECK_CREDENTIAL_CHANGED'
+  );
+  assert.equal(providerReads, 2);
+  assert.equal(localApplies, 0);
+});

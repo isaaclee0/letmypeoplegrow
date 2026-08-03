@@ -803,50 +803,36 @@ ON individuals
 BEGIN UPDATE individuals SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `;
 
-const UPDATED_AT_TRIGGERS = `
-CREATE TRIGGER IF NOT EXISTS users_updated_at AFTER UPDATE ON users
-BEGIN UPDATE users SET updated_at = datetime('now') WHERE id = NEW.id; END;
+function simpleUpdatedAtTrigger(name, table) {
+  return `CREATE TRIGGER IF NOT EXISTS ${name} AFTER UPDATE ON ${table}
+BEGIN UPDATE ${table} SET updated_at = datetime('now') WHERE id = NEW.id; END;`;
+}
 
-CREATE TRIGGER IF NOT EXISTS church_settings_updated_at AFTER UPDATE ON church_settings
-BEGIN UPDATE church_settings SET updated_at = datetime('now') WHERE id = NEW.id; END;
+const UPDATED_AT_TRIGGER_DEFINITIONS = Object.freeze([
+  { name: 'users_updated_at', table: 'users', sql: simpleUpdatedAtTrigger('users_updated_at', 'users') },
+  { name: 'church_settings_updated_at', table: 'church_settings', sql: simpleUpdatedAtTrigger('church_settings_updated_at', 'church_settings') },
+  { name: 'gathering_types_updated_at', table: 'gathering_types', sql: simpleUpdatedAtTrigger('gathering_types_updated_at', 'gathering_types') },
+  { name: 'families_updated_at', table: 'families', sql: simpleUpdatedAtTrigger('families_updated_at', 'families') },
+  { name: 'individuals_updated_at', table: 'individuals', sql: INDIVIDUALS_UPDATED_AT_TRIGGER },
+  { name: 'attendance_sessions_updated_at', table: 'attendance_sessions', sql: simpleUpdatedAtTrigger('attendance_sessions_updated_at', 'attendance_sessions') },
+  { name: 'attendance_records_updated_at', table: 'attendance_records', sql: simpleUpdatedAtTrigger('attendance_records_updated_at', 'attendance_records') },
+  { name: 'headcount_records_updated_at', table: 'headcount_records', sql: simpleUpdatedAtTrigger('headcount_records_updated_at', 'headcount_records') },
+  { name: 'notification_rules_updated_at', table: 'notification_rules', sql: simpleUpdatedAtTrigger('notification_rules_updated_at', 'notification_rules') },
+  { name: 'onboarding_progress_updated_at', table: 'onboarding_progress', sql: simpleUpdatedAtTrigger('onboarding_progress_updated_at', 'onboarding_progress') },
+  { name: 'visitor_config_updated_at', table: 'visitor_config', sql: simpleUpdatedAtTrigger('visitor_config_updated_at', 'visitor_config') },
+  { name: 'user_preferences_updated_at', table: 'user_preferences', sql: simpleUpdatedAtTrigger('user_preferences_updated_at', 'user_preferences') },
+  { name: 'contacts_updated_at', table: 'contacts', sql: simpleUpdatedAtTrigger('contacts_updated_at', 'contacts') },
+]);
 
-CREATE TRIGGER IF NOT EXISTS gathering_types_updated_at AFTER UPDATE ON gathering_types
-BEGIN UPDATE gathering_types SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS families_updated_at AFTER UPDATE ON families
-BEGIN UPDATE families SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-${INDIVIDUALS_UPDATED_AT_TRIGGER}
-
-CREATE TRIGGER IF NOT EXISTS attendance_sessions_updated_at AFTER UPDATE ON attendance_sessions
-BEGIN UPDATE attendance_sessions SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS attendance_records_updated_at AFTER UPDATE ON attendance_records
-BEGIN UPDATE attendance_records SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS headcount_records_updated_at AFTER UPDATE ON headcount_records
-BEGIN UPDATE headcount_records SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS notification_rules_updated_at AFTER UPDATE ON notification_rules
-BEGIN UPDATE notification_rules SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS onboarding_progress_updated_at AFTER UPDATE ON onboarding_progress
-BEGIN UPDATE onboarding_progress SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS visitor_config_updated_at AFTER UPDATE ON visitor_config
-BEGIN UPDATE visitor_config SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS user_preferences_updated_at AFTER UPDATE ON user_preferences
-BEGIN UPDATE user_preferences SET updated_at = datetime('now') WHERE id = NEW.id; END;
-
-CREATE TRIGGER IF NOT EXISTS contacts_updated_at AFTER UPDATE ON contacts
-BEGIN UPDATE contacts SET updated_at = datetime('now') WHERE id = NEW.id; END;
-`;
+const UPDATED_AT_TRIGGERS = UPDATED_AT_TRIGGER_DEFINITIONS
+  .map(({ sql }) => sql)
+  .join('\n\n');
 
 module.exports = {
   REGISTRY_SCHEMA,
   CHURCH_SCHEMA,
   PROVIDER_NEUTRAL_SYNC_SCHEMA,
   UPDATED_AT_TRIGGERS,
+  UPDATED_AT_TRIGGER_DEFINITIONS,
   INDIVIDUALS_UPDATED_AT_TRIGGER,
 };

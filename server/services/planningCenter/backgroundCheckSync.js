@@ -12,13 +12,13 @@
 const Database = require('../../config/database');
 const { createPcoReadClient, PcoSourceError } = require('./readClient');
 const { isBackgroundCheckTrackingEnabled } = require('./mode');
+const accountCoordinator = require('./accountCoordinator');
 
 const API = 'https://api.planningcenteronline.com/people/v2';
 const SUCCESS_CACHE_TTL_MS = 60 * 1000;
+const MAX_STALE_CREDENTIAL_RETRIES = 1;
 const successfulSnapshots = new Map();
 const refreshInFlight = new Map();
-let allChurchCredentialGeneration = 0;
-const churchCredentialGenerations = new Map();
 
 function projectBackgroundCheckPerson(resource) {
   const id = resource?.id === null || resource?.id === undefined
@@ -99,37 +99,29 @@ async function applyBackgroundCheckSnapshot(churchId, snapshot) {
 function invalidateBackgroundCheckStatusCache(churchId) {
   if (churchId) {
     successfulSnapshots.delete(churchId);
-    churchCredentialGenerations.set(
-      churchId,
-      (churchCredentialGenerations.get(churchId) || 0) + 1
-    );
   } else {
     successfulSnapshots.clear();
-    allChurchCredentialGeneration += 1;
-    churchCredentialGenerations.clear();
   }
-}
-
-function getCredentialGeneration(churchId) {
-  return {
-    allChurches: allChurchCredentialGeneration,
-    church: churchCredentialGenerations.get(churchId) || 0,
-  };
-}
-
-function sameCredentialGeneration(left, right) {
-  return left?.allChurches === right?.allChurches && left?.church === right?.church;
-}
-
-function isCredentialGenerationCurrent(churchId, generation) {
-  return sameCredentialGeneration(generation, getCredentialGeneration(churchId));
+  accountCoordinator.invalidateCredentialEpoch(churchId);
 }
 
 async function defaultWithToken(churchId, operation) {
   return require('../planningCenterSync').withPlanningCenterSourceToken(churchId, operation);
 }
 
-async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
+function staleCredentialError() {
+  const error = new Error(
+    'Planning Center credentials changed repeatedly during background-check refresh; retry later'
+  );
+  error.code = 'PCO_BACKGROUND_CHECK_CREDENTIAL_CHANGED';
+  return error;
+}
+
+async function refreshBackgroundCheckStatusesAttempt(
+  churchId,
+  overrides,
+  staleCredentialRetriesRemaining
+) {
   const isTrackingEnabled = overrides.isTrackingEnabled || isBackgroundCheckTrackingEnabled;
   if (!(await isTrackingEnabled(churchId))) {
     return { skipped: 'tracking_disabled', updated: 0 };
@@ -137,21 +129,40 @@ async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
 
   const now = overrides.now || Date.now;
   const applySnapshot = overrides.applySnapshot || applyBackgroundCheckSnapshot;
-  const credentialGeneration = getCredentialGeneration(churchId);
-  const activeRefresh = refreshInFlight.get(churchId);
+  const observedEpoch = accountCoordinator.getCredentialEpoch(churchId);
+  let activeRefresh = refreshInFlight.get(churchId);
   if (
     activeRefresh
-    && sameCredentialGeneration(activeRefresh.credentialGeneration, credentialGeneration)
+    && accountCoordinator.sameCredentialEpoch(activeRefresh.credentialEpoch, observedEpoch)
+  ) {
+    return activeRefresh.promise;
+  }
+  const credentialEpoch = await accountCoordinator.captureCredentialEpoch(churchId);
+  activeRefresh = refreshInFlight.get(churchId);
+  if (
+    activeRefresh
+    && accountCoordinator.sameCredentialEpoch(activeRefresh.credentialEpoch, credentialEpoch)
   ) {
     return activeRefresh.promise;
   }
   const cached = successfulSnapshots.get(churchId);
   if (
     cached
-    && sameCredentialGeneration(cached.credentialGeneration, credentialGeneration)
+    && accountCoordinator.sameCredentialEpoch(cached.credentialEpoch, credentialEpoch)
     && now() - cached.cachedAt < SUCCESS_CACHE_TTL_MS
   ) {
-    return applySnapshot(churchId, cached.snapshot);
+    const application = await accountCoordinator.withSnapshotApplication(
+      churchId,
+      credentialEpoch,
+      () => applySnapshot(churchId, cached.snapshot)
+    );
+    if (!application.stale) return application.value;
+    if (staleCredentialRetriesRemaining <= 0) throw staleCredentialError();
+    return refreshBackgroundCheckStatusesAttempt(
+      churchId,
+      overrides,
+      staleCredentialRetriesRemaining - 1
+    );
   }
 
   const withToken = overrides.withToken || defaultWithToken;
@@ -161,20 +172,28 @@ async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
       churchId,
       (accessToken) => fetchSnapshot({ accessToken })
     );
-    if (!isCredentialGenerationCurrent(churchId, credentialGeneration)) {
-      return refreshBackgroundCheckStatuses(churchId, overrides);
-    }
-    const result = await applySnapshot(churchId, snapshot);
-    if (isCredentialGenerationCurrent(churchId, credentialGeneration)) {
-      successfulSnapshots.set(churchId, {
-        snapshot,
-        cachedAt: now(),
-        credentialGeneration,
-      });
-    }
-    return result;
+    const application = await accountCoordinator.withSnapshotApplication(
+      churchId,
+      credentialEpoch,
+      async () => {
+        const result = await applySnapshot(churchId, snapshot);
+        successfulSnapshots.set(churchId, {
+          snapshot,
+          cachedAt: now(),
+          credentialEpoch,
+        });
+        return result;
+      }
+    );
+    if (!application.stale) return application.value;
+    if (staleCredentialRetriesRemaining <= 0) throw staleCredentialError();
+    return refreshBackgroundCheckStatusesAttempt(
+      churchId,
+      overrides,
+      staleCredentialRetriesRemaining - 1
+    );
   })();
-  const refreshEntry = { credentialGeneration, promise: refreshPromise };
+  const refreshEntry = { credentialEpoch, promise: refreshPromise };
   refreshInFlight.set(churchId, refreshEntry);
   try {
     return await refreshPromise;
@@ -183,6 +202,14 @@ async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
       refreshInFlight.delete(churchId);
     }
   }
+}
+
+async function refreshBackgroundCheckStatuses(churchId, overrides = {}) {
+  return refreshBackgroundCheckStatusesAttempt(
+    churchId,
+    overrides,
+    MAX_STALE_CREDENTIAL_RETRIES
+  );
 }
 
 module.exports = {

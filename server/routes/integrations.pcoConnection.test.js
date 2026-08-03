@@ -118,6 +118,61 @@ function makeBackgroundRefreshHarness(churchId) {
   };
 }
 
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+function makeCredentialBoundBackgroundHarness(churchId, { pauseStoredFetch = false } = {}) {
+  const storedFetchStarted = createDeferred();
+  const storedFetchRelease = createDeferred();
+  const providerReads = [];
+  const localApplies = [];
+  const makeSnapshot = (id) => ({
+    fetchedAt: '2026-08-03T05:00:00.000Z',
+    complete: true,
+    people: [{ id, passedBackgroundCheck: true }],
+  });
+  const overrides = {
+    isTrackingEnabled: async () => true,
+    now: () => 1_000,
+    withToken: async (scopedChurchId, operation) => {
+      const credentials = await connectionStore.getCredentials(scopedChurchId, 'planning_center');
+      if (!credentials) throw new Error(`Planning Center connection unavailable for ${scopedChurchId}`);
+      return operation(credentials.accessToken);
+    },
+    fetchSnapshot: async ({ accessToken }) => {
+      providerReads.push(accessToken);
+      if (pauseStoredFetch && accessToken === 'stored-access') {
+        storedFetchStarted.resolve();
+        await storedFetchRelease.promise;
+      }
+      return makeSnapshot(accessToken === 'stored-access' ? 'old-snapshot' : 'fresh-snapshot');
+    },
+    applySnapshot: (scopedChurchId, snapshot) => Database.transactionForChurch(
+      scopedChurchId,
+      async () => {
+        localApplies.push(snapshot.people[0].id);
+        return {
+          fetchedAt: snapshot.fetchedAt,
+          updated: 1,
+          cleared: 1,
+          notCleared: 0,
+          unknown: 0,
+        };
+      }
+    ),
+  };
+  return {
+    refresh: () => backgroundCheckSync.refreshBackgroundCheckStatuses(churchId, overrides),
+    waitForStoredFetch: () => storedFetchStarted.promise,
+    releaseStoredFetch: () => storedFetchRelease.resolve(),
+    providerReads,
+    localApplies,
+  };
+}
+
 function mockPcoTokenExchange(t) {
   t.mock.method(https, 'request', (_options, callback) => {
     const request = new EventEmitter();
@@ -377,6 +432,77 @@ test('successful OAuth credential replacement invalidates the church background-
   }
 });
 
+test('OAuth replacement blocks an old fetched snapshot and applies one fresh snapshot after commit', async (t) => {
+  const previousClientId = process.env.PLANNING_CENTER_CLIENT_ID;
+  const previousClientSecret = process.env.PLANNING_CENTER_CLIENT_SECRET;
+  process.env.PLANNING_CENTER_CLIENT_ID = 'test-client';
+  process.env.PLANNING_CENTER_CLIENT_SECRET = 'test-secret';
+  mockPcoTokenExchange(t);
+
+  try {
+    await withRouteChurchDb(async ({ churchId, app }) => {
+      backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+      try {
+        await seedPcoConnection(churchId);
+        const backgroundRefresh = makeCredentialBoundBackgroundHarness(
+          churchId,
+          { pauseStoredFetch: true }
+        );
+        const oldRefresh = backgroundRefresh.refresh();
+        await backgroundRefresh.waitForStoredFetch();
+
+        const credentialWriteEntered = createDeferred();
+        const credentialWriteRelease = createDeferred();
+        const originalUpsertConnection = connectionStore.upsertConnection;
+        t.mock.method(connectionStore, 'upsertConnection', async (input) => {
+          if (input.credentials?.accessToken === 'replacement-access-token') {
+            credentialWriteEntered.resolve();
+            await credentialWriteRelease.promise;
+          }
+          return originalUpsertConnection(input);
+        });
+
+        const state = Buffer.from(JSON.stringify({
+          redirectUri: 'http://localhost/api/integrations/planning-center/callback',
+        })).toString('base64');
+        const routeResponse = withPcoStatusStubs({
+          validatePlanningCenterToken: async () => ({
+            connected: true,
+            accountName: 'Replacement Account',
+          }),
+        }, () => app.request(
+          `/api/integrations/planning-center/callback?code=test-code&state=${encodeURIComponent(state)}`,
+          { redirect: 'manual' }
+        ));
+
+        await credentialWriteEntered.promise;
+        backgroundRefresh.releaseStoredFetch();
+        await new Promise((resolve) => setImmediate(resolve));
+        const appliesWhileCredentialTransactionHeld = [...backgroundRefresh.localApplies];
+        credentialWriteRelease.resolve();
+
+        const [refreshResult, response] = await Promise.all([oldRefresh, routeResponse]);
+        assert.equal(response.status, 302);
+        assert.match(response.location, /pco_success=true/);
+        assert.equal(refreshResult.updated, 1);
+        assert.deepEqual(appliesWhileCredentialTransactionHeld, []);
+        assert.deepEqual(backgroundRefresh.providerReads, [
+          'stored-access',
+          'replacement-access-token',
+        ]);
+        assert.deepEqual(backgroundRefresh.localApplies, ['fresh-snapshot']);
+      } finally {
+        backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+      }
+    });
+  } finally {
+    if (previousClientId === undefined) delete process.env.PLANNING_CENTER_CLIENT_ID;
+    else process.env.PLANNING_CENTER_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.PLANNING_CENTER_CLIENT_SECRET;
+    else process.env.PLANNING_CENTER_CLIENT_SECRET = previousClientSecret;
+  }
+});
+
 test('successful PCO disconnect invalidates the church background-check snapshot', async () => {
   await withRouteChurchDb(async ({ churchId, app }) => {
     backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
@@ -394,6 +520,56 @@ test('successful PCO disconnect invalidates the church background-check snapshot
 
       await backgroundRefresh.refresh();
       assert.equal(backgroundRefresh.providerReads(), 2);
+    } finally {
+      backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+    }
+  });
+});
+
+test('PCO disconnect blocks a cached old snapshot after the credential deletion commits', async (t) => {
+  await withRouteChurchDb(async ({ churchId, app }) => {
+    backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
+    try {
+      await seedPcoConnection(churchId);
+      const backgroundRefresh = makeCredentialBoundBackgroundHarness(churchId);
+      await backgroundRefresh.refresh();
+      assert.deepEqual(backgroundRefresh.localApplies, ['old-snapshot']);
+
+      const credentialMutationEntered = createDeferred();
+      const credentialMutationRelease = createDeferred();
+      const originalRunTransaction = Database._runTransaction;
+      let holdNextChurchTransaction = true;
+      t.mock.method(Database, '_runTransaction', (db, callback, scopedChurchId) => {
+        if (scopedChurchId === churchId && holdNextChurchTransaction) {
+          holdNextChurchTransaction = false;
+          return originalRunTransaction.call(Database, db, async (conn) => {
+            credentialMutationEntered.resolve();
+            await credentialMutationRelease.promise;
+            return callback(conn);
+          }, scopedChurchId);
+        }
+        return originalRunTransaction.call(Database, db, callback, scopedChurchId);
+      });
+      const routeResponse = app.request('/api/integrations/planning-center/disconnect', {
+        method: 'POST',
+      });
+      await credentialMutationEntered.promise;
+
+      const cachedRefresh = backgroundRefresh.refresh();
+      const cachedOutcome = cachedRefresh.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error })
+      );
+      credentialMutationRelease.resolve();
+
+      const response = await routeResponse;
+      const outcome = await cachedOutcome;
+      assert.equal(response.status, 200);
+      assert.equal(response.body.success, true);
+      assert.equal(outcome.status, 'rejected');
+      assert.match(outcome.error.message, /Planning Center connection unavailable/);
+      assert.deepEqual(backgroundRefresh.providerReads, ['stored-access']);
+      assert.deepEqual(backgroundRefresh.localApplies, ['old-snapshot']);
     } finally {
       backgroundCheckSync.invalidateBackgroundCheckStatusCache(churchId);
     }

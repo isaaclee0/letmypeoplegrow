@@ -768,9 +768,7 @@ test('connection saves fail closed without an encryption key while non-integrati
   }
 });
 
-test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique IDs', () => {
-  // Catches an upgrade that runs the entire current schema and retroactively
-  // applies idx_individuals_pco_id_unique to legacy duplicate PCO data.
+function withOldestLegacySyncDb(run) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lmpg-legacy-sync-test-'));
   const churchDir = path.join(tempDir, 'churches');
   const churchId = `legacy_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -842,6 +840,8 @@ test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique
         added_by_pco_batch_id INTEGER,
         UNIQUE(gathering_type_id, individual_id)
       );
+      CREATE TRIGGER individuals_updated_at AFTER UPDATE ON individuals
+      BEGIN UPDATE individuals SET updated_at = datetime('now') WHERE id = NEW.id; END;
     `);
     legacyDb.prepare('INSERT INTO church_settings (church_id, church_name) VALUES (?, ?)').run(churchId, 'Legacy Church');
     legacyDb.prepare('INSERT INTO individuals (first_name, last_name, church_id, planning_center_id) VALUES (?, ?, ?, ?)')
@@ -863,6 +863,58 @@ test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique
     Database.closeAll();
     process.env.CHURCH_DATA_DIR = tempDir;
     Database.initialize();
+    return run({ churchId });
+  } finally {
+    Database.closeAll();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousChurchDataDir === undefined) {
+      delete process.env.CHURCH_DATA_DIR;
+    } else {
+      process.env.CHURCH_DATA_DIR = previousChurchDataDir;
+    }
+  }
+}
+
+test('ensureChurchSchema keeps the oldest supported individuals table writable', () => {
+  // Catches production startup installing timestamp triggers for missing
+  // tables or for a legacy individuals table that has no updated_at column.
+  withOldestLegacySyncDb(({ churchId }) => {
+    const migrated = Database.getChurchDb(churchId);
+
+    assert.doesNotThrow(
+      () => {
+        Database.ensureChurchSchema(churchId);
+        Database.ensureChurchSchema(churchId);
+      },
+      'the production schema/startup path must complete for the oldest supported database'
+    );
+
+    const timestampTriggers = migrated.prepare(
+      "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%_updated_at'"
+    ).all();
+    for (const trigger of timestampTriggers) {
+      const quotedTable = `"${String(trigger.tbl_name).replaceAll('"', '""')}"`;
+      const columns = migrated.prepare(`PRAGMA table_info(${quotedTable})`).all();
+      assert.ok(
+        columns.some((column) => column.name === 'updated_at'),
+        `${trigger.name} must not reference missing ${trigger.tbl_name}.updated_at`
+      );
+    }
+
+    assert.doesNotThrow(
+      () => migrated.prepare(
+        `UPDATE individuals SET first_name = 'Updated'
+          WHERE church_id = ? AND planning_center_id = 'legacy-unique-id'`
+      ).run(churchId),
+      'a normal person edit must remain writable after production schema startup'
+    );
+  });
+});
+
+test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique IDs', () => {
+  // Catches an upgrade that runs the entire current schema and retroactively
+  // applies idx_individuals_pco_id_unique to legacy duplicate PCO data.
+  withOldestLegacySyncDb(({ churchId }) => {
     const migrated = Database.getChurchDb(churchId);
 
     assert.doesNotThrow(
@@ -928,15 +980,7 @@ test('getChurchDb quarantines duplicate legacy PCO IDs and backfills only unique
       migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'people_sync_batches'").get(),
       'neutral schema should be created during the old-database upgrade'
     );
-  } finally {
-    Database.closeAll();
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    if (previousChurchDataDir === undefined) {
-      delete process.env.CHURCH_DATA_DIR;
-    } else {
-      process.env.CHURCH_DATA_DIR = previousChurchDataDir;
-    }
-  }
+  });
 });
 
 test('linkUserLookups: is a safe no-op when both rows already share the same person_id', async () => {

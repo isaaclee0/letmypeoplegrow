@@ -22,6 +22,7 @@
 const Database = require('../../config/database');
 const connectionStore = require('./connectionStore');
 const { getAuthorityWithConnection } = require('./authority');
+const accountCoordinator = require('../planningCenter/accountCoordinator');
 
 const PCO_RECONNECT_REQUIRED = 'PCO_RECONNECT_REQUIRED';
 
@@ -297,15 +298,17 @@ async function ensureFreshCredentials(churchId, credentials, requestRefresh, { f
 // OAuth callback write. Kept here so reconnect participates in the same
 // per-church mutation order as an already-running refresh.
 async function replaceConnection({ churchId, credentials, connectedBy, metadata = {} }) {
-  return withCredentialMutation(churchId, () =>
-    Database.transactionForChurch(churchId, () => connectionStore.upsertConnection({
-      churchId,
-      provider: 'planning_center',
-      authType: 'oauth',
-      credentials,
-      connectedBy,
-      metadata,
-    }))
+  return accountCoordinator.withCredentialMutation(churchId, () =>
+    withCredentialMutation(churchId, () =>
+      Database.transactionForChurch(churchId, () => connectionStore.upsertConnection({
+        churchId,
+        provider: 'planning_center',
+        authType: 'oauth',
+        credentials,
+        connectedBy,
+        metadata,
+      }))
+    )
   );
 }
 
@@ -315,24 +318,26 @@ async function replaceConnection({ churchId, credentials, connectedBy, metadata 
 // activation or activation wins and disconnect is rejected; active PCO can
 // never be committed without a connection because of this race.
 async function disconnectConnection(churchId) {
-  return withCredentialMutation(churchId, () => Database.transactionForChurch(churchId, async (conn) => {
-    const authority = await getAuthorityWithConnection(conn, churchId);
-    if (authority.active === 'planning_center' || authority.pending === 'planning_center') {
-      throw new PcoAuthorityConnectionRequiredError();
-    }
+  return accountCoordinator.withCredentialMutation(churchId, () =>
+    withCredentialMutation(churchId, () => Database.transactionForChurch(churchId, async (conn) => {
+      const authority = await getAuthorityWithConnection(conn, churchId);
+      if (authority.active === 'planning_center' || authority.pending === 'planning_center') {
+        throw new PcoAuthorityConnectionRequiredError();
+      }
 
-    const result = await conn.query(
-      `DELETE FROM integration_connections
-        WHERE church_id = ? AND provider = 'planning_center'`,
-      [churchId]
-    );
-    await conn.query(
-      `DELETE FROM user_preferences
-        WHERE church_id = ? AND preference_key = 'planning_center_tokens'`,
-      [churchId]
-    );
-    return result.affectedRows > 0;
-  }));
+      const result = await conn.query(
+        `DELETE FROM integration_connections
+          WHERE church_id = ? AND provider = 'planning_center'`,
+        [churchId]
+      );
+      await conn.query(
+        `DELETE FROM user_preferences
+          WHERE church_id = ? AND preference_key = 'planning_center_tokens'`,
+        [churchId]
+      );
+      return result.affectedRows > 0;
+    }))
+  );
 }
 
 // Convenience: read-or-migrate, then ensure freshness. The one call most
